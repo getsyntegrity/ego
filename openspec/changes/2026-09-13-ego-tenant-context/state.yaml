@@ -1,7 +1,7 @@
 change: ego-tenant-context
 created: 2026-09-13
 closed: null
-status: proposing
+status: specifying
 artifact_store: hybrid
 tracker_issue: https://github.com/getsyntegrity/ego/issues/45
 tracker_epic: https://github.com/getsyntegrity/ego/issues/23
@@ -41,7 +41,12 @@ phases:
     engram_topics:
       - sdd/ego-tenant-context/proposal
     revision_note: "230->93 lines, 2026-09-13; see PR #47 review for rationale"
-  spec:       { status: pending }
+  spec:
+    status: done
+    date: 2026-09-13
+    artifact: openspec/changes/2026-09-13-ego-tenant-context/specs/tenancy-core/spec.md
+    engram_topics:
+      - sdd/ego-tenant-context/spec
   design:     { status: pending }
   tasks:      { status: pending }
   apply:      { status: pending }
