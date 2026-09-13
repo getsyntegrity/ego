@@ -28,12 +28,12 @@ Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance 
 
 ## Phase 1: Foundation
 
-- [ ] 1.1 RED: `tenancy/errors_test.go` — `Reason`, `Error.Unwrap/Is`, sentinels `ErrMissing/ErrInvalid/ErrDenied`
-- [ ] 1.2 GREEN: `tenancy/errors.go` implementing 1.1
-- [ ] 1.3 RED: `tenancy/tenant_id_test.go` — empty/whitespace/control-rune/invalid-UTF-8/>128-byte rejected; arbitrary non-UUID accepted
-- [ ] 1.4 GREEN: `tenancy/tenant_id.go` — `TenantID`, `NewTenantID` (R1)
-- [ ] 1.5 RED: `tenancy/tenant_context_test.go` — empty `TenantID` fails; admin scope type-distinct, attributed
-- [ ] 1.6 GREEN: `tenancy/tenant_context.go` — `Scope`, `Administrative`, `TenantContext`, constructors, accessors
+- [x] 1.1 RED: `tenancy/errors_test.go` — `Reason`, `Error.Unwrap/Is`, sentinels `ErrMissing/ErrInvalid/ErrDenied`
+- [x] 1.2 GREEN: `tenancy/errors.go` implementing 1.1
+- [x] 1.3 RED: `tenancy/tenant_id_test.go` — empty/whitespace/control-rune/invalid-UTF-8/>128-byte rejected; arbitrary non-UUID accepted
+- [x] 1.4 GREEN: `tenancy/tenant_id.go` — `TenantID`, `NewTenantID` (R1)
+- [x] 1.5 RED: `tenancy/tenant_context_test.go` — empty `TenantID` fails; admin scope type-distinct, attributed
+- [x] 1.6 GREEN: `tenancy/tenant_context.go` — `Scope`, `Administrative`, `TenantContext`, constructors, accessors
 
 ## Phase 2: Core Mechanics
 
