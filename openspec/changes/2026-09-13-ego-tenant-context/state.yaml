@@ -70,15 +70,32 @@ phases:
     engram_topics:
       - sdd/ego-tenant-context/proposal
     summary: >
-      Proposal elaborates the five closed decisions as settled inputs and fixes
-      the core contract shape: package `tenancy` (GoAkt-free) exporting
-      `type TenantID string` + NewTenantID/Validate, TenantContext = TenantID +
-      Scope discriminator (Tenant | Administrative), TenantResolver.Resolve(
-      context.Context) (TenantContext, error), and WithSingleTenant(TenantID).
-      Carries the normative invariant forward to design, proposes upgrading
-      architecture conformance from substring scan to a go/packages import-graph
-      check (also a candidate epic #10 deliverable), and records non-binding
-      recommendations R1-R5 for the still-open decisions listed below.
+      Proposal states the five closed decisions with a one-line rationale each
+      (citing exploration.md by section, not restating its evidence), names
+      the core contract (TenantID, TenantContext with a Tenant/Administrative
+      scope discriminator, TenantResolver, WithSingleTenant) without fixing
+      exact signatures, and defers implementation-technique detail (exact
+      constructors, the go/packages-vs-go-list-deps choice, per-item R1-R5
+      rationale) to sdd-design. Carries the normative invariant forward.
+      Compacted 2026-09-13 from an initial 230-line/13-section draft that
+      re-derived exploration evidence and included a full Go interface
+      sketch — both belong to design, not propose. See revision note below.
+    revision:
+      date: 2026-09-13
+      reason: >
+        User review of PR #47 flagged the first draft as doing explore+design
+        work inside propose: repeated exploration.md's evidence in prose,
+        included a complete API sketch (TenantID/Scope/TenantContext/
+        TenantResolver/WithSingleTenant with full method signatures), and
+        spelled out the go/packages import-graph technique in detail —
+        230 lines against a target of ~80-120. Compacted to 93 lines: kept
+        every decision (S1-S5) and every recommendation (R1-R5), cut
+        re-derivation, full signatures, and implementation-technique detail.
+        Also hardened skills/sdd-propose/SKILL.md (new Content Boundary
+        section + non-negotiable size budget) and skills/sdd-design/SKILL.md
+        (explicit note that it's the receiver of deferred signature/technique
+        detail) so this does not recur in later phases of this change or in
+        future changes.
     recommendations_pending_ratification:
       - R1 normalization -> validate, do not normalize (no case-folding)
       - R2 engine role -> ego enforces, trust boundary resolves; engine-invoked
