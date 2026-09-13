@@ -341,7 +341,7 @@ A separate headless service (`ego-cluster-headless`) is kept for gossip-based pe
 
 ## Dependency Isolation
 
-This example is a **separate Go module** (`github.com/tochemey/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
+This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
 
 ## Cleanup
 
