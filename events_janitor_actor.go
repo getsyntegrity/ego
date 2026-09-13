@@ -23,6 +23,7 @@
 package ego
 
 import (
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/tochemey/ego/v4/internal/extensions"
@@ -50,6 +51,7 @@ type applyRetentionRequest struct {
 type eventsJanitorActor struct {
 	eventsStore   persistence.EventsStore
 	snapshotStore persistence.SnapshotStore
+	logger        kitlog.Logger
 }
 
 var _ goakt.Actor = (*eventsJanitorActor)(nil)
@@ -61,6 +63,7 @@ func newEventsJanitorActor() *eventsJanitorActor {
 
 // PreStart loads the events store and snapshot store from the actor system extensions.
 func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
+	a.logger = kitLoggerFrom(ctx.Logger())
 	a.eventsStore = ctx.Extension(extensions.EventsStoreExtensionID).(*extensions.EventsStore).Underlying()
 	if ext := ctx.Extension(extensions.SnapshotStoreExtensionID); ext != nil {
 		a.snapshotStore = ext.(*extensions.SnapshotStoreExt).Underlying()
@@ -100,7 +103,10 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 			if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
 				return a.eventsStore.DeleteEvents(ctx.Context(), req.persistenceID, deleteUpTo)
 			}); err != nil {
-				ctx.Logger().Errorf("failed to delete events for retention policy: %s", err)
+				a.logger.ErrorContext(ctx.Context(), "failed to delete events for retention policy",
+					"persistence_id", req.persistenceID,
+					"delete_up_to", deleteUpTo,
+					"error", err)
 			}
 		}
 	}
@@ -110,7 +116,10 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 		if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
 			return a.snapshotStore.DeleteSnapshots(ctx.Context(), req.persistenceID, previousSnapshotSeqNr)
 		}); err != nil {
-			ctx.Logger().Errorf("failed to delete old snapshots for retention policy: %s", err)
+			a.logger.ErrorContext(ctx.Context(), "failed to delete old snapshots for retention policy",
+				"persistence_id", req.persistenceID,
+				"sequence_number", previousSnapshotSeqNr,
+				"error", err)
 		}
 	}
 }

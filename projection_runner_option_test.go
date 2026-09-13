@@ -28,7 +28,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/tochemey/ego/v4/encryption"
@@ -65,8 +64,8 @@ func TestOption(t *testing.T) {
 	})
 	t.Run("WithLogger", func(t *testing.T) {
 		var r projectionRunner
-		withLogger(log.DefaultLogger).Apply(&r)
-		assert.Equal(t, log.DefaultLogger, r.logger)
+		withLogger(DiscardLogger).Apply(&r)
+		assert.Same(t, DiscardLogger, r.logger)
 	})
 	t.Run("WithRecoveryStrategy", func(t *testing.T) {
 		var r projectionRunner

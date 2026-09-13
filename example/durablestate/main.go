@@ -26,13 +26,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
@@ -45,6 +45,9 @@ import (
 func main() {
 	// create the go context
 	ctx := context.Background()
+	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// actor system it sits on, and this program
+	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
 	// create the durable state store
 	durableStore := testkit.NewDurableStore()
 	// connect the durable state store
@@ -52,17 +55,20 @@ func main() {
 	// Durable-state-only deployments pass a nil events store to NewConfig;
 	// the EventsStore extension is still registered by GoaktOptions because
 	// eGo's actor types depend on it being present.
-	cfg := ego.NewConfig(nil, ego.WithStateStore(durableStore))
+	cfg := ego.NewConfig(nil, ego.WithStateStore(durableStore), ego.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
 	if err != nil {
-		log.Fatalf("failed to build actor system: %v", err)
+		logger.Error("failed to build actor system", "error", err)
+		os.Exit(1)
 	}
 	if err := sys.Start(ctx); err != nil {
-		log.Fatalf("failed to start actor system: %v", err)
+		logger.Error("failed to start actor system", "error", err)
+		os.Exit(1)
 	}
 	engine, err := ego.NewEngine(sys, cfg)
 	if err != nil {
-		log.Fatalf("failed to create ego engine: %v", err)
+		logger.Error("failed to create ego engine", "error", err)
+		os.Exit(1)
 	}
 	// start ego engine
 	_ = engine.Start(ctx)
@@ -83,7 +89,7 @@ func main() {
 	// send the command to the actor. Please don't ignore the error in production grid code
 	reply, _, _ := engine.SendCommand(ctx, entityID, command, time.Minute)
 	account := reply.(*samplepb.Account)
-	log.Printf("current balance on opening: %v", account.GetAccountBalance())
+	logger.Info("current balance on opening", "balance", account.GetAccountBalance())
 
 	// send another command to credit the balance
 	command = &samplepb.CreditAccount{
@@ -93,7 +99,7 @@ func main() {
 
 	reply, _, _ = engine.SendCommand(ctx, entityID, command, time.Minute)
 	account = reply.(*samplepb.Account)
-	log.Printf("current balance after a credit of 250: %v", account.GetAccountBalance())
+	logger.Info("current balance after a credit of 250", "balance", account.GetAccountBalance())
 
 	// capture ctrl+c
 	interruptSignal := make(chan os.Signal, 1)

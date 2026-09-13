@@ -24,10 +24,10 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	samplepb "github.com/tochemey/ego/v4/example/examplepb"
@@ -38,15 +38,16 @@ import (
 // It materializes account balance events into the account_balances read table
 // in PostgreSQL, providing a queryable read model for the CQRS read side.
 type AccountBalanceHandler struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	logger kitlog.Logger
 }
 
 var _ projection.Handler = (*AccountBalanceHandler)(nil)
 
 // NewAccountBalanceHandler creates a projection handler that writes to the
 // account_balances table using the given connection pool.
-func NewAccountBalanceHandler(pool *pgxpool.Pool) *AccountBalanceHandler {
-	return &AccountBalanceHandler{pool: pool}
+func NewAccountBalanceHandler(pool *pgxpool.Pool, logger kitlog.Logger) *AccountBalanceHandler {
+	return &AccountBalanceHandler{pool: pool, logger: logger}
 }
 
 // Handle processes a single event from the projection runner.
@@ -54,8 +55,8 @@ func NewAccountBalanceHandler(pool *pgxpool.Pool) *AccountBalanceHandler {
 func (h *AccountBalanceHandler) Handle(ctx context.Context, persistenceID string, event *anypb.Any, _ uint64) error {
 	msg, err := event.UnmarshalNew()
 	if err != nil {
-		slog.Warn("projection: failed to unmarshal event, skipping",
-			"persistenceID", persistenceID, "typeUrl", event.GetTypeUrl(), "err", err)
+		h.logger.WarnContext(ctx, "projection: failed to unmarshal event, skipping",
+			"persistence_id", persistenceID, "type_url", event.GetTypeUrl(), "error", err)
 		return nil
 	}
 

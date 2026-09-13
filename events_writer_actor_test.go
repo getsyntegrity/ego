@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/tochemey/ego/v4/egopb"
@@ -54,7 +53,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream.Subscribe(sub, "topic.events.0")
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -133,7 +132,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream.Subscribe(sub, "topic.events.0")
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -198,7 +197,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -240,7 +239,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),

@@ -88,7 +88,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 	}
 
 	opts := []runnerOption{
-		withLogger(ctx.ActorSystem().Logger()),
+		withLogger(kitLoggerFrom(ctx.ActorSystem().Logger())),
 		withRecoveryStrategy(options.Recovery),
 		withStartOffset(options.StartOffset),
 		withResetOffset(options.ResetOffset),

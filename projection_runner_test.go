@@ -25,14 +25,15 @@ package ego
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/tochemey/goakt/v4/log"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
@@ -488,7 +489,7 @@ func TestRunner(t *testing.T) {
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
 		shardNumber := uint64(9)
-		logger := log.DiscardLogger
+		logger := DiscardLogger
 
 		// set up the event store
 		eventsStore := testkit2.NewEventsStore()
@@ -1842,7 +1843,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 		handler := projection.NewDiscardHandler()
 		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
 			withPullInterval(10*time.Millisecond),
-			withLogger(log.DiscardLogger),
+			withLogger(DiscardLogger),
 		)
 		runner.maxBufferSize = maxBufferSize
 
@@ -1878,7 +1879,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 		// processing beyond the first buffer only by the full-buffer re-poll.
 		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
 			withPullInterval(10*time.Minute),
-			withLogger(log.DiscardLogger),
+			withLogger(DiscardLogger),
 			withEventsStream(stream),
 		)
 		runner.maxBufferSize = 2
@@ -1927,17 +1928,17 @@ func TestRunnerPullEfficiency(t *testing.T) {
 // Default logger
 // -----------------------------------------------------------------------------
 
-func TestProjectionRunnerDefaultLoggerComesFromEgoSeam(t *testing.T) {
-	t.Run("no withLogger option yields a loggerAdapter over Ego's seam", func(t *testing.T) {
+func TestProjectionRunnerDefaultLogger(t *testing.T) {
+	t.Run("no withLogger option yields the discard logger", func(t *testing.T) {
 		runner := newProjectionRunner("projection-name", testHandler1{}, nil, nil)
 		require.NotNil(t, runner.logger)
-		// The default must be derived from Ego's own Logger seam, never a
-		// concrete third-party logger constructed by first-party code.
-		assert.IsType(t, &loggerAdapter{}, runner.logger)
+		// A runner is always handed the actor system's logger by the
+		// projection actor; the construction default must stay silent.
+		assert.Same(t, DiscardLogger, runner.logger)
 	})
 
 	t.Run("withLogger overrides the default", func(t *testing.T) {
-		custom := newLoggerAdapter(&spyLogger{})
+		custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
 		runner := newProjectionRunner("projection-name", testHandler1{}, nil, nil, withLogger(custom))
 		assert.Same(t, custom, runner.logger)
 	})

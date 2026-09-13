@@ -234,7 +234,7 @@ Engine-wide options are passed to `ego.NewConfig`:
 - `WithTelemetry` enables OpenTelemetry instrumentation.
 - `WithEncryptor` encrypts persisted event and snapshot payloads.
 - `WithEntityKinds` registers behavior types on every cluster node.
-- `WithLogger` configures logging for eGo and the underlying actor system.
+- `WithLogger` sets the [kit-logger](https://github.com/pablogore/kit-logger) logger used by eGo and the underlying actor system. See [Logging](#logging).
 
 Entity-specific options are passed when an entity is spawned:
 
@@ -525,115 +525,36 @@ Instrumentation covers command dispatch and handling, event persistence, active 
 
 ## Logging
 
-eGo logs through one interface, `ego.Logger`, and nothing else. Every record the
-engine, migrator, projections, sagas and the embedded Go-Akt actor system emit
-travels through the `Logger` you supplied.
+eGo logs through [kit-logger](https://github.com/pablogore/kit-logger), a structured logging framework built on `log/slog`. One kit-logger `Logger` covers the whole runtime: the engine, its projection runners, saga actors and publishers, the migrator, and the GoAkt actor system eGo sits on.
 
 ```go
-type Logger interface {
-    Debug(msg string, args ...any)
-    Info(msg string, args ...any)
-    Warn(msg string, args ...any)
-    Error(msg string, args ...any)
-}
+import kitlog "github.com/pablogore/kit-logger/pkg/logger"
+
+logger := kitlog.New(kitlog.Config{
+    Level:        kitlog.LevelInfo,
+    Format:       kitlog.FormatJSON,
+    GlobalFields: map[string]string{"service": "accounts"},
+})
+
+cfg := ego.NewConfig(eventStore, ego.WithLogger(logger))
 ```
 
-### Default
+- When `WithLogger` is not used, eGo logs through `ego.DefaultLogger()`, which is kit-logger's process-wide logger (`logger.L()`). An application that installs its own logger with `logger.SetGlobal` before building the engine therefore needs no extra wiring.
+- `ego.DiscardLogger` drops every record and reports every level as disabled. Use it in tests and benchmarks.
+- `ego.ResolveLogger` applies eGo's nil-logger rule outside the engine: a nil or typed-nil logger resolves to `ego.DefaultLogger()`.
 
-When no logger is supplied, eGo uses `ego.DefaultLogger`, which delegates to the
-`log/slog` default logger. It is deliberately cheap: no goroutines, no exporters,
-no buffering. `ego.DiscardLogger` silences output entirely.
-
-### Optional capabilities
-
-A `Logger` may implement any of these to unlock better behaviour. eGo detects
-them honestly — a capability is used only when the backend really has it.
-
-| Interface | Method | What eGo does with it |
-|---|---|---|
-| `ego.EnabledLogger` | `Enabled(ctx, slog.Level) bool` | Skips formatting a record the backend would drop. Preferred over `LeveledLogger`. |
-| `ego.ContextLogger` | `DebugContext`, `InfoContext`, `WarnContext`, `ErrorContext` | Forwards the caller's `context.Context` verbatim, so a trace id stays reachable. |
-| `ego.FieldLogger` | `With(args ...any) Logger` | Builds child loggers in the backend instead of replaying fields on every record. |
-| `ego.LeveledLogger` | `Level() string` | Fallback level gating when `EnabledLogger` is absent. |
-
-`ego.WithFields(logger, "component", "runtime")` returns a component-tagged
-logger, using the backend's own `With` when it has one.
-
-### Custom logger
+eGo's own records are structured: a fixed message plus snake_case fields such as `persistence_id`, `sequence_number`, `projection`, `saga_id` and `error`. Records written with a context go through kit-logger's `*Context` methods, so enabling kit-logger's OpenTelemetry decorator stamps `trace_id` and `span_id` on them, which joins a log line to the trace `WithTelemetry` produced:
 
 ```go
-cfg := ego.NewConfig(eventsStore, ego.WithLogger(myLogger))
+import kitotel "github.com/pablogore/kit-logger/pkg/logger/otel"
+
+logger := kitlog.New(kitlog.Config{
+    Format:         kitlog.FormatJSON,
+    ContextHandler: kitotel.Decorator(kitotel.Options{}),
+})
 ```
 
-### Recommended backend: kit-logger
-
-[kit-logger](https://github.com/pablogore/kit-logger) is the recommended
-backend. It is slog-native, context-aware, and supports child loggers, so it
-backs every eGo capability except `LeveledLogger` — which it does not need,
-because `EnabledLogger` answers the same question exactly.
-
-kit-logger's `With` returns a `kitlogger.Logger`, not an `ego.Logger`, and Go has
-no covariance on a method's return type, so a thin adapter is required. It lives
-in its own Go module so that eGo's core stays backend-neutral and only
-applications that opt in pay for kit-logger's dependency graph:
-
-```shell
-go get github.com/tochemey/ego/v4/compat/kitlogger
-```
-
-```go
-import (
-    kitlogger "github.com/pablogore/kit-logger/pkg/logger"
-    "github.com/tochemey/ego/v4"
-    egokit "github.com/tochemey/ego/v4/compat/kitlogger"
-)
-
-kl := kitlogger.New(kitlogger.Config{Level: "info", Format: "json"})
-
-cfg := ego.NewConfig(eventsStore, ego.WithLogger(egokit.New(kl)))
-
-sys, err := goakt.NewActorSystem("accounts", cfg.GoaktOptions()...)
-```
-
-`egokit.New` returns `ego.DefaultLogger` for a nil or typed-nil logger, so a
-missing backend degrades instead of panicking on the first record.
-
-### Who owns the logger's lifecycle
-
-Whoever creates the logger closes it. eGo never calls `Sync`, `Flush` or
-`Close` on a logger it was handed, because it cannot know whether the
-application still needs it after the engine stops. Flush your own logger before
-exit:
-
-```go
-defer func() { _ = kl.Sync() }()
-```
-
-`egokit.Adapter.Unwrap()` returns the underlying `kitlogger.Logger` when you
-need to reach it again.
-
-### Why the default is still slog-backed
-
-kit-logger is the recommended backend, but it is not yet `ego.DefaultLogger`,
-because making it the default would cost more than it is worth today. Two
-properties of kit-logger itself — not of the adapter — decide that, and both are
-pinned by tests in `compat/kitlogger` so the tradeoff is re-evaluated if either
-changes:
-
-- **Importing** kit-logger registers a Prometheus counter (`slog_logged_total`)
-  on the default registry from an `init` function. Linking eGo must not mutate
-  process-global state on an application's behalf.
-- A kit-logger built from the zero `Config` writes a record on construction and
-  then resolves the calling frame for every record. `ego.New` has to stay cheap
-  and silent.
-
-An application that wants either builds the logger itself and passes it through
-`ego.WithLogger`, which is exactly the seam's job. Pass your own
-`Config.Handler` to bypass kit-logger's handler chain entirely.
-
-One more thing worth knowing: kit-logger adds its own `component` attribute
-group (file, line, function). If you also tag records with
-`ego.WithFields(logger, "component", ...)`, both appear under that name.
+Everything else kit-logger offers — level changes at runtime with `SetLevel`, redaction and filtering rules, sampling, rate limiting, `AddSource` call-site attribution, buffered output with an explicit `Flush`/`Shutdown` lifecycle — applies to eGo's records unchanged, because eGo never wraps the logger it is given. Records the actor system writes are attributed to GoAkt's own call site, not to eGo's adapter. The application owns the logger's lifecycle; eGo flushes it when the actor system stops but never shuts it down.
 
 ## Reliability and operations
 
@@ -643,7 +564,7 @@ eGo includes several production-focused capabilities:
 - Storage cleanup through [retention policies](#snapshots-and-retention)
 - At-rest [encryption](#encryption-and-schema-evolution) for events and snapshots
 - GDPR-style erasure with `Engine.EraseEntity(...)`
-- Pluggable structured logging via `ego.WithLogger(...)`
+- Structured, context-aware [logging](#logging) through kit-logger
 
 ## Testing
 

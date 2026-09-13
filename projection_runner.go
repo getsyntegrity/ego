@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/flowchartsman/retry"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/atomic"
@@ -73,8 +73,8 @@ type shardItem struct {
 type projectionRunner struct {
 	// Name specifies the projectionRunner Name
 	name string
-	// Logger specifies the logger
-	logger log.Logger
+	// logger is the kit-logger Logger every runner record is written to
+	logger kitlog.Logger
 	// Handler specifies the projection handler
 	handler projection.Handler
 	// JournalStore specifies the journal store for reading events
@@ -177,7 +177,7 @@ func newProjectionRunner(name string,
 	opts ...runnerOption) *projectionRunner {
 	runner := &projectionRunner{
 		name:             name,
-		logger:           newLoggerAdapter(DiscardLogger),
+		logger:           DiscardLogger,
 		handler:          handler,
 		eventsStore:      eventsStore,
 		offsetsStore:     offsetStore,
@@ -403,7 +403,7 @@ drain:
 	}
 
 	if eventErr != nil {
-		x.logger.Error(eventErr)
+		x.logger.Error("projection stopped on an unprocessable event", "projection", x.name, "error", eventErr)
 		x.ticker.Stop()
 		_ = x.Stop()
 
@@ -437,7 +437,11 @@ drain:
 func (x *projectionRunner) retryAfterStoreFailure(ctx context.Context, err error) bool {
 	x.storeFailures++
 	delay := storeRetryDelay(x.storeFailures)
-	x.logger.Error(fmt.Errorf("projection=(%s) store round trip failed, attempt=%d, retrying in %s: %w", x.name, x.storeFailures, delay, err))
+	x.logger.ErrorContext(ctx, "projection store round trip failed, retrying",
+		"projection", x.name,
+		"attempt", x.storeFailures,
+		"retry_in", delay,
+		"error", err)
 
 	select {
 	case <-x.stopSignal:
@@ -772,13 +776,21 @@ func (x *projectionRunner) sendToDeadLetter(ctx context.Context, persistenceID s
 		return
 	}
 	if err := x.deadLetterHandler.Handle(ctx, x.name, persistenceID, event, seqNr, cause); err != nil {
-		x.logger.Error(fmt.Errorf("dead letter handler failed for persistence id=%s, revision=%d: %w", persistenceID, seqNr, err))
+		x.logger.ErrorContext(ctx, "dead letter handler failed",
+			"projection", x.name,
+			"persistence_id", persistenceID,
+			"sequence_number", seqNr,
+			"error", err)
 	}
 }
 
 // logHandlerError emits a consistent error message for handler failures.
 func (x *projectionRunner) logHandlerError(err error, persistenceID string, seqNr uint64) {
-	x.logger.Error(fmt.Errorf("failed to process event for persistence id=%s, revision=%d: %w", persistenceID, seqNr, err))
+	x.logger.Error("failed to process event",
+		"projection", x.name,
+		"persistence_id", persistenceID,
+		"sequence_number", seqNr,
+		"error", err)
 }
 
 // commitOffset persists the processed offset for the given shard.
@@ -849,9 +861,8 @@ func newHandlerPanicError(value any) error {
 func (x *projectionRunner) preStart(ctx context.Context) error {
 	if !x.resetOffsetTo.IsZero() {
 		if err := x.offsetsStore.ResetOffset(ctx, x.name, x.resetOffsetTo.UnixMilli()); err != nil {
-			fmtErr := fmt.Errorf("failed to reset projection=%s: %w", x.name, err)
-			x.logger.Error(fmtErr)
-			return fmtErr
+			x.logger.ErrorContext(ctx, "failed to reset projection offset", "projection", x.name, "error", err)
+			return fmt.Errorf("failed to reset projection=%s: %w", x.name, err)
 		}
 	}
 

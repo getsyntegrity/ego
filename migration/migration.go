@@ -28,13 +28,14 @@
 //
 //	migrator := migration.New(eventsStore, snapshotStore,
 //	    migration.WithPageSize(100),
-//	    migration.WithLogger(logger), // any ego.Logger implementation
+//	    migration.WithLogger(logger), // any kit-logger Logger
 //	)
 //	if err := migrator.Run(ctx); err != nil {
-//	    log.Fatal(err)
+//	    logger.Error("migration failed", "error", err)
 //	}
 //
-// When no logger is supplied the migrator logs through ego.DefaultLogger.
+// When no logger is supplied the migrator logs through ego.DefaultLogger(),
+// kit-logger's process-wide logger.
 //
 // The migrator reads all persistence IDs from the events store, finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),
@@ -47,6 +48,7 @@ import (
 	"context"
 	"fmt"
 
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -66,7 +68,7 @@ type Migrator struct {
 	eventsStore   persistence.EventsStore
 	snapshotStore persistence.SnapshotStore
 	pageSize      uint64
-	logger        ego.Logger
+	logger        kitlog.Logger
 }
 
 // New creates a Migrator.
@@ -75,7 +77,6 @@ func New(eventsStore persistence.EventsStore, snapshotStore persistence.Snapshot
 		eventsStore:   eventsStore,
 		snapshotStore: snapshotStore,
 		pageSize:      500,
-		logger:        ego.DefaultLogger,
 	}
 	for _, opt := range opts {
 		opt.apply(m)
@@ -124,7 +125,7 @@ func (m *Migrator) Run(ctx context.Context) error {
 		pageToken = nextToken
 	}
 
-	m.logger.Info(fmt.Sprintf("migration: completed successfully, processed %d entities", total))
+	m.logger.InfoContext(ctx, "migration: completed successfully", "entities", total)
 	return nil
 }
 
@@ -154,7 +155,7 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 	}
 
 	if bestSnapshot == nil {
-		m.logger.Debug(fmt.Sprintf("migration: entity %s has no legacy resulting_state, skipping", persistenceID))
+		m.logger.DebugContext(ctx, "migration: entity has no legacy resulting_state, skipping", "persistence_id", persistenceID)
 		return nil
 	}
 
@@ -162,7 +163,9 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
-	m.logger.Debug(fmt.Sprintf("migration: entity %s snapshot written at sequence %d", persistenceID, bestSnapshot.GetSequenceNumber()))
+	m.logger.DebugContext(ctx, "migration: snapshot written",
+		"persistence_id", persistenceID,
+		"sequence_number", bestSnapshot.GetSequenceNumber())
 	return nil
 }
 

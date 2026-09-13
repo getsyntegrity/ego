@@ -32,10 +32,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// loggerSeamFile is the one first-party file allowed to speak GoAkt's logging
+// API: it defines the adapter that presents kit-logger to the actor system.
+const loggerSeamFile = "logger.go"
+
 // bannedLoggerConstructs are logging constructs first-party production code
-// must not contain anywhere. eGo exposes its own Logger seam (ego.Logger), so
-// every default must be derived from that seam instead of hardcoding a
-// concrete third-party backend the caller cannot replace.
+// must not contain anywhere. eGo logs through kit-logger, so no default may be
+// derived from a concrete third-party backend the caller cannot replace.
 var bannedLoggerConstructs = []string{
 	"log.NewZap(",
 	"go.uber.org/zap",
@@ -43,27 +46,25 @@ var bannedLoggerConstructs = []string{
 	"log.DiscardLogger",
 }
 
-// loggerSeamFile is the one first-party file allowed to name a concrete
-// logging backend. It *is* the seam: DefaultLogger and the GoAkt adapter are
-// defined there, so the constructs below are its job, not a leak.
-const loggerSeamFile = "logger.go"
-
-// bannedOutsideLoggerSeam are logging constructs allowed only in the seam
-// file. Everywhere else they are a parallel backend: a log record that no
-// longer honours the caller's Logger, its level, or its fields.
+// bannedOutsideLoggerSeam are constructs allowed only in the seam file.
+// Anywhere else they are a parallel logging backend: a record that bypasses
+// the kit-logger Logger the application configured, its level and its fields.
 //
-// The scan is a substring match, so an entry has to be written the way it
-// appears in source. "log.New(" deliberately also matches "slog.New(" and
-// "golog.New(": constructing any of those outside the seam is the same defect.
+// The scan is a substring match, so every entry is written the way it appears
+// in source.
 var bannedOutsideLoggerSeam = []string{
+	`"github.com/tochemey/goakt/v4/log"`,
+	"\t\"log\"\n",
+	"slog.New(",
+	"slog.Default(",
+	"slog.SetDefault(",
 	"slog.Debug(",
 	"slog.Info(",
 	"slog.Warn(",
 	"slog.Error(",
-	"slog.Default(",
-	"log.New(",
 	"log.Printf(",
 	"log.Println(",
+	"log.Fatal",
 	"fmt.Printf(",
 	"fmt.Println(",
 }
@@ -100,12 +101,12 @@ func isScannedGoSource(path string) bool {
 	}
 }
 
-// TestNoParallelLoggingBackendInFirstPartyCode guards the logging boundary. No
-// first-party production file may construct a concrete backend, and none but
-// the seam file itself may write a record outside the ego.Logger it was given,
-// because the only supported way to choose a backend is to implement
-// ego.Logger and pass it through WithLogger.
-func TestNoParallelLoggingBackendInFirstPartyCode(t *testing.T) {
+// TestKitLoggerIsTheOnlyLoggingBackend guards the logging boundary. No
+// first-party production file may construct a concrete third-party logger, and
+// none but the seam file may reach for GoAkt's logging API or the standard
+// library's, because the only supported way to log is through the kit-logger
+// Logger the application passes to WithLogger.
+func TestKitLoggerIsTheOnlyLoggingBackend(t *testing.T) {
 	root, err := os.Getwd()
 	require.NoError(t, err)
 
@@ -140,7 +141,7 @@ func TestNoParallelLoggingBackendInFirstPartyCode(t *testing.T) {
 			// Assert on a boolean rather than the file body so a failure names
 			// the offending path and construct instead of dumping the source.
 			require.Falsef(t, strings.Contains(string(content), banned),
-				"%s must not use %q: derive the default from ego.Logger instead", rel, banned)
+				"%s must not use %q: log through kit-logger instead", rel, banned)
 		}
 
 		if rel == loggerSeamFile {
@@ -148,7 +149,7 @@ func TestNoParallelLoggingBackendInFirstPartyCode(t *testing.T) {
 		}
 		for _, banned := range bannedOutsideLoggerSeam {
 			require.Falsef(t, strings.Contains(string(content), banned),
-				"%s must not use %q: log through the ego.Logger it was given, not a parallel backend",
+				"%s must not use %q: log through the kit-logger Logger it was given, not a parallel backend",
 				rel, banned)
 		}
 		return nil

@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/atomic"
@@ -56,7 +55,7 @@ import (
 func TestProjection(t *testing.T) {
 	t.Run("With happy path", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -146,7 +145,7 @@ func TestProjection(t *testing.T) {
 	})
 	t.Run("With unhandled message result in deadletter", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 
@@ -207,7 +206,7 @@ func TestProjection(t *testing.T) {
 	})
 	t.Run("With dead letter handler", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -277,7 +276,7 @@ func TestProjection(t *testing.T) {
 	})
 	t.Run("With event adapters extension", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -350,7 +349,7 @@ func TestProjection(t *testing.T) {
 	})
 	t.Run("With encryptor extension", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -420,7 +419,7 @@ func TestProjection(t *testing.T) {
 	})
 	t.Run("With telemetry extension", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -496,7 +495,7 @@ func TestProjection(t *testing.T) {
 func TestProjectionActorPreStartFailure(t *testing.T) {
 	t.Run("fails when runner Start returns an error", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		resetAt := time.Now().UTC()
@@ -542,7 +541,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 func TestProjectionActorRunnerFailure(t *testing.T) {
 	t.Run("recovers from transient store failure without restarting", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -627,7 +626,7 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 	})
 	t.Run("stops on unprocessable event", func(t *testing.T) {
 		ctx := context.TODO()
-		logger := log.DiscardLogger
+		logger := newLoggerAdapter(DiscardLogger)
 
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()

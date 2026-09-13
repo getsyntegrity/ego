@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"time"
 
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/tochemey/ego/v4/egopb"
@@ -58,7 +58,7 @@ type SagaActor struct {
 	// consumeEvents goroutine can use them safely after the ReceiveContext
 	// from PostStart has been returned to the pool.
 	actorSystem goakt.ActorSystem
-	logger      log.Logger
+	logger      kitlog.Logger
 	self        *goakt.PID
 
 	// stopCh is used to stop the event consumption loop
@@ -129,7 +129,7 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 	case *goakt.PostStart:
 		// Capture stable references before the ReceiveContext is returned to the pool.
 		s.actorSystem = ctx.ActorSystem()
-		s.logger = ctx.Logger()
+		s.logger = kitLoggerFrom(ctx.Logger())
 		s.self = ctx.Self()
 		// Start consuming events from the stream
 		go s.consumeEvents()
@@ -143,7 +143,7 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 	case *sagaTimeoutMsg:
 		if s.status == SagaRunning {
 			s.status = SagaCompensating
-			s.compensate(ctx.Logger(), ctx.ActorSystem())
+			s.compensate(s.logger, ctx.ActorSystem())
 		}
 	case *egopb.GetStateCommand:
 		s.replyWithState(ctx)
@@ -240,7 +240,7 @@ func (s *SagaActor) consumeEvents() {
 			}
 
 			if err := s.actorSystem.NoSender().Tell(context.Background(), s.self, event); err != nil {
-				s.logger.Errorf("saga %s: failed to forward event to mailbox: %v", s.sagaID, err)
+				s.logger.Error("saga: failed to forward event to mailbox", "saga_id", s.sagaID, "error", err)
 			}
 		}
 	}
@@ -255,13 +255,13 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 
 	eventMsg, err := event.GetEvent().UnmarshalNew()
 	if err != nil {
-		s.logger.Errorf("saga %s: failed to unmarshal event: %v", s.sagaID, err)
+		s.logger.Error("saga: failed to unmarshal event", "saga_id", s.sagaID, "error", err)
 		return
 	}
 
 	action, err := s.behavior.HandleEvent(context.Background(), eventMsg, s.currentState)
 	if err != nil {
-		s.logger.Errorf("saga %s: HandleEvent failed: %v", s.sagaID, err)
+		s.logger.Error("saga: HandleEvent failed", "saga_id", s.sagaID, "error", err)
 		return
 	}
 
@@ -277,7 +277,7 @@ func (s *SagaActor) processAction(action *SagaAction) {
 	// Persist saga events
 	if len(action.Events) > 0 {
 		if err := s.persistAndApplyEvents(context.Background(), action.Events); err != nil {
-			s.logger.Errorf("saga %s: failed to persist events: %v", s.sagaID, err)
+			s.logger.Error("saga: failed to persist events", "saga_id", s.sagaID, "error", err)
 			return
 		}
 	}
@@ -338,7 +338,7 @@ func (s *SagaActor) sendCommand(cmd SagaCommand) {
 	if err != nil {
 		action, handleErr := s.behavior.HandleError(ctx, cmd.EntityID, err, s.currentState)
 		if handleErr != nil {
-			s.logger.Errorf("saga %s: HandleError failed for entity %s: %v", s.sagaID, cmd.EntityID, handleErr)
+			s.logger.Error("saga: HandleError failed", "saga_id", s.sagaID, "entity_id", cmd.EntityID, "error", handleErr)
 			return
 		}
 		s.processAction(action)
@@ -348,7 +348,7 @@ func (s *SagaActor) sendCommand(cmd SagaCommand) {
 	// Parse the reply
 	commandReply, ok := reply.(*egopb.CommandReply)
 	if !ok {
-		s.logger.Errorf("saga %s: unexpected reply type from entity %s", s.sagaID, cmd.EntityID)
+		s.logger.Error("saga: unexpected reply type from entity", "saga_id", s.sagaID, "entity_id", cmd.EntityID)
 		return
 	}
 
@@ -356,7 +356,7 @@ func (s *SagaActor) sendCommand(cmd SagaCommand) {
 	if err != nil {
 		action, handleErr := s.behavior.HandleError(ctx, cmd.EntityID, err, s.currentState)
 		if handleErr != nil {
-			s.logger.Errorf("saga %s: HandleError failed for entity %s: %v", s.sagaID, cmd.EntityID, handleErr)
+			s.logger.Error("saga: HandleError failed", "saga_id", s.sagaID, "entity_id", cmd.EntityID, "error", handleErr)
 			return
 		}
 		s.processAction(action)
@@ -365,18 +365,18 @@ func (s *SagaActor) sendCommand(cmd SagaCommand) {
 
 	action, err := s.behavior.HandleResult(ctx, cmd.EntityID, resultState, s.currentState)
 	if err != nil {
-		s.logger.Errorf("saga %s: HandleResult failed for entity %s: %v", s.sagaID, cmd.EntityID, err)
+		s.logger.Error("saga: HandleResult failed", "saga_id", s.sagaID, "entity_id", cmd.EntityID, "error", err)
 		return
 	}
 	s.processAction(action)
 }
 
 // compensate executes the compensation logic defined by the behavior.
-func (s *SagaActor) compensate(logger log.Logger, actorSystem goakt.ActorSystem) {
+func (s *SagaActor) compensate(logger kitlog.Logger, actorSystem goakt.ActorSystem) {
 	ctx := context.Background()
 	commands, err := s.behavior.Compensate(ctx, s.currentState)
 	if err != nil {
-		logger.Errorf("saga %s: Compensate failed: %v", s.sagaID, err)
+		logger.Error("saga: Compensate failed", "saga_id", s.sagaID, "error", err)
 		s.status = SagaFailed
 		return
 	}
@@ -389,7 +389,7 @@ func (s *SagaActor) compensate(logger log.Logger, actorSystem goakt.ActorSystem)
 
 		noSender := actorSystem.NoSender()
 		if _, err := noSender.SendSync(ctx, cmd.EntityID, cmd.Command, timeout); err != nil {
-			logger.Errorf("saga %s: compensation command to %s failed: %v", s.sagaID, cmd.EntityID, err)
+			logger.Error("saga: compensation command failed", "saga_id", s.sagaID, "entity_id", cmd.EntityID, "error", err)
 			s.status = SagaFailed
 			return
 		}

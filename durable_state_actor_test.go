@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/proto"
@@ -64,7 +63,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -167,7 +166,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -261,7 +260,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -388,7 +387,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -437,7 +436,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -483,7 +482,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		// create an actor system with telemetry extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -539,7 +538,7 @@ func TestDurableStateBehavior(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
@@ -593,7 +592,7 @@ func TestDurableStateBehavior(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),

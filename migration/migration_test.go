@@ -24,9 +24,11 @@ package migration
 
 import (
 	"context"
-	"sync"
+	"log/slog"
 	"testing"
 
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
+	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -388,23 +390,23 @@ func TestMigratorOptions(t *testing.T) {
 
 	t.Run("WithLogger(nil) falls back to the default logger", func(t *testing.T) {
 		m := New(nil, nil, WithLogger(nil))
-		assert.Equal(t, ego.DefaultLogger, m.logger)
+		assert.Same(t, ego.DefaultLogger(), m.logger)
 	})
 
 	t.Run("WithLogger with a typed-nil logger falls back to the default logger", func(t *testing.T) {
-		var typedNil *recordingLogger
+		var typedNil *kitlogtest.MockLogger
 		m := New(nil, nil, WithLogger(typedNil))
-		assert.Equal(t, ego.DefaultLogger, m.logger)
+		assert.Same(t, ego.DefaultLogger(), m.logger)
 	})
 }
 
 func TestMigratorRunWithNilLogger(t *testing.T) {
 	tests := []struct {
 		name   string
-		logger ego.Logger
+		logger kitlog.Logger
 	}{
 		{"untyped nil", nil},
-		{"typed nil", (*recordingLogger)(nil)},
+		{"typed nil", (*kitlogtest.MockLogger)(nil)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -433,53 +435,27 @@ func TestMigratorRunWithNilLogger(t *testing.T) {
 	}
 }
 
-// recordingLogger implements ego.Logger and records every message it receives,
+// messagesAt returns the messages a MockLogger captured at the given level,
 // so a test can prove a caller-supplied logger really reaches the Migrator's
 // logging call sites.
-type recordingLogger struct {
-	mu       sync.Mutex
-	debugMsg []string
-	infoMsg  []string
+func messagesAt(logger *kitlogtest.MockLogger, level slog.Level) []string {
+	var msgs []string
+	for _, entry := range logger.Entries {
+		if entry.Level == level {
+			msgs = append(msgs, entry.Message)
+		}
+	}
+	return msgs
 }
 
-func (r *recordingLogger) Debug(msg string, _ ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.debugMsg = append(r.debugMsg, msg)
-}
-
-func (r *recordingLogger) Info(msg string, _ ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.infoMsg = append(r.infoMsg, msg)
-}
-
-func (r *recordingLogger) Warn(string, ...any)  {}
-func (r *recordingLogger) Error(string, ...any) {}
-
-func (r *recordingLogger) infos() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.infoMsg...)
-}
-
-func (r *recordingLogger) debugs() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.debugMsg...)
-}
-
-// compile-time check that the fake satisfies the public logging seam.
-var _ ego.Logger = (*recordingLogger)(nil)
-
-func TestMigratorUsesEgoLogger(t *testing.T) {
-	t.Run("defaults to ego.DefaultLogger", func(t *testing.T) {
+func TestMigratorUsesKitLogger(t *testing.T) {
+	t.Run("defaults to ego.DefaultLogger()", func(t *testing.T) {
 		m := New(nil, nil)
-		assert.Equal(t, ego.DefaultLogger, m.logger)
+		assert.Same(t, ego.DefaultLogger(), m.logger)
 	})
 
-	t.Run("WithLogger injects a custom ego.Logger", func(t *testing.T) {
-		logger := &recordingLogger{}
+	t.Run("WithLogger injects a custom kit-logger Logger", func(t *testing.T) {
+		logger := kitlogtest.NewMockLogger()
 		m := New(nil, nil, WithLogger(logger))
 		assert.Same(t, logger, m.logger)
 	})
@@ -500,11 +476,11 @@ func TestMigratorUsesEgoLogger(t *testing.T) {
 
 		writeLegacyEvent(t, eventStore, "entity-1", 1, eventAny, stateAny, 100, 0)
 
-		logger := &recordingLogger{}
+		logger := kitlogtest.NewMockLogger()
 		migrator := New(eventStore, snapshotStore, WithLogger(logger))
 		require.NoError(t, migrator.Run(ctx))
 
-		assert.Contains(t, logger.infos(), "migration: completed successfully, processed 1 entities")
-		assert.Contains(t, logger.debugs(), "migration: entity entity-1 snapshot written at sequence 1")
+		assert.Contains(t, messagesAt(logger, slog.LevelInfo), "migration: completed successfully")
+		assert.Contains(t, messagesAt(logger, slog.LevelDebug), "migration: snapshot written")
 	})
 }

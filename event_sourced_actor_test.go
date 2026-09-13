@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
@@ -80,7 +79,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -189,7 +188,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -284,7 +283,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -353,7 +352,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -489,7 +488,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -620,7 +619,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -704,7 +703,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -749,7 +748,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -801,7 +800,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -875,7 +874,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -958,7 +957,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with telemetry extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1045,7 +1044,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with encryptor extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1129,7 +1128,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1214,7 +1213,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1322,7 +1321,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with event adapters extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1410,7 +1409,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with encryption and snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1468,7 +1467,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// start a NEW actor system with the same stores and encryption
 		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream2),
@@ -1541,7 +1540,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// first actor system: send commands with encryption (no snapshot store)
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1573,7 +1572,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// second actor system: recover from encrypted events (no snapshot)
 		eventStream2 := eventstream.New()
 		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream2),
@@ -1635,7 +1634,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1726,7 +1725,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1762,7 +1761,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistenceID).Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1815,7 +1814,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-ciphertext"), "key-1").Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1871,7 +1870,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-ciphertext"), "key-1").Return([]byte("not-valid-proto"), nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1921,7 +1920,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1974,7 +1973,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-cipher"), "key-1").Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2026,7 +2025,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-cipher"), "key-1").Return([]byte("not-valid-proto"), nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2074,7 +2073,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		adapter.EXPECT().Adapt(mock.Anything, uint64(1)).Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2118,7 +2117,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2164,7 +2163,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewFailingHandleEventBehavior(persistenceID)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2201,7 +2200,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2256,7 +2255,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2320,7 +2319,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2384,7 +2383,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistenceID, uint64(2)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2450,7 +2449,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2500,7 +2499,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2599,7 +2598,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2672,7 +2671,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2748,7 +2747,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2803,7 +2802,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2861,7 +2860,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2928,7 +2927,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3012,7 +3011,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3065,7 +3064,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3118,7 +3117,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3172,7 +3171,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3230,7 +3229,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3285,7 +3284,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3336,7 +3335,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3390,7 +3389,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3452,7 +3451,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3507,7 +3506,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3591,7 +3590,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3714,7 +3713,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3877,7 +3876,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3999,7 +3998,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4123,7 +4122,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),

@@ -4,8 +4,8 @@ go 1.26.0
 
 require (
 	github.com/IBM/sarama v1.60.2
+	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/tochemey/ego/v4 v4.4.3
-	github.com/tochemey/goakt/v4 v4.5.2
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -75,11 +75,13 @@ require (
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.29 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/tochemey/goakt/v4 v4.5.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	go.mongodb.org/mongo-driver v1.17.9 // indirect
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
 
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics

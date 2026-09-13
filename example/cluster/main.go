@@ -37,7 +37,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -46,6 +45,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
+	kitotel "github.com/pablogore/kit-logger/pkg/logger/otel"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	gerrors "github.com/tochemey/goakt/v4/errors"
 	"github.com/tochemey/goakt/v4/remote"
@@ -58,6 +59,17 @@ import (
 )
 
 const projectionName = "account-balances"
+
+// logger is the kit-logger Logger the whole process logs through: this
+// program, eGo, and the actor system. Records carry the OpenTelemetry
+// trace_id/span_id of the context they are written with, so a log line can
+// be joined to its trace in Jaeger.
+var logger = kitlog.New(kitlog.Config{
+	Level:          kitlog.LevelInfo,
+	Format:         kitlog.FormatJSON,
+	GlobalFields:   map[string]string{"service": "ego-cluster"},
+	ContextHandler: kitotel.Decorator(kitotel.Options{}),
+})
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -73,28 +85,28 @@ func main() {
 
 	tel, telShutdown, err := setupTelemetry(ctx, "ego-cluster")
 	if err != nil {
-		slog.Error("failed to setup telemetry", "err", err)
+		logger.Error("failed to setup telemetry", "error", err)
 		os.Exit(1)
 	}
 	defer telShutdown(context.Background())
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		slog.Error("failed to create connection pool", "err", err)
+		logger.Error("failed to create connection pool", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
 	eventStore := NewPostgresEventStore(dsn)
 	if err := eventStore.Connect(ctx); err != nil {
-		slog.Error("failed to connect event store", "err", err)
+		logger.Error("failed to connect event store", "error", err)
 		os.Exit(1)
 	}
 	defer eventStore.Disconnect(ctx)
 
 	offsetStore := NewPostgresOffsetStore(dsn)
 	if err := offsetStore.Connect(ctx); err != nil {
-		slog.Error("failed to connect offset store", "err", err)
+		logger.Error("failed to connect offset store", "error", err)
 		os.Exit(1)
 	}
 	defer offsetStore.Disconnect(ctx)
@@ -107,11 +119,12 @@ func main() {
 		"peers",
 	)
 
-	projectionHandler := NewAccountBalanceHandler(pool)
+	projectionHandler := NewAccountBalanceHandler(pool, logger)
 
 	// Build the eGo Config once; the same instance is passed to both the
 	// actor system (for extension wiring) and the engine.
 	cfg := ego.NewConfig(eventStore,
+		ego.WithLogger(logger),
 		ego.WithOffsetStore(offsetStore),
 		ego.WithTelemetry(tel),
 		ego.WithProjection(projectionName, &projection.Options{
@@ -145,21 +158,21 @@ func main() {
 
 	sys, err := goakt.NewActorSystem("ego-cluster", goaktOpts...)
 	if err != nil {
-		slog.Error("failed to build actor system", "err", err)
+		logger.Error("failed to build actor system", "error", err)
 		os.Exit(1)
 	}
 	if err := sys.Start(ctx); err != nil {
-		slog.Error("failed to start actor system", "err", err)
+		logger.Error("failed to start actor system", "error", err)
 		os.Exit(1)
 	}
 
 	engine, err := ego.NewEngine(sys, cfg)
 	if err != nil {
-		slog.Error("failed to create engine", "err", err)
+		logger.Error("failed to create engine", "error", err)
 		os.Exit(1)
 	}
 	if err := engine.Start(ctx); err != nil {
-		slog.Error("failed to start engine", "err", err)
+		logger.Error("failed to start engine", "error", err)
 		os.Exit(1)
 	}
 
@@ -167,15 +180,15 @@ func main() {
 	// In cluster mode, StartProjection automatically runs it as a singleton on the
 	// oldest node. If that node leaves, it migrates to the new oldest node.
 	if err := engine.StartProjection(ctx, projectionName); err != nil {
-		slog.Error("failed to add projection", "err", err)
+		logger.Error("failed to add projection", "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("engine started",
+	logger.Info("engine started",
 		"node", nodeIP,
-		"remotingPort", remotingPort,
-		"discoveryPort", discoveryPort,
-		"peersPort", peersPort,
+		"remoting_port", remotingPort,
+		"discovery_port", discoveryPort,
+		"peers_port", peersPort,
 	)
 
 	mux := http.NewServeMux()
@@ -325,9 +338,9 @@ func main() {
 
 	// Start HTTP server in background.
 	go func() {
-		slog.Info("http server listening", "port", httpPort)
+		logger.Info("http server listening", "port", httpPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("http server error", "err", err)
+			logger.Error("http server error", "error", err)
 		}
 	}()
 
@@ -335,7 +348,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	slog.Info("shutting down...")
+	logger.Info("shutting down...")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -344,13 +357,13 @@ func main() {
 	_ = server.Shutdown(shutdownCtx)
 	_ = engine.Stop(shutdownCtx)
 	_ = sys.Stop(shutdownCtx)
-	slog.Info("shutdown complete")
+	logger.Info("shutdown complete")
 }
 
 func requireEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		slog.Error("required environment variable not set", "key", key)
+		logger.Error("required environment variable not set", "key", key)
 		os.Exit(1)
 	}
 	return v
@@ -363,7 +376,7 @@ func envInt(key string, defaultVal int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		slog.Error("invalid integer env var", "key", key, "value", v)
+		logger.Error("invalid integer env var", "key", key, "value", v)
 		os.Exit(1)
 	}
 	return n

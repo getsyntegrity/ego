@@ -7,6 +7,7 @@ replace github.com/tochemey/ego/v4 => ../../
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/tochemey/ego/v4 v4.4.3
 	github.com/tochemey/goakt/v4 v4.5.4
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0

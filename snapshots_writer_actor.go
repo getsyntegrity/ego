@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -70,6 +71,7 @@ type persistSnapshotRequest struct {
 type snapshotsWriterActor struct {
 	snapshotStore persistence.SnapshotStore
 	encryptor     encryption.Encryptor
+	logger        kitlog.Logger
 }
 
 var _ goakt.Actor = (*snapshotsWriterActor)(nil)
@@ -82,6 +84,7 @@ func newSnapshotsWriterActor() *snapshotsWriterActor {
 // PreStart loads the snapshot store and optional encryptor from the actor
 // system extensions.
 func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
+	a.logger = kitLoggerFrom(ctx.Logger())
 	if ext := ctx.Extension(extensions.SnapshotStoreExtensionID); ext != nil {
 		a.snapshotStore = ext.(*extensions.SnapshotStoreExt).Underlying()
 	}
@@ -121,8 +124,10 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 	if a.encryptor != nil && snapshot.GetState() != nil {
 		encrypted, err := a.encryptSnapshotState(ctx.Context(), snapshot)
 		if err != nil {
-			ctx.Logger().Errorf("failed to encrypt snapshot for %s at sequence %d: %s",
-				snapshot.GetPersistenceId(), snapshot.GetSequenceNumber(), err)
+			a.logger.ErrorContext(ctx.Context(), "failed to encrypt snapshot",
+				"persistence_id", snapshot.GetPersistenceId(),
+				"sequence_number", snapshot.GetSequenceNumber(),
+				"error", err)
 			return
 		}
 		snapshot = encrypted
@@ -131,8 +136,10 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 	if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
 		return a.snapshotStore.WriteSnapshot(ctx.Context(), snapshot)
 	}); err != nil {
-		ctx.Logger().Errorf("failed to persist snapshot for %s at sequence %d: %s",
-			snapshot.GetPersistenceId(), snapshot.GetSequenceNumber(), err)
+		a.logger.ErrorContext(ctx.Context(), "failed to persist snapshot",
+			"persistence_id", snapshot.GetPersistenceId(),
+			"sequence_number", snapshot.GetSequenceNumber(),
+			"error", err)
 		return
 	}
 

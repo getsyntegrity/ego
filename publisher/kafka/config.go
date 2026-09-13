@@ -27,8 +27,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-
-	ego "github.com/tochemey/ego/v4"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 )
 
 // Config is a set of base config values required for connecting to Kafka
@@ -53,8 +52,8 @@ type Config struct {
 	EventsTopic string
 	// StateTopic is the topic for publishing state changes.
 	StateTopic string
-	// Logger is the logger for the publisher.
-	Logger ego.Logger
+	// Logger is the kit-logger Logger for the publisher.
+	Logger kitlog.Logger
 }
 
 func toSaramaConfig(config *Config) *sarama.Config {

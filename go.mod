@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/flowchartsman/retry v1.2.0
 	github.com/google/uuid v1.6.0
+	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/stretchr/testify v1.12.1
 	github.com/tochemey/goakt/v4 v4.5.4
 	github.com/travisjeffery/go-dynaport v1.0.0
@@ -69,6 +70,7 @@ require (
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
 
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics

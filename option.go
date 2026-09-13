@@ -23,6 +23,7 @@
 package ego
 
 import (
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
@@ -47,7 +48,7 @@ type Config struct {
 	stateStore    persistence.StateStore
 	offsetStore   offsetstore.OffsetStore
 	snapshotStore persistence.SnapshotStore
-	logger        Logger
+	logger        kitlog.Logger
 	projections   map[string]*projection.Options
 	eventAdapters []eventadapter.EventAdapter
 	telemetry     *Telemetry
@@ -74,7 +75,6 @@ type Config struct {
 func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 	c := &Config{
 		eventsStore: eventsStore,
-		logger:      DefaultLogger,
 		eventStream: eventstream.New(),
 	}
 
@@ -82,9 +82,9 @@ func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 		opt.Apply(c)
 	}
 
-	if isNilLogger(c.logger) {
-		c.logger = DefaultLogger
-	}
+	// Options may have set a nil or typed-nil logger, which would panic on the
+	// first log call. Resolving after the loop covers every option path.
+	c.logger = ResolveLogger(c.logger)
 	return c
 }
 
@@ -196,13 +196,14 @@ func (f OptionFunc) Apply(c *Config) {
 	f(c)
 }
 
-// WithLogger sets the logger used by the engine and the goakt actor system
-// it sits on.
+// WithLogger sets the kit-logger Logger used by the engine and the goakt
+// actor system it sits on.
 //
-// When unset, eGo uses a slog-backed default. The same logger is adapted
-// into the goakt logger so the actor system, eGo's internals, and the caller
-// log through one backend.
-func WithLogger(logger Logger) Option {
+// When unset, or when the given logger is nil or a typed-nil pointer, eGo
+// logs through DefaultLogger(): kit-logger's process-wide logger. The same
+// logger is adapted into the goakt logger so the actor system, eGo's
+// internals, and the caller log through one backend.
+func WithLogger(logger kitlog.Logger) Option {
 	return OptionFunc(func(c *Config) {
 		c.logger = logger
 	})

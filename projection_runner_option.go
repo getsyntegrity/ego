@@ -25,7 +25,7 @@ package ego
 import (
 	"time"
 
-	"github.com/tochemey/goakt/v4/log"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
 	"github.com/tochemey/ego/v4/encryption"
 	"github.com/tochemey/ego/v4/eventadapter"
@@ -79,8 +79,8 @@ func withResetOffset(resetOffset time.Time) runnerOption {
 	})
 }
 
-// WithLogger sets the actor system custom log
-func withLogger(logger log.Logger) runnerOption {
+// withLogger sets the kit-logger Logger the runner writes its records to.
+func withLogger(logger kitlog.Logger) runnerOption {
 	return runnerOptionFunc(func(runner *projectionRunner) {
 		runner.logger = logger
 	})

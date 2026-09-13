@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -79,7 +78,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -108,7 +107,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -142,7 +141,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -182,7 +181,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -225,7 +224,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -269,7 +268,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -319,7 +318,7 @@ func TestSagaActor(t *testing.T) {
 
 		applied := make(chan struct{}, 1)
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -370,7 +369,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -417,7 +416,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -469,7 +468,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -538,7 +537,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -581,7 +580,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -635,7 +634,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -695,7 +694,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -761,7 +760,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -833,7 +832,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -898,7 +897,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -955,7 +954,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1005,7 +1004,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1072,7 +1071,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1133,7 +1132,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1202,7 +1201,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1254,7 +1253,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1309,7 +1308,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1387,7 +1386,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1449,7 +1448,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1514,7 +1513,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1585,7 +1584,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1660,7 +1659,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1736,7 +1735,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1817,7 +1816,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1896,7 +1895,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),

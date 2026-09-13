@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/tochemey/ego/v4/egopb"
@@ -57,7 +56,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -114,7 +113,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor := encryption.NewAESEncryptor(keyStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -175,7 +174,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -243,7 +242,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -308,7 +307,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -361,7 +360,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, "entity-1", mock.Anything).Return(nil, "", assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -415,7 +414,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -461,7 +460,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(log.DiscardLogger),
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),

@@ -53,34 +53,3 @@ jobs:
           files: ./coverage.out # optional
           fail_ci_if_error: false # optional (default = false)
           verbose: false # optional (default = false)
-
-  compat-kitlogger:
-    # The kit-logger adapter is a separate module, so the root job above never
-    # compiles it. It is the recommended logging backend, and it is the first
-    # thing a change to the ego.Logger seam breaks, so it gets its own job.
-    runs-on: ubuntu-latest
-    env:
-      FORCE_COLOR: 1
-    defaults:
-      run:
-        working-directory: compat/kitlogger
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.27.0"
-          check-latest: false
-          cache-dependency-path: "**/*.sum"
-      - name: Install dependencies
-        run: go mod download
-      - name: Run Linter
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.1
-          # The module is not vendored, unlike the root one the config targets.
-          args: --timeout 10m --config ../../.golangci.yml --modules-download-mode=mod
-          working-directory: compat/kitlogger
-      - name: Run tests
-        run: go test -race -timeout 0 -v ./...

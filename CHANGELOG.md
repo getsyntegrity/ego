@@ -8,68 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### 💥 Breaking Changes
 
-- **`migration.WithLogger` now takes `ego.Logger` instead of `github.com/tochemey/goakt/v4/log.Logger`.** The migrator logs through eGo's own logging seam, so a single `ego.Logger` implementation now covers the engine and the migrator instead of one per backend. Existing calls that passed a GoAkt logger no longer compile:
+- **eGo logs through [kit-logger](https://github.com/pablogore/kit-logger).** The `ego.Logger` seam and its optional capability interfaces (`LeveledLogger`, `EnabledLogger`, `ContextLogger`, `FieldLogger`), the `WithFields` helper and the `DefaultLogger` variable are gone. Every logging surface of the framework now takes a `github.com/pablogore/kit-logger/pkg/logger.Logger`:
 
   ```go
-  migration.WithLogger(myEgoLogger)
+  import kitlog "github.com/pablogore/kit-logger/pkg/logger"
+
+  logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatJSON})
+  cfg := ego.NewConfig(store, ego.WithLogger(logger))
   ```
 
-  The default also changes from `log.DefaultLogger` (zap to stdout) to `ego.DefaultLogger` (`log/slog`). Rendered message text is unchanged.
+  - `ego.WithLogger`, `migration.WithLogger` and `kafka.Config.Logger` take a kit-logger `Logger`. A custom `ego.Logger` implementation no longer compiles; wrap the backend as a kit-logger `Logger` instead, or hand kit-logger a `slog.Handler` through `Config.Sink`.
+  - `ego.DefaultLogger` is now a function. It returns kit-logger's process-wide logger (`logger.L()`), so an application that calls `logger.SetGlobal` before building the engine gets eGo's records through it without passing `WithLogger` at all. When nothing is configured, kit-logger's default writes text to stdout at `info`.
+  - `ego.DiscardLogger` is a kit-logger `Logger` whose sink drops every record and whose level gate reports every level as disabled, so it keeps working wherever it was used.
+  - `ego.ResolveLogger` keeps its role — a nil or typed-nil logger resolves to `DefaultLogger()` — with the kit-logger type.
 
-- **`kafka.Config.Logger` now takes `ego.Logger` instead of `github.com/tochemey/goakt/v4/log.Logger`.** The field was never read anywhere in the `publisher/kafka` module, so nothing changes at runtime, but code that assigned a GoAkt logger to it no longer compiles:
+  The same logger is adapted into the GoAkt actor system, so the actor runtime, eGo's internals and the application log through one backend. The adapter forwards the engine's `context.Context` verbatim, builds child loggers with kit-logger's own `With`, answers GoAkt's level checks from the logger's live level, so a runtime `SetLevel` is honored on the next record, and skips its own frame through kit-logger's `CallerSkipper`, so a record written with `Config.AddSource` names GoAkt's call site rather than eGo's adapter.
 
-  ```go
-  cfg := &kafka.Config{Logger: myEgoLogger}
-  ```
+- **eGo's own records are structured.** Every record the engine, the projection runner, the saga actor, the snapshot and retention actors and the migrator write is now a fixed message with snake_case fields (`publisher`, `topic`, `persistence_id`, `sequence_number`, `version`, `projection`, `attempt`, `retry_in`, `saga_id`, `entity_id`, `entities`, `error`) instead of a message rendered with `fmt.Sprintf`. Log-based alerts or dashboards that matched the old message text need updating; nothing about *when* a record is written or at which level has changed.
 
-### ✨ Features
-
-- **`ego.EnabledLogger` lets a Logger answer level checks exactly.** A `Logger` that implements it becomes the sole authority on log-level gating, so the engine stops inferring levels:
-
-  ```go
-  func (l *myLogger) Enabled(ctx context.Context, level slog.Level) bool {
-      return l.handler.Enabled(ctx, level)
-  }
-  ```
-
-  The signature mirrors `log/slog`'s own `Handler.Enabled`, so any slog-backed logger satisfies it trivially and gating costs no string formatting on the hot path. `LeveledLogger` keeps working unchanged and is used when `EnabledLogger` is absent.
-
-- **`ego.ContextLogger` lets a Logger receive the `context.Context` of a log call.** A `Logger` that implements it is handed the engine's own context verbatim, so a backend can enrich records from it:
-
-  ```go
-  func (l *myLogger) InfoContext(ctx context.Context, msg string, args ...any) {
-      l.handler.Handle(ctx, record(msg, args))
-  }
-  ```
-
-  The adapter previously discarded every context the engine supplied. A `Logger` that does not implement it keeps using the context-free methods; no context is ever fabricated to fill the gap.
-
-- **`ego.FieldLogger` and `ego.WithFields` build component-tagged loggers.** A `Logger` that implements `FieldLogger` has its own child loggers used by the engine instead of the adapter replaying accumulated fields on every record, and the new helper works whatever the backend supports:
-
-  ```go
-  logger := ego.WithFields(cfg.Logger, "component", "projection")
-  ```
-
-  `WithFields` uses the native child logger when one is available and otherwise wraps the logger. The wrapper reports only the capabilities it genuinely owns — `Logger` and `FieldLogger` — so `_, ok := logger.(ContextLogger)` keeps answering whether the *backend* understands context rather than reporting `true` merely because something wrapped it:
-
-  ```go
-  wrapped := ego.WithFields(plainLogger, "component", "projection")
-  _, ok := wrapped.(ego.ContextLogger) // false — the backend has no context support
-  ```
-
-  Tagging fields still never downgrades level gating or context propagation: the engine resolves `EnabledLogger`, `LeveledLogger` and `ContextLogger` on the wrapped logger through an unexported unwrap protocol, and replays the wrapper's own fields when it routes there, so every record carries them exactly once.
-
-- **`DiscardLogger` now reports every level as disabled**, so the engine skips message formatting entirely for it, and **`DefaultLogger` answers level checks from `slog.Default()` on every call**, so gating tracks `slog.SetDefault` instead of a snapshot taken when the engine was configured.
+  Records written with a context now go through the `*Context` methods, so a kit-logger configured with its OpenTelemetry decorator (`pkg/logger/otel`) stamps `trace_id`/`span_id` on eGo's records for free.
 
 ### 🐛 Bug Fixes
 
-- **A custom `ego.Logger` no longer loses all engine DEBUG output.** The logger adapter used to snapshot the log level once, when the engine was configured, and to assume `info` for any `Logger` that did not implement `LeveledLogger` — including `ego.DefaultLogger`. The engine guards every DEBUG record with a level check, so those records were dropped before reaching the logger, no matter how the logger itself was configured.
+- **`migration.WithLogger(nil)` no longer panics.** The migrator stored whatever the option supplied, so a nil — or a typed-nil such as `(*myLogger)(nil)` — replaced the default and the first log call inside `Run` dereferenced it. `migration.New` now resolves the logger after applying every option, so a nil or typed-nil logger falls back to `ego.DefaultLogger()`, the same semantics the engine already applied to `ego.WithLogger`. The `ego.ResolveLogger` helper exposes that single rule to packages outside the root instead of each one re-implementing typed-nil detection.
 
-  The level is now resolved per call: `EnabledLogger` first, then `LeveledLogger` re-read on every check so a runtime level change is honored, and otherwise permissive — the adapter no longer filters on behalf of a `Logger` that never declared a level.
+### ⬆️ Dependencies
 
-  **This is a visible behaviour change.** A `Logger` that implements neither optional interface will now receive engine DEBUG records it previously never saw. Implement `EnabledLogger` (or `LeveledLogger`) to gate them, or filter inside the logger.
-
-- **`migration.WithLogger(nil)` no longer panics.** The migrator stored whatever the option supplied, so a nil — or a typed-nil such as `(*myLogger)(nil)` — replaced the default and the first log call inside `Run` dereferenced it. `migration.New` now resolves the logger after applying every option, so a nil or typed-nil logger falls back to `ego.DefaultLogger`, the same semantics the engine already applied to `ego.WithLogger`. The new `ego.ResolveLogger` helper exposes that single rule to packages outside the root instead of each one re-implementing typed-nil detection.
+- Add `github.com/pablogore/kit-logger`.
 
 ## [v4.4.3] - 2026-08-15
 

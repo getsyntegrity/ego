@@ -1,0 +1,113 @@
+change: adopt-kit-logger
+created: 2026-09-09
+closed: 2026-09-13
+status: archived
+artifact_store: hybrid
+pull_request: https://github.com/pablogore/ego/pull/6
+follow_up_issue: https://github.com/pablogore/ego/issues/7
+
+session:
+  execution_mode: auto
+  delivery_strategy: auto-chain
+  review_budget_lines: 400
+  chain_strategy: null   # not yet collected; needed before sdd-apply
+
+phases:
+  explore:
+    status: done
+    artifact: openspec/changes/archive/2026-09-13-adopt-kit-logger/exploration.md
+    engram_topics:
+      - sdd/adopt-kit-logger/explore
+      - sdd/adopt-kit-logger/explore-repo
+      - sdd/adopt-kit-logger/explore-external
+  pr_a_prime:
+    status: implemented
+    branch: feat/consolidate-logging-boundary
+    commits: [b0cc5ab, 852c5de, 5014d36, c50d597]
+    diff: 310 insertions / 24 deletions across 11 files
+    artifact: engram sdd/adopt-kit-logger/apply-progress
+  decision:
+    status: done
+    date: 2026-09-12
+    decided_by: user
+    summary: >
+      Adopt kit-logger as THE logging API of eGo, replacing the ego.Logger seam
+      entirely (not opt-in). kit-logger main at f602522 (2026-09-12) resolved
+      the blocking defects D1-D7 recorded in exploration.md: Prometheus is
+      opt-in (Config.MetricsHandler), the init-time stdout line is opt-in
+      (Config.LogInitialization), output is configurable (Config.Writer /
+      Config.Sink), Flush/Shutdown are real (ManagedLogger), every log method
+      has a level-disabled fast path, globals are atomic, and an OpenTelemetry
+      correlation decorator ships in pkg/logger/otel. kit-logger 17d1a6e (same
+      day) then added CallerSkipper/WithCallerSkip and made call-site
+      attribution opt-in under "source", so eGo's GoAkt adapter skips its own
+      frame and records name GoAkt's real call site; pin bumped accordingly.
+  apply:
+    status: done
+    branch: feat/adopt-kit-logger
+    pull_request: https://github.com/pablogore/ego/pull/6
+    commits: [dc900ad, b9381b1]
+    summary: >
+      logger.go rewritten as a thin kitlog.Logger -> GoAkt log.Logger adapter;
+      ego.WithLogger, migration.WithLogger, kafka.Config.Logger take
+      kitlog.Logger; DefaultLogger() returns kitlog.L(); DiscardLogger is a
+      kit-logger with a discard sink; engine, projection runner, saga actor,
+      janitor and snapshot writer log structured records through kit-logger;
+      examples converted; readme and CHANGELOG updated; architecture test now
+      bans GoAkt's log package and the standard library loggers outside
+      logger.go.
+  proposal: { status: superseded, reason: decision recorded above }
+  spec:     { status: superseded }
+  design:   { status: superseded }
+  tasks:    { status: superseded }
+  verify:
+    status: done
+    date: 2026-09-13
+    executed:
+      - "go vet ./... (root): clean"
+      - "golangci-lint run ./... (root, --modules-download-mode=mod): 0 issues"
+      - "go test -count=1 -p 1 -timeout 0 -race on every root-module package except egopb/test/example/mocks: all green except TestEventPublisherClusterHighPartitionCount"
+      - "TestEventPublisherClusterHighPartitionCount also fails on main with the branch stashed (3/3 runs, all shards 0); it uses DiscardLogger, so it is unrelated to this change"
+      - "go build + go vet in publisher/kafka, example/cluster, benchmark against kit-logger 17d1a6e: clean"
+      - "go test ./migration/...: green"
+      - "new logger tests cover routing of every GoAkt method, SetLevel tracking, context propagation, With accumulation, formatted-method fast path, Flush forwarding, DiscardLogger, ResolveLogger, the DefaultLogger() global hook, and call-site attribution on the GoAkt and actor paths"
+    not_executed:
+      - "GitHub CI: PR #6 has no status checks recorded (statusCheckRollup empty as of 2026-09-13)"
+      - "the compat/kitlogger module merged into main on 2026-09-12 (5f0bd13..418c822) was not built against this branch; it adapts the ego.Logger seam this change removes"
+  archive:
+    status: done
+    date: 2026-09-13
+    path: openspec/changes/archive/2026-09-13-adopt-kit-logger
+    residual_risks:
+      - >
+        PR #6 is CONFLICTING against main: main merged feat/kitlogger-backend
+        (opt-in compat/kitlogger adapter) after this branch was cut. Textual
+        conflicts in logger_architecture_test.go and readme.md; semantic
+        conflict in compat/kitlogger, which imports ego.Logger, ego.DefaultLogger
+        and the capability interfaces that no longer exist. Resolving requires a
+        product decision (drop or rewrite compat/kitlogger) before merge.
+        RESOLVED 2026-09-13: main merged into feat/adopt-kit-logger keeping the
+        branch's logger_architecture_test.go and readme.md; compat/kitlogger
+        and its CI jobs were removed because kit-logger is now eGo's Logger
+        type itself, so an adapter to the removed ego.Logger seam has no role.
+      - >
+        main pins kit-logger at 7125fc80ab54 (2026-08-25) in compat/kitlogger,
+        while this branch pins main@17d1a6e (2026-09-12) in root, publisher/kafka,
+        example/cluster and benchmark. Tracked as
+        https://github.com/pablogore/ego/issues/7.
+      - >
+        kit-logger has no tag past v0.1.1; every pin is a pseudo-version.
+      - >
+        No CI run has been recorded for PR #6.
+
+key_findings:
+  - The ego.Logger seam, WithLogger option, DiscardLogger, slog default and the
+    GoAkt loggerAdapter already exist and are public since v4.4.3.
+    (Superseded 2026-09-12: the seam was replaced by kit-logger's Logger.)
+  - kit-logger.Logger is a strict superset of ego.Logger, so *SlogLogger already
+    satisfies ego.Logger with zero adapter code.
+  - kit-logger has NO redaction and NO automatic OTel trace correlation, despite
+    its README claiming redaction.
+  - Zero first-party zap imports already; zap enters only via goakt/v4/log.
+  - The repo carries no vendor/ tree but the Makefile test target uses -mod=vendor,
+    so `make test` requires an out-of-band `go mod vendor`.

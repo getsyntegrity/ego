@@ -144,11 +144,10 @@ func TestOptionWithEventAdaptersMultiple(t *testing.T) {
 
 func TestOptionWithLoggerNilFallback(t *testing.T) {
 	// Passing a nil Logger via WithLogger should round-trip through
-	// NewConfig and land on the default logger (isNilLogger fallback).
+	// NewConfig and land on the default logger (ResolveLogger fallback).
 	c := NewConfig(nil, WithLogger(nil))
 	require.NotNil(t, c.logger)
-	_, ok := c.logger.(defaultLogger)
-	assert.True(t, ok, "expected defaultLogger fallback, got %T", c.logger)
+	assert.Same(t, DefaultLogger(), c.logger)
 }
 
 func TestConfigGoaktOptionsEncryptor(t *testing.T) {

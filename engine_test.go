@@ -298,7 +298,7 @@ func TestEngineHotPathGuards(t *testing.T) {
 		t.Helper()
 		e := &Engine{
 			eventsStore:   testkit.NewEventsStore(),
-			logger:        defaultLogger{},
+			logger:        DiscardLogger,
 			eventsStreams: syncmap.New[string, *eventsStream](),
 			statesStreams: syncmap.New[string, *statesStream](),
 		}
@@ -1430,7 +1430,7 @@ func TestToSupervisorDirectiveStop(t *testing.T) {
 func TestEngineStartWithoutActorSystem(t *testing.T) {
 	e := &Engine{
 		eventsStore:   testkit.NewEventsStore(),
-		logger:        defaultLogger{},
+		logger:        DiscardLogger,
 		eventsStreams: syncmap.New[string, *eventsStream](),
 		statesStreams: syncmap.New[string, *statesStream](),
 	}
@@ -1728,7 +1728,7 @@ func synthEngineWithStores(eventsStore persistence.EventsStore, snapStore persis
 		eventsStore:   eventsStore,
 		snapshotStore: snapStore,
 		offsetStore:   offsetStore,
-		logger:        defaultLogger{},
+		logger:        DiscardLogger,
 		eventsStreams: syncmap.New[string, *eventsStream](),
 		statesStreams: syncmap.New[string, *statesStream](),
 	}

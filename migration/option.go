@@ -22,7 +22,7 @@
 
 package migration
 
-import ego "github.com/tochemey/ego/v4"
+import kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
 // Option configures the Migrator.
 type Option interface {
@@ -42,11 +42,11 @@ func WithPageSize(size uint64) Option {
 	})
 }
 
-// WithLogger sets the logger used during migration. It accepts any
-// ego.Logger implementation, the same logging seam the engine uses.
-// When the option is not used, or when the given logger is nil or a typed-nil
-// pointer, the migrator logs through ego.DefaultLogger.
-func WithLogger(logger ego.Logger) Option {
+// WithLogger sets the kit-logger Logger used during migration, the same
+// logging seam the engine uses. When the option is not used, or when the
+// given logger is nil or a typed-nil pointer, the migrator logs through
+// ego.DefaultLogger().
+func WithLogger(logger kitlog.Logger) Option {
 	return optionFunc(func(m *Migrator) {
 		m.logger = logger
 	})

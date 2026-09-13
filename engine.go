@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/passivation"
@@ -113,7 +114,7 @@ type Engine struct {
 	offsetStore   offsetstore.OffsetStore
 	snapshotStore persistence.SnapshotStore
 	actorSystem   atomic.Pointer[actorSystemRef]
-	logger        Logger
+	logger        kitlog.Logger
 	started       atomic.Bool
 	eventStream   eventstream.Stream
 	mutex         sync.RWMutex
@@ -785,7 +786,7 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
-		engine.logger.Debug(fmt.Sprintf("%s subscribing to topic: %s", publisher.ID(), eventsTopic))
+		engine.logger.Debug("events publisher subscribing to topic", "publisher", publisher.ID(), "topic", eventsTopic)
 		engine.eventStream.Subscribe(subscriber, eventsTopic)
 
 		// create an instance of the event subscriber
@@ -799,7 +800,7 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 		engine.eventsStreams.Set(publisher.ID(), eventSubscriber)
 
 		// start the event publisher
-		engine.logger.Info(fmt.Sprintf("starting %s events publisher....", publisher.ID()))
+		engine.logger.Info("starting events publisher", "publisher", publisher.ID())
 		go engine.sendEvent(eventSubscriber)
 	}
 
@@ -826,7 +827,7 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
-		engine.logger.Debug(fmt.Sprintf("%s subscribing to topic: %s", publisher.ID(), statesTopic))
+		engine.logger.Debug("durable state publisher subscribing to topic", "publisher", publisher.ID(), "topic", statesTopic)
 		engine.eventStream.Subscribe(subscriber, statesTopic)
 
 		// create an instance of the state subscriber
@@ -840,7 +841,7 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 		engine.statesStreams.Set(publisher.ID(), stateSubscriber)
 
 		// start the state publisher
-		engine.logger.Info(fmt.Sprintf("starting %s durable state publisher....", publisher.ID()))
+		engine.logger.Info("starting durable state publisher", "publisher", publisher.ID())
 		go engine.sendState(stateSubscriber)
 	}
 
@@ -1179,18 +1180,18 @@ func (engine *Engine) sendEvent(stream *eventsStream) {
 			}
 
 			if err := stream.publisher.Publish(context.Background(), event); err != nil {
-				engine.logger.Error(fmt.Sprintf("(%s) failed to publish event=[persistenceID=%s, sequenceNumber=%d]: %s",
-					stream.publisher.ID(),
-					event.GetPersistenceId(),
-					event.GetSequenceNumber(),
-					err.Error()))
+				engine.logger.Error("failed to publish event",
+					"publisher", stream.publisher.ID(),
+					"persistence_id", event.GetPersistenceId(),
+					"sequence_number", event.GetSequenceNumber(),
+					"error", err)
 				continue
 			}
 
-			engine.logger.Info(fmt.Sprintf("(%s) successfully published event=[persistenceID=%s, sequenceNumber=%d]",
-				stream.publisher.ID(),
-				event.GetPersistenceId(),
-				event.GetSequenceNumber()))
+			engine.logger.Info("event published",
+				"publisher", stream.publisher.ID(),
+				"persistence_id", event.GetPersistenceId(),
+				"sequence_number", event.GetSequenceNumber())
 		}
 	}
 }
@@ -1226,18 +1227,18 @@ func (engine *Engine) sendState(stream *statesStream) {
 
 			publisher := stream.publisher
 			if err := publisher.Publish(context.Background(), msg); err != nil {
-				engine.logger.Error(fmt.Sprintf("(%s) failed to publish state=[persistenceID=%s, version=%d]: %s",
-					publisher.ID(),
-					msg.GetPersistenceId(),
-					msg.GetVersionNumber(),
-					err.Error()))
+				engine.logger.Error("failed to publish durable state",
+					"publisher", publisher.ID(),
+					"persistence_id", msg.GetPersistenceId(),
+					"version", msg.GetVersionNumber(),
+					"error", err)
 				continue
 			}
 
-			engine.logger.Info(fmt.Sprintf("(%s) successfully published state=[persistenceID=%s, version=%d]",
-				publisher.ID(),
-				msg.GetPersistenceId(),
-				msg.GetVersionNumber()))
+			engine.logger.Info("durable state published",
+				"publisher", publisher.ID(),
+				"persistence_id", msg.GetPersistenceId(),
+				"version", msg.GetVersionNumber())
 		}
 	}
 }

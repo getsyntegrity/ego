@@ -65,13 +65,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
@@ -83,10 +83,14 @@ import (
 func main() {
 	ctx := context.Background()
 
+	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// actor system it sits on, and this program
+	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
+
 	// Create the event store (in-memory for this example).
 	eventStore := testkit.NewEventsStore()
 	if err := eventStore.Connect(ctx); err != nil {
-		slog.Error("failed to connect event store", "err", err)
+		logger.Error("failed to connect event store", "error", err)
 		os.Exit(1)
 	}
 
@@ -94,25 +98,25 @@ func main() {
 	// the engine. cfg.GoaktOptions() wires the extensions eGo needs (events
 	// store, event stream, default supervisor, pubsub, logger adapter) at
 	// construction time.
-	cfg := ego.NewConfig(eventStore)
+	cfg := ego.NewConfig(eventStore, ego.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("FundTransferExample", cfg.GoaktOptions()...)
 	if err != nil {
-		slog.Error("failed to build actor system", "err", err)
+		logger.Error("failed to build actor system", "error", err)
 		os.Exit(1)
 	}
 	if err := sys.Start(ctx); err != nil {
-		slog.Error("failed to start actor system", "err", err)
+		logger.Error("failed to start actor system", "error", err)
 		os.Exit(1)
 	}
 
 	// Plug eGo into the running actor system.
 	engine, err := ego.NewEngine(sys, cfg)
 	if err != nil {
-		slog.Error("failed to create engine", "err", err)
+		logger.Error("failed to create engine", "error", err)
 		os.Exit(1)
 	}
 	if err := engine.Start(ctx); err != nil {
-		slog.Error("failed to start engine", "err", err)
+		logger.Error("failed to start engine", "error", err)
 		os.Exit(1)
 	}
 
@@ -124,36 +128,36 @@ func main() {
 	destBehavior := NewAccountBehavior(destAccountID)
 
 	if err := engine.Entity(ctx, sourceBehavior); err != nil {
-		slog.Error("failed to create source account entity", "err", err)
+		logger.Error("failed to create source account entity", "error", err)
 		os.Exit(1)
 	}
 	if err := engine.Entity(ctx, destBehavior); err != nil {
-		slog.Error("failed to create destination account entity", "err", err)
+		logger.Error("failed to create destination account entity", "error", err)
 		os.Exit(1)
 	}
 
 	// Fund both accounts with initial balances.
-	slog.Info("--- Setting up accounts ---")
+	logger.Info("--- Setting up accounts ---")
 
 	reply, _, err := engine.SendCommand(ctx, sourceAccountID, &samplepb.CreateAccount{
 		AccountId:      sourceAccountID,
 		AccountBalance: 1000.00,
 	}, time.Minute)
 	if err != nil {
-		slog.Error("failed to create source account", "err", err)
+		logger.Error("failed to create source account", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Source account created", "balance", reply.(*samplepb.Account).GetAccountBalance())
+	logger.Info("Source account created", "balance", reply.(*samplepb.Account).GetAccountBalance())
 
 	reply, _, err = engine.SendCommand(ctx, destAccountID, &samplepb.CreateAccount{
 		AccountId:      destAccountID,
 		AccountBalance: 500.00,
 	}, time.Minute)
 	if err != nil {
-		slog.Error("failed to create destination account", "err", err)
+		logger.Error("failed to create destination account", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Destination account created", "balance", reply.(*samplepb.Account).GetAccountBalance())
+	logger.Info("Destination account created", "balance", reply.(*samplepb.Account).GetAccountBalance())
 
 	// Start the fund transfer saga.
 	// The saga will:
@@ -162,18 +166,18 @@ func main() {
 	//   3. On success, send a CreditAccount command to the destination account
 	//   4. On success, mark the saga as complete
 	//   5. On failure at any step, trigger compensation (refund the source)
-	slog.Info("--- Starting fund transfer saga ---")
+	logger.Info("--- Starting fund transfer saga ---")
 
 	transferID := uuid.NewString()
-	sagaBehavior := NewFundTransferSaga(transferID, sourceAccountID, destAccountID, 250.00)
+	sagaBehavior := NewFundTransferSaga(transferID, sourceAccountID, destAccountID, 250.00, logger)
 
 	// Start the saga with a 30-second timeout.
 	// If the saga does not complete within this duration, compensation is triggered automatically.
 	if err := engine.Saga(ctx, sagaBehavior, 30*time.Second); err != nil {
-		slog.Error("failed to start saga", "err", err)
+		logger.Error("failed to start saga", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Fund transfer saga started", "amount", 250.00)
+	logger.Info("Fund transfer saga started", "amount", 250.00)
 
 	// The saga reacts to events on the event stream. To kick it off, we send
 	// a command to the source account that the saga will pick up and orchestrate.
@@ -187,37 +191,37 @@ func main() {
 		Balance:   250.00,
 	}, time.Minute)
 	if err != nil {
-		slog.Error("failed to debit source account", "err", err)
+		logger.Error("failed to debit source account", "error", err)
 		os.Exit(1)
 	}
 	sourceAccount := reply.(*samplepb.Account)
-	slog.Info("Source account debited", "balance", sourceAccount.GetAccountBalance())
+	logger.Info("Source account debited", "balance", sourceAccount.GetAccountBalance())
 
 	// Give the saga time to process the event and send the credit command.
 	time.Sleep(2 * time.Second)
 
 	// Check the final balances.
-	slog.Info("--- Final account balances ---")
+	logger.Info("--- Final account balances ---")
 
 	reply, _, err = engine.SendCommand(ctx, sourceAccountID, &samplepb.CreditAccount{
 		AccountId: sourceAccountID,
 		Balance:   0, // no-op credit just to read state
 	}, time.Minute)
 	if err != nil {
-		slog.Error("failed to query source account", "err", err)
+		logger.Error("failed to query source account", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Source account balance", "balance", reply.(*samplepb.Account).GetAccountBalance())
+	logger.Info("Source account balance", "balance", reply.(*samplepb.Account).GetAccountBalance())
 
 	reply, _, err = engine.SendCommand(ctx, destAccountID, &samplepb.CreditAccount{
 		AccountId: destAccountID,
 		Balance:   0, // no-op credit just to read state
 	}, time.Minute)
 	if err != nil {
-		slog.Error("failed to query destination account", "err", err)
+		logger.Error("failed to query destination account", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Destination account balance", "balance", reply.(*samplepb.Account).GetAccountBalance())
+	logger.Info("Destination account balance", "balance", reply.(*samplepb.Account).GetAccountBalance())
 
 	// Wait for interrupt signal to gracefully shut down.
 	interruptSignal := make(chan os.Signal, 1)
@@ -356,17 +360,19 @@ type FundTransferSaga struct {
 	sourceID      string
 	destinationID string
 	amount        float64
+	logger        kitlog.Logger
 }
 
 var _ ego.SagaBehavior = (*FundTransferSaga)(nil)
 
 // NewFundTransferSaga creates a new saga instance.
-func NewFundTransferSaga(transferID, sourceID, destinationID string, amount float64) *FundTransferSaga {
+func NewFundTransferSaga(transferID, sourceID, destinationID string, amount float64, logger kitlog.Logger) *FundTransferSaga {
 	return &FundTransferSaga{
 		transferID:    transferID,
 		sourceID:      sourceID,
 		destinationID: destinationID,
 		amount:        amount,
+		logger:        logger,
 	}
 }
 
@@ -432,7 +438,7 @@ func (s *FundTransferSaga) HandleEvent(_ context.Context, event ego.Event, state
 func (s *FundTransferSaga) HandleResult(_ context.Context, entityID string, _ ego.State, _ ego.State) (*ego.SagaAction, error) {
 	if entityID == s.destinationID {
 		// Destination was credited — record and complete the saga.
-		slog.Info("Saga: destination account credited successfully, completing transfer")
+		s.logger.Info("saga: destination account credited successfully, completing transfer", "transfer_id", s.transferID)
 		return &ego.SagaAction{
 			Events: []ego.Event{
 				&samplepb.DestinationCredited{
@@ -449,7 +455,7 @@ func (s *FundTransferSaga) HandleResult(_ context.Context, entityID string, _ eg
 // HandleError is called when a command sent to an entity fails.
 // The saga triggers compensation to undo completed steps.
 func (s *FundTransferSaga) HandleError(_ context.Context, entityID string, err error, _ ego.State) (*ego.SagaAction, error) {
-	slog.Error("Saga: command failed, triggering compensation", "entityID", entityID, "err", err)
+	s.logger.Error("saga: command failed, triggering compensation", "transfer_id", s.transferID, "entity_id", entityID, "error", err)
 	return &ego.SagaAction{
 		Compensate: true,
 	}, nil
@@ -479,7 +485,7 @@ func (s *FundTransferSaga) Compensate(_ context.Context, state ego.State) ([]ego
 
 	// If the source was debited, refund it.
 	if transfer.GetSourceDebited() {
-		slog.Info("Saga: compensating, refunding source account", "amount", s.amount)
+		s.logger.Info("saga: compensating, refunding source account", "transfer_id", s.transferID, "amount", s.amount)
 		commands = append(commands, ego.SagaCommand{
 			EntityID: s.sourceID,
 			Command: &samplepb.CreditAccount{
