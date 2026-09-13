@@ -30,8 +30,8 @@ import (
 )
 
 // maxTenantIDBytes bounds TenantID length. This is a validation cap, not a
-// format mandate: any UTF-8 string within this budget, containing no
-// whitespace or control runes, is an acceptable tenant identifier.
+// format mandate: any UTF-8 string within this budget, free of surrounding
+// whitespace and control runes, is an acceptable tenant identifier.
 const maxTenantIDBytes = 128
 
 // TenantID is an opaque tenant identifier. It is a defined type, not an
