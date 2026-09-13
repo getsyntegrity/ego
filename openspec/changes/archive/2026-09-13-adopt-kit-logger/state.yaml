@@ -86,6 +86,10 @@ phases:
         conflict in compat/kitlogger, which imports ego.Logger, ego.DefaultLogger
         and the capability interfaces that no longer exist. Resolving requires a
         product decision (drop or rewrite compat/kitlogger) before merge.
+        RESOLVED 2026-09-13: main merged into feat/adopt-kit-logger keeping the
+        branch's logger_architecture_test.go and readme.md; compat/kitlogger
+        and its CI jobs were removed because kit-logger is now eGo's Logger
+        type itself, so an adapter to the removed ego.Logger seam has no role.
       - >
         main pins kit-logger at 7125fc80ab54 (2026-08-25) in compat/kitlogger,
         while this branch pins main@17d1a6e (2026-09-12) in root, publisher/kafka,
