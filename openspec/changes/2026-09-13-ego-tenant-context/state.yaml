@@ -9,9 +9,9 @@ tracker_dependency: https://github.com/getsyntegrity/ego/issues/10
 
 session:
   execution_mode: auto
-  delivery_strategy: null   # to be set at design/tasks phase
+  delivery_strategy: ask-on-risk
   review_budget_lines: 400
-  chain_strategy: null
+  chain_strategy: pending   # decision needed before apply; see tasks.md forecast
 
 phases:
   explore:
@@ -40,7 +40,6 @@ phases:
     artifact: openspec/changes/2026-09-13-ego-tenant-context/proposal.md
     engram_topics:
       - sdd/ego-tenant-context/proposal
-    revision_note: "230->93 lines, 2026-09-13; see PR #47 review for rationale"
   spec:
     status: done
     date: 2026-09-13
@@ -53,7 +52,12 @@ phases:
     artifact: openspec/changes/2026-09-13-ego-tenant-context/design.md
     engram_topics:
       - sdd/ego-tenant-context/design
-  tasks:      { status: pending }
+  tasks:
+    status: done
+    date: 2026-09-13
+    artifact: openspec/changes/2026-09-13-ego-tenant-context/tasks.md
+    engram_topics:
+      - sdd/ego-tenant-context/tasks
   apply:      { status: pending }
   verify:     { status: pending }
   archive:    { status: pending }
