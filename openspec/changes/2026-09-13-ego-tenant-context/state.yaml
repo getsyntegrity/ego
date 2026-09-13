@@ -63,7 +63,31 @@ phases:
       graph check (tenancy/core MUST NOT import net/http, JWT libs, Ory SDK,
       GoAkt, gRPC transport types, Kafka/NATS/etc), a candidate foundational
       piece for epic #10 as well.
-  proposal:   { status: pending }
+  proposal:
+    status: done
+    date: 2026-09-13
+    artifact: openspec/changes/2026-09-13-ego-tenant-context/proposal.md
+    engram_topics:
+      - sdd/ego-tenant-context/proposal
+    summary: >
+      Proposal elaborates the five closed decisions as settled inputs and fixes
+      the core contract shape: package `tenancy` (GoAkt-free) exporting
+      `type TenantID string` + NewTenantID/Validate, TenantContext = TenantID +
+      Scope discriminator (Tenant | Administrative), TenantResolver.Resolve(
+      context.Context) (TenantContext, error), and WithSingleTenant(TenantID).
+      Carries the normative invariant forward to design, proposes upgrading
+      architecture conformance from substring scan to a go/packages import-graph
+      check (also a candidate epic #10 deliverable), and records non-binding
+      recommendations R1-R5 for the still-open decisions listed below.
+    recommendations_pending_ratification:
+      - R1 normalization -> validate, do not normalize (no case-folding)
+      - R2 engine role -> ego enforces, trust boundary resolves; engine-invoked
+        resolution deferred to TENANT-006
+      - R3 administrative payload -> required actor identity + required reason,
+        optional correlation ID, no TenantID field
+      - R4 error taxonomy -> Missing / Invalid / Denied, with Unwrap(); Ambiguous
+        not modeled
+      - R5 resolver composition -> exactly one configured resolver, no chaining
   spec:       { status: pending }
   design:     { status: pending }
   tasks:      { status: pending }
