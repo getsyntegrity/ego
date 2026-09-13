@@ -1,0 +1,63 @@
+change: ego-tenant-context
+created: 2026-09-13
+closed: null
+status: exploring
+artifact_store: hybrid
+tracker_issue: https://github.com/getsyntegrity/ego/issues/45
+tracker_epic: https://github.com/getsyntegrity/ego/issues/23
+tracker_dependency: https://github.com/getsyntegrity/ego/issues/10
+
+session:
+  execution_mode: auto
+  delivery_strategy: null   # not yet decided, blocked on open decisions below
+  review_budget_lines: 400
+  chain_strategy: null
+
+phases:
+  explore:
+    status: done
+    date: 2026-09-13
+    artifact: openspec/changes/2026-09-13-ego-tenant-context/exploration.md
+    engram_topics:
+      - sdd/ego-tenant-context/explore
+      - sdd/ego-tenant-context/explore-repo
+      - sdd/ego-tenant-context/explore-external   # no external library involved; noted explicitly, nothing to explore
+  proposal:   { status: pending, blocked_by: "open decisions in exploration.md §13(b)" }
+  spec:       { status: pending }
+  design:     { status: pending }
+  tasks:      { status: pending }
+  decision:   { status: pending }
+  apply:      { status: pending }
+  verify:     { status: pending }
+  archive:    { status: pending }
+
+key_findings:
+  - Tenancy is genuinely greenfield in this codebase; every existing identifier
+    (persistenceID, entityID, sagaID, keyID) is a bare string with no typed-wrapper
+    precedent, making TenantID's Go shape a real design fork, not a detail.
+  - context.Context already survives the full in-process command path
+    (Engine.SendCommand -> GoAkt SendSync -> ctx.Context() in the actor ->
+    behavior.HandleCommand), but GoAkt's documented ability to relocate spawns to
+    remote nodes means this propagation is same-node-only (UNVERIFIED at the GoAkt
+    wire-protocol level) — tenant-aware envelopes (future TENANT-002) are load-bearing,
+    not optional, for cluster correctness.
+  - The repo's only architecture-conformance test (logger_architecture_test.go) is a
+    filepath.WalkDir + strings.Contains substring scan with one exempted seam file,
+    not an AST or `go list -deps` check. Directly reusable as the template for a
+    tenant-resolver-decoupling test, with the same transitive-leak blind spot.
+  - The internal/extensions + ctx.Extension(ID) pattern (already used for Encryptor,
+    Telemetry, event adapters, offset/snapshot stores) is a proven plug-in point for
+    a TenantResolver, requiring no new architectural mechanism.
+  - Engine.EraseEntity and migration.Migrator.Run are existing public administrative
+    operations with zero tenant awareness today — concrete precedent for what
+    "administrative/system context" must eventually reconcile with.
+
+open_decisions_blocking_propose:
+  - TenantID Go shape: string alias vs defined string type vs struct
+  - Normalization policy (case-fold, whitespace, charset, UUID-only vs opaque)
+  - Does the engine itself invoke TenantResolver, or is it a caller-side contract only?
+  - Tenant scoping granularity: per-entity (bound at spawn) vs per-command (resolved per SendCommand)
+  - Administrative-context payload: actor identity, reason string, both?
+  - Error-reason taxonomy: missing / invalid / unknown / forbidden / ambiguous
+  - Resolver composition: single configured resolver only, or chain/priority now?
+  - Architecture-test rigor: keep substring-scan technique, or add a go-list-deps transitive check?
