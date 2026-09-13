@@ -35,11 +35,11 @@ import (
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/projection"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/projection"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 // buildActorSystem constructs and starts a goakt actor system from a Config so

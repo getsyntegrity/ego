@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### 💥 Breaking Changes
 
+- **Module path changed to `github.com/pablogore/ego/v4`.** `github.com/pablogore/ego` is a fork of [tochemey/ego](https://github.com/Tochemey/ego), maintained independently since 2026-09. The module, every internal import, the generated protobuf `go_package` options, and this repo's own CI, badges and docs now refer to the fork's own path instead of upstream's. Update `go.mod` and every import: `github.com/tochemey/ego/v4` → `github.com/pablogore/ego/v4`. Dependencies genuinely owned by the original author (`tochemey/goakt`, `tochemey/ego-contrib`, `tochemey/olric`) are unaffected. No tag has been cut for the fork yet, so the satellite modules (`benchmark`, `example/cluster`, `publisher/*`) carry a local `replace` directive back to the monorepo root until a first `pablogore/ego` release exists.
+
 - **eGo logs through [kit-logger](https://github.com/pablogore/kit-logger).** The `ego.Logger` seam and its optional capability interfaces (`LeveledLogger`, `EnabledLogger`, `ContextLogger`, `FieldLogger`), the `WithFields` helper and the `DefaultLogger` variable are gone. Every logging surface of the framework now takes a `github.com/pablogore/kit-logger/pkg/logger.Logger`:
 
   ```go

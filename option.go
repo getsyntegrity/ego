@@ -28,13 +28,13 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
 
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/offsetstore"
-	"github.com/tochemey/ego/v4/persistence"
-	"github.com/tochemey/ego/v4/projection"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/offsetstore"
+	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/projection"
 )
 
 // Config captures every option an Engine needs.

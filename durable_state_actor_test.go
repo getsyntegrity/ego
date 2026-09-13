@@ -38,13 +38,13 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/pause"
-	mocks "github.com/tochemey/ego/v4/mocks/persistence"
-	testpb "github.com/tochemey/ego/v4/test/data/testpb"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/pause"
+	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 func TestDurableStateBehavior(t *testing.T) {

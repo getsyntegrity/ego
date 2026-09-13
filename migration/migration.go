@@ -52,9 +52,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	ego "github.com/tochemey/ego/v4"
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/persistence"
+	ego "github.com/pablogore/ego/v4"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/persistence"
 )
 
 // legacyResultingStateFieldNumber is the protobuf field number that was used

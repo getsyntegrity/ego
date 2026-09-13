@@ -27,10 +27,10 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/projection"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/projection"
 )
 
 // Option is the interface that applies a configuration option.

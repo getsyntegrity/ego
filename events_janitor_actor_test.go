@@ -32,11 +32,11 @@ import (
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/pause"
-	mocks "github.com/tochemey/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/pause"
+	mocks "github.com/pablogore/ego/v4/mocks/persistence"
 )
 
 func TestEventsJanitorActor(t *testing.T) {

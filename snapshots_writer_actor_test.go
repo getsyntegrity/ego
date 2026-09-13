@@ -33,14 +33,14 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/pause"
-	mockencryption "github.com/tochemey/ego/v4/mocks/encryption"
-	mocks "github.com/tochemey/ego/v4/mocks/persistence"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/pause"
+	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
+	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 func TestSnapshotsWriterActor(t *testing.T) {

@@ -37,11 +37,11 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/tochemey/ego/v4"
-	"github.com/tochemey/ego/v4/egopb"
-	samplepb "github.com/tochemey/ego/v4/example/examplepb"
-	"github.com/tochemey/ego/v4/persistence"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4"
+	"github.com/pablogore/ego/v4/egopb"
+	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 // ---------------------------------------------------------------------------

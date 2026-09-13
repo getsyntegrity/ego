@@ -1,4 +1,4 @@
-module github.com/tochemey/ego/v4
+module github.com/pablogore/ego/v4
 
 go 1.26.0
 

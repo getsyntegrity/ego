@@ -35,9 +35,9 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	ego "github.com/tochemey/ego/v4"
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/testkit"
+	ego "github.com/pablogore/ego/v4"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 // buildLegacyEventBytes constructs raw protobuf bytes for an Event that includes

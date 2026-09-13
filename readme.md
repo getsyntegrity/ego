@@ -5,18 +5,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Tochemey/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/Tochemey/ego/build.yml?branch=main" alt="Build status"></a>
-  <a href="https://pkg.go.dev/github.com/tochemey/ego/v4"><img src="https://pkg.go.dev/badge/github.com/tochemey/ego/v4.svg" alt="Go reference"></a>
-  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/Tochemey/ego" alt="Go version"></a>
-  <a href="https://codecov.io/gh/Tochemey/ego"><img src="https://codecov.io/gh/Tochemey/ego/branch/main/graph/badge.svg?token=Z5b9gM6Mnt" alt="Code coverage"></a>
-  <a href="https://github.com/Tochemey/ego/releases/latest"><img src="https://img.shields.io/github/v/release/Tochemey/ego?label=release" alt="Latest release"></a>
-  <a href="https://github.com/Tochemey/ego/tags"><img src="https://img.shields.io/github/v/tag/Tochemey/ego?label=tag" alt="Pre-release"></a>
+  <a href="https://github.com/pablogore/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/pablogore/ego/build.yml?branch=main" alt="Build status"></a>
+  <a href="https://pkg.go.dev/github.com/pablogore/ego/v4"><img src="https://pkg.go.dev/badge/github.com/pablogore/ego/v4.svg" alt="Go reference"></a>
+  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/pablogore/ego" alt="Go version"></a>
+  <a href="https://codecov.io/gh/pablogore/ego"><img src="https://codecov.io/gh/pablogore/ego/branch/main/graph/badge.svg?token=Z5b9gM6Mnt" alt="Code coverage"></a>
+  <a href="https://github.com/pablogore/ego/releases/latest"><img src="https://img.shields.io/github/v/release/pablogore/ego?label=release" alt="Latest release"></a>
+  <a href="https://github.com/pablogore/ego/tags"><img src="https://img.shields.io/github/v/tag/pablogore/ego?label=tag" alt="Pre-release"></a>
   <a href="https://human-oss.dev"><img src="https://human-oss.dev/badge.svg" alt="Open Source AI Manifesto"></a>
 </p>
 
 eGo is a protobuf-first framework for building event-sourced and durable-state CQRS applications in Go. It runs on [Go-Akt](https://github.com/Tochemey/goakt) and adds persistence, projections, publishers, sagas, encryption, and observability to an actor system that your application owns.
 
 eGo deliberately does not hide the actor runtime. Your application creates and operates the Go-Akt actor system, including clustering, discovery, remoting, TLS, supervision, and non-eGo actors. eGo contributes the extensions and actor kinds needed for its persistence model.
+
+`github.com/pablogore/ego` is a fork of [tochemey/ego](https://github.com/Tochemey/ego), maintained independently since 2026-09. Releases, module path, and CI here are this fork's own; they do not track the upstream project.
 
 ## Table of contents
 
@@ -69,7 +71,7 @@ For production use, provide durable implementations of the stores your applicati
 ## Installation
 
 ```bash
-go get github.com/tochemey/ego/v4
+go get github.com/pablogore/ego/v4
 ```
 
 ## Quick start
@@ -86,9 +88,9 @@ import (
 
     accountpb "example.com/myapp/gen/account/v1"
     goakt "github.com/tochemey/goakt/v4/actor"
-    "github.com/tochemey/ego/v4"
-    "github.com/tochemey/ego/v4/projection"
-    "github.com/tochemey/ego/v4/testkit"
+    "github.com/pablogore/ego/v4"
+    "github.com/pablogore/ego/v4/projection"
+    "github.com/pablogore/ego/v4/testkit"
 )
 
 func main() {
@@ -245,7 +247,7 @@ Entity-specific options are passed when an entity is spawned:
 
 Event-sourced entities additionally support `WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, and `WithBatchFlushWindow`.
 
-API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/tochemey/ego/v4).
+API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/pablogore/ego/v4).
 
 ## Snapshots and retention
 

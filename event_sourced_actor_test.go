@@ -44,17 +44,17 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/pause"
-	mockencryption "github.com/tochemey/ego/v4/mocks/encryption"
-	mockadapter "github.com/tochemey/ego/v4/mocks/eventadapter"
-	mocks "github.com/tochemey/ego/v4/mocks/persistence"
-	testpb "github.com/tochemey/ego/v4/test/data/testpb"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/pause"
+	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
+	mockadapter "github.com/pablogore/ego/v4/mocks/eventadapter"
+	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 func TestEventSourcedActor(t *testing.T) {

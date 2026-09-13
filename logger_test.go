@@ -37,7 +37,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 // capturedRecord is one record that reached the kit-logger sink.
