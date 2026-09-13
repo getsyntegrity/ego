@@ -42,7 +42,7 @@ Every `state.yaml` field must map to one of these categories:
 
 ### Denylist
 
-The following field names — or their semantic equivalent under any other name — MUST NOT appear in `state.yaml`: `revision_note`, `revision_history`, `history`, `change_log`, `rationale`, `reasoning`, `explanation`, `findings`, `key_findings`, `lessons_learned`, `implementation_notes`, `design_notes`, `proposal_summary`, `exploration_summary`, `design_summary`, `tasks_summary`.
+The following field names — or their semantic equivalent under any other name — MUST NOT appear in `state.yaml`: `revision_note`, `revision_history`, `history`, `change_log`, `rationale`, `reasoning`, `explanation`, `findings`, `key_findings`, `lessons_learned`, `implementation_notes`, `design_notes`, `proposal_summary`, `exploration_summary`, `design_summary`, `tasks_summary`, `review_context`, `revision_ref`, or any field whose sole purpose is a git commit/PR pointer explaining an edit.
 
 This is a semantic denylist, not a lexical one. Renaming the field does not make it valid — `metadata.note: "..."` containing narrative prose is exactly as invalid as `revision_note:` containing the same prose. If a field's value could be pasted into a commit message or PR comment without losing meaning, it's revision history or rationale, not workflow metadata — remove it.
 
@@ -72,7 +72,7 @@ phases:
 - Copied sections from `exploration.md`, `proposal.md`, or `design.md`.
 - Long decision explanations — a paragraph justifying a decision belongs in the phase artifact that made it, referenced by ID.
 - Implementation design (contracts, signatures, algorithms, tooling choices) — that's `design.md`'s job, and `state.yaml` MUST NOT assert a specific technique/tool is chosen when the owning artifact only names the requirement (e.g. record `required: import-graph` / `exact_tooling: deferred-to-design`, never assert `go/packages` or `go list -deps` was picked, if the phase artifact hasn't picked one).
-- Revision-history prose (why a draft was rewritten, the before/after line count) beyond a one-line pointer to where that discussion lives (a PR, a commit).
+- Revision-history prose or references (why a draft was rewritten, the before/after line count, "see PR #47", "commit abc123") in any form, even as a one-line pointer. Git history and PR discussion are discoverable from the repository itself and are not workflow state — `state.yaml` MUST NOT record a reference whose only purpose is to explain why something was edited.
 - Duplicated acceptance criteria, or any explanation that belongs in another artifact.
 - A duplicate list of "open decisions" once the phase that resolves them is `done` — either the decisions are closed (move to `closed_decisions`) or they carry forward under a name that reflects the next consumer phase (e.g. `open_decisions_for_design`), never both an old and a new copy of the same list.
 
@@ -128,7 +128,7 @@ For every field being added or changed in `state.yaml`, confirm ALL of:
 
 ## Artifact Ownership
 
-Each phase file owns a distinct layer; none re-derives what an earlier one already established (see Anti-duplication above). **One fact, one canonical home**: `state.yaml` never duplicates a fact that already lives in an artifact or in git/PR history — it points at it (`source: exploration.md#13`, "see PR #47") when a pointer is useful, or omits it entirely when the fact isn't needed to resume/route/gate/locate/close the workflow.
+Each phase file owns a distinct layer; none re-derives what an earlier one already established (see Anti-duplication above). **One fact, one canonical home**: `state.yaml` never duplicates a fact that already lives in an artifact or in git/PR history. It may point only to canonical SDD artifacts or workflow trackers required to resume/route/gate/locate/close the workflow (`source: exploration.md#13`, `tracker_issue: ...`) — never to a git commit or PR whose only purpose is explaining why something was edited. Git commits and PR discussions are not state references; omit the field entirely when a fact isn't needed to resume/route/gate/locate/close the workflow.
 
 | Artifact | Owns | Does NOT own |
 |---|---|---|
