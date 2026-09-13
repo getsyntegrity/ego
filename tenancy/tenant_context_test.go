@@ -24,6 +24,7 @@ package tenancy_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,6 +44,31 @@ func TestNewTenantContext_RejectsZeroValueTenantID(t *testing.T) {
 	_, err := tenancy.NewTenantContext(zero)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+}
+
+func TestNewTenantContext_RevalidatesTenantIDBypassingConstructor(t *testing.T) {
+	// TenantID is a defined string type, so a caller can bypass
+	// NewTenantID with a bare conversion. NewTenantContext must not trust
+	// an already-typed TenantID — it must re-run R1 validation.
+	invalidUTF8 := string([]byte{0xff, 0xfe, 0xfd})
+	tests := []struct {
+		name string
+		id   tenancy.TenantID
+	}{
+		{"leading whitespace", tenancy.TenantID(" acme")},
+		{"trailing whitespace", tenancy.TenantID("acme ")},
+		{"control rune", tenancy.TenantID("acme\x00corp")},
+		{"too long", tenancy.TenantID(strings.Repeat("a", 129))},
+		{"invalid UTF-8", tenancy.TenantID(invalidUTF8)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tenancy.NewTenantContext(tt.id)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+		})
+	}
 }
 
 func TestNewTenantContext_ProducesTenantScopedContext(t *testing.T) {

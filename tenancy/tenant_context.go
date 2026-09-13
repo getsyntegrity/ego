@@ -116,13 +116,19 @@ type TenantContext struct {
 }
 
 // NewTenantContext builds a tenant-scoped TenantContext for id.
-// It fails if id is the empty TenantID (including its zero value),
-// guarding against a zero-value TenantContext reaching a trust boundary.
+//
+// id is revalidated through NewTenantID's rules, not merely checked for
+// emptiness: TenantID is a defined string type, so a caller can bypass
+// NewTenantID with a bare conversion (tenancy.TenantID("acme corp ")).
+// Revalidating here keeps this trust-boundary constructor the single
+// place an invalid tenant identity is refused, regardless of how the
+// caller obtained the TenantID value.
 func NewTenantContext(id TenantID) (TenantContext, error) {
-	if id == "" {
-		return TenantContext{}, newError(ReasonInvalid, "tenancy: tenant context requires a non-empty tenant id", nil)
+	validated, err := NewTenantID(string(id))
+	if err != nil {
+		return TenantContext{}, err
 	}
-	return TenantContext{scope: ScopeTenant, tenant: id}, nil
+	return TenantContext{scope: ScopeTenant, tenant: validated}, nil
 }
 
 // NewAdministrativeContext builds an administrative TenantContext from a.
