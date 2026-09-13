@@ -1,7 +1,7 @@
 change: ego-tenant-context
 created: 2026-09-13
 closed: null
-status: exploring
+status: proposing
 artifact_store: hybrid
 tracker_issue: https://github.com/getsyntegrity/ego/issues/45
 tracker_epic: https://github.com/getsyntegrity/ego/issues/23
@@ -9,7 +9,7 @@ tracker_dependency: https://github.com/getsyntegrity/ego/issues/10
 
 session:
   execution_mode: auto
-  delivery_strategy: null   # not yet decided, blocked on open decisions below
+  delivery_strategy: null   # to be set at design/tasks phase
   review_budget_lines: 400
   chain_strategy: null
 
@@ -22,11 +22,51 @@ phases:
       - sdd/ego-tenant-context/explore
       - sdd/ego-tenant-context/explore-repo
       - sdd/ego-tenant-context/explore-external   # no external library involved; noted explicitly, nothing to explore
-  proposal:   { status: pending, blocked_by: "open decisions in exploration.md §13(b)" }
+  decision:
+    status: done
+    date: 2026-09-13
+    decided_by: user
+    summary: >
+      Five foundational decisions closed against exploration.md §13(b), to be
+      treated as settled (not reopened) starting in sdd-propose:
+      (1) TenantID is `type TenantID string` — a defined type, not an alias —
+      opaque, non-empty, no UUID mandate, with a constructor/validator and
+      helpers. Rejected `type TenantID = string` as insufficient isolation.
+      (2) The TenantResolver core contract MUST NOT depend on GoAkt. The
+      GoAkt runtime MAY transport/configure a resolver via its existing
+      extensions mechanism, but that wiring is a runtime-adapter concern, not
+      a #001 core-contract decision.
+      (3) Resolution and propagation are distinct: TenantResolver resolves
+      ONCE at the trust boundary into a TenantContext; propagation is a
+      separate concern — local via context.Context, remote/cross-boundary
+      via a tenant-aware envelope owned by future TENANT-002. Rule: "resolve
+      once at the trust boundary; propagate thereafter."
+      (4) The "per-entity vs per-command" scoping question is reformulated,
+      not left open: tenant + aggregate identity together form the
+      aggregate's effective identity (e.g. Tenant A/Order 123 and Tenant
+      B/Order 123 must never share a stream). Command execution context
+      carries the tenant; aggregate identity/persistence namespace is
+      tenant-scoped; exact physical format deferred to TENANT-002/003. The
+      architecture must not allow a global actor whose tenant changes
+      arbitrarily per command (confused-deputy risk).
+      (5) Single-tenant and multi-tenant share the same TenantContext
+      machinery — WithSingleTenant(TenantID) installs a built-in
+      resolver/policy, not a second execution model or bypass.
+      Additional guidance for propose: TenantContext = TenantID + an
+      execution-scope discriminator (Tenant vs Administrative);
+      TenantResolver.Resolve(context.Context) (TenantContext, error); the
+      normative invariant "Once an execution has a tenant identity, Ego MUST
+      NOT permit that identity to change implicitly while crossing command,
+      saga, event, persistence or projection boundaries" belongs in the
+      future design doc; the architecture-conformance test recommendation
+      upgrades from a substring scan to an AST/go-packages/go-list import-
+      graph check (tenancy/core MUST NOT import net/http, JWT libs, Ory SDK,
+      GoAkt, gRPC transport types, Kafka/NATS/etc), a candidate foundational
+      piece for epic #10 as well.
+  proposal:   { status: pending }
   spec:       { status: pending }
   design:     { status: pending }
   tasks:      { status: pending }
-  decision:   { status: pending }
   apply:      { status: pending }
   verify:     { status: pending }
   archive:    { status: pending }
@@ -52,12 +92,17 @@ key_findings:
     operations with zero tenant awareness today — concrete precedent for what
     "administrative/system context" must eventually reconcile with.
 
-open_decisions_blocking_propose:
-  - TenantID Go shape: string alias vs defined string type vs struct
+closed_decisions:
+  - TenantID Go shape -> type TenantID string (defined type, not alias). See decision phase above.
+  - TenantResolver core contract independence from GoAkt. See decision phase above.
+  - Resolution vs propagation separation. See decision phase above.
+  - Tenant scoping granularity -> tenant + aggregate effective identity. See decision phase above.
+  - Single-tenant vs multi-tenant machinery -> unified. See decision phase above.
+  - Architecture-test rigor -> upgrade to AST/go-packages import-graph check. See decision phase above.
+
+open_decisions_for_propose:
   - Normalization policy (case-fold, whitespace, charset, UUID-only vs opaque)
   - Does the engine itself invoke TenantResolver, or is it a caller-side contract only?
-  - Tenant scoping granularity: per-entity (bound at spawn) vs per-command (resolved per SendCommand)
   - Administrative-context payload: actor identity, reason string, both?
   - Error-reason taxonomy: missing / invalid / unknown / forbidden / ambiguous
   - Resolver composition: single configured resolver only, or chain/priority now?
-  - Architecture-test rigor: keep substring-scan technique, or add a go-list-deps transitive check?
