@@ -30,10 +30,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/projection"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/projection"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 func TestOption(t *testing.T) {

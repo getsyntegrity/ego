@@ -42,14 +42,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/encryption"
-	"github.com/tochemey/ego/v4/eventadapter"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/syncmap"
-	"github.com/tochemey/ego/v4/offsetstore"
-	"github.com/tochemey/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/eventadapter"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/syncmap"
+	"github.com/pablogore/ego/v4/offsetstore"
+	"github.com/pablogore/ego/v4/persistence"
 )
 
 var (

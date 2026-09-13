@@ -33,12 +33,12 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/eventstream"
-	"github.com/tochemey/ego/v4/internal/extensions"
-	"github.com/tochemey/ego/v4/internal/pause"
-	mocks "github.com/tochemey/ego/v4/mocks/persistence"
-	"github.com/tochemey/ego/v4/testkit"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/internal/pause"
+	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/testkit"
 )
 
 func TestEventsWriterActor(t *testing.T) {

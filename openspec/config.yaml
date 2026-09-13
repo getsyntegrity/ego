@@ -2,7 +2,7 @@ schema: spec-driven
 
 context: |
   Tech stack: Go 1.26.0 (toolchain at /home/pablog/sdk/go1.26.6/bin/go; `go` is NOT on PATH),
-    protobuf-first, module github.com/tochemey/ego/v4 (fork owned as github.com/pablogore/ego).
+    protobuf-first, module github.com/pablogore/ego/v4 (fork of github.com/tochemey/ego, maintained independently).
   Architecture: CQRS / Event Sourcing framework built on github.com/tochemey/goakt/v4 actors.
     Composition root is ego.NewEngine with functional Options in option.go.
   Observability: OpenTelemetry (traces + metrics) wired in telemetry.go;

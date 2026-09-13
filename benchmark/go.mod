@@ -1,10 +1,10 @@
-module github.com/tochemey/ego/v4/benchmark
+module github.com/pablogore/ego/v4/benchmark
 
 go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/tochemey/ego/v4 v4.4.3
+	github.com/pablogore/ego/v4 v4.4.3
 	github.com/tochemey/goakt/v4 v4.5.4
 )
 
@@ -71,7 +71,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/tochemey/ego/v4 => ../
+replace github.com/pablogore/ego/v4 => ../
 
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail

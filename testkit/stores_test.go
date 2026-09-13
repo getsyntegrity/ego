@@ -31,9 +31,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/tochemey/ego/v4/egopb"
-	"github.com/tochemey/ego/v4/encryption"
-	testpb "github.com/tochemey/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/encryption"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 )
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ package offsetstore
 import (
 	"context"
 
-	"github.com/tochemey/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/egopb"
 )
 
 // OffsetStore defines the contract needed to persist offsets

@@ -3,7 +3,7 @@ name: Performance issue report
 about: Create a report to help us improve
 title: ''
 labels: performance
-assignees: Tochemey
+assignees: pablogore
 
 ---
 

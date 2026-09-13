@@ -30,8 +30,8 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	samplepb "github.com/tochemey/ego/v4/example/examplepb"
-	"github.com/tochemey/ego/v4/projection"
+	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	"github.com/pablogore/ego/v4/projection"
 )
 
 // AccountBalanceHandler implements projection.Handler.
