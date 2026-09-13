@@ -1,7 +1,7 @@
 change: ego-tenant-context
 created: 2026-09-13
 closed: null
-status: specifying
+status: designing
 artifact_store: hybrid
 tracker_issue: https://github.com/getsyntegrity/ego/issues/45
 tracker_epic: https://github.com/getsyntegrity/ego/issues/23
@@ -47,7 +47,12 @@ phases:
     artifact: openspec/changes/2026-09-13-ego-tenant-context/specs/tenancy-core/spec.md
     engram_topics:
       - sdd/ego-tenant-context/spec
-  design:     { status: pending }
+  design:
+    status: done
+    date: 2026-09-13
+    artifact: openspec/changes/2026-09-13-ego-tenant-context/design.md
+    engram_topics:
+      - sdd/ego-tenant-context/design
   tasks:      { status: pending }
   apply:      { status: pending }
   verify:     { status: pending }
@@ -61,14 +66,14 @@ closed_decisions:
   S5: unified-single-and-multi-tenant-machinery
   S6: import-graph-conformance-required
 
-open_decisions_for_design:
-  R1: tenant-id-normalization-policy
-  R2: engine-resolution-wiring
-  R3: administrative-context-payload
-  R4: tenant-error-taxonomy
-  R5: resolver-composition
+closed_decisions_design:
+  R1: validate-not-normalize
+  R2: entrypoint-invokes-resolver
+  R3: admin-actor-and-reason-required
+  R4: missing-invalid-denied
+  R5: single-resolver-no-chaining
 
 constraints:
   architecture_conformance:
     required: import-graph
-    exact_tooling: deferred-to-design
+    exact_tooling: go-list-deps
