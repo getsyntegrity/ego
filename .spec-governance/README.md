@@ -7,15 +7,23 @@ pack that enforces atomicity/evidence rules across phases.
 
 ## Ownership direction
 
+> **`.spec-governance/skills/` in this repo is the single source of truth
+> for EGO's SDD governance. `~/.claude/skills/` is nothing more than an
+> installation of it — a consumer, never an authority.**
+
 ```text
-EGO .spec-governance/  = source of truth
-~/.claude/skills/       = installed/runtime copy
+EGO .spec-governance/skills/  = source of truth   (versioned, reviewed, this repo)
+~/.claude/skills/              = installed copy    (unversioned, per-machine, disposable)
 ```
 
 Claude Code loads skills from `~/.claude/skills/` at runtime — that copy has
 to exist for any agent/session to actually use these skills. But it is a
 **global, unversioned, per-machine install**, not protected by this repo. It
-is never the authority.
+is never the authority. If the installed copy were deleted right now,
+nothing would be lost — it would just need re-syncing from here. If this
+repo's copy were lost without a backup, the installed copy is the only
+place the governance would survive; that is the failure mode this
+canonicalization exists to prevent.
 
 **Never edit the installed copy (`~/.claude/skills/...`) as the canonical
 source.** A change made only there is invisible to every other clone/agent
@@ -46,12 +54,52 @@ Any difference other than files intentionally excluded from this package
 not a merge to resolve casually: figure out which side is correct, apply
 that content to `.spec-governance/skills/` first, then re-sync outward.
 
+## Self-check
+
+`scripts/check-self-contained.sh` verifies the package doesn't quietly
+depend on anything outside itself:
+
+```bash
+.spec-governance/scripts/check-self-contained.sh
+```
+
+It checks two things, both by inspecting only this package's own tree:
+
+1. No file under `skills/` hardcodes `~/.claude` or an absolute `/Users/...`
+   path — the exact failure mode fixed in `sdd-phase-common.md` §G before
+   this package was first published (it used to say `~/.claude/skills/spec-*`
+   instead of describing the spec-* skills as siblings in the package).
+2. Every `_shared/<file>.md` a skill in this package references actually
+   exists under `skills/_shared/` here — so a skill can never silently lean
+   on a `_shared` file this package chose not to include.
+
+Run it after any change that adds a skill, adds a cross-reference, or adds
+a new `_shared` file — it does not know what *should* be included (see
+"Deliberately NOT included" below for that judgment call), only whether
+what's already wired together is actually self-contained.
+
+## Version history
+
+- **2.0.0** (this change) — first canonical, portable release of this
+  package. Replaces an incomplete pre-porting bundle that held only 4
+  `spec-*` skills with stale placeholder text ("not yet created", unchecked
+  boxes) and no `sdd-*` lifecycle skills or `_shared` conventions at all.
+  Bumped as a major version because the package's scope and contract
+  changed completely — a consumer of the old `1.0.0` bundle (4 skills, no
+  lifecycle, no ownership rule) cannot assume anything about this one
+  without re-reading it.
+- **1.0.0** — original ad-hoc copy of `spec-governance`/`spec-splitting`/
+  `spec-authoring`/`spec-evidence`, predating this README and the
+  source-of-truth rule above.
+
 ## What's in this package, and why
 
 ```text
 .spec-governance/
 ├── README.md
 ├── VERSION
+├── scripts/
+│   └── check-self-contained.sh  # self-check: no leaks to global paths or missing _shared deps
 └── skills/
     ├── _shared/
     │   ├── openspec-convention.md   # OpenSpec file conventions + state.yaml Discipline + State Hygiene Gate
