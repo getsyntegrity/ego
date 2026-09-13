@@ -27,14 +27,20 @@ phases:
     date: 2026-09-13
     decided_by: user
     source: exploration.md#13
-    decisions: [S1, S2, S3, S4, S5, S6]
+    decisions:
+      - S1
+      - S2
+      - S3
+      - S4
+      - S5
+      - S6
   proposal:
     status: done
     date: 2026-09-13
     artifact: openspec/changes/2026-09-13-ego-tenant-context/proposal.md
     engram_topics:
       - sdd/ego-tenant-context/proposal
-    revision: "230->93 lines, 2026-09-13; cut re-derived evidence and full signatures per PR #47 review"
+    revision_note: "230->93 lines, 2026-09-13; see PR #47 review for rationale"
   spec:       { status: pending }
   design:     { status: pending }
   tasks:      { status: pending }
@@ -43,16 +49,21 @@ phases:
   archive:    { status: pending }
 
 closed_decisions:
-  S1: tenant-id-defined-string-type
+  S1: tenant-id-defined-string
   S2: resolver-core-goakt-independent
   S3: resolve-once-propagate-after
   S4: tenant-plus-aggregate-effective-identity
   S5: unified-single-and-multi-tenant-machinery
-  S6: architecture-test-upgrade-to-import-graph
+  S6: import-graph-conformance-required
 
-open_decisions:
-  R1: normalization-validate-not-normalize
-  R2: engine-enforces-trust-boundary-resolves
-  R3: admin-payload-actor-identity-plus-reason
-  R4: error-taxonomy-missing-invalid-denied
-  R5: single-resolver-no-chaining
+open_decisions_for_design:
+  R1: tenant-id-normalization-policy
+  R2: engine-resolution-wiring
+  R3: administrative-context-payload
+  R4: tenant-error-taxonomy
+  R5: resolver-composition
+
+constraints:
+  architecture_conformance:
+    required: import-graph
+    exact_tooling: deferred-to-design
