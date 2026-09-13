@@ -51,10 +51,12 @@ func TestNewTenantID_RejectsLeadingOrTrailingWhitespace(t *testing.T) {
 	assert.True(t, errors.Is(err, tenancy.ErrInvalid))
 }
 
-func TestNewTenantID_RejectsInteriorWhitespace(t *testing.T) {
-	_, err := tenancy.NewTenantID("acme corp")
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+func TestNewTenantID_AcceptsInteriorWhitespace(t *testing.T) {
+	// R1 rejects "surrounding space", not "any whitespace" — an interior
+	// space (e.g. a human-readable tenant name) is a legitimate identifier.
+	id, err := tenancy.NewTenantID("Acme Europe")
+	require.NoError(t, err)
+	assert.Equal(t, tenancy.TenantID("Acme Europe"), id)
 }
 
 func TestNewTenantID_RejectsControlRune(t *testing.T) {

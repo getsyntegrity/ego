@@ -44,9 +44,11 @@ type TenantID string
 //
 // Validation is strict and never normalizes (R1: validate, don't
 // normalize): no trimming, no case-folding. s is rejected when it is
-// empty, not valid UTF-8, longer than 128 bytes, or contains any
-// whitespace or control rune (anywhere in the string, not just at the
-// edges). Any other non-empty string is accepted verbatim.
+// empty, not valid UTF-8, longer than 128 bytes, has leading or
+// trailing whitespace, or contains a control rune anywhere. Interior
+// whitespace (e.g. "Acme Europe") is a legitimate tenant identifier per
+// R1's ratified scope — "surrounding space", not "any whitespace" — and
+// is accepted. Any other non-empty string is accepted verbatim.
 func NewTenantID(s string) (TenantID, error) {
 	if s == "" {
 		return "", newError(ReasonInvalid, "tenancy: tenant id must not be empty", nil)
@@ -57,16 +59,13 @@ func NewTenantID(s string) (TenantID, error) {
 	if len(s) > maxTenantIDBytes {
 		return "", newError(ReasonInvalid, fmt.Sprintf("tenancy: tenant id exceeds %d bytes", maxTenantIDBytes), nil)
 	}
-	for _, r := range s {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return "", newError(ReasonInvalid, "tenancy: tenant id must not contain whitespace or control characters", nil)
-		}
-	}
-	// Defense in depth: the per-rune scan above already rejects any
-	// whitespace rune, including leading/trailing, but this makes the
-	// "no accidental leading/trailing whitespace" guarantee explicit.
 	if strings.TrimSpace(s) != s {
 		return "", newError(ReasonInvalid, "tenancy: tenant id must not have leading or trailing whitespace", nil)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return "", newError(ReasonInvalid, "tenancy: tenant id must not contain control characters", nil)
+		}
 	}
 	return TenantID(s), nil
 }
