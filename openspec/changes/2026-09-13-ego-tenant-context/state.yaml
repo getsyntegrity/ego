@@ -11,7 +11,7 @@ session:
   execution_mode: auto
   delivery_strategy: ask-on-risk
   review_budget_lines: 400
-  chain_strategy: pending   # decision needed before apply; see tasks.md forecast
+  chain_strategy: stacked-to-main
 
 phases:
   explore:

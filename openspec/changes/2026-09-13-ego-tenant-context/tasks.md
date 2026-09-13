@@ -9,14 +9,14 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 foundation -> PR2 resolver/context -> PR3 conformance+mocks |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | pending |
+| Chain strategy | stacked-to-main |
 
-Decision needed before apply: Yes
+Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance scenarios and a conformance test exceed 400 lines; splits cleanly by file. Chain strategy is the orchestrator's call.
+Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance scenarios and a conformance test exceed 400 lines; splits cleanly by file. Stacked-to-main (user choice): each PR merges to `main` in order, not stacked on the `docs/propose-ego-tenant-context` proposal branch.
 
 ### Suggested Work Units
 
