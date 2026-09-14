@@ -146,7 +146,16 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 	}
 }
 
-// PostStop prepares the actor to gracefully shutdown
+// PostStop prepares the actor to gracefully shutdown.
+//
+// T4-B exclusion (design.md D4): this lifecycle flush deliberately carries
+// no verifyTenantForPersist gate. It persists whatever state the actor
+// already holds in memory — state that only ever got there by passing the
+// T4-A pre-handler gate in processCommand at the time each command was
+// accepted. There is no new tenant identity to re-confirm here, and
+// ctx.Context() at shutdown is not the per-command context T4-B reasons
+// about; adding a gate here would just fail closed on a shutdown path for
+// no defensive benefit.
 func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 	if entity.metrics != nil {
 		entity.metrics.entitiesActive.Add(ctx.Context(), -1)
@@ -235,6 +244,18 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	entity.lastCommandTime = time.Now()
 	entity.currentVersion = newVersion
 
+	// Defensive persistence invariant (T4-B, design.md D4): re-confirm a
+	// valid tenant identity is present before this state is handed to
+	// persistStateAndPublish. This reuses tenancy.Require — a read-only
+	// check of the context already validated by the pre-handler gate above
+	// — and never re-invokes TenantResolver.Resolve. It is deliberately not
+	// the sole enforcement point: T4-A above already blocks HandleCommand
+	// itself.
+	if err := entity.verifyTenantForPersist(ctx); err != nil {
+		entity.sendErrorReply(receiveContext, err)
+		return
+	}
+
 	if err := entity.persistStateAndPublish(ctx); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
@@ -302,6 +323,21 @@ func (entity *DurableStateActor) durableStateRequired() error {
 		return ErrDurableStateStoreRequired
 	}
 	return nil
+}
+
+// verifyTenantForPersist re-confirms, from ctx alone, that a valid tenant
+// identity is present before this command's state is committed (T4-B,
+// design.md D4). It is a no-op in legacy mode (tenantAware == false) and,
+// in tenant-aware mode, does nothing but read the context already attached
+// by Engine.SendCommand and validated by the pre-handler gate: it never
+// invokes a TenantResolver and is never the sole enforcement point for
+// fail-closed behavior.
+func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) error {
+	if !entity.tenantAware {
+		return nil
+	}
+	_, err := tenancy.Require(ctx)
+	return err
 }
 
 // persistStateAndPublish persists the actor state and publishes it to the stream.

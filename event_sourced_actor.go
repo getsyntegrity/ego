@@ -79,6 +79,13 @@ const (
 // is reached.
 type batchFlushTick struct{}
 
+// noTenantContext is the zero value of tenancy.TenantContext. Neither
+// tenancy.NewTenantContext nor tenancy.NewAdministrativeContext can ever
+// produce it (tenancy/tenant_context.go), so it safely marks "no tenant
+// recorded yet for this batch cycle" for EventSourcedActor.batchTenant,
+// distinct from any real resolved identity.
+var noTenantContext tenancy.TenantContext
+
 // batchEntry holds the pre-computed reply and observability context for
 // a single command that has been optimistically processed and stashed
 // while awaiting batch persistence.
@@ -149,6 +156,30 @@ type EventSourcedActor struct {
 	// to already be attached to the incoming context (set by
 	// Engine.SendCommand at the trust boundary) before HandleCommand runs.
 	tenantAware bool
+
+	// batchTenant records the TenantContext of the first command buffered
+	// in the current batch cycle (T4-B, design.md D4). Every later command
+	// merged into the same batchBuffer before the next flush must carry the
+	// identical TenantContext — flushBatch (below) collapses the whole
+	// buffer into a single context.Background() Ask and therefore cannot
+	// attribute any tenant to an individual envelope, so homogeneity must be
+	// proven here instead. Read and written only through
+	// tenancy.Require/tenancy.VerifyUnchanged — never re-resolved.
+	// Holds noTenantContext (the zero value) when unset; MUST be reset to
+	// noTenantContext in resetBatch, or a tenant from a prior, already
+	// flushed batch cycle leaks into the homogeneity check of the next one.
+	//
+	// Blocker 3 fix (EGO-TENANT-006 review): the homogeneity check against
+	// batchTenant runs in processAndBatch's pre-handler gate, BEFORE
+	// entity.behavior.HandleCommand executes — not only afterward, at
+	// buffer-append time. latestState() returns entity.batchState (this
+	// batch's accumulated, unpersisted state) whenever a batch is already
+	// open, regardless of which tenant is calling; running HandleCommand
+	// against that state under a different tenant's identity is itself the
+	// leak, whether or not the handler goes on to produce any events.
+	// batchTenant is still only *established* (first written) after a
+	// successful buildEnvelopes, matching prior behavior for a fresh batch.
+	batchTenant tenancy.TenantContext
 }
 
 var _ goakt.Actor = (*EventSourcedActor)(nil)
@@ -570,6 +601,17 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		return
 	}
 
+	// Defensive persistence invariant (T4-B, design.md D4): re-confirm a
+	// valid tenant identity is present before these events are handed to
+	// persistEvents. This reuses tenancy.Require — a read-only check of the
+	// context already validated by the pre-handler gate above — and never
+	// re-invokes TenantResolver.Resolve. It is deliberately not the sole
+	// enforcement point: T4-A above already blocks HandleCommand itself.
+	if err := entity.verifyTenantForPersist(goCtx); err != nil {
+		entity.sendErrorReply(ctx, err)
+		return
+	}
+
 	if err := entity.persistEvents(ctx, envelopes, eventsTopic); err != nil {
 		entity.sendErrorReply(ctx, err)
 		ctx.Shutdown()
@@ -654,6 +696,21 @@ func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, 
 		EncryptionKeyId: encKeyID,
 		IsEncrypted:     isEncrypted,
 	}, nil
+}
+
+// verifyTenantForPersist re-confirms, from goCtx alone, that a valid tenant
+// identity is present before this command's events are committed (T4-B,
+// design.md D4). It is a no-op in legacy mode (tenantAware == false) and,
+// in tenant-aware mode, does nothing but read the context already attached
+// by Engine.SendCommand and validated by the pre-handler gate: it never
+// invokes a TenantResolver and is never the sole enforcement point for
+// fail-closed behavior.
+func (entity *EventSourcedActor) verifyTenantForPersist(goCtx context.Context) error {
+	if !entity.tenantAware {
+		return nil
+	}
+	_, err := tenancy.Require(goCtx)
+	return err
 }
 
 // persistEvents sends the event envelopes to the [eventsWriterActor] via a
@@ -802,13 +859,38 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// processCommandAndReply — see its comment for the rationale. The
 	// batched path must fail closed here too, before flushBatch's own
 	// context.Background() call is ever reached.
+	//
+	// Blocker 3 fix (EGO-TENANT-006 review): this gate also captures the
+	// resolved TenantContext (tc) and, if a batch is already open
+	// (entity.batchTenant != noTenantContext), verifies it against tc
+	// BEFORE entity.behavior.HandleCommand runs below — not only after
+	// buildEnvelopes, as this used to. state (via latestState()) is
+	// entity.batchState whenever a batch is open: another tenant's
+	// accumulated, unpersisted data. Deferring the homogeneity check until
+	// after the handler ran meant a cross-tenant call already executed
+	// against the wrong tenant's batchState, and — if it happened to
+	// produce zero events — the len(events)==0 branch below would reply
+	// with that wrong-tenant state before the (then-later) homogeneity
+	// check was ever reached. See design.md Decision D4/D8.
+	var tc tenancy.TenantContext
 	if entity.tenantAware {
-		if _, err := tenancy.Require(goCtx); err != nil {
+		var requireErr error
+		tc, requireErr = tenancy.Require(goCtx)
+		if requireErr != nil {
 			if span != nil {
 				span.End()
 			}
-			entity.sendErrorReply(ctx, err)
+			entity.sendErrorReply(ctx, requireErr)
 			return
+		}
+		if entity.batchTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.batchTenant, tc); verifyErr != nil {
+				if span != nil {
+					span.End()
+				}
+				entity.sendErrorReply(ctx, verifyErr)
+				return
+			}
 		}
 	}
 
@@ -852,6 +934,20 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		}
 		entity.sendErrorReply(ctx, err)
 		return
+	}
+
+	// Defensive persistence invariant (T4-B, design.md D4): establish
+	// batchTenant for a fresh batch cycle, now that this command's
+	// envelopes are actually about to be appended. Homogeneity itself was
+	// already verified above, in the pre-handler gate, before
+	// HandleCommand ran (Blocker 3 fix) — flushBatch below still collapses
+	// the whole buffer into a single context.Background() Ask, so recording
+	// the tenant here is what lets the *next* command's pre-handler gate
+	// compare against it. batchTenant is cleared in resetBatch: a stale
+	// value surviving across cycles would wrongly reject the next cycle's
+	// first command.
+	if entity.tenantAware && entity.batchTenant == noTenantContext {
+		entity.batchTenant = tc
 	}
 
 	entity.batchBuffer = append(entity.batchBuffer, envelopes...)
@@ -1082,4 +1178,8 @@ func (entity *EventSourcedActor) resetBatch() {
 	entity.batchNumEvents = 0
 	entity.remainingReplies = 0
 	entity.shutdownOnDrain = false
+	// T4-B (design.md D4): clear the tenant recorded for the batch cycle that
+	// just ended. Leaving it set would wrongly compare the next cycle's
+	// first command against this cycle's already-flushed tenant.
+	entity.batchTenant = noTenantContext
 }
