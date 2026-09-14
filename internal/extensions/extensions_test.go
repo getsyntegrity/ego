@@ -138,6 +138,13 @@ func TestEncryptorExtension(t *testing.T) {
 	assert.Equal(t, enc, ext.Encryptor())
 }
 
+func TestTenancyMarker(t *testing.T) {
+	ext := NewTenancyMarker()
+
+	require.NotNil(t, ext)
+	assert.Equal(t, TenancyExtensionID, ext.ID())
+}
+
 func TestEntityConfig(t *testing.T) {
 	cfg := NewEntityConfig(10)
 	require.NotNil(t, cfg)

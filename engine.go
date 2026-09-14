@@ -50,6 +50,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/syncmap"
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 var (
@@ -68,6 +69,13 @@ var (
 	// actor system. The caller must construct and start the actor system
 	// themselves before plugging eGo in.
 	ErrActorSystemRequired = errors.New("actor system is required")
+	// ErrAmbiguousTenantResolver is returned when NewEngine finds that a
+	// Config recorded more than one non-nil WithTenantResolver registration.
+	// TenantResolver is a security boundary (DP2): the engine never picks
+	// one of several candidates, and refuses to start instead. Registering
+	// exactly one non-nil resolver, or never registering one at all
+	// (legacy, non-tenant-aware mode), are both valid.
+	ErrAmbiguousTenantResolver = errors.New("ambiguous tenant resolver: more than one non-nil WithTenantResolver was registered")
 	// ErrActorSystemNotStarted is returned when NewEngine is given an actor
 	// system whose Start has not yet been called or has not yet succeeded.
 	ErrActorSystemNotStarted = errors.New("actor system must be started before NewEngine")
@@ -125,6 +133,12 @@ type Engine struct {
 	telemetry     *Telemetry
 	metrics       *metrics
 	encryptor     encryption.Encryptor
+
+	// tenantResolver is the effective tenancy.TenantResolver carried over
+	// from Config; non-nil means tenant-aware mode is active. NewEngine has
+	// already validated there is at most one (ErrAmbiguousTenantResolver).
+	// Not yet consumed: resolve-and-attach at SendCommand lands separately.
+	tenantResolver tenancy.TenantResolver
 }
 
 // NewEngine plugs eGo into an already-constructed and started goakt.ActorSystem.
@@ -171,6 +185,16 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 		return nil, ErrActorSystemNotStarted
 	}
 
+	// TenantResolver is a security boundary (DP2): two or more non-nil
+	// registrations must fail construction rather than pick one via
+	// last-call-wins. The second branch is a defensive guard against a state
+	// WithTenantResolver's own inertness rules make unreachable today (a
+	// positive count with no effective resolver); it protects future
+	// refactors of that invariant.
+	if config.tenantResolverCount > 1 || (config.tenantResolverCount > 0 && config.tenantResolver == nil) {
+		return nil, ErrAmbiguousTenantResolver
+	}
+
 	if err := validateActorSystemExtensions(actorSys, config); err != nil {
 		return nil, err
 	}
@@ -189,18 +213,19 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		name:          actorSys.Name(),
-		eventsStore:   config.eventsStore,
-		stateStore:    config.stateStore,
-		offsetStore:   config.offsetStore,
-		snapshotStore: config.snapshotStore,
-		logger:        config.logger,
-		eventStream:   config.eventStream,
-		eventAdapters: config.eventAdapters,
-		telemetry:     config.telemetry,
-		encryptor:     config.encryptor,
-		eventsStreams: syncmap.New[string, *eventsStream](),
-		statesStreams: syncmap.New[string, *statesStream](),
+		name:           actorSys.Name(),
+		eventsStore:    config.eventsStore,
+		stateStore:     config.stateStore,
+		offsetStore:    config.offsetStore,
+		snapshotStore:  config.snapshotStore,
+		logger:         config.logger,
+		eventStream:    config.eventStream,
+		eventAdapters:  config.eventAdapters,
+		telemetry:      config.telemetry,
+		encryptor:      config.encryptor,
+		tenantResolver: config.tenantResolver,
+		eventsStreams:  syncmap.New[string, *eventsStream](),
+		statesStreams:  syncmap.New[string, *statesStream](),
 	}
 	e.actorSystem.Store(&actorSystemRef{
 		sys:      actorSys,
@@ -229,6 +254,7 @@ func validateActorSystemExtensions(sys goakt.ActorSystem, cfg *Config) error {
 		{extensions.EventAdaptersExtensionID, len(cfg.eventAdapters) > 0},
 		{extensions.TelemetryExtensionID, cfg.telemetry != nil},
 		{extensions.EncryptorExtensionID, cfg.encryptor != nil},
+		{extensions.TenancyExtensionID, cfg.tenantResolver != nil},
 	}
 
 	var missing []string

@@ -120,6 +120,66 @@ func TestNewEngineValidation(t *testing.T) {
 	})
 }
 
+// TestNewEngineTenantResolverValidation exercises NewEngine's rejection of
+// ambiguous WithTenantResolver registrations (DP2) and its acceptance of the
+// two valid configurations: zero registrations (legacy) and exactly one
+// non-nil registration (tenant-aware).
+func TestNewEngineTenantResolverValidation(t *testing.T) {
+	t.Run("two distinct resolvers fail construction", func(t *testing.T) {
+		ctx := context.Background()
+		cfg := NewConfig(testkit.NewEventsStore(),
+			WithTenantResolver(&stubTenantResolver{id: "acme"}),
+			WithTenantResolver(&stubTenantResolver{id: "globex"}),
+		)
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, cfg)
+		require.ErrorIs(t, err, ErrAmbiguousTenantResolver)
+	})
+
+	t.Run("same resolver registered twice fails with the same error", func(t *testing.T) {
+		// Count, not value identity, is what is rejected (spec.md "Same
+		// resolver registered twice").
+		ctx := context.Background()
+		resolver := &stubTenantResolver{id: "acme"}
+		cfg := NewConfig(testkit.NewEventsStore(),
+			WithTenantResolver(resolver),
+			WithTenantResolver(resolver),
+		)
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, cfg)
+		require.ErrorIs(t, err, ErrAmbiguousTenantResolver)
+	})
+
+	t.Run("exactly one resolver succeeds", func(t *testing.T) {
+		resolver := &stubTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore(), WithTenantResolver(resolver))
+		assert.Same(t, resolver, engine.tenantResolver)
+	})
+
+	t.Run("zero resolvers succeeds as legacy, non-tenant-aware mode", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore())
+		assert.Nil(t, engine.tenantResolver)
+	})
+
+	t.Run("nil registrations do not count toward ambiguity", func(t *testing.T) {
+		resolver := &stubTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore(),
+			WithTenantResolver(nil),
+			WithTenantResolver(resolver),
+			WithTenantResolver(nil),
+		)
+		assert.Same(t, resolver, engine.tenantResolver)
+	})
+}
+
 // TestEngineEventSourced covers the happy path for an event-sourced entity in
 // single-node mode.
 func TestEngineEventSourced(t *testing.T) {

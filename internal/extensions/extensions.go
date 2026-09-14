@@ -78,6 +78,12 @@ const (
 
 	// SagaConfigID is the identifier for the saga config dependency.
 	SagaConfigID = "EgoSagaConfig"
+
+	// TenancyExtensionID is the identifier for the tenancy marker extension.
+	// Its presence on the actor system signals that the engine's Config
+	// registered a non-nil tenancy.TenantResolver (tenant-aware mode is
+	// active); its absence signals legacy, non-tenant-aware behavior.
+	TenancyExtensionID = "EgoTenancyExtension"
 )
 
 type EventsStore struct {
@@ -308,6 +314,31 @@ func (x *EncryptorExtension) ID() string {
 // Encryptor returns the underlying encryptor
 func (x *EncryptorExtension) Encryptor() encryption.Encryptor {
 	return x.encryptor
+}
+
+// TenancyMarker signals that the actor system was built from a Config with a
+// non-nil tenancy.TenantResolver registered (tenant-aware mode).
+//
+// TenancyMarker deliberately carries no resolver and no other tenancy state:
+// actors can observe that tenant-aware mode is active by checking for this
+// extension's presence, but they can never reach a TenantResolver through it.
+// Resolution happens exactly once, at Engine.SendCommand, which is the only
+// place that holds the resolver; making it structurally unreachable from
+// actor code keeps Resolve from ever being re-invoked outside that trust
+// boundary.
+type TenancyMarker struct{}
+
+// enforce compliance with the extension.Extension interface
+var _ extension.Extension = (*TenancyMarker)(nil)
+
+// NewTenancyMarker creates a new tenancy marker extension.
+func NewTenancyMarker() *TenancyMarker {
+	return &TenancyMarker{}
+}
+
+// ID returns the identifier for the TenancyMarker extension.
+func (x *TenancyMarker) ID() string {
+	return TenancyExtensionID
 }
 
 // EntityConfig is a dependency that carries per-entity spawn configuration.
