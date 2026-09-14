@@ -25,6 +25,7 @@ package ego
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -766,6 +767,100 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 		pause.For(time.Second)
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
+}
+
+// TestDurableStateActorVerifyTenantForPersist unit-tests the T4-B defensive
+// persistence invariant (design.md D4) in isolation, without a goakt actor
+// system: verifyTenantForPersist must be a no-op in legacy mode, must fail
+// closed via tenancy.Require when tenant-aware mode has no TenantContext
+// attached, and must succeed without touching a resolver (the actor struct
+// holds no resolver field at all — see DurableStateActor.tenantAware's doc
+// comment) when one is already attached.
+func TestDurableStateActorVerifyTenantForPersist(t *testing.T) {
+	t.Run("legacy mode is always a no-op", func(t *testing.T) {
+		entity := &DurableStateActor{}
+		assert.NoError(t, entity.verifyTenantForPersist(context.Background()))
+	})
+
+	t.Run("tenant-aware mode fails closed when no TenantContext is attached", func(t *testing.T) {
+		entity := &DurableStateActor{tenantAware: true}
+		err := entity.verifyTenantForPersist(context.Background())
+		assert.True(t, errors.Is(err, tenancy.ErrMissing))
+	})
+
+	t.Run("tenant-aware mode succeeds against an already-attached TenantContext", func(t *testing.T) {
+		entity := &DurableStateActor{tenantAware: true}
+		tc, err := tenancy.NewTenantContext("acme")
+		require.NoError(t, err)
+		ctx, err := tenancy.Attach(context.Background(), tc)
+		require.NoError(t, err)
+		assert.NoError(t, entity.verifyTenantForPersist(ctx))
+	})
+}
+
+// TestDurableStateActorTenancyWritePath is the end-to-end counterpart of
+// TestDurableStateActorVerifyTenantForPersist: with a TenantContext properly
+// attached (as Engine.SendCommand would do at the trust boundary), the
+// command must succeed all the way through persistStateAndPublish, and
+// HandleCommand must observe the exact same TenantContext instance that was
+// attached — proving the T4-B gate reads it back rather than re-resolving
+// it (there is no resolver reachable from the actor to re-resolve with in
+// the first place).
+func TestDurableStateActorTenancyWritePath(t *testing.T) {
+	ctx := context.TODO()
+
+	durableStore := testkit.NewDurableStore()
+	persistenceID := uuid.NewString()
+	behavior := newTenancyProbeDurableStateBehavior(persistenceID)
+	require.NoError(t, durableStore.Connect(ctx))
+
+	eventStream := eventstream.New()
+
+	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithExtensions(
+			extensions.NewDurableStateStore(durableStore),
+			extensions.NewEventsStream(eventStream),
+			extensions.NewTenancyMarker(),
+		),
+		goakt.WithActorInitMaxRetries(3))
+	require.NoError(t, err)
+	require.NoError(t, actorSystem.Start(ctx))
+	pause.For(time.Second)
+
+	actor := newDurableStateActor()
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+	require.NoError(t, err)
+	require.NotNil(t, pid)
+	pause.For(time.Second)
+
+	tenant, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	tenantCtx, err := tenancy.Attach(ctx, tenant)
+	require.NoError(t, err)
+
+	reply, err := goakt.Ask(tenantCtx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	commandReply, ok := reply.(*egopb.CommandReply)
+	require.True(t, ok)
+	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
+		"a command with a TenantContext already attached must succeed through persistStateAndPublish")
+
+	assert.EqualValues(t, 1, behavior.invocationCount())
+	observed, ok := behavior.observedTenant()
+	require.True(t, ok)
+	assert.Equal(t, tenant, observed, "HandleCommand must observe the exact TenantContext attached at the trust boundary")
+
+	latest, err := durableStore.GetLatestState(ctx, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest, "the state must be persisted once the tenant is confirmed present")
+
+	require.NoError(t, durableStore.Disconnect(ctx))
+	eventStream.Close()
+	pause.For(time.Second)
+	require.NoError(t, actorSystem.Stop(ctx))
 }
 
 func (x *badVersionDurableStateBehavior) UnmarshalBinary(data []byte) error {

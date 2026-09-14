@@ -411,6 +411,110 @@ func TestSendCommandTenantResolution(t *testing.T) {
 	})
 }
 
+// TestSendCommandSingleTenantZeroPlumbing exercises AC4/AC5/D6/D7:
+// tenancy.WithSingleTenant, registered as the sole resolver via
+// WithTenantResolver, lets a command succeed with zero manual
+// tenancy.Attach/tenancy.Require calls in application code — the caller's
+// ctx here is a plain context.Background(), exactly like every other
+// SendCommand test in this file, and never touches the tenancy package at
+// all. SendCommand and the actor's T4-A/T4-B gates do the entire resolve,
+// attach, and re-confirm sequence identically to a multi-tenant resolver
+// (see TestSendCommandTenantResolution above); this test only proves it
+// also works, end-to-end, for the single-tenant case with no per-call
+// tenant plumbing whatsoever.
+func TestSendCommandSingleTenantZeroPlumbing(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	resolver, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
+	require.NoError(t, err)
+	engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	probe := newTenancyProbeEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, probe))
+
+	// Plain context.Background(): no tenancy.Attach, no tenancy.Require,
+	// nothing tenancy-related at the call site.
+	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 1, probe.invocationCount())
+	tc, ok := probe.observedTenant()
+	require.True(t, ok, "HandleCommand must still observe a TenantContext even though the caller never attached one")
+	tenantID, ok := tc.Tenant()
+	require.True(t, ok)
+	assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestSendCommandResolverSwapIdenticalSequence proves D6/D7's other half:
+// swapping tenancy.WithSingleTenant for an ordinary multi-tenant resolver
+// changes nothing about the resolve-attach-gate sequence a command travels
+// through. Both resolvers here are driven through the exact same
+// SendCommand call with the exact same plain ctx; only the registered
+// resolver differs.
+func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
+	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
+		t.Helper()
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe))
+
+		return engine, entityID, probe
+	}
+
+	t.Run("single-tenant resolver", func(t *testing.T) {
+		ctx := context.Background()
+		singleTenant, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
+		require.NoError(t, err)
+
+		engine, entityID, probe := newEngineWithResolver(t, singleTenant)
+		_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 1, probe.invocationCount())
+		tc, ok := probe.observedTenant()
+		require.True(t, ok)
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("multi-tenant resolver", func(t *testing.T) {
+		ctx := context.Background()
+		multiTenant := &countingTenantResolver{id: "acme"}
+
+		engine, entityID, probe := newEngineWithResolver(t, multiTenant)
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step")
+		assert.EqualValues(t, 1, probe.invocationCount())
+		tc, ok := probe.observedTenant()
+		require.True(t, ok)
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+}
+
 // TestEngineDurableState covers the happy path for a durable-state entity.
 func TestEngineDurableState(t *testing.T) {
 	ctx := context.Background()

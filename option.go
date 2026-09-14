@@ -418,6 +418,15 @@ func isNilResolver(r tenancy.TenantResolver) bool {
 // on Option application order. NewEngine rejects two or more non-nil
 // registrations with ErrAmbiguousTenantResolver rather than silently
 // picking one.
+//
+// Known limitation: a Saga step dispatched through NoSender resets
+// context.Context (getsyntegrity/ego#54) and therefore loses any
+// TenantContext SendCommand attached upstream. In tenant-aware mode this
+// fails closed at the actor's pre-handler gate (T4-A) rather than silently
+// running without an identity, but a saga cannot currently complete a
+// tenant-aware command on its own — see saga_test.go for the documented
+// end-to-end demonstration. This will be resolved once #54 lets a saga
+// reconstruct and reattach a TenantContext from carried Metadata.
 func WithTenantResolver(resolver tenancy.TenantResolver) Option {
 	return OptionFunc(func(c *Config) {
 		if isNilResolver(resolver) {
