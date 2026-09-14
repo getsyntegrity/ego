@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
 	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine
@@ -244,6 +246,179 @@ func (x *AccountDurableStateBehavior) UnmarshalBinary(data []byte) error {
 
 	x.id = serializable.ID
 	return nil
+}
+
+// tenancyProbeEventSourcedBehavior is a minimal EventSourcedBehavior that
+// records, from inside a real HandleCommand invocation, how many times it
+// was called and the ctx it was called with. Tests use it to prove (rather
+// than infer) that a TenantContext resolved and attached at the trust
+// boundary reaches domain code unchanged via tenancy.From, and that the
+// pre-handler gate prevents HandleCommand from ever running when no
+// TenantContext is attached.
+type tenancyProbeEventSourcedBehavior struct {
+	id string
+
+	mu          sync.Mutex
+	invocations int
+	lastCtx     context.Context
+}
+
+var _ EventSourcedBehavior = (*tenancyProbeEventSourcedBehavior)(nil)
+
+func newTenancyProbeEventSourcedBehavior(id string) *tenancyProbeEventSourcedBehavior {
+	return &tenancyProbeEventSourcedBehavior{id: id}
+}
+
+func (x *tenancyProbeEventSourcedBehavior) ID() string {
+	return x.id
+}
+
+func (x *tenancyProbeEventSourcedBehavior) InitialState() State {
+	return new(testpb.Account)
+}
+
+func (x *tenancyProbeEventSourcedBehavior) HandleCommand(ctx context.Context, command Command, _ State) (events []Event, err error) {
+	x.mu.Lock()
+	x.invocations++
+	x.lastCtx = ctx
+	x.mu.Unlock()
+
+	switch cmd := command.(type) {
+	case *testpb.CreateAccount:
+		return []Event{
+			&testpb.AccountCreated{
+				AccountId:      x.id,
+				AccountBalance: cmd.GetAccountBalance(),
+			},
+		}, nil
+	default:
+		return nil, errors.New("unhandled command")
+	}
+}
+
+func (x *tenancyProbeEventSourcedBehavior) HandleEvent(_ context.Context, event Event, _ State) (state State, err error) {
+	switch evt := event.(type) {
+	case *testpb.AccountCreated:
+		return &testpb.Account{
+			AccountId:      evt.GetAccountId(),
+			AccountBalance: evt.GetAccountBalance(),
+		}, nil
+	default:
+		return nil, errors.New("unhandled event")
+	}
+}
+
+func (x *tenancyProbeEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
+	return json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: x.id})
+}
+
+func (x *tenancyProbeEventSourcedBehavior) UnmarshalBinary(data []byte) error {
+	aux := struct {
+		ID string `json:"id"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	x.id = aux.ID
+	return nil
+}
+
+// invocationCount reports how many times HandleCommand has run so far.
+func (x *tenancyProbeEventSourcedBehavior) invocationCount() int {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.invocations
+}
+
+// observedTenant returns the tenancy.TenantContext bound to the ctx of the
+// most recent HandleCommand invocation, if any.
+func (x *tenancyProbeEventSourcedBehavior) observedTenant() (tenancy.TenantContext, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.lastCtx == nil {
+		return tenancy.TenantContext{}, false
+	}
+	return tenancy.From(x.lastCtx)
+}
+
+// tenancyProbeDurableStateBehavior is the DurableStateBehavior counterpart of
+// tenancyProbeEventSourcedBehavior, used for the same purpose against
+// DurableStateActor's processCommand gate.
+type tenancyProbeDurableStateBehavior struct {
+	id string
+
+	mu          sync.Mutex
+	invocations int
+	lastCtx     context.Context
+}
+
+var _ DurableStateBehavior = (*tenancyProbeDurableStateBehavior)(nil)
+
+func newTenancyProbeDurableStateBehavior(id string) *tenancyProbeDurableStateBehavior {
+	return &tenancyProbeDurableStateBehavior{id: id}
+}
+
+func (x *tenancyProbeDurableStateBehavior) ID() string {
+	return x.id
+}
+
+func (x *tenancyProbeDurableStateBehavior) InitialState() State {
+	return new(testpb.Account)
+}
+
+// nolint
+func (x *tenancyProbeDurableStateBehavior) HandleCommand(ctx context.Context, command Command, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
+	x.mu.Lock()
+	x.invocations++
+	x.lastCtx = ctx
+	x.mu.Unlock()
+
+	switch cmd := command.(type) {
+	case *testpb.CreateAccount:
+		return &testpb.Account{
+			AccountId:      x.id,
+			AccountBalance: cmd.GetAccountBalance(),
+		}, priorVersion + 1, nil
+	default:
+		return nil, 0, errors.New("unhandled command")
+	}
+}
+
+func (x *tenancyProbeDurableStateBehavior) MarshalBinary() (data []byte, err error) {
+	return json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: x.id})
+}
+
+func (x *tenancyProbeDurableStateBehavior) UnmarshalBinary(data []byte) error {
+	aux := struct {
+		ID string `json:"id"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	x.id = aux.ID
+	return nil
+}
+
+// invocationCount reports how many times HandleCommand has run so far.
+func (x *tenancyProbeDurableStateBehavior) invocationCount() int {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.invocations
+}
+
+// observedTenant returns the tenancy.TenantContext bound to the ctx of the
+// most recent HandleCommand invocation, if any.
+func (x *tenancyProbeDurableStateBehavior) observedTenant() (tenancy.TenantContext, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.lastCtx == nil {
+		return tenancy.TenantContext{}, false
+	}
+	return tenancy.From(x.lastCtx)
 }
 
 // testSagaBehavior implements SagaBehavior for testing

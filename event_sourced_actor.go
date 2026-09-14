@@ -42,6 +42,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/runner"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 const (
@@ -139,6 +140,15 @@ type EventSourcedActor struct {
 	shutdownOnDrain  bool
 	flushTimer       *time.Timer
 	batchMu          sync.Mutex
+
+	// tenantAware reports whether the actor system was built from a Config
+	// with a tenancy.TenantResolver registered (extensions.TenancyMarker
+	// present). It is presence-only: the actor never holds a resolver and
+	// never calls Resolve — see PreStart. When true, the pre-handler gates
+	// in processCommandAndReply and processAndBatch require a TenantContext
+	// to already be attached to the incoming context (set by
+	// Engine.SendCommand at the trust boundary) before HandleCommand runs.
+	tenantAware bool
 }
 
 var _ goakt.Actor = (*EventSourcedActor)(nil)
@@ -158,6 +168,11 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 	entity.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
 	entity.persistenceID = ctx.ActorName()
 	entity.persistTimeout = defaultPersistTimeout
+	// Presence-only signal: tenant-aware mode is active when the engine
+	// registered the tenancy marker extension. The marker carries no
+	// resolver (internal/extensions.TenancyMarker), so the actor can never
+	// reach a TenantResolver through it.
+	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
 
 	entity.loadOptionalExtensions(ctx)
 	entity.setConfig(ctx)
@@ -524,6 +539,20 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		}()
 	}
 
+	// Pre-handler gate (T4-A): in tenant-aware mode, HandleCommand must never
+	// run without a TenantContext already attached by Engine.SendCommand.
+	// This reuses tenancy.Require, a read-only check of the context already
+	// in hand; it never calls a resolver and never re-resolves. A saga or
+	// any other caller that bypasses SendCommand (e.g. via NoSender with a
+	// fresh context.Background()) fails closed here instead of silently
+	// running without an identity.
+	if entity.tenantAware {
+		if _, err := tenancy.Require(goCtx); err != nil {
+			entity.sendErrorReply(ctx, err)
+			return
+		}
+	}
+
 	events, err := entity.behavior.HandleCommand(goCtx, command, entity.currentState)
 	if err != nil {
 		entity.sendErrorReply(ctx, err)
@@ -768,6 +797,20 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 
 	state := entity.latestState()
 	counter := entity.latestCounter()
+
+	// Pre-handler gate (T4-A): same reused read-only check as
+	// processCommandAndReply — see its comment for the rationale. The
+	// batched path must fail closed here too, before flushBatch's own
+	// context.Background() call is ever reached.
+	if entity.tenantAware {
+		if _, err := tenancy.Require(goCtx); err != nil {
+			if span != nil {
+				span.End()
+			}
+			entity.sendErrorReply(ctx, err)
+			return
+		}
+	}
 
 	events, err := entity.behavior.HandleCommand(goCtx, command, state)
 	if err != nil {

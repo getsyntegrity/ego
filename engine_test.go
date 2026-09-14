@@ -25,8 +25,10 @@ package ego
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -57,6 +59,7 @@ import (
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/projection"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -216,6 +219,158 @@ func TestEngineEventSourced(t *testing.T) {
 	assert.EqualValues(t, 2, revision)
 
 	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestSendCommandTenantResolution exercises the T4-A trust boundary in
+// Engine.SendCommand: in tenant-aware mode (a resolver registered via
+// WithTenantResolver) Resolve is invoked exactly once per command and the
+// resulting TenantContext is attached before the actor runtime ever sees
+// the command; a resolver failure blocks the command outright, before
+// dispatch, the actor, the handler, or persistence. Legacy mode (no
+// resolver) is exercised separately by TestEngineEventSourced and
+// TestEngineDurableState, which remain unmodified and passing.
+func TestSendCommandTenantResolution(t *testing.T) {
+	t.Run("resolves exactly once and attaches the TenantContext before the handler runs", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		resolver := &countingTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command")
+		assert.EqualValues(t, 1, probe.invocationCount())
+
+		tc, ok := probe.observedTenant()
+		require.True(t, ok, "HandleCommand must observe a TenantContext attached to its ctx via tenancy.From")
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("a resolver error rejects the command before the actor system runs it", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		wantErr := errors.New("identity provider unavailable")
+		resolver := &erroringTenantResolver{err: wantErr}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.ErrorIs(t, err, wantErr, "SendCommand must surface the resolver error, not silently transform it")
+
+		assert.EqualValues(t, 1, resolver.callCount())
+		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
+
+		latest, err := store.GetLatestEvent(ctx, entityID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when Resolve fails")
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("tenancy sentinel errors from the resolver block the command before the handler", func(t *testing.T) {
+		for _, tt := range []struct {
+			name    string
+			wantErr error
+		}{
+			{"ErrMissing", tenancy.ErrMissing},
+			{"ErrInvalid", tenancy.ErrInvalid},
+			{"ErrDenied", tenancy.ErrDenied},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				ctx := context.Background()
+				store := testkit.NewEventsStore()
+				require.NoError(t, store.Connect(ctx))
+				t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+				resolver := &erroringTenantResolver{err: tt.wantErr}
+				engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+				require.NoError(t, engine.Start(ctx))
+
+				entityID := uuid.NewString()
+				probe := newTenancyProbeEventSourcedBehavior(entityID)
+				require.NoError(t, engine.Entity(ctx, probe))
+
+				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Zero(t, probe.invocationCount())
+
+				latest, err := store.GetLatestEvent(ctx, entityID)
+				require.NoError(t, err)
+				assert.Nil(t, latest)
+
+				require.NoError(t, engine.Stop(ctx))
+			})
+		}
+	})
+
+	t.Run("concurrent commands for different tenants do not cross-contaminate", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		// perCallerTenantResolver resolves whichever tenant ID the caller
+		// placed on ctx, simulating a resolver that derives identity from
+		// request-scoped data (e.g. a header) rather than a fixed value.
+		resolver := perCallerTenantResolver{}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		const tenantCount = 5
+		entityIDs := make([]string, tenantCount)
+		probes := make([]*tenancyProbeEventSourcedBehavior, tenantCount)
+		tenantIDs := make([]tenancy.TenantID, tenantCount)
+
+		for i := 0; i < tenantCount; i++ {
+			entityIDs[i] = uuid.NewString()
+			tenantIDs[i] = tenancy.TenantID(fmt.Sprintf("tenant-%d", i))
+
+			probes[i] = newTenancyProbeEventSourcedBehavior(entityIDs[i])
+			require.NoError(t, engine.Entity(ctx, probes[i]))
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < tenantCount; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				callerCtx := context.WithValue(ctx, perCallerTenantKey{}, string(tenantIDs[i]))
+				_, _, err := engine.SendCommand(callerCtx, entityIDs[i], &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+				assert.NoError(t, err)
+			}(i)
+		}
+		wg.Wait()
+
+		for i := 0; i < tenantCount; i++ {
+			tc, ok := probes[i].observedTenant()
+			require.True(t, ok)
+			gotTenant, ok := tc.Tenant()
+			require.True(t, ok)
+			assert.Equal(t, tenantIDs[i], gotTenant, "each entity's handler must observe only its own tenant")
+		}
+
+		require.NoError(t, engine.Stop(ctx))
+	})
 }
 
 // TestEngineDurableState covers the happy path for a durable-state entity.

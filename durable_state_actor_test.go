@@ -44,6 +44,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -702,6 +703,69 @@ func (x *badVersionDurableStateBehavior) MarshalBinary() ([]byte, error) {
 	return json.Marshal(struct {
 		ID string `json:"id"`
 	}{ID: x.id})
+}
+
+// TestDurableStateActorTenancyGate exercises the T4-A pre-handler gate added
+// to DurableStateActor: when the actor system carries the tenancy marker
+// (tenant-aware mode), HandleCommand must never run without a TenantContext
+// already attached to the incoming ctx. Like its EventSourcedActor
+// counterpart, this spawns the actor directly and dispatches through
+// goakt.Ask with a plain context, deliberately bypassing
+// Engine.SendCommand's resolve-and-attach step.
+func TestDurableStateActorTenancyGate(t *testing.T) {
+	t.Run("missing TenantContext blocks HandleCommand and persistence", func(t *testing.T) {
+		ctx := context.TODO()
+
+		durableStore := testkit.NewDurableStore()
+		persistenceID := uuid.NewString()
+		behavior := newTenancyProbeDurableStateBehavior(persistenceID)
+		require.NoError(t, durableStore.Connect(ctx))
+
+		eventStream := eventstream.New()
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewDurableStateStore(durableStore),
+				extensions.NewEventsStream(eventStream),
+				extensions.NewTenancyMarker(),
+			),
+			goakt.WithActorInitMaxRetries(3))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newDurableStateActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+		pause.For(time.Second)
+
+		// No TenantContext attached: mirrors a caller that bypasses
+		// Engine.SendCommand entirely.
+		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, reply)
+
+		commandReply, ok := reply.(*egopb.CommandReply)
+		require.True(t, ok)
+		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
+		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+
+		_, wantErr := tenancy.Require(context.Background())
+		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
+
+		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
+
+		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no state may be persisted when the gate blocks the command")
+
+		require.NoError(t, durableStore.Disconnect(ctx))
+		eventStream.Close()
+		pause.For(time.Second)
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
 }
 
 func (x *badVersionDurableStateBehavior) UnmarshalBinary(data []byte) error {

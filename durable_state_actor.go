@@ -39,6 +39,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/runner"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // statesTopic is the single in-process pub/sub topic eGo's durable-state
@@ -64,6 +65,15 @@ type DurableStateActor struct {
 
 	// Cached values computed once at startup to avoid per-command allocations.
 	shardNumber uint64
+
+	// tenantAware reports whether the actor system was built from a Config
+	// with a tenancy.TenantResolver registered (extensions.TenancyMarker
+	// present). It is presence-only: the actor never holds a resolver and
+	// never calls Resolve — see PreStart. When true, the pre-handler gate in
+	// processCommand requires a TenantContext to already be attached to the
+	// incoming context (set by Engine.SendCommand at the trust boundary)
+	// before HandleCommand runs.
+	tenantAware bool
 }
 
 // implements the goakt.Actor interface
@@ -79,6 +89,11 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 	entity.stateStore = ctx.Extension(extensions.DurableStateStoreExtensionID).(*extensions.DurableStateStore).Underlying()
 	entity.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
 	entity.persistenceID = ctx.ActorName()
+	// Presence-only signal: tenant-aware mode is active when the engine
+	// registered the tenancy marker extension. The marker carries no
+	// resolver (internal/extensions.TenancyMarker), so the actor can never
+	// reach a TenantResolver through it.
+	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency != nil {
@@ -189,6 +204,17 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 			duration := float64(time.Since(startTime).Milliseconds())
 			entity.metrics.commandsDuration.Record(ctx, duration)
 		}()
+	}
+
+	// Pre-handler gate (T4-A): in tenant-aware mode, HandleCommand must never
+	// run without a TenantContext already attached by Engine.SendCommand.
+	// This reuses tenancy.Require, a read-only check of the context already
+	// in hand; it never calls a resolver and never re-resolves.
+	if entity.tenantAware {
+		if _, err := tenancy.Require(ctx); err != nil {
+			entity.sendErrorReply(receiveContext, err)
+			return
+		}
 	}
 
 	newState, newVersion, err := entity.behavior.HandleCommand(ctx, command, entity.currentVersion, entity.currentState)
