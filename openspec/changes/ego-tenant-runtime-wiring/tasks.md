@@ -121,3 +121,72 @@ every run. Task 6.1 is executed and reconciled.
 `go vet ./...` completed with no output (clean). `git diff --stat -- saga_actor.go tenancy/`
 is empty, confirming both are byte-identical to their pre-PR3 state (read-only for this
 change, as designed).
+
+**Superseded by Phase 7 for `tenancy/`.** The repository owner's adversarial review of PR2/PR3
+found a real defect reachable only through this change's own T4-A/T4-B call sites (Blocker 1,
+below), requiring a small, deliberate change to `tenancy/context.go` and
+`tenancy/tenant_context.go` — see Phase 7 and design.md Decision D8 for the paper trail.
+`saga_actor.go` remains untouched (still deferred to #54).
+
+## Phase 7: Review-Fix — TenantContext content validation (post-verify, adversarial review)
+
+`sdd-verify` passed, but the repository owner's own adversarial review of the 3 stacked PRs
+found 3 real P1 blockers `sdd-verify` missed, all rooted in the same gap: `tenancy.Attach`/
+`tenancy.Require` validated only presence/change of a `TenantContext`, never its content, so a
+`TenantResolver.Resolve` returning `tenancy.TenantContext{}, nil` (zero value, no error) flowed
+through unchallenged. Fixed here, tracked as design.md Decision D8 / spec.md DP4.
+
+- [x] 7.1 (Blocker 1) GREEN `tenancy/tenant_context.go`: `TenantContext.valid()` — `Scope()` is
+      `ScopeTenant` or `ScopeAdministrative`, the zero value is the sole invalid case.
+- [x] 7.2 (Blocker 1) GREEN `tenancy/context.go`: `Attach` rejects an invalid `TenantContext`
+      before binding (`ErrInvalid`); `Require` rejects one even if somehow already bound,
+      independently (defense in depth, both call `valid()`).
+- [x] 7.3 (Blocker 1) RED/GREEN `tenancy/context_test.go`, `tenancy/context_internal_test.go`
+      (new, white-box): `Attach` rejects `TenantContext{}`; `Require` rejects a directly-bound
+      invalid value; valid tenant-scoped/administrative contexts still flow through unchanged.
+- [x] 7.4 (Blocker 1) RED/GREEN `engine_test.go` `TestSendCommandTenantResolution`: a resolver
+      returning `TenantContext{}, nil` is rejected before dispatch — handler invocation count 0,
+      no event persisted. Confirmed genuinely RED by temporarily reverting the tenancy/ fix and
+      re-running this subtest in isolation.
+- [x] 7.5 docs `design.md`: Decision D8 — option analysis (Attach-only vs Require-only vs both)
+      and explicit note on why this is recorded here, not by reopening the archived
+      `ego-tenant-context` (EGO-TENANT-001) change.
+- [x] 7.6 docs `specs/tenancy-runtime/spec.md`: new Requirement "Fail-Closed Gates Validate
+      TenantContext Content, Not Just Presence" (AC3, T4-A, T4-B, DP4), 3 scenarios, Ratified
+      Decision DP4, updated AC3 traceability row.
+- [x] 7.7 (Blocker 2) GREEN/confirm `event_sourced_actor_test.go`, `durable_state_actor_test.go`:
+      new subtests on `TestEventSourcedActorVerifyTenantForPersist` /
+      `TestDurableStateActorVerifyTenantForPersist` proving both actors' `verifyTenantForPersist`
+      inherit 7.1-7.2's protection with **zero** production-code changes to either function —
+      confirmed by test, not re-patched.
+- [x] 7.8 (Blocker 3) GREEN `event_sourced_actor.go` `processAndBatch`: moved the
+      `entity.batchTenant` vs incoming-tenant homogeneity check (`tenancy.VerifyUnchanged`) into
+      the pre-handler gate, capturing `tc` from the existing `tenancy.Require(goCtx)` call there,
+      so it runs BEFORE `entity.behavior.HandleCommand` — not only after `buildEnvelopes`.
+      Deleted the now-redundant second `tenancy.Require` call that followed `buildEnvelopes`.
+- [x] 7.9 (Blocker 3) RED/GREEN `event_sourced_actor_test.go`: new
+      `TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant` — tenant A opens a batch
+      (produces an event); tenant B's zero-event command into the same open batch is rejected
+      before `HandleCommand` ever runs (invocation count proven unchanged), with tenant A's
+      in-flight batch left uncontaminated. Confirmed genuinely RED by temporarily reverting the
+      `event_sourced_actor.go` fix and re-running this test in isolation (observed the exact
+      leak: the zero-event command was wrongly accepted). Regression companion
+      `TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant` confirms a same-tenant
+      zero-event command still succeeds via the `len(events)==0` cached-state-reply path.
+      `helper_test.go`'s `tenancyProbeEventSourcedBehavior.HandleCommand` extended to handle
+      `*testpb.TestNoEvent` as a genuine zero-event, no-error command for this test.
+- [x] 7.10 Resolved the 3 open P1 GitHub review threads (PR #57 `PRRT_kwDOSegGrc6iNWB7`; PR #58
+      `PRRT_kwDOSegGrc6iOul3`, `PRRT_kwDOSegGrc6iOul-`) via `resolveReviewThread`, each with a
+      reply quoting the fix commit and the exact test proving it.
+- [x] 7.11 Confirmed PR1 (`feat/ego-tenant-006-config-foundation`, tip `3ac8e1d`) still builds,
+      `go vet`s, and passes its full test suite standalone/independently (verified in a disposable
+      worktree) — untouched by this review-fix phase.
+
+### Verification note — task 7 (full suite)
+
+`go build -mod=vendor ./...` and `go vet -mod=vendor ./...` both clean on PR2 and PR3 branches
+after the fixes. `go test -mod=vendor -race . ./tenancy/... -run 'Tenant|Tenancy|Ambiguous|Resolver|Saga|Batch' -v`
+passed on PR3 (post-rebase): `ok github.com/pablogore/ego/v4 190.390s`,
+`ok github.com/pablogore/ego/v4/tenancy` — no `FAIL`, no `DATA RACE`, no panic anywhere in the
+702-line log. `saga_actor.go` remains untouched (still deferred to #54); only `saga_test.go`
+was read, not modified, for this phase.
