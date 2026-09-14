@@ -37,14 +37,14 @@ Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance 
 
 ## Phase 2: Core Mechanics
 
-- [ ] 2.1 RED: `tenancy/resolver_test.go` — `WithSingleTenant` produces a `TenantContext` indistinguishable from any resolver's
-- [ ] 2.2 GREEN: `tenancy/resolver.go` — `TenantResolver` interface, `WithSingleTenant`
-- [ ] 2.3 RED: `tenancy/context_test.go` — `Attach` idempotent/`ErrDenied` on change; `From`/`Require` `ErrMissing`; `VerifyUnchanged` -> `ErrDenied`
-- [ ] 2.4 RED: `tenancy/context_test.go` — saga: `context.Background()` reset, reconstruct via metadata+`Attach`; skip -> `ErrMissing`
-- [ ] 2.5 RED: `tenancy/context_test.go` — invocation: entrypoint `Resolve`+`Attach`, behavior only `Require`; skip -> fails
-- [ ] 2.6 GREEN: `tenancy/context.go` — `Attach`, `From`, `Require`, `VerifyUnchanged` satisfying 2.3-2.5
-- [ ] 2.7 RED: `tenancy/metadata_test.go` — `MarshalMetadata`/`UnmarshalMetadata` round-trip, tenant and administrative
-- [ ] 2.8 GREEN: `tenancy/metadata.go` — `Metadata`, marshal/unmarshal (`ego.tenant.*` keys)
+- [x] 2.1 RED: `tenancy/resolver_test.go` — `WithSingleTenant` produces a `TenantContext` indistinguishable from any resolver's
+- [x] 2.2 GREEN: `tenancy/resolver.go` — `TenantResolver` interface, `WithSingleTenant`
+- [x] 2.3 RED: `tenancy/context_test.go` — `Attach` idempotent/`ErrDenied` on change; `From`/`Require` `ErrMissing`; `VerifyUnchanged` -> `ErrDenied`
+- [x] 2.4 RED: `tenancy/context_test.go` — saga: `context.Background()` reset, reconstruct via metadata+`Attach`; skip -> `ErrMissing`
+- [x] 2.5 RED: `tenancy/context_test.go` — invocation: entrypoint `Resolve`+`Attach`, behavior only `Require`; skip -> fails
+- [x] 2.6 GREEN: `tenancy/context.go` — `Attach`, `From`, `Require`, `VerifyUnchanged` satisfying 2.3-2.5
+- [x] 2.7 RED: `tenancy/metadata_test.go` — `MarshalMetadata`/`UnmarshalMetadata` round-trip, tenant and administrative
+- [x] 2.8 GREEN: `tenancy/metadata.go` — `Metadata`, marshal/unmarshal (`ego.tenant.*` keys)
 
 ## Phase 3: Conformance & Tooling
 
