@@ -39,8 +39,39 @@ import (
 	"github.com/pablogore/ego/v4/eventadapter"
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/projection"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
+
+// stubTenantResolver is a minimal tenancy.TenantResolver used across
+// option_test.go and engine_test.go to exercise WithTenantResolver and
+// NewEngine's tenant-resolver validation without pulling in a mocking
+// framework for what is, here, just an identity comparison.
+type stubTenantResolver struct {
+	id string
+}
+
+var _ tenancy.TenantResolver = (*stubTenantResolver)(nil)
+
+func (r *stubTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	tid, err := tenancy.NewTenantID(r.id)
+	if err != nil {
+		return tenancy.TenantContext{}, err
+	}
+	return tenancy.NewTenantContext(tid)
+}
+
+// funcTenantResolver is a named function type implementing
+// tenancy.TenantResolver, used to exercise the reflect.Func branch of
+// isNilResolver: a nil value of this type is a typed-nil that must be
+// treated exactly like a nil interface, not a callable resolver.
+type funcTenantResolver func(context.Context) (tenancy.TenantContext, error)
+
+var _ tenancy.TenantResolver = funcTenantResolver(nil)
+
+func (f funcTenantResolver) Resolve(ctx context.Context) (tenancy.TenantContext, error) {
+	return f(ctx)
+}
 
 // buildActorSystem constructs and starts a goakt actor system from a Config so
 // the optional extension branches in Config.GoaktOptions can be inspected.
@@ -81,6 +112,102 @@ func TestOptionWithEncryptor(t *testing.T) {
 	enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
 	c := NewConfig(nil, WithEncryptor(enc))
 	assert.Equal(t, enc, c.encryptor)
+}
+
+func TestOptionWithTenantResolverNil(t *testing.T) {
+	// A nil resolver must be inert: no registration, no error, tenant-aware
+	// mode not activated (spec.md "Nil option is inert").
+	c := NewConfig(nil, WithTenantResolver(nil))
+	assert.Nil(t, c.tenantResolver)
+	assert.Zero(t, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverTypedNil(t *testing.T) {
+	// A typed-nil resolver value is non-nil at the interface level but
+	// wraps a nil pointer; isNilResolver must detect it the way
+	// isNilLogger does, so it is treated exactly like a plain nil.
+	var typedNil *stubTenantResolver
+	c := NewConfig(nil, WithTenantResolver(typedNil))
+	assert.Nil(t, c.tenantResolver)
+	assert.Zero(t, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverFuncTypedNil(t *testing.T) {
+	// A typed-nil value of a named function type implementing
+	// tenancy.TenantResolver is non-nil at the interface level but wraps a
+	// nil func; isNilResolver must detect it via the reflect.Func branch,
+	// not just reflect.Pointer, or it would be registered as an "effective"
+	// resolver and panic on the first Resolve call.
+	var typedNil funcTenantResolver
+	c := NewConfig(nil, WithTenantResolver(typedNil))
+	assert.Nil(t, c.tenantResolver)
+	assert.Zero(t, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolver(t *testing.T) {
+	// A single non-nil registration becomes the effective resolver and
+	// activates tenant-aware mode (spec.md "Non-nil resolver registers as
+	// effective").
+	resolver := &stubTenantResolver{id: "acme"}
+	c := NewConfig(nil, WithTenantResolver(resolver))
+	assert.Same(t, resolver, c.tenantResolver)
+	assert.Equal(t, 1, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverNilAfterNonNil(t *testing.T) {
+	// nil after a valid registration must not reset it — nil is not a
+	// mechanism to disable tenancy once configured (spec.md "Nil after
+	// non-nil does not disable tenancy").
+	resolver := &stubTenantResolver{id: "acme"}
+	c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(nil))
+	assert.Same(t, resolver, c.tenantResolver)
+	assert.Equal(t, 1, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverCountsOnlyNonNilRegistrations(t *testing.T) {
+	// A single non-nil registration surrounded by nil registrations still
+	// counts as exactly one (spec.md "Nil registrations do not count").
+	resolver := &stubTenantResolver{id: "acme"}
+	c := NewConfig(nil,
+		WithTenantResolver(nil),
+		WithTenantResolver(resolver),
+		WithTenantResolver(nil),
+	)
+	assert.Same(t, resolver, c.tenantResolver)
+	assert.Equal(t, 1, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverTypedNilThenValid(t *testing.T) {
+	// A typed-nil registration followed by a valid non-nil registration
+	// must produce exactly one effective registration: the typed-nil is
+	// inert and must not be mistaken for an already-registered resolver.
+	var typedNil *stubTenantResolver
+	resolver := &stubTenantResolver{id: "acme"}
+	c := NewConfig(nil, WithTenantResolver(typedNil), WithTenantResolver(resolver))
+	assert.Same(t, resolver, c.tenantResolver)
+	assert.Equal(t, 1, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverValidThenTypedNil(t *testing.T) {
+	// The reverse order must produce the same result: a typed-nil
+	// registration after a valid one must not count and must not disturb
+	// the already-registered effective resolver.
+	var typedNil *stubTenantResolver
+	resolver := &stubTenantResolver{id: "acme"}
+	c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(typedNil))
+	assert.Same(t, resolver, c.tenantResolver)
+	assert.Equal(t, 1, c.tenantResolverCount)
+}
+
+func TestOptionWithTenantResolverAmbiguousCount(t *testing.T) {
+	// Two distinct non-nil registrations are both counted; NewEngine (not
+	// the Option itself, which cannot return an error) rejects
+	// tenantResolverCount > 1.
+	c := NewConfig(nil,
+		WithTenantResolver(&stubTenantResolver{id: "acme"}),
+		WithTenantResolver(&stubTenantResolver{id: "globex"}),
+	)
+	assert.Equal(t, 2, c.tenantResolverCount)
 }
 
 func TestOptionWithProjection(t *testing.T) {
@@ -157,6 +284,38 @@ func TestConfigGoaktOptionsEncryptor(t *testing.T) {
 
 	sys := buildActorSystem(t, cfg)
 	require.NotNil(t, sys.Extension(extensions.EncryptorExtensionID))
+}
+
+func TestConfigGoaktOptionsTenancyMarker(t *testing.T) {
+	// WithTenantResolver must register the tenancy marker extension via
+	// GoaktOptions when a non-nil resolver is configured.
+	cfg := NewConfig(testkit.NewEventsStore(), WithTenantResolver(&stubTenantResolver{id: "acme"}))
+
+	sys := buildActorSystem(t, cfg)
+	require.NotNil(t, sys.Extension(extensions.TenancyExtensionID))
+}
+
+func TestConfigGoaktOptionsNoTenancyMarkerWithoutResolver(t *testing.T) {
+	// Backward compatibility (T3/D7): an engine that never registers a
+	// resolver must not carry the tenancy marker extension at all.
+	cfg := NewConfig(testkit.NewEventsStore())
+
+	sys := buildActorSystem(t, cfg)
+	require.Nil(t, sys.Extension(extensions.TenancyExtensionID))
+}
+
+func TestConfigGoaktOptionsNoTenancyMarkerWithTypedNilResolver(t *testing.T) {
+	// A typed-nil resolver (pointer or func) must not activate the tenancy
+	// marker extension: it is inert, not an effective registration.
+	var typedNilPointer *stubTenantResolver
+	var typedNilFunc funcTenantResolver
+	cfg := NewConfig(testkit.NewEventsStore(),
+		WithTenantResolver(typedNilPointer),
+		WithTenantResolver(typedNilFunc),
+	)
+
+	sys := buildActorSystem(t, cfg)
+	require.Nil(t, sys.Extension(extensions.TenancyExtensionID))
 }
 
 func TestConfigGoaktOptionsTelemetry(t *testing.T) {

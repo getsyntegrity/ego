@@ -23,6 +23,8 @@
 package ego
 
 import (
+	"reflect"
+
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
@@ -35,6 +37,7 @@ import (
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/projection"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // Config captures every option an Engine needs.
@@ -54,6 +57,20 @@ type Config struct {
 	telemetry     *Telemetry
 	encryptor     encryption.Encryptor
 	entityKinds   []EntityKind
+
+	// tenantResolver is the effective tenancy.TenantResolver, if any. Its
+	// non-nil-ness IS tenant-aware mode (design.md D1) — there is no
+	// separate boolean flag. It is set once, by the first non-nil
+	// registration WithTenantResolver sees; later non-nil registrations are
+	// counted in tenantResolverCount but never replace it (first-wins, not
+	// last-call-wins — DP2).
+	tenantResolver tenancy.TenantResolver
+
+	// tenantResolverCount counts non-nil WithTenantResolver registrations
+	// only. NewEngine rejects count > 1 with ErrAmbiguousTenantResolver:
+	// TenantResolver is a security boundary and must not depend on Option
+	// ordering the way WithLogger/WithTelemetry do (DP2).
+	tenantResolverCount int
 
 	// eventStream is the in-process pub/sub stream eGo's entity actors
 	// publish to and the engine's publishers/subscribers consume from. It is
@@ -100,8 +117,8 @@ func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 // The returned list always includes the events store, event stream, logger
 // adapter, pub/sub option, and a default resume-on-error supervisor. It
 // additionally contains the state store, offset store, projection, snapshot
-// store, event adapters, telemetry, and encryptor extensions whenever the
-// corresponding Option was set on this Config.
+// store, event adapters, telemetry, encryptor, and tenancy marker extensions
+// whenever the corresponding Option was set on this Config.
 func (c *Config) GoaktOptions() []goakt.Option {
 	opts := []goakt.Option{
 		goakt.WithLogger(newLoggerAdapter(c.logger)),
@@ -153,6 +170,10 @@ func (c *Config) GoaktOptions() []goakt.Option {
 
 	if c.encryptor != nil {
 		opts = append(opts, goakt.WithExtensions(extensions.NewEncryptor(c.encryptor)))
+	}
+
+	if c.tenantResolver != nil {
+		opts = append(opts, goakt.WithExtensions(extensions.NewTenancyMarker()))
 	}
 
 	return opts
@@ -351,5 +372,60 @@ func WithEntityKinds(kinds ...EntityKind) Option {
 func WithEncryptor(encryptor encryption.Encryptor) Option {
 	return OptionFunc(func(c *Config) {
 		c.encryptor = encryptor
+	})
+}
+
+// isNilResolver returns true when r is nil or a typed-nil (e.g.
+// (*MyResolver)(nil), a nil named function, or a nil map/slice/chan value
+// implementing tenancy.TenantResolver). It mirrors isNilLogger
+// (logger.go:72): a typed-nil interface value is non-nil at the interface
+// level but wraps a nil concrete value, which would misfire tenant-aware
+// mode and any resolver call made against it.
+//
+// reflect.Value.IsNil panics on kinds that cannot be nil, so it is only
+// called for the nil-capable kinds (Chan, Func, Interface, Map, Pointer,
+// Slice); every other kind (e.g. a struct value) cannot be a typed-nil and
+// is reported as non-nil without calling IsNil.
+func isNilResolver(r tenancy.TenantResolver) bool {
+	if r == nil {
+		return true
+	}
+	v := reflect.ValueOf(r)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// WithTenantResolver registers the tenancy.TenantResolver the engine
+// resolves and attaches a tenant identity through. Registering a non-nil
+// resolver — and only that — activates tenant-aware mode
+// (design.md D1); an engine that never calls this Option, or only ever
+// calls it with nil, keeps today's legacy, non-tenant-aware behavior.
+//
+// Passing nil is inert: it registers no resolver, does not activate
+// tenant-aware mode, and does not reset a resolver a previous call already
+// registered. Nil is therefore not a mechanism to disable tenancy once
+// configured — the effective resolver is decided by the first non-nil
+// registration, not the last call (first-wins, not last-call-wins). A
+// typed-nil resolver value is treated exactly like nil.
+//
+// Unlike WithLogger and WithTelemetry, which are last-call-wins,
+// WithTenantResolver deliberately is not: a TenantResolver is a security
+// boundary and registering more than one non-nil resolver must not depend
+// on Option application order. NewEngine rejects two or more non-nil
+// registrations with ErrAmbiguousTenantResolver rather than silently
+// picking one.
+func WithTenantResolver(resolver tenancy.TenantResolver) Option {
+	return OptionFunc(func(c *Config) {
+		if isNilResolver(resolver) {
+			return
+		}
+		c.tenantResolverCount++
+		if c.tenantResolver == nil {
+			c.tenantResolver = resolver
+		}
 	})
 }
