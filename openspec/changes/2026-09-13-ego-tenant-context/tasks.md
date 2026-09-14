@@ -48,12 +48,12 @@ Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance 
 
 ## Phase 3: Conformance & Tooling
 
-- [ ] 3.1 RED: `tenancy_architecture_test.go` (root, pkg `ego`) — `go list -deps ./tenancy/...` fails on non-stdlib import
-- [ ] 3.2 GREEN: confirm `tenancy/` has zero non-stdlib imports; 3.1 passes unmodified
-- [ ] 3.3 Generate `mocks/tenancy/tenant_resolver.go` mock for `TenantResolver`
-- [ ] 3.4 Add tenancy mock generation to `Makefile` `docker-mock` target
+- [x] 3.1 RED: `tenancy_architecture_test.go` (root, pkg `ego`) — `go list -deps ./tenancy/...` fails on non-stdlib import
+- [x] 3.2 GREEN: confirm `tenancy/` has zero non-stdlib imports; 3.1 passes unmodified
+- [x] 3.3 Generate `mocks/tenancy/tenant_resolver.go` mock for `TenantResolver`
+- [x] 3.4 Add tenancy mock generation to `Makefile` `docker-mock` target
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Run `go mod tidy && go mod vendor`, then `go test -mod=vendor -p 1 -timeout 0 -race ./...` — confirm all spec scenarios pass
-- [ ] 4.2 Run `go vet ./tenancy/...`; confirm `behavior.go`/`saga.go`/`engine.go`/`option.go` are byte-identical (proposal Success Criteria)
+- [x] 4.1 Run `go mod tidy && go mod vendor`, then `go test -mod=vendor -p 1 -timeout 0 -race ./...` — confirm all spec scenarios pass
+- [x] 4.2 Run `go vet ./tenancy/...`; confirm `behavior.go`/`saga.go`/`engine.go`/`option.go` are byte-identical (proposal Success Criteria)

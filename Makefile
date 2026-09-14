@@ -102,7 +102,8 @@ docker-mock: docker-image
 		mockery --dir .            --name EventPublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
 		mockery --dir .            --name StatePublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
 		mockery --dir encryption   --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/encryption   --case snake && \
-		mockery --dir eventadapter --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/eventadapter --case snake'
+		mockery --dir eventadapter --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/eventadapter --case snake && \
+		mockery --dir tenancy      --name TenantResolver  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/tenancy      --case snake'
 
 # Regenerate protobuf code inside the CI image. buf writes everything under
 # gen/ (per buf.gen.yaml); we then copy each subtree to its destination —
