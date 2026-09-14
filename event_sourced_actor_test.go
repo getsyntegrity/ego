@@ -54,6 +54,7 @@ import (
 	mockadapter "github.com/pablogore/ego/v4/mocks/eventadapter"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -1710,6 +1711,145 @@ func TestEventSourcedActor(t *testing.T) {
 
 		err = actorSystem.Stop(ctx)
 		assert.NoError(t, err)
+	})
+}
+
+// TestEventSourcedActorTenancyGate exercises the T4-A pre-handler gate added
+// to EventSourcedActor: when the actor system carries the tenancy marker
+// (tenant-aware mode), HandleCommand must never run without a TenantContext
+// already attached to the incoming ctx. The gate reuses tenancy.Require — a
+// read-only check — and never calls a resolver itself, so these tests spawn
+// the actor directly and dispatch through goakt.Ask with a plain context,
+// deliberately bypassing Engine.SendCommand's resolve-and-attach step
+// (mirroring how a saga or any other internal caller can reach the actor
+// runtime without crossing the trust boundary; see TestSagaFailsClosed...
+// in saga_test.go for the end-to-end demonstration).
+func TestEventSourcedActorTenancyGate(t *testing.T) {
+	t.Run("non-batched: missing TenantContext blocks HandleCommand and persistence", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStore := testkit.NewEventsStore()
+		persistenceID := uuid.NewString()
+		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+
+		require.NoError(t, eventStore.Connect(ctx))
+		pause.For(time.Second)
+
+		eventStream := eventstream.New()
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				extensions.NewTenancyMarker(),
+			),
+			goakt.WithActorInitMaxRetries(3))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+		pause.For(time.Second)
+
+		// No TenantContext attached: this is exactly what a caller that
+		// bypasses Engine.SendCommand (e.g. a saga's context.Background()
+		// dispatch, documented in #54) looks like from the actor's side.
+		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, reply)
+
+		commandReply, ok := reply.(*egopb.CommandReply)
+		require.True(t, ok)
+		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
+		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+
+		_, wantErr := tenancy.Require(context.Background())
+		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
+
+		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
+
+		latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
+
+		require.NoError(t, eventStore.Disconnect(ctx))
+		eventStream.Close()
+		pause.For(time.Second)
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("batched: missing TenantContext blocks HandleCommand before flushBatch is ever reached", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStore := testkit.NewEventsStore()
+		persistenceID := uuid.NewString()
+		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+
+		require.NoError(t, eventStore.Connect(ctx))
+		pause.For(time.Second)
+
+		eventStream := eventstream.New()
+
+		// A short flush window with a threshold that is never reached by a
+		// single command: if the gate failed to block the command and
+		// flushBatch ran, it would still take at least this long, giving the
+		// assertion below a real window to catch a regression.
+		entityCfg := &extensions.EntityConfig{
+			BatchThreshold:   100,
+			BatchFlushWindow: 200 * time.Millisecond,
+		}
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				extensions.NewTenancyMarker(),
+			),
+			goakt.WithActorInitMaxRetries(3))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, entityCfg),
+			goakt.WithLongLived(),
+			goakt.WithStashing())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+		pause.For(time.Second)
+
+		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, reply)
+
+		commandReply, ok := reply.(*egopb.CommandReply)
+		require.True(t, ok)
+		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
+		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+
+		_, wantErr := tenancy.Require(context.Background())
+		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
+
+		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
+
+		// Give any wrongly-scheduled flush timer time to fire, then confirm
+		// nothing was ever written: flushBatch's own context.Background()
+		// call (T4-B, out of scope here) must never even be reached.
+		pause.For(500 * time.Millisecond)
+		latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
+
+		require.NoError(t, eventStore.Disconnect(ctx))
+		eventStream.Close()
+		pause.For(time.Second)
+		require.NoError(t, actorSystem.Stop(ctx))
 	})
 }
 

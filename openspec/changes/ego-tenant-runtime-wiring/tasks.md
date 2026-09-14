@@ -47,18 +47,18 @@ Rationale: five production files across two subsystems (Config/Engine vs. two ac
 
 ## Phase 3: T4-A Trust Boundary (AC2, AC3, T2, T4-A, T5)
 
-- [ ] 3.1 RED `engine_test.go`: `SendCommand` resolves once, attaches, handler observes via `tenancy.From` (resolver call-count spy).
-- [ ] 3.2 RED `engine_test.go`: resolver error rejects the command before the actor system; zero writes.
-- [ ] 3.3 GREEN `engine.go` `SendCommand` (:724): resolve + `tenancy.Attach` before `ref.noSender.SendSync` (:757), guarded by `tenantResolver != nil`.
-- [ ] 3.4 GREEN `event_sourced_actor.go`: `tenantAware` field, populated from the marker at actor start.
-- [ ] 3.5 RED `event_sourced_actor_test.go`: non-batched — missing `TenantContext` ⇒ `HandleCommand` never invoked, zero writes.
-- [ ] 3.6 GREEN `event_sourced_actor.go` `processCommandAndReply` (:505): `tenancy.Require` gate before `HandleCommand` (:527).
-- [ ] 3.7 RED `event_sourced_actor_test.go`: batched — same fail-closed; `flushBatch`'s `context.Background()` never reached.
-- [ ] 3.8 GREEN `event_sourced_actor.go` `processAndBatch` (:752): same gate before `HandleCommand` (:772).
-- [ ] 3.9 GREEN `durable_state_actor.go`: `tenantAware` field, populated at actor start.
-- [ ] 3.10 RED `durable_state_actor_test.go`: missing `TenantContext` ⇒ `HandleCommand` never invoked, zero writes.
-- [ ] 3.11 GREEN `durable_state_actor.go` `processCommand` (:172): same gate before `HandleCommand` (:194).
-- [ ] 3.12 RED `saga_actor_test.go` (reads `saga_actor.go` (read-only)): saga-dispatched command in tenant-aware mode fails closed at the actor gate — documents the known #54 limitation, not ignored.
+- [x] 3.1 RED `engine_test.go`: `SendCommand` resolves once, attaches, handler observes via `tenancy.From` (resolver call-count spy).
+- [x] 3.2 RED `engine_test.go`: resolver error rejects the command before the actor system; zero writes.
+- [x] 3.3 GREEN `engine.go` `SendCommand` (:724): resolve + `tenancy.Attach` before `ref.noSender.SendSync` (:757), guarded by `tenantResolver != nil`.
+- [x] 3.4 GREEN `event_sourced_actor.go`: `tenantAware` field, populated from the marker at actor start.
+- [x] 3.5 RED `event_sourced_actor_test.go`: non-batched — missing `TenantContext` ⇒ `HandleCommand` never invoked, zero writes.
+- [x] 3.6 GREEN `event_sourced_actor.go` `processCommandAndReply` (:505): `tenancy.Require` gate before `HandleCommand` (:527).
+- [x] 3.7 RED `event_sourced_actor_test.go`: batched — same fail-closed; `flushBatch`'s `context.Background()` never reached.
+- [x] 3.8 GREEN `event_sourced_actor.go` `processAndBatch` (:752): same gate before `HandleCommand` (:772).
+- [x] 3.9 GREEN `durable_state_actor.go`: `tenantAware` field, populated at actor start.
+- [x] 3.10 RED `durable_state_actor_test.go`: missing `TenantContext` ⇒ `HandleCommand` never invoked, zero writes.
+- [x] 3.11 GREEN `durable_state_actor.go` `processCommand` (:172): same gate before `HandleCommand` (:194).
+- [x] 3.12 RED `saga_test.go` (reads `saga_actor.go` (read-only)): saga-dispatched command in tenant-aware mode fails closed at the actor gate — documents the known #54 limitation, not ignored.
 
 ## Phase 4: T4-B Defensive Invariant (T4-B, D4)
 

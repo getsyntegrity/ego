@@ -43,11 +43,23 @@ var tenantContextKey = contextKey{}
 // ErrDenied — leaving ctx unchanged — when a DIFFERENT TenantContext is
 // already bound. It never silently overwrites an existing binding.
 //
+// Attach also refuses to ever bind an invalid TenantContext in the first
+// place: tc must have been produced by NewTenantContext or
+// NewAdministrativeContext (design.md Decision D8, EGO-TENANT-006
+// reconciliation). A zero-value TenantContext{} — the only state an
+// external TenantResolver.Resolve implementation can return as
+// `tenancy.TenantContext{}, nil` without an error, since every field is
+// unexported — is rejected here with ErrInvalid and ctx is left unchanged,
+// so it can never reach a trust boundary as if it were a real identity.
+//
 // Attach only covers the same-node, context.Context-preserving path
 // (proposal.md S3). A boundary that resets context.Context (e.g. a saga
 // step) MUST reconstruct a TenantContext from carried Metadata and Attach
 // it into the fresh context instead — see MarshalMetadata/UnmarshalMetadata.
 func Attach(ctx context.Context, tc TenantContext) (context.Context, error) {
+	if !tc.valid() {
+		return ctx, newError(ReasonInvalid, "tenancy: cannot attach an invalid (zero-value) tenant context", nil)
+	}
 	if bound, ok := From(ctx); ok {
 		if bound == tc {
 			return ctx, nil
@@ -71,10 +83,22 @@ func From(ctx context.Context) (TenantContext, bool) {
 // Decision R2: "domain code reads") — they never call a TenantResolver
 // themselves, and an absent TenantContext fails closed rather than running
 // under an implicit default tenant.
+//
+// Require also re-validates whatever it finds: a bound-but-invalid
+// TenantContext returns ErrInvalid rather than being handed back as if it
+// were a real identity (design.md Decision D8, EGO-TENANT-006
+// reconciliation). This is defense in depth alongside Attach's own
+// rejection, not a substitute for it — Attach already refuses to bind an
+// invalid TenantContext in the first place; this guards the case where one
+// somehow got bound anyway (e.g. a future caller of context.WithValue that
+// bypasses Attach entirely).
 func Require(ctx context.Context) (TenantContext, error) {
 	tc, ok := From(ctx)
 	if !ok {
 		return TenantContext{}, newError(ReasonMissing, "tenancy: no tenant identity attached to context", nil)
+	}
+	if !tc.valid() {
+		return TenantContext{}, newError(ReasonInvalid, "tenancy: tenant identity attached to context is invalid", nil)
 	}
 	return tc, nil
 }

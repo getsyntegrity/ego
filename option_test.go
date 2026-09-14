@@ -24,6 +24,7 @@ package ego
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,93 @@ var _ tenancy.TenantResolver = funcTenantResolver(nil)
 
 func (f funcTenantResolver) Resolve(ctx context.Context) (tenancy.TenantContext, error) {
 	return f(ctx)
+}
+
+// countingTenantResolver is an instrumented tenancy.TenantResolver used to
+// prove exactly how many times Resolve was invoked, rather than inferring
+// the count from downstream behavior. Safe for concurrent use.
+type countingTenantResolver struct {
+	id    string
+	calls atomic.Int64
+}
+
+var _ tenancy.TenantResolver = (*countingTenantResolver)(nil)
+
+func (r *countingTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	r.calls.Add(1)
+	tid, err := tenancy.NewTenantID(r.id)
+	if err != nil {
+		return tenancy.TenantContext{}, err
+	}
+	return tenancy.NewTenantContext(tid)
+}
+
+func (r *countingTenantResolver) callCount() int64 {
+	return r.calls.Load()
+}
+
+// erroringTenantResolver is a tenancy.TenantResolver stub that always fails
+// with a fixed error. Used to prove a resolver failure blocks a command
+// before it ever reaches the actor system. It also counts its own
+// invocations so tests can assert Resolve was tried exactly once.
+type erroringTenantResolver struct {
+	err   error
+	calls atomic.Int64
+}
+
+var _ tenancy.TenantResolver = (*erroringTenantResolver)(nil)
+
+func (r *erroringTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	r.calls.Add(1)
+	return tenancy.TenantContext{}, r.err
+}
+
+func (r *erroringTenantResolver) callCount() int64 {
+	return r.calls.Load()
+}
+
+// zeroValueTenantResolver is a tenancy.TenantResolver stub that returns the
+// zero-value tenancy.TenantContext{} with a nil error — the exact malformed
+// value an external TenantResolver implementation can produce, since every
+// TenantContext field is unexported and a bare struct literal is the only
+// construction path available outside the tenancy package. Used to prove
+// Engine.SendCommand's trust boundary rejects it (design.md Decision D8)
+// before dispatch, the domain handler, or persistence, rather than treating
+// "no error" as "a valid identity was resolved".
+type zeroValueTenantResolver struct {
+	calls atomic.Int64
+}
+
+var _ tenancy.TenantResolver = (*zeroValueTenantResolver)(nil)
+
+func (r *zeroValueTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	r.calls.Add(1)
+	return tenancy.TenantContext{}, nil
+}
+
+func (r *zeroValueTenantResolver) callCount() int64 {
+	return r.calls.Load()
+}
+
+// perCallerTenantKey is the context key perCallerTenantResolver reads from.
+type perCallerTenantKey struct{}
+
+// perCallerTenantResolver resolves whichever tenant ID the caller placed on
+// ctx under perCallerTenantKey, simulating a resolver that derives identity
+// from request-scoped data (e.g. a header) rather than a fixed value. Used
+// to prove concurrent commands for different tenants never cross-contaminate
+// the TenantContext each command's handler observes.
+type perCallerTenantResolver struct{}
+
+var _ tenancy.TenantResolver = perCallerTenantResolver{}
+
+func (perCallerTenantResolver) Resolve(ctx context.Context) (tenancy.TenantContext, error) {
+	id, _ := ctx.Value(perCallerTenantKey{}).(string)
+	tid, err := tenancy.NewTenantID(id)
+	if err != nil {
+		return tenancy.TenantContext{}, err
+	}
+	return tenancy.NewTenantContext(tid)
 }
 
 // buildActorSystem constructs and starts a goakt actor system from a Config so

@@ -780,6 +780,25 @@ func (engine *Engine) SendCommand(ctx context.Context, entityID string, cmd Comm
 		return nil, 0, ErrEngineNotStarted
 	}
 
+	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
+	// here, at the single trust boundary between external callers and the
+	// actor runtime, and attach it to ctx before it ever reaches dispatch.
+	// A resolver error blocks the command outright: no dispatch, no actor,
+	// no handler, no persistence. Legacy mode (no resolver registered) is
+	// byte-identical: this whole block is skipped and ctx is untouched.
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return nil, 0, resolveErr
+		}
+
+		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
+		if attachErr != nil {
+			return nil, 0, attachErr
+		}
+		ctx = attachedCtx
+	}
+
 	reply, err := ref.noSender.SendSync(ctx, entityID, cmd, timeout)
 	if err != nil {
 		return nil, 0, err
