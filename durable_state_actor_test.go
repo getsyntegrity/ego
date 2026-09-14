@@ -796,6 +796,25 @@ func TestDurableStateActorVerifyTenantForPersist(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, entity.verifyTenantForPersist(ctx))
 	})
+
+	// Blocker 2 inheritance (EGO-TENANT-006 review fix): a resolver
+	// returning the zero-value tenancy.TenantContext{} (Blocker 1) is now
+	// rejected by tenancy.Attach itself (design.md Decision D8) before the
+	// command ever reaches this actor, so ctx here ends up with nothing
+	// attached — the same "missing" case this gate already covered. No
+	// code change to verifyTenantForPersist was needed to inherit this
+	// protection; it fails closed purely because tenancy.Require now
+	// rejects malformed content, and Attach never let one through.
+	t.Run("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(t *testing.T) {
+		entity := &DurableStateActor{tenantAware: true}
+
+		ctx, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
+		require.Error(t, attachErr)
+		assert.True(t, errors.Is(attachErr, tenancy.ErrInvalid))
+
+		err := entity.verifyTenantForPersist(ctx)
+		assert.True(t, errors.Is(err, tenancy.ErrMissing))
+	})
 }
 
 // TestDurableStateActorTenancyWritePath is the end-to-end counterpart of
