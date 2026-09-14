@@ -56,17 +56,18 @@ Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance 
 ## Phase 4: Verification
 
 - [x] 4.1 Run `go mod tidy && go mod vendor`, then `go test -mod=vendor -p 1 -timeout 0 -race ./...`.
-      Exact command executed. Result: FAIL only in the pre-existing
-      `TestEventPublisherClusterHighPartitionCount` root-package test.
-      The same failure was independently reproduced 3/3 on plain `main`
-      without EGO-TENANT-001 changes, so it is unrelated to this change.
-      All EGO-TENANT-001 packages and tenancy spec scenarios passed.
+      Exact command executed at PR3 apply time. Result at that time: FAIL only in
+      `TestEventPublisherClusterHighPartitionCount` (root package), reproduced 3/3 on a
+      disposable worktree of plain `main` with no EGO-TENANT-001 code present. Re-run
+      independently during `sdd-verify` (both locally and via GitHub Actions CI on the
+      merged commit `b61eeea`) and found passing both times — see the reclassification
+      below. All EGO-TENANT-001 packages and tenancy spec scenarios passed on every run.
 - [x] 4.2 Run `go vet ./tenancy/...`; confirm `behavior.go`/`saga.go`/`engine.go`/`option.go`
       are byte-identical (proposal Success Criteria).
 
 ### Verification note — task 4.1
 
-The repository-wide race suite is not fully green because of one known pre-existing failure:
+At PR3 apply time, the repository-wide race suite was not fully green because of one failure:
 
 `TestEventPublisherClusterHighPartitionCount`
 
@@ -78,9 +79,17 @@ Failure:
 
 `workload only produced events in shards [0..270] (max seen: 0); the test does not exercise the pre-fix bug range`
 
-This failure was reproduced independently 3/3 on a disposable worktree of plain `main`,
-with no EGO-TENANT-001 code present.
+That failure was reproduced 3/3 on a disposable worktree of plain `main`, with no
+EGO-TENANT-001 code present — establishing at the time that it was unrelated to this change.
 
-All other packages passed, including `tenancy`, and no failure is attributable to this change.
+**Reclassification (during `sdd-verify`, after merge):** the same command, re-run against
+the merged `main` at `b61eeea`, passed with zero failures — `TestEventPublisherClusterHighPartitionCount`
+included (11.51s). The same result was independently confirmed by the real GitHub Actions
+CI run on that commit (run `34798920900`, `push` event, conclusion `success`). This means
+the test is **pre-existing and flaky**, not a deterministic pre-existing failure as first
+recorded — the original 3/3 reproduction is preserved above as accurate historical evidence
+of what was observed at that time, but the conclusion is corrected: it is not a standing
+blocker, and no further action against it is required by EGO-TENANT-001.
 
-Therefore task 4.1 is considered executed and reconciled, with a documented pre-existing repository-wide blocker rather than a false claim that the complete suite is green.
+All other packages passed on every run, including `tenancy`, and no failure — historical or
+current — is attributable to this change. Task 4.1 is executed and reconciled.
