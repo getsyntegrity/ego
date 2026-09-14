@@ -117,6 +117,29 @@ func (r *erroringTenantResolver) callCount() int64 {
 	return r.calls.Load()
 }
 
+// zeroValueTenantResolver is a tenancy.TenantResolver stub that returns the
+// zero-value tenancy.TenantContext{} with a nil error — the exact malformed
+// value an external TenantResolver implementation can produce, since every
+// TenantContext field is unexported and a bare struct literal is the only
+// construction path available outside the tenancy package. Used to prove
+// Engine.SendCommand's trust boundary rejects it (design.md Decision D8)
+// before dispatch, the domain handler, or persistence, rather than treating
+// "no error" as "a valid identity was resolved".
+type zeroValueTenantResolver struct {
+	calls atomic.Int64
+}
+
+var _ tenancy.TenantResolver = (*zeroValueTenantResolver)(nil)
+
+func (r *zeroValueTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	r.calls.Add(1)
+	return tenancy.TenantContext{}, nil
+}
+
+func (r *zeroValueTenantResolver) callCount() int64 {
+	return r.calls.Load()
+}
+
 // perCallerTenantKey is the context key perCallerTenantResolver reads from.
 type perCallerTenantKey struct{}
 

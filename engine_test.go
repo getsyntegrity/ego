@@ -287,6 +287,44 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		require.NoError(t, engine.Stop(ctx))
 	})
 
+	t.Run("a resolver returning the zero-value TenantContext is rejected before dispatch (Blocker 1)", func(t *testing.T) {
+		// design.md Decision D8 (EGO-TENANT-006 review fix): a custom
+		// TenantResolver implementation living outside package tenancy can
+		// only ever produce tenancy.TenantContext{} via a bare struct
+		// literal, since every field is unexported. Returning it with a
+		// nil error used to be silently accepted by tenancy.Attach (which
+		// only checked whether a DIFFERENT TenantContext was already
+		// bound, never the content of this one) and then handed straight
+		// through by tenancy.Require (which only checked presence). This
+		// proves the corrected trust boundary now fails closed before the
+		// command ever reaches the actor system.
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		resolver := &zeroValueTenantResolver{}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.Error(t, err, "SendCommand must reject a resolver returning the zero-value TenantContext")
+		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+
+		assert.EqualValues(t, 1, resolver.callCount())
+		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
+
+		latest, err := store.GetLatestEvent(ctx, entityID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when the resolved TenantContext is invalid")
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
 	t.Run("tenancy sentinel errors from the resolver block the command before the handler", func(t *testing.T) {
 		for _, tt := range []struct {
 			name    string

@@ -164,3 +164,24 @@ func (c TenantContext) Administrative() (Administrative, bool) {
 	}
 	return c.admin, true
 }
+
+// valid reports whether c was actually constructed through NewTenantContext
+// or NewAdministrativeContext, i.e. Scope() is ScopeTenant or
+// ScopeAdministrative. The zero value TenantContext{} — the only state
+// reachable from outside this package via a bare struct literal, since
+// every field here is unexported — is the sole invalid case and is neither.
+//
+// context.go's Attach and Require both call valid() so that a malformed
+// TenantContext (e.g. one a caller's own TenantResolver.Resolve returns as
+// `tenancy.TenantContext{}, nil` — no error, but no real identity either)
+// can never be treated as an attached tenant identity, on the way in
+// (Attach) or on the way out (Require). See design.md Decision D8
+// (EGO-TENANT-006 reconciliation).
+func (c TenantContext) valid() bool {
+	switch c.scope {
+	case ScopeTenant, ScopeAdministrative:
+		return true
+	default:
+		return false
+	}
+}

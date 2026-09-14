@@ -88,6 +88,54 @@ func TestFrom_ReturnsFalseWhenNothingAttached(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// --- Blocker 1 fix (EGO-TENANT-006 review): Attach/Require must reject an
+// invalid (zero-value) TenantContext, not just an absent one. A caller's
+// own tenancy.TenantResolver implementation lives outside this package and
+// can only ever construct tenancy.TenantContext{} via a bare struct
+// literal (every field is unexported), so `TenantContext{}, nil` — no
+// error — is the one malformed value external code can produce. Before
+// design.md Decision D8, Attach bound it unchecked and Require returned it
+// unchecked; these tests are the RED/GREEN pair for that fix. ---
+
+func TestAttach_RejectsZeroValueTenantContext(t *testing.T) {
+	var zero tenancy.TenantContext
+
+	ctx, err := tenancy.Attach(context.Background(), zero)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+
+	// ctx must be left unchanged: no TenantContext attached at all, not
+	// even the invalid one.
+	_, ok := tenancy.From(ctx)
+	assert.False(t, ok, "Attach must not bind an invalid TenantContext even when rejecting it")
+}
+
+func TestAttach_ValidTenantScopedContextStillFlowsThroughUnchanged(t *testing.T) {
+	tc, err := tenancy.NewTenantContext(mustTenantID(t, "acme-corp"))
+	require.NoError(t, err)
+
+	ctx, err := tenancy.Attach(context.Background(), tc)
+	require.NoError(t, err)
+
+	got, err := tenancy.Require(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tc, got)
+}
+
+func TestAttach_ValidAdministrativeContextStillFlowsThroughUnchanged(t *testing.T) {
+	admin, err := tenancy.NewAdministrative("ops-tool", "crypto-shredding")
+	require.NoError(t, err)
+	tc, err := tenancy.NewAdministrativeContext(admin)
+	require.NoError(t, err)
+
+	ctx, err := tenancy.Attach(context.Background(), tc)
+	require.NoError(t, err)
+
+	got, err := tenancy.Require(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tc, got)
+}
+
 func TestRequire_ReturnsErrMissingWhenNothingAttached(t *testing.T) {
 	_, err := tenancy.Require(context.Background())
 	require.Error(t, err)
