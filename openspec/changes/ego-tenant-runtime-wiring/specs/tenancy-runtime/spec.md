@@ -170,6 +170,42 @@ NOT be the sole enforcement point for fail-closed behavior.
 - THEN it confirms the propagated `TenantContext` is present without calling
   `Resolve` again
 
+### Requirement: Fail-Closed Gates Validate TenantContext Content, Not Just Presence (AC3, T4-A, T4-B, DP4)
+
+Both the acceptance-time gate (T4-A) and the persistence-time gate (T4-B) rely
+on `tenancy.Require` to decide whether a valid tenant identity is attached.
+"Present" MUST mean well-formed, not merely non-absent: a `TenantContext`
+whose `Scope()` is neither `ScopeTenant` nor `ScopeAdministrative` — most
+notably the zero value `tenancy.TenantContext{}`, which a misbehaving or
+buggy `TenantResolver.Resolve` implementation can return alongside a `nil`
+error — MUST be rejected exactly as if no `TenantContext` were attached at
+all. `tenancy.Attach` MUST also refuse to bind such a value in the first
+place. Neither gate MUST treat a resolver's `TenantContext{}, nil` return as
+a valid identity.
+
+#### Scenario: A resolver returning the zero-value TenantContext is rejected before dispatch
+
+- GIVEN an engine configured with a `TenantResolver` whose `Resolve` returns
+  `tenancy.TenantContext{}, nil` (no error, but an invalid, zero-value
+  identity)
+- WHEN a command is sent
+- THEN the command is rejected before the domain handler runs, the domain
+  handler is invoked zero times, and no event or state is persisted
+
+#### Scenario: Attach never binds an invalid TenantContext
+
+- GIVEN code attempts `tenancy.Attach(ctx, tenancy.TenantContext{})`
+- WHEN `Attach` is called
+- THEN it returns an error and the returned context carries no tenant
+  identity — a subsequent `tenancy.From` on it returns `ok == false`
+
+#### Scenario: Require rejects an invalid TenantContext even if already bound
+
+- GIVEN a context that somehow already carries a zero-value `TenantContext`
+  (bypassing `Attach`)
+- WHEN `tenancy.Require` reads it
+- THEN it returns an error rather than the invalid value
+
 ### Requirement: Zero-Plumbing Single-Tenant Mode (AC4)
 
 Configuring `tenancy.WithSingleTenant(id)` as the sole resolver MUST activate
@@ -269,6 +305,24 @@ proposal.md has been amended to the T4-A/T4-B split (trust-boundary gate
 before the handler; defensive persistence invariant reusing already-resolved
 identity, never re-invoking `Resolve`). Both documents now agree.
 
+### DP4 — TenantContext content validation at Attach/Require (CLOSED: validate in both, review reconciliation)
+
+Closed by the repository owner during adversarial review of PR2 (#57)/PR3
+(#58), after the review found T4-A/T4-B's `tenancy.Require` calls accepted a
+zero-value `TenantContext` returned by a misbehaving resolver (`Resolve`
+returning `tenancy.TenantContext{}, nil`) as if it were a real identity. See
+design.md Decision D8 for the full option analysis and the reasoning for
+recording this in this change's spec rather than reopening the archived
+`ego-tenant-context` (EGO-TENANT-001) change.
+
+Both `tenancy.Attach` (reject before binding) and `tenancy.Require` (reject
+on read, in case something else bound an invalid value directly) now
+validate `Scope()` is `ScopeTenant` or `ScopeAdministrative`. This closes the
+gap at every existing T4-A/T4-B call site with no changes required to
+`engine.go`, `event_sourced_actor.go`, or `durable_state_actor.go`'s gate
+call sites themselves — see "Fail-Closed Gates Validate TenantContext
+Content, Not Just Presence" above.
+
 ## Action Required Outside This Spec
 
 **Issue #55 AC6 needs a wording reconciliation on GitHub before the SDD cycle
@@ -290,7 +344,7 @@ tracker-hygiene action owned by the repository owner, not by any SDD phase.
 |---|---|
 | 1 | Single Resolver Registration Option; Duplicate Resolver Registration Rejected |
 | 2 | Automatic Resolution at Trust Boundary |
-| 3 | Fail-Closed Before Domain Handler Runs; Defensive Persistence Invariant |
+| 3 | Fail-Closed Before Domain Handler Runs; Defensive Persistence Invariant; Fail-Closed Gates Validate TenantContext Content, Not Just Presence (DP4) |
 | 4 | Zero-Plumbing Single-Tenant Mode |
 | 5 | Unified Execution Path |
 | 6 | Tenancy Is Explicitly Activated, Never Global; No Implicit Default at Startup (DP1 closed — issue wording reconciliation pending, see "Action Required Outside This Spec") |
