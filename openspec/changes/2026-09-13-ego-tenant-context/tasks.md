@@ -48,12 +48,39 @@ Rationale: one leaf package, no engine wiring, but 12 files plus two acceptance 
 
 ## Phase 3: Conformance & Tooling
 
-- [ ] 3.1 RED: `tenancy_architecture_test.go` (root, pkg `ego`) — `go list -deps ./tenancy/...` fails on non-stdlib import
-- [ ] 3.2 GREEN: confirm `tenancy/` has zero non-stdlib imports; 3.1 passes unmodified
-- [ ] 3.3 Generate `mocks/tenancy/tenant_resolver.go` mock for `TenantResolver`
-- [ ] 3.4 Add tenancy mock generation to `Makefile` `docker-mock` target
+- [x] 3.1 RED: `tenancy_architecture_test.go` (root, pkg `ego`) — `go list -deps ./tenancy/...` fails on non-stdlib import
+- [x] 3.2 GREEN: confirm `tenancy/` has zero non-stdlib imports; 3.1 passes unmodified
+- [x] 3.3 Generate `mocks/tenancy/tenant_resolver.go` mock for `TenantResolver`
+- [x] 3.4 Add tenancy mock generation to `Makefile` `docker-mock` target
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Run `go mod tidy && go mod vendor`, then `go test -mod=vendor -p 1 -timeout 0 -race ./...` — confirm all spec scenarios pass
-- [ ] 4.2 Run `go vet ./tenancy/...`; confirm `behavior.go`/`saga.go`/`engine.go`/`option.go` are byte-identical (proposal Success Criteria)
+- [x] 4.1 Run `go mod tidy && go mod vendor`, then `go test -mod=vendor -p 1 -timeout 0 -race ./...`.
+      Exact command executed. Result: FAIL only in the pre-existing
+      `TestEventPublisherClusterHighPartitionCount` root-package test.
+      The same failure was independently reproduced 3/3 on plain `main`
+      without EGO-TENANT-001 changes, so it is unrelated to this change.
+      All EGO-TENANT-001 packages and tenancy spec scenarios passed.
+- [x] 4.2 Run `go vet ./tenancy/...`; confirm `behavior.go`/`saga.go`/`engine.go`/`option.go`
+      are byte-identical (proposal Success Criteria).
+
+### Verification note — task 4.1
+
+The repository-wide race suite is not fully green because of one known pre-existing failure:
+
+`TestEventPublisherClusterHighPartitionCount`
+
+Observed from the exact required command:
+
+`go test -mod=vendor -p 1 -timeout 0 -race ./...`
+
+Failure:
+
+`workload only produced events in shards [0..270] (max seen: 0); the test does not exercise the pre-fix bug range`
+
+This failure was reproduced independently 3/3 on a disposable worktree of plain `main`,
+with no EGO-TENANT-001 code present.
+
+All other packages passed, including `tenancy`, and no failure is attributable to this change.
+
+Therefore task 4.1 is considered executed and reconciled, with a documented pre-existing repository-wide blocker rather than a false claim that the complete suite is green.
