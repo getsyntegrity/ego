@@ -291,6 +291,12 @@ func (x *tenancyProbeEventSourcedBehavior) HandleCommand(ctx context.Context, co
 				AccountBalance: cmd.GetAccountBalance(),
 			},
 		}, nil
+	case *testpb.TestNoEvent:
+		// A genuinely idempotent no-op: no error, zero events. Used by the
+		// Blocker 3 cross-tenant batch-leak regression test, which needs a
+		// command that would otherwise reach processAndBatch's
+		// len(events)==0 reply path without ever erroring out first.
+		return nil, nil
 	default:
 		return nil, errors.New("unhandled command")
 	}
