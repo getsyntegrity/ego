@@ -1,7 +1,7 @@
 change: ego-tenant-context
 created: 2026-09-13
-closed: null
-status: designing
+closed: 2026-09-14
+status: done
 artifact_store: hybrid
 tracker_issue: https://github.com/getsyntegrity/ego/issues/45
 tracker_epic: https://github.com/getsyntegrity/ego/issues/23
@@ -17,7 +17,7 @@ phases:
   explore:
     status: done
     date: 2026-09-13
-    artifact: openspec/changes/2026-09-13-ego-tenant-context/exploration.md
+    artifact: exploration.md
     engram_topics:
       - sdd/ego-tenant-context/explore
       - sdd/ego-tenant-context/explore-repo
@@ -37,30 +37,52 @@ phases:
   proposal:
     status: done
     date: 2026-09-13
-    artifact: openspec/changes/2026-09-13-ego-tenant-context/proposal.md
+    artifact: proposal.md
     engram_topics:
       - sdd/ego-tenant-context/proposal
   spec:
     status: done
     date: 2026-09-13
-    artifact: openspec/changes/2026-09-13-ego-tenant-context/specs/tenancy-core/spec.md
+    artifact: specs/tenancy-core/spec.md
     engram_topics:
       - sdd/ego-tenant-context/spec
   design:
     status: done
     date: 2026-09-13
-    artifact: openspec/changes/2026-09-13-ego-tenant-context/design.md
+    artifact: design.md
     engram_topics:
       - sdd/ego-tenant-context/design
   tasks:
     status: done
     date: 2026-09-13
-    artifact: openspec/changes/2026-09-13-ego-tenant-context/tasks.md
+    artifact: tasks.md
     engram_topics:
       - sdd/ego-tenant-context/tasks
-  apply:      { status: pending }
-  verify:     { status: pending }
-  archive:    { status: pending }
+  apply:
+    status: done
+    date: 2026-09-14
+    pr_numbers:
+      - 49
+      - 50
+      - 51
+    commits:
+      - 74d8a35  # feat(tenancy): add TenantID, TenantContext, and error taxonomy
+      - 3f672be  # feat(tenancy): add TenantResolver, context propagation, and metadata
+      - b61eeea  # feat(tenancy): add architecture conformance test, resolver mock, and Makefile wiring
+  verify:
+    status: done
+    date: 2026-09-14
+    pr_numbers:
+      - 52
+    verdict: pass_with_warnings
+    critical_findings: 0
+    requirements_met: 7/7
+    scenarios_met: 10/10
+  archive:
+    status: done
+    date: 2026-09-14
+    spec_synced: openspec/specs/tenancy-core/spec.md
+    folder_archived_to: openspec/changes/archive/2026-09-14-ego-tenant-context
 
 closed_decisions:
   S1: tenant-id-defined-string
