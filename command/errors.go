@@ -39,15 +39,48 @@ import "errors"
 // Error can only be constructed by this package (unexported fields);
 // callers never build one directly.
 type Error struct {
-	sentinel error
-	message  string
-	cause    error
+	sentinel   error
+	message    string
+	cause      error
+	outcome    Outcome
+	hasOutcome bool
+	failure    Failure
+	hasFailure bool
 }
 
 // NewError builds a command error classified by sentinel, carrying message
 // and an optional cause. cause may be nil.
 func NewError(sentinel error, message string, cause error) *Error {
 	return &Error{sentinel: sentinel, message: message, cause: cause}
+}
+
+// newOutcomeError builds a command error from a non-success Result: it
+// classifies by sentinel (matching outcome), carries f's message and
+// cause, and lets Outcome/Failure recover the originating Result's shape.
+func newOutcomeError(sentinel error, outcome Outcome, f Failure) *Error {
+	return &Error{
+		sentinel:   sentinel,
+		message:    f.Message(),
+		cause:      f.cause,
+		outcome:    outcome,
+		hasOutcome: true,
+		failure:    f,
+		hasFailure: true,
+	}
+}
+
+// Outcome returns the Outcome this error was raised from. The second
+// return value is false for an Error built directly through NewError,
+// which carries no Result-level outcome.
+func (e *Error) Outcome() (Outcome, bool) {
+	return e.outcome, e.hasOutcome
+}
+
+// Failure returns the Failure this error was raised from. The second
+// return value is false for an Error built directly through NewError,
+// which carries no Result-level failure.
+func (e *Error) Failure() (Failure, bool) {
+	return e.failure, e.hasFailure
 }
 
 // Error implements the error interface.
