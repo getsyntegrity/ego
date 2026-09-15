@@ -148,6 +148,24 @@ func TestNewMetadataWithoutDeadline(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestMetadataElapsedDeadlineIsRecognized proves AC7's semantics for an
+// already-elapsed deadline: Deadline and Timestamp are both plain
+// time.Time, directly comparable via the stdlib, so a deadline earlier
+// than the timestamp is recognized as already expired without any
+// dedicated enforcement mechanism (enforcement itself is out of scope).
+func TestMetadataElapsedDeadlineIsRecognized(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	deadline := ts.Add(-time.Hour)
+
+	md, err := command.NewMetadata(op, command.WithTimestamp(ts), command.WithDeadline(deadline))
+	require.NoError(t, err)
+
+	got, ok := md.Deadline()
+	require.True(t, ok)
+	require.True(t, got.Before(md.Timestamp()))
+}
+
 func TestNewMetadataCustomDefensiveCopy(t *testing.T) {
 	op := mustOperationID(t, "op-1")
 
