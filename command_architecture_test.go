@@ -1,0 +1,99 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package ego
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// commandArchitectureAllowedModules names the only module-qualified import
+// path prefixes command/ may depend on (design.md's package-level import
+// allowlist, EGO-WRITE-003): google.golang.org/protobuf and this repo's
+// own tenancy/, which command composes rather than reimplements (W3). No
+// GoAkt, transport, auth library or other first-party runtime package.
+var commandArchitectureAllowedModules = []string{
+	"google.golang.org/protobuf",
+	"github.com/pablogore/ego/v4/tenancy",
+}
+
+// TestCommandArchitecture enforces design.md's import allowlist for
+// command/ (EGO-WRITE-003): stdlib, google.golang.org/protobuf and
+// ego/v4/tenancy only — no GoAkt, no engine, no transport or auth
+// library. It mirrors TestTenancyArchitecture's mechanism (a real `go
+// list -deps ./command/...` subprocess, not a source-text scan) so it
+// also catches transitive dependencies.
+func TestCommandArchitecture(t *testing.T) {
+	goBin, err := tenancyArchitectureGoBinary()
+	require.NoError(t, err, "go toolchain not found")
+
+	root, err := os.Getwd()
+	require.NoError(t, err)
+
+	// The command package itself is always present in its own `-deps`
+	// output; it is the subject under test, not a dependency it
+	// acquired, so it must be excluded from the allowlist check below
+	// rather than trivially failing it.
+	commandPackages := tenancyArchitectureGoList(t, goBin, root, "list", "./command/...")
+	require.NotEmpty(t, commandPackages, "go list ./command/... returned no packages, so it proves nothing")
+
+	self := make(map[string]struct{}, len(commandPackages))
+	for _, pkg := range commandPackages {
+		self[pkg] = struct{}{}
+	}
+
+	deps := tenancyArchitectureGoList(t, goBin, root, "list", "-deps", "./command/...")
+	require.NotEmpty(t, deps, "go list -deps ./command/... returned no dependencies, so it proves nothing")
+
+	var checked int
+	for _, dep := range deps {
+		if _, isSelf := self[dep]; isSelf {
+			continue
+		}
+		checked++
+
+		first, _, _ := strings.Cut(dep, "/")
+		if !strings.Contains(first, ".") {
+			continue // standard library
+		}
+
+		var allowed bool
+		for _, module := range commandArchitectureAllowedModules {
+			if dep == module || strings.HasPrefix(dep, module+"/") {
+				allowed = true
+				break
+			}
+		}
+		require.Truef(t, allowed,
+			"command/ must not depend on %q: only the standard library, google.golang.org/protobuf "+
+				"and ego/v4/tenancy are allowed (design.md's import allowlist, EGO-WRITE-003) — command "+
+				"is a leaf package with no GoAkt, transport, auth, or other first-party runtime dependency", dep)
+	}
+	require.NotZero(t, checked, "no external dependency was checked against the allowlist, so this test proves nothing")
+}
+
+// tenancyArchitectureGoList and tenancyArchitectureGoBinary are defined in
+// tenancy_architecture_test.go and reused here unchanged.

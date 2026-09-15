@@ -59,15 +59,15 @@ Rationale: one leaf package, zero runtime wiring (W1); size mirrors EGO-TENANT-0
 
 ## Phase 4: Carrier (D9)
 
-- [ ] 4.1 RED `command/carrier_test.go` — `Metadata -> Carrier -> Metadata` round-trip; exact `operation_id/correlation_id/causation_id` preservation
-- [ ] 4.2 RED `command/carrier_test.go` — optional-field absence/presence (causation, tenant, principal, deadline)
-- [ ] 4.3 RED `command/carrier_test.go` — `Unmarshal` rejects reserved-key/invalid values; unknown keys ignored
-- [ ] 4.4 GREEN `command/carrier.go` — `Carrier`, `Marshal/UnmarshalMetadata`, `ego.cmd.*` keys; tenant slot delegates to `tenancy.MarshalMetadata`/`UnmarshalMetadata` (read-only)
+- [x] 4.1 RED `command/carrier_test.go` — `Metadata -> Carrier -> Metadata` round-trip; exact `operation_id/correlation_id/causation_id` preservation
+- [x] 4.2 RED `command/carrier_test.go` — optional-field absence/presence (causation, tenant, principal, deadline)
+- [x] 4.3 RED `command/carrier_test.go` — `Unmarshal` rejects reserved-key/invalid values; unknown keys ignored
+- [x] 4.4 GREEN `command/carrier.go` — `Carrier`, `Marshal/UnmarshalMetadata`, `ego.cmd.*` keys; tenant slot delegates to `tenancy.MarshalMetadata`/`UnmarshalMetadata` (read-only)
 
 ## Phase 5: Conformance
 
-- [ ] 5.1 RED `command_architecture_test.go` (root, pkg `ego`) — `go list -deps ./command/...` fails on non-allowlisted import; mirrors `tenancy_architecture_test.go` (read-only)
-- [ ] 5.2 GREEN confirm `command/` has zero disallowed imports; 5.1 passes unmodified
+- [x] 5.1 RED `command_architecture_test.go` (root, pkg `ego`) — `go list -deps ./command/...` fails on non-allowlisted import; mirrors `tenancy_architecture_test.go` (read-only)
+- [x] 5.2 GREEN confirm `command/` has zero disallowed imports; 5.1 passes unmodified
 
 ## Phase 6: Migration Documentation (W7/AC12)
 
@@ -76,5 +76,6 @@ Rationale: one leaf package, zero runtime wiring (W1); size mirrors EGO-TENANT-0
 
 ## Phase 7: Verification
 
-- [ ] 7.1 Run `go mod tidy && go mod vendor` (only if new deps), then `go test -mod=vendor -p 1 -timeout 0 -race ./command/... .`; record any pre-existing flake per EGO-TENANT-001/006 evidence convention
-- [ ] 7.2 Run `go vet ./command/... .`; confirm `engine.go`, `saga.go`, `saga_actor.go`, `behavior.go`, `option.go`, `protos/`, `egopb/`, `tenancy/`, `Makefile` (all read-only) byte-identical
+- [x] 7.1 `go test -mod=vendor -p 1 -timeout 0 -race ./command/... .` — no new deps, `go mod vendor` not needed. `github.com/pablogore/ego/v4/command` ok (1.574s, all 44 tests incl. carrier/conformance/integration). Root package `.` FAILs solely on `TestEventPublisherClusterHighPartitionCount` (publisher_test.go) — pre-existing flake, reproduces identically on `main`, untouched by this chain's diff (confirmed via `git diff --stat`/`git log` on `publisher_test.go` before PR3 started); recorded per EGO-TENANT-001/006 evidence convention, not attributable to EGO-WRITE-003
+- [x] 7.2 `go build ./...` and `go vet ./...` clean repo-wide. `git diff --stat main -- engine.go saga.go saga_actor.go behavior.go option.go protos/ egopb/ tenancy/ Makefile` empty — byte-identical to `main`, confirming zero runtime wiring (W1)
+- [x] 7.3 AC → evidence reconciliation against `specs/command-envelope/spec.md`'s Traceability table surfaced one gap: AC7/AC13 require the test suite to cover "an already-elapsed deadline" explicitly; no such test existed in PR2's `metadata_test.go`. No production code change was needed (`Timestamp()`/`Deadline()` are already directly comparable `time.Time` values — the "defined semantics" AC7 requires) — this was a missing test case, not a contractual violation, so it was closed in-place: `command/metadata_test.go` — `TestMetadataElapsedDeadlineIsRecognized` (GREEN, no RED phase — the production behavior was already correct). Full AC1-AC14 reconciliation otherwise confirmed complete; see PR3 description for the full table.
