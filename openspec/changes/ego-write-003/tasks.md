@@ -39,23 +39,23 @@ Rationale: one leaf package, zero runtime wiring (W1); size mirrors EGO-TENANT-0
 
 - [x] 2.1 RED `command/principal_test.go` — `NewPrincipal` id required, kind optional
 - [x] 2.2 GREEN `command/principal.go` implementing 2.1
-- [ ] 2.3 RED `command/metadata_test.go` — root: correlation defaults to `CorrelationID(op)`; causation absent
-- [ ] 2.4 RED `command/metadata_test.go` — tenant/principal/timestamp/deadline options; `Custom()` defensive copy
-- [ ] 2.5 RED `command/metadata_test.go` — `WithCustom` rejects `ego.`-prefixed/canonical keys (`ErrReservedKey`); accepts valid key/value (D6)
-- [ ] 2.6 GREEN `command/metadata.go` — struct, `NewMetadata`, options, accessors
-- [ ] 2.7 RED `command/metadata_test.go` — `Derive`: correlation inherited, new `operation_id` (else `ErrSameOperationID`), causation = parent op
-- [ ] 2.8 RED `command/metadata_test.go` — `Derive`: tenant switch -> `tenancy.ErrDenied` (`tenancy.VerifyUnchanged`, read-only); deadline only shortened (`ErrDeadlineExtension`); custom NOT inherited
-- [ ] 2.9 GREEN `command/metadata.go` — `Derive` implementing 2.7-2.8 (D7)
+- [x] 2.3 RED `command/metadata_test.go` — root: correlation defaults to `CorrelationID(op)`; causation absent
+- [x] 2.4 RED `command/metadata_test.go` — tenant/principal/timestamp/deadline options; `Custom()` defensive copy
+- [x] 2.5 RED `command/metadata_test.go` — `WithCustom` rejects `ego.`-prefixed/canonical keys (`ErrReservedKey`); accepts valid key/value (D6)
+- [x] 2.6 GREEN `command/metadata.go` — struct, `NewMetadata`, options, accessors
+- [x] 2.7 RED `command/metadata_test.go` — `Derive`: correlation inherited, new `operation_id` (else `ErrSameOperationID`), causation = parent op
+- [x] 2.8 RED `command/metadata_test.go` — `Derive`: tenant switch -> `tenancy.ErrDenied` (`tenancy.VerifyUnchanged`, read-only); deadline only shortened (`ErrDeadlineExtension`); custom NOT inherited
+- [x] 2.9 GREEN `command/metadata.go` — `Derive` implementing 2.7-2.8 (D7)
 
 ## Phase 3: Envelope & Result
 
-- [ ] 3.1 RED `command/envelope_test.go` — `NewEnvelope` rejects nil payload; `PayloadAs[T]` typed extraction
-- [ ] 3.2 RED `command/envelope_test.go` — `Envelope.Derive` delegates to `Metadata.Derive`
-- [ ] 3.3 GREEN `command/envelope.go` implementing 3.1-3.2
-- [ ] 3.4 RED `command/result_test.go` — `Outcome` zero-value invalid; `String()`; six kinds mutually exclusive
-- [ ] 3.5 RED `command/result_test.go` — kind-specific constructors reject wrong shape; `NewTimedOut/NewCanceled` default cause
-- [ ] 3.6 RED `command/result_test.go` — `Err()`/`errors.Is/As/Unwrap`; `StateAs[T]`
-- [ ] 3.7 GREEN `command/result.go` — `Outcome`, `Failure`, `Result` implementing 3.4-3.6 (D5)
+- [x] 3.1 RED `command/envelope_test.go` — `NewEnvelope` rejects nil payload; `PayloadAs[T]` typed extraction
+- [x] 3.2 RED `command/envelope_test.go` — `Envelope.Derive` delegates to `Metadata.Derive`
+- [x] 3.3 GREEN `command/envelope.go` implementing 3.1-3.2
+- [x] 3.4 RED `command/result_test.go` — `Outcome` zero-value invalid; `String()`; six kinds mutually exclusive
+- [x] 3.5 RED `command/result_test.go` — kind-specific constructors reject wrong shape; `NewTimedOut/NewCanceled` default cause
+- [x] 3.6 RED `command/result_test.go` — `Err()`/`errors.Is/As/Unwrap`; `StateAs[T]`
+- [x] 3.7 GREEN `command/result.go` — `Outcome`, `Failure`, `Result` implementing 3.4-3.6 (D5)
 
 ## Phase 4: Carrier (D9)
 
