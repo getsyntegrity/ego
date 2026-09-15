@@ -45,11 +45,22 @@ const (
 	carrierKeyPrincipalKind = "ego.cmd.principal_kind"
 )
 
-// carrierEgoPrefix namespaces every key this package or tenancy recognizes.
-// Any "ego."-prefixed key Unmarshal does not recognize is ignored rather
-// than rejected (forward compatibility); it is never folded into custom
-// metadata.
-const carrierEgoPrefix = "ego."
+// carrierCmdPrefix and carrierTenantPrefix are the only two namespaces a
+// Carrier's keys may occupy (design.md: "ego.cmd.* ∪ ego.tenant.* — D9").
+// An unrecognized key within one of these two prefixes is a forward
+// compatibility case — a newer writer's field this reader does not know
+// yet — and is ignored, never folded into custom metadata. A key outside
+// both prefixes but still under D6's blanket-reserved "ego." prefix (e.g.
+// a stray WRITE-005 ego.idem.* value, or a corrupted/malicious Carrier) is
+// NOT a forward compatibility case: it falls through to WithCustom below,
+// which rejects it with ErrReservedKey exactly as it would at direct
+// construction (NewMetadata + WithCustom). Silently ignoring it here would
+// make reconstructing a Metadata from a Carrier strictly more permissive
+// than building one directly — the wrong direction for a trust boundary.
+const (
+	carrierCmdPrefix    = "ego.cmd."
+	carrierTenantPrefix = "ego.tenant."
+)
 
 // Carrier is a flat string-map carry format for Metadata (D9): a Go-side
 // representation that crosses boundaries a context.Context does not
@@ -98,9 +109,10 @@ func MarshalMetadata(m Metadata) Carrier {
 // (ErrInvalidMetadata otherwise); causation_id, deadline and the principal
 // slot are recognized only when present. A key shadowing a canonical field
 // name, or a custom value that fails D6's rules, fails the same way
-// WithCustom would. Any other "ego."-prefixed key Unmarshal does not
-// recognize is ignored, not rejected (forward compatibility); every
-// remaining key is treated as custom metadata.
+// WithCustom would. An unrecognized ego.cmd.* key is ignored (forward
+// compatibility); a key outside ego.cmd.*/ego.tenant.* but still under
+// D6's reserved "ego." prefix is rejected with ErrReservedKey, not
+// silently ignored; every remaining key is treated as custom metadata.
 func UnmarshalMetadata(c Carrier) (Metadata, error) {
 	opID, ok := c[carrierKeyOperationID]
 	if !ok {
@@ -159,7 +171,7 @@ func UnmarshalMetadata(c Carrier) (Metadata, error) {
 	}
 
 	for k, v := range c {
-		if strings.HasPrefix(k, carrierEgoPrefix) {
+		if strings.HasPrefix(k, carrierCmdPrefix) || strings.HasPrefix(k, carrierTenantPrefix) {
 			continue
 		}
 		opts = append(opts, WithCustom(k, v))
@@ -183,7 +195,7 @@ func UnmarshalMetadata(c Carrier) (Metadata, error) {
 func tenantSubset(c Carrier) tenancy.Metadata {
 	out := tenancy.Metadata{}
 	for k, v := range c {
-		if strings.HasPrefix(k, "ego.tenant.") {
+		if strings.HasPrefix(k, carrierTenantPrefix) {
 			out[k] = v
 		}
 	}

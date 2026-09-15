@@ -175,6 +175,26 @@ func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
 	require.Empty(t, got.Custom())
 }
 
+// TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace proves a carrier
+// key under D6's reserved "ego." prefix but outside the two namespaces
+// design.md's Carrier type comment grants forward compatibility to
+// (ego.cmd.* ∪ ego.tenant.* — D9) is rejected with ErrReservedKey, not
+// silently dropped. A hypothetical stray WRITE-005 ego.idem.* value
+// stands in for that case here; reconstructing from a Carrier must not
+// be more permissive than constructing directly via WithCustom, which
+// already rejects any "ego."-prefixed custom key.
+func TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	carrier["ego.idem.key"] = "future-namespace-value"
+
+	_, err = command.UnmarshalMetadata(carrier)
+	require.ErrorIs(t, err, command.ErrReservedKey)
+}
+
 func TestCarrierDelegatesTenantSerializationToTenancyPackage(t *testing.T) {
 	op := mustOperationID(t, "op-1")
 	tc := mustTenantContext(t, "tenant-1")
