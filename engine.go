@@ -1235,14 +1235,9 @@ func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
 func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
 	switch r := reply.GetReply().(type) {
 	case *egopb.CommandReply_StateReply:
-		msg, err := r.StateReply.GetState().UnmarshalNew()
+		state, err := r.StateReply.GetState().UnmarshalNew()
 		if err != nil {
 			return command.Result{}, err
-		}
-
-		state, ok := msg.(State)
-		if !ok {
-			return command.Result{}, fmt.Errorf("got %s", r.StateReply.GetState().GetTypeUrl())
 		}
 		return command.NewSuccess(md, state, r.StateReply.GetSequenceNumber())
 	case *egopb.CommandReply_ErrorReply:
