@@ -43,7 +43,6 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
@@ -2001,28 +2000,32 @@ func TestSagaFailsClosed(t *testing.T) {
 		pause.For(time.Second)
 
 		// The saga's real target: a genuine tenant-aware EventSourcedActor,
-		// not a stub. If the gate ever regressed and let the saga's
-		// context.Background() dispatch through, this probe would record it.
+		// not a stub. If the gate ever regressed and let a saga-dispatched
+		// command through, this probe would record it.
 		targetProbe := newTenancyProbeEventSourcedBehavior(targetID)
 		_, err = actorSystem.Spawn(ctx, targetID, newEventSourcedActor(),
 			goakt.WithDependencies(targetProbe), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		pause.For(500 * time.Millisecond)
 
-		handleErrorCalled := make(chan error, 1)
+		// Post-EGO-TENANT-002/PR3, SagaActor reconstructs a TenantContext from
+		// each incoming event's own tenant metadata (SG2) and rejects the
+		// event outright — before HandleEvent ever runs, so no SagaAction and
+		// no command is ever produced — when that metadata is absent or
+		// malformed (SG4). This is a strictly earlier and stronger form of
+		// the structural invariant this test originally proved by relying on
+		// the saga blindly dispatching via context.Background() and the
+		// target entity's own tenancy gate catching it downstream: that
+		// fallback path no longer exists because the saga never reaches
+		// sendCommand for a tenant-less event in the first place.
+		var handleEventCalls atomic.Int32
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
 			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+				handleEventCalls.Add(1)
 				return &SagaAction{Commands: []SagaCommand{
 					{EntityID: targetID, Command: &testpb.CreateAccount{AccountBalance: 500}, Timeout: 3 * time.Second},
 				}}, nil
-			},
-			handleError: func(_ context.Context, _ string, err error, _ State) (*SagaAction, error) {
-				select {
-				case handleErrorCalled <- err:
-				default:
-				}
-				return &SagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -2039,26 +2042,18 @@ func TestSagaFailsClosed(t *testing.T) {
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
 
-		var gotErr error
-		select {
-		case gotErr = <-handleErrorCalled:
-		case <-time.After(5 * time.Second):
-			t.Fatal("HandleError was not called: the saga's command must be rejected by the tenancy gate")
-		}
+		pause.For(2 * time.Second)
 
-		_, wantErr := tenancy.Require(context.Background())
-		require.Error(t, gotErr)
-		assert.Equal(t, wantErr.Error(), gotErr.Error(),
-			"the saga's command must fail with the same error the tenancy gate produces for a missing TenantContext")
+		assert.Zero(t, handleEventCalls.Load(),
+			"HandleEvent must never run for an event with no tenant metadata in tenant-aware mode")
 
 		assert.Zero(t, targetProbe.invocationCount(),
-			"HandleCommand must never run for a command dispatched by a saga's context.Background() call in tenant-aware mode")
+			"HandleCommand must never run for a command the saga could not have formed for a rejected event")
 
 		latest, err := eventStore.GetLatestEvent(ctx, targetID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the saga's command")
 
-		pause.For(300 * time.Millisecond)
 		require.True(t, pid.IsRunning())
 
 		stream.Close()
