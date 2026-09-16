@@ -31,7 +31,6 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/pablogore/ego/v4/egopb"
@@ -74,6 +73,20 @@ type DurableStateActor struct {
 	// incoming context (set by Engine.SendCommand at the trust boundary)
 	// before HandleCommand runs.
 	tenantAware bool
+
+	// actorTenant records this actor's tenant identity for its full
+	// lifetime (DS1/DS2, EGO-TENANT-002 PR2), mirroring
+	// EventSourcedActor.actorTenant position-for-position. Seeded once in
+	// recoverFromStore (DS2) when recovering a committed (version > 0)
+	// record, or committed together with the first successful command's
+	// state and version in commitState (PR2 review round 2 P1 fix) when
+	// starting at genesis — never before HandleCommand and checkPreconditions
+	// both succeed, and never before the durable write itself succeeds. Every
+	// subsequent command is checked against it via tenancy.VerifyUnchanged.
+	// Holds noTenantContext (the zero value, declared
+	// event_sourced_actor.go:96, same package) until seeded or committed.
+	// No-op in legacy mode.
+	actorTenant tenancy.TenantContext
 }
 
 // implements the goakt.Actor interface
@@ -94,6 +107,13 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 	// resolver (internal/extensions.TenancyMarker), so the actor can never
 	// reach a TenantResolver through it.
 	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
+	// Computed here rather than in PostStart's Receive: PreStart runs on the
+	// actor's spawning goroutine before it is registered as running, so it
+	// happens-before any concurrent PostStop triggered by an early Shutdown/
+	// Kill. Reading shardNumber in PostStop (via persistStateAndPublish) while
+	// it was still being written from the dispatcher's PostStart handling was
+	// a genuine data race caught by -race.
+	entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency != nil {
@@ -137,9 +157,8 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 	switch message := ctx.Message().(type) {
 	case *goakt.PostStart:
 		entity.actorSystem = ctx.ActorSystem()
-		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 	case *egopb.GetStateCommand:
-		entity.sendStateReply(ctx)
+		entity.getStateAndReply(ctx)
 	default:
 		msg := message.(Command)
 		entity.processCommand(ctx, msg)
@@ -150,21 +169,37 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 //
 // T4-B exclusion (design.md D4): this lifecycle flush deliberately carries
 // no verifyTenantForPersist gate. It persists whatever state the actor
-// already holds in memory — state that only ever got there by passing the
-// T4-A pre-handler gate in processCommand at the time each command was
-// accepted. There is no new tenant identity to re-confirm here, and
-// ctx.Context() at shutdown is not the per-command context T4-B reasons
-// about; adding a gate here would just fail closed on a shutdown path for
-// no defensive benefit.
+// already holds in memory — state that only ever landed there via
+// commitState's single commit point. There is no new tenant identity to
+// re-confirm here, and ctx.Context() at shutdown is not the per-command
+// context T4-B reasons about; adding a gate here would just fail closed on a
+// shutdown path for no defensive benefit.
+//
+// Version-gated skip (DS3, EGO-TENANT-002 PR2, PR2 review round 2 P1 fix):
+// currentVersion is the durable discriminant for "has this actor ever
+// committed a command" — commitState only ever advances it together with
+// actorTenant, in the same in-memory assignment, so checking
+// currentVersion > 0 here is equivalent to checking actorTenant was
+// committed, without relying on actorTenant's zero value as a stand-in for
+// that fact. An actor that starts at genesis and receives no command is
+// exactly the actor still at version 0. Flushing that state would persist a
+// DurableState whose tenant_metadata is an empty map, which recoverFromStore
+// then refuses to recover from — bricking the persistence ID permanently.
+// Skipping the flush here loses nothing (in-memory state is still exactly
+// InitialState() at version 0) and keeps fail-closed in the strong
+// direction: no tenant-less record is ever written. Legacy mode is
+// unaffected — it keeps today's unconditional flush.
 func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 	if entity.metrics != nil {
 		entity.metrics.entitiesActive.Add(ctx.Context(), -1)
 	}
-	return runner.
+	chain := runner.
 		New(runner.WithFailFast()).
-		AddRunner(func() error { return entity.stateStore.Ping(ctx.Context()) }).
-		AddRunner(func() error { return entity.persistStateAndPublish(ctx.Context()) }).
-		Run()
+		AddRunner(func() error { return entity.stateStore.Ping(ctx.Context()) })
+	if !entity.tenantAware || entity.currentVersion > 0 {
+		chain = chain.AddRunner(func() error { return entity.persistStateAndPublish(ctx.Context()) })
+	}
+	return chain.Run()
 }
 
 // recoverFromStore reset the persistent actor to the latest state in case there is one
@@ -175,9 +210,46 @@ func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
 		return fmt.Errorf("failed to get the latest state: %w", err)
 	}
 
-	if durableState == nil || proto.Equal(durableState, new(egopb.DurableState)) {
+	// Genesis: no record at all. Nothing to recover.
+	if durableState == nil {
 		entity.currentState = entity.behavior.InitialState()
 		return nil
+	}
+
+	// Legacy genesis (DS2, EGO-TENANT-002 PR2 review round 2 P1 fix): in
+	// tenant-aware mode, a record at version 0 carries no committed tenant to
+	// recover and none to enforce. commitState only ever advances the version
+	// together with a committed tenant, and checkPreconditions only ever
+	// admits a version exactly 1 above the prior one, so a durable record can
+	// only be at version 0 by way of a legacy installation's PostStop, which
+	// used to flush InitialState() unconditionally even when the actor never
+	// received a command. Treat it exactly like no record at all, discarding
+	// its payload and any tenant_metadata rather than attempting to unmarshal
+	// either. version > 0 is never legacy-genesis and always requires valid
+	// tenant metadata below. Non-tenant-aware installations never carried
+	// this ambiguity: they keep validating whatever payload is on record
+	// regardless of version, unchanged from before this fix.
+	if entity.tenantAware && durableState.GetVersionNumber() == 0 {
+		entity.currentState = entity.behavior.InitialState()
+		return nil
+	}
+
+	// Seed this actor's lifetime tenant identity from the recovered record's
+	// carried metadata (DS2, EGO-TENANT-002 PR2), before its state payload is
+	// touched. recoverFromStore is this actor's only recovery path — no
+	// snapshot, no replay — so there is a single seed source and no
+	// cross-check to perform: unlike EventSourcedActor's seedActorTenant,
+	// this assigns directly. Absent or malformed metadata on a committed
+	// (version > 0) tenant-aware record is not tolerated: it means this
+	// record predates tenancy or was corrupted, and the actor must refuse to
+	// start rather than silently run without an identity (fail-closed,
+	// UnmarshalMetadata's own ErrInvalid is the rejection).
+	if entity.tenantAware {
+		tc, err := tenancy.UnmarshalMetadata(tenancy.Metadata(durableState.GetTenantMetadata()))
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal durable state tenant metadata: %w", err)
+		}
+		entity.actorTenant = tc
 	}
 
 	currentState := entity.behavior.InitialState()
@@ -219,11 +291,36 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	// run without a TenantContext already attached by Engine.SendCommand.
 	// This reuses tenancy.Require, a read-only check of the context already
 	// in hand; it never calls a resolver and never re-resolves.
+	//
+	// candidateTenant is deliberately NOT written into entity.actorTenant
+	// here (PR2 review round 2 P1 fix): a command that fails HandleCommand
+	// or checkPreconditions below must never appropriate the actor for a
+	// tenant that accepted no mutation. It is carried through to commitState,
+	// the single point — immediately after WriteState confirms the durable
+	// write, before Publish — where committed state, committed version, and
+	// owning tenant land together.
+	//
+	// Cross-tenant extension (DS1, EGO-TENANT-002 PR2): once actorTenant is
+	// seeded (DS2, recovery) or committed (a prior successful command on this
+	// actor), a command resolving to a different tenant is rejected here —
+	// before HandleCommand runs and before entity.currentState/currentVersion
+	// are ever mutated, which is exactly why this identity check cannot live
+	// in commitState instead: by that point the foreign tenant's state would
+	// already be resident in memory.
+	var candidateTenant tenancy.TenantContext
 	if entity.tenantAware {
-		if _, err := tenancy.Require(ctx); err != nil {
+		tc, err := tenancy.Require(ctx)
+		if err != nil {
 			entity.sendErrorReply(receiveContext, err)
 			return
 		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(receiveContext, verifyErr)
+				return
+			}
+		}
+		candidateTenant = tc
 	}
 
 	newState, newVersion, err := entity.behavior.HandleCommand(ctx, command, entity.currentVersion, entity.currentState)
@@ -238,25 +335,18 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 		return
 	}
 
-	// set the current state with the newState
-	entity.currentState = newState
-	entity.cachedStateAny, _ = anypb.New(newState) // eagerly cache for the reply and persist that follow
-	entity.lastCommandTime = time.Now()
-	entity.currentVersion = newVersion
-
 	// Defensive persistence invariant (T4-B, design.md D4): re-confirm a
-	// valid tenant identity is present before this state is handed to
-	// persistStateAndPublish. This reuses tenancy.Require — a read-only
-	// check of the context already validated by the pre-handler gate above
-	// — and never re-invokes TenantResolver.Resolve. It is deliberately not
-	// the sole enforcement point: T4-A above already blocks HandleCommand
-	// itself.
+	// valid tenant identity is still present before this state is committed.
+	// This reuses tenancy.Require — a read-only check of the context already
+	// validated by the pre-handler gate above — and never re-invokes
+	// TenantResolver.Resolve. It is deliberately not the sole enforcement
+	// point: T4-A above already blocks HandleCommand itself.
 	if err := entity.verifyTenantForPersist(ctx); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
 
-	if err := entity.persistStateAndPublish(ctx); err != nil {
+	if err := entity.commitState(ctx, newState, newVersion, time.Now(), candidateTenant); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
@@ -271,6 +361,29 @@ func (entity *DurableStateActor) currentStateAny() *anypb.Any {
 		entity.cachedStateAny, _ = anypb.New(entity.currentState)
 	}
 	return entity.cachedStateAny
+}
+
+// getStateAndReply returns the last committed state of the entity without
+// processing any command. Mirrors EventSourcedActor.getStateAndReply's gate
+// (DS4, EGO-TENANT-002 PR2): Receive dispatches *egopb.GetStateCommand here
+// directly, bypassing processCommand and its T4-A gate entirely, so without
+// its own check any resolved tenant could read another tenant's full
+// committed durable state.
+func (entity *DurableStateActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+	if entity.tenantAware {
+		tc, err := tenancy.Require(ctx.Context())
+		if err != nil {
+			entity.sendErrorReply(ctx, err)
+			return
+		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(ctx, verifyErr)
+				return
+			}
+		}
+	}
+	entity.sendStateReply(ctx)
 }
 
 // sendStateReply sends a state reply message
@@ -340,7 +453,59 @@ func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) err
 	return err
 }
 
-// persistStateAndPublish persists the actor state and publishes it to the stream.
+// commitState is the single logical commit point (PR2 review round 2 P1
+// fix): committed state, committed version, and owning tenant land together,
+// in that order, only once WriteState confirms the durable write succeeded.
+//
+// It never reads entity.currentState/currentVersion/actorTenant to build the
+// record — newState, newVersion, and candidateTenant are the record, passed
+// in explicitly by processCommand once HandleCommand and checkPreconditions
+// have both already succeeded — so a WriteState failure here leaves entity
+// exactly as it was before the command: no state mutated, no tenant
+// appropriated.
+//
+// The in-memory commit (currentState/cachedStateAny/currentVersion/
+// actorTenant) happens immediately after WriteState succeeds and before
+// Publish, so a Publish failure can never un-appropriate what the store
+// already durably committed.
+func (entity *DurableStateActor) commitState(ctx context.Context, newState State, newVersion uint64, commandTime time.Time, candidateTenant tenancy.TenantContext) error {
+	newStateAny, err := anypb.New(newState)
+	if err != nil {
+		return err
+	}
+
+	durableState := &egopb.DurableState{
+		PersistenceId:  entity.persistenceID,
+		VersionNumber:  newVersion,
+		ResultingState: newStateAny,
+		Timestamp:      commandTime.UnixNano(),
+		Shard:          entity.shardNumber,
+	}
+	if entity.tenantAware {
+		durableState.TenantMetadata = tenancy.MarshalMetadata(candidateTenant)
+	}
+
+	if err := entity.stateStore.WriteState(ctx, durableState); err != nil {
+		return err
+	}
+
+	entity.currentState = newState
+	entity.cachedStateAny = newStateAny
+	entity.lastCommandTime = commandTime
+	entity.currentVersion = newVersion
+	if entity.tenantAware {
+		entity.actorTenant = candidateTenant
+	}
+
+	entity.eventsStream.Publish(statesTopic, durableState)
+	return nil
+}
+
+// persistStateAndPublish flushes the actor's already-committed in-memory
+// state to the store. Used only by PostStop's lifecycle flush (T4-B
+// exclusion, design.md D4): there is no new candidate tenant to commit here,
+// only whatever state/version/tenant a prior successful command already
+// committed via commitState, or, in legacy mode, whatever is in memory.
 func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) error {
 	durableState := &egopb.DurableState{
 		PersistenceId:  entity.persistenceID,
@@ -348,6 +513,15 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		ResultingState: entity.currentStateAny(),
 		Timestamp:      entity.lastCommandTime.UnixNano(),
 		Shard:          entity.shardNumber,
+	}
+
+	// DS3 (EGO-TENANT-002 PR2): write from entity.actorTenant, never from
+	// ctx — PostStop's ctx.Context() is a shutdown context that never
+	// carried a TenantContext, and actorTenant is already committed by the
+	// time PostStop reaches here (commitState, or legacy mode's unconditional
+	// flush).
+	if entity.tenantAware {
+		durableState.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
 	}
 
 	if err := entity.stateStore.WriteState(ctx, durableState); err != nil {
