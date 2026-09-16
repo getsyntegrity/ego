@@ -780,6 +780,16 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		}
 	}
 
+	// Deadline pre-handler gate: goCtx carries the effective deadline
+	// Engine.Dispatch computed (min of ctx's own deadline, the envelope
+	// Metadata's deadline, and the caller's timeout). If it has already
+	// expired or been canceled, fail closed before the handler runs — the
+	// handler must never execute past the deadline.
+	if err := checkDeadline(goCtx, "before handler execution"); err != nil {
+		entity.sendErrorReply(ctx, err)
+		return
+	}
+
 	events, err := entity.dispatchToBehavior(goCtx, command, entity.currentState)
 	if err != nil {
 		entity.endCommandSpan(goCtx, span, startTime)
@@ -796,6 +806,17 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, tc, entity.currentState, entity.eventsCounter)
 	if err != nil {
 		entity.endCommandSpan(goCtx, span, startTime)
+		entity.sendErrorReply(ctx, err)
+		return
+	}
+
+	// Deadline post-handler/pre-persist gate: the handler above may have run
+	// long enough for the deadline to expire while it was in flight —
+	// context.WithDeadline does not preempt a handler that ignores its
+	// context, so this re-check is the actual barrier that stops a late
+	// handler output from mutating currentState or reaching the store.
+	// envelopes/pendingState/pendingCounter are discarded, never persisted.
+	if err := checkDeadline(goCtx, "before persistence"); err != nil {
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -1270,6 +1291,17 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		}
 	}
 
+	// Deadline pre-handler gate: same barrier as processCommandAndReply — see
+	// its comment for the rationale. Must fail closed here too, before the
+	// handler ever runs against batchState.
+	if deadlineErr := checkDeadline(goCtx, "before handler execution"); deadlineErr != nil {
+		if span != nil {
+			span.End()
+		}
+		entity.sendErrorReply(ctx, deadlineErr)
+		return
+	}
+
 	events, err := entity.dispatchToBehavior(goCtx, command, state)
 	if err != nil {
 		if span != nil {
@@ -1309,6 +1341,21 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 			span.End()
 		}
 		entity.sendErrorReply(ctx, err)
+		return
+	}
+
+	// Deadline post-handler/pre-batch-append gate: the handler above may
+	// have run long enough for the deadline to expire while it was in
+	// flight. This is the barrier that keeps an expired command's output
+	// out of the shared batch state entirely — envelopes/pendingState/
+	// pendingCounter are discarded here, never appended to batchBuffer/
+	// batchState/batchEntries, so a later flushBatch never persists them and
+	// a subsequent valid command on this actor is unaffected.
+	if deadlineErr := checkDeadline(goCtx, "before persistence"); deadlineErr != nil {
+		if span != nil {
+			span.End()
+		}
+		entity.sendErrorReply(ctx, deadlineErr)
 		return
 	}
 

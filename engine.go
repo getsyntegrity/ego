@@ -32,6 +32,7 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	goakterrors "github.com/tochemey/goakt/v4/errors"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/passivation"
 	"github.com/tochemey/goakt/v4/supervisor"
@@ -739,13 +740,22 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 // remote or cluster hop — see the #60 report for that explicitly deferred
 // gap.
 //
-// Dispatch rejects env outright, before any SendSync call, in two cases:
+// Dispatch rejects env outright, before any SendSync call, in three cases:
 // Metadata that fails the same Marshal/UnmarshalMetadata round-trip the
 // receiving actor depends on (a plain error — a caller-side defect, never
-// silently downgraded to the HandleCommand fallback), and a Metadata
-// deadline already in the past (an OutcomeTimedOut Result). A deadline
-// still ahead but tighter than timeout takes precedence over it for the
-// SendSync call.
+// silently downgraded to the HandleCommand fallback), ctx already done
+// (canceled or its own deadline expired), and an effective deadline already
+// in the past (an OutcomeTimedOut/OutcomeCanceled Result).
+//
+// The effective deadline is min(ctx's own deadline if any, env.Metadata()'s
+// deadline if any, now+timeout) — not merely how long the caller is willing
+// to wait for a reply. It is propagated into a derived, cancelable ctx (via
+// context.WithDeadline) passed to SendSync, so the target actor can itself
+// detect and fail closed on it — both before invoking the handler and again
+// before persisting anything — since context.WithDeadline alone does not
+// preempt a handler that ignores its context. See checkDeadline
+// (deadline_gate.go) and its call sites in EventSourcedActor/
+// DurableStateActor for the actor-side half of this.
 func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command.Envelope, timeout time.Duration) (result command.Result, err error) {
 	if !engine.Started() {
 		return command.Result{}, ErrEngineNotStarted
@@ -791,24 +801,48 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 		return command.Result{}, unmarshalErr
 	}
 
-	// A Metadata deadline bounds when the handler is allowed to run and
-	// persist, not merely how long the caller is willing to wait: a
-	// deadline already in the past is rejected outright (no dispatch, no
-	// actor, no handler, no persistence), and a deadline still ahead but
-	// tighter than the caller-supplied timeout takes precedence over it.
-	if deadline, ok := env.Metadata().Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			failure, failureErr := command.NewFailure("command: deadline already exceeded")
-			if failureErr != nil {
-				return command.Result{}, failureErr
-			}
-			return command.NewTimedOut(env.Metadata(), failure)
+	// ctx may already be done — canceled by the caller, or past its own
+	// deadline — before Dispatch even starts. Reject outright rather than
+	// let SendSync discover it a moment later after paying for tenant
+	// resolution and carrier attachment.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		failure, failureErr := command.NewFailure("command: context already done before dispatch", command.WithFailureCause(ctxErr))
+		if failureErr != nil {
+			return command.Result{}, failureErr
 		}
-		if remaining < timeout {
-			timeout = remaining
+		if errors.Is(ctxErr, context.Canceled) {
+			return command.NewCanceled(env.Metadata(), failure)
 		}
+		return command.NewTimedOut(env.Metadata(), failure)
 	}
+
+	// Effective deadline = min(ctx's own deadline if any, env.Metadata()'s
+	// deadline if any, now+timeout). This bounds when the handler is
+	// allowed to run and persist, not merely how long the caller is willing
+	// to wait for a reply.
+	deadline := time.Now().Add(timeout)
+	if mdDeadline, ok := env.Metadata().Deadline(); ok && mdDeadline.Before(deadline) {
+		deadline = mdDeadline
+	}
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if !deadline.After(time.Now()) {
+		failure, failureErr := command.NewFailure("command: deadline already exceeded")
+		if failureErr != nil {
+			return command.Result{}, failureErr
+		}
+		return command.NewTimedOut(env.Metadata(), failure)
+	}
+
+	// Derive a cancelable, deadline-bound ctx and propagate it (not just a
+	// shrunk timeout duration) all the way to SendSync and, through it, to
+	// the target actor's goCtx — this is what makes the actor-side
+	// checkDeadline gates possible.
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithDeadline(ctx, deadline)
+	defer cancel()
+	timeout = time.Until(deadline)
 
 	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
 	// here, at the single trust boundary between external callers and the
@@ -833,6 +867,31 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 
 	reply, sendErr := ref.noSender.SendSync(ctx, entityID, env.Payload(), timeout)
 	if sendErr != nil {
+		// SendSync/goakt's Ask races ctx.Done() against its own internal
+		// timer derived from the timeout argument. When ctx.Done() wins it
+		// returns errors.Join(ctx.Err(), goakterrors.ErrRequestTimeout); when
+		// the internal timer wins instead it returns the bare, unwrapped
+		// goakterrors.ErrRequestTimeout — neither ctx.Canceled nor
+		// ctx.DeadlineExceeded. Since Dispatch aligns ctx's deadline and
+		// timeout to the same instant, either race outcome is possible, so
+		// both must classify as a Result (Timed/CanceledOut carries the same
+		// contract as the pre-dispatch checks above) rather than a bare
+		// plumbing error, since it is exactly the deadline/cancellation the
+		// command package models.
+		if errors.Is(sendErr, context.Canceled) {
+			failure, failureErr := command.NewFailure("command: caller context canceled while waiting for reply", command.WithFailureCause(sendErr))
+			if failureErr != nil {
+				return command.Result{}, failureErr
+			}
+			return command.NewCanceled(env.Metadata(), failure)
+		}
+		if errors.Is(sendErr, context.DeadlineExceeded) || errors.Is(sendErr, goakterrors.ErrRequestTimeout) {
+			failure, failureErr := command.NewFailure("command: deadline exceeded while waiting for reply", command.WithFailureCause(sendErr))
+			if failureErr != nil {
+				return command.Result{}, failureErr
+			}
+			return command.NewTimedOut(env.Metadata(), failure)
+		}
 		return command.Result{}, sendErr
 	}
 
@@ -1267,10 +1326,15 @@ func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
 // (#60's Alcance calls this out explicitly): the wire protocol has no way
 // to distinguish a domain rejection from an application failure, a timeout
 // or a cancellation, so every CommandReply_ErrorReply becomes OutcomeFailed
-// regardless of its true cause. An empty ErrorReply.Message (never produced
-// by this repo's own sendErrorReply call sites, but not ruled out for an
-// external egopb.CommandReply) is substituted with a placeholder, since
-// command.NewFailure rejects an empty message.
+// regardless of its true cause — with one recognized exception: a message
+// produced by an actor's checkDeadline gate (deadline_gate.go), identified
+// by its errActorDeadlineExceeded/errActorContextCanceled prefix, maps to
+// OutcomeTimedOut/OutcomeCanceled instead, so a mid-handler deadline
+// rejection is classifiable the same way a pre-dispatch one is. An empty
+// ErrorReply.Message (never produced by this repo's own sendErrorReply call
+// sites, but not ruled out for an external egopb.CommandReply) is
+// substituted with a placeholder, since command.NewFailure rejects an empty
+// message.
 func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
 	switch r := reply.GetReply().(type) {
 	case *egopb.CommandReply_StateReply:
@@ -1287,6 +1351,12 @@ func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Re
 		failure, err := command.NewFailure(message)
 		if err != nil {
 			return command.Result{}, err
+		}
+		switch {
+		case strings.HasPrefix(message, errActorContextCanceled.Error()):
+			return command.NewCanceled(md, failure)
+		case strings.HasPrefix(message, errActorDeadlineExceeded.Error()):
+			return command.NewTimedOut(md, failure)
 		}
 		return command.NewFailed(md, failure)
 	}
