@@ -157,8 +157,11 @@ func newBoundSagaActor(t *testing.T, behavior SagaBehavior) *SagaActor {
 }
 
 func TestSagaActorBindOnFirstEvent(t *testing.T) {
-	t.Run("binds to the first valid tenant it processes", func(t *testing.T) {
-		// 2.1
+	t.Run("binds to the first relevant tenant event it acts on", func(t *testing.T) {
+		// 2.1. The behavior returns a non-noop SagaAction (an event to persist for
+		// its own state) to prove the event is one this saga acts on, not just
+		// one it happened to observe (SG4 correction, see the "does not bind on
+		// an unrelated event" test below).
 		tenantA, err := tenancy.NewTenantContext("acme")
 		require.NoError(t, err)
 
@@ -167,7 +170,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 			id: "saga-" + uuid.NewString(),
 			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
 				handleEventCalls++
-				return &SagaAction{}, nil
+				return &SagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
 			},
 		}
 		s := newBoundSagaActor(t, behavior)
@@ -176,7 +179,45 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 		s.handleStreamEvent(event)
 
 		assert.Equal(t, 1, handleEventCalls, "HandleEvent must run for a validly tenant-scoped event")
-		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must be seeded from the first valid event")
+		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must be seeded from the first relevant event")
+	})
+
+	t.Run("does not bind on an unrelated event, binds once the saga's own event arrives", func(t *testing.T) {
+		// Codex P1 (PR #78, saga_actor.go handleStreamEvent): every saga
+		// subscribes to the shared eventsTopic, so the first event observed may
+		// belong to a different tenant and be irrelevant to this saga. Binding
+		// must not commit to that tenant before HandleEvent's own relevance
+		// filter has a chance to reject it.
+		tenantA, err := tenancy.NewTenantContext("acme")
+		require.NoError(t, err)
+		tenantB, err := tenancy.NewTenantContext("globex")
+		require.NoError(t, err)
+
+		var handleEventCalls int
+		behavior := &callbackSagaBehavior{
+			id: "saga-" + uuid.NewString(),
+			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+				handleEventCalls++
+				created, ok := event.(*testpb.AccountCreated)
+				if !ok || created.GetAccountId() != "watched-entity" {
+					return &SagaAction{}, nil
+				}
+				return &SagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
+			},
+		}
+		s := newBoundSagaActor(t, behavior)
+
+		unrelated := newAnyEvent(t, "entity-noise", 1, &testpb.AccountCreated{AccountId: "entity-noise"}, tenantMetadata(t, tenantB))
+		s.handleStreamEvent(unrelated)
+
+		assert.Equal(t, 1, handleEventCalls, "HandleEvent must still see the event to decide relevance")
+		assert.Equal(t, noTenantContext, s.boundTenant, "an event the behavior ignores must never seed boundTenant")
+
+		watched := newAnyEvent(t, "watched-entity", 1, &testpb.AccountCreated{AccountId: "watched-entity"}, tenantMetadata(t, tenantA))
+		s.handleStreamEvent(watched)
+
+		assert.Equal(t, 2, handleEventCalls)
+		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must bind to the saga's own tenant, not an earlier unrelated tenant's noise event")
 	})
 
 	t.Run("a second event from a different tenant is rejected once bound", func(t *testing.T) {
@@ -191,7 +232,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 			id: "saga-" + uuid.NewString(),
 			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
 				handleEventCalls++
-				return &SagaAction{}, nil
+				return &SagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
 			},
 		}
 		s := newBoundSagaActor(t, behavior)
@@ -200,6 +241,10 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 		s.handleStreamEvent(firstEvent)
 		require.Equal(t, 1, handleEventCalls)
 		require.Equal(t, tenantA, s.boundTenant)
+
+		boundLatest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		require.NoError(t, err)
+		require.NotNil(t, boundLatest, "the first, relevant event must have persisted a saga event")
 
 		secondEvent := newAnyEvent(t, "entity-2", 1, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantB))
 		s.handleStreamEvent(secondEvent)
@@ -210,7 +255,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 
 		latest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
 		require.NoError(t, err)
-		assert.Nil(t, latest, "no saga event may be persisted for a rejected foreign-tenant event")
+		assert.Equal(t, boundLatest.GetSequenceNumber(), latest.GetSequenceNumber(), "no additional saga event may be persisted for a rejected foreign-tenant event")
 	})
 
 	t.Run("tenant-less or malformed event at the reset site is rejected, saga still consumes the next valid event", func(t *testing.T) {
@@ -223,7 +268,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 			id: "saga-" + uuid.NewString(),
 			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
 				handleEventCalls++
-				return &SagaAction{}, nil
+				return &SagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
 			},
 		}
 		s := newBoundSagaActor(t, behavior)

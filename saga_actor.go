@@ -363,6 +363,8 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 		return
 	}
 
+	// eventContext only decodes the event's own tenant metadata onto ctx; it
+	// does not touch s.boundTenant.
 	ctx, err := s.eventContext(context.Background(), event)
 	if err != nil {
 		s.logger.Error("saga: rejected stream event, invalid tenant metadata",
@@ -370,10 +372,21 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 		return
 	}
 
-	if err := s.bindOrVerify(ctx); err != nil {
-		s.logger.Error("saga: rejected stream event, tenant mismatch",
-			"saga_id", s.sagaID, "persistence_id", event.GetPersistenceId(), "sequence_number", event.GetSequenceNumber(), "error", err)
-		return
+	// Once bound, verify BEFORE HandleEvent (fail closed without ever
+	// exposing a foreign-tenant payload to the saga's own business logic).
+	// While unbound, defer the bind past HandleEvent (SG4 correction): every
+	// saga on the shared eventsTopic runs its own entity/type relevance
+	// filter first, and only a genuinely actionable result (a non-noop
+	// SagaAction — the only signal HandleEvent has for "this belongs to me")
+	// commits boundTenant. This stops an unrelated tenant's noise event from
+	// poisoning boundTenant before this saga's real initiating event arrives.
+	alreadyBound := s.tenantAware && s.boundTenant != noTenantContext
+	if alreadyBound {
+		if err := s.bindOrVerify(ctx); err != nil {
+			s.logger.Error("saga: rejected stream event, tenant mismatch",
+				"saga_id", s.sagaID, "persistence_id", event.GetPersistenceId(), "sequence_number", event.GetSequenceNumber(), "error", err)
+			return
+		}
 	}
 
 	eventMsg, err := event.GetEvent().UnmarshalNew()
@@ -386,6 +399,17 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 	if err != nil {
 		s.logger.Error("saga: HandleEvent failed", "saga_id", s.sagaID, "error", err)
 		return
+	}
+
+	if !alreadyBound {
+		if action.isNoop() {
+			return
+		}
+		if err := s.bindOrVerify(ctx); err != nil {
+			s.logger.Error("saga: rejected stream event, tenant mismatch",
+				"saga_id", s.sagaID, "persistence_id", event.GetPersistenceId(), "sequence_number", event.GetSequenceNumber(), "error", err)
+			return
+		}
 	}
 
 	s.processAction(ctx, action)
