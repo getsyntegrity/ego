@@ -265,7 +265,7 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 		entity.spawnChildren(ctx)
 	case *egopb.GetStateCommand:
-		entity.getStateAndReply(ctx)
+		entity.handleGetStateCommand(ctx)
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
 	case *persistEventsResponse:
@@ -640,6 +640,26 @@ func (entity *EventSourcedActor) sendStateReply(ctx *goakt.ReceiveContext) {
 	})
 }
 
+// handleGetStateCommand dispatches a GetStateCommand from Receive, deferring
+// it via ctx.Stash() while a direct (non-batched) command's persist write is
+// unsettled (phasePersisting: entity.currentState is still the pre-write
+// value; phaseDirectReplying: the write is confirmed but the originating
+// command has not yet been replied to). Deferring in both phases guarantees
+// a read never observes stale state and never overtakes the write it raced
+// with (issue #64 P1 follow-up).
+//
+// Batch mode is untouched: entity.currentState there is likewise only
+// mutated on confirmed batch writes (see handleBatchPersistResponse), so
+// getStateAndReply already returns a consistent value regardless of
+// batchThreshold's flush phase.
+func (entity *EventSourcedActor) handleGetStateCommand(ctx *goakt.ReceiveContext) {
+	if !entity.batchEnabled() && (entity.phase == phasePersisting || entity.phase == phaseDirectReplying) {
+		ctx.Stash()
+		return
+	}
+	entity.getStateAndReply(ctx)
+}
+
 // getStateAndReply returns the last committed state of the entity without
 // processing any command. When event batching is enabled, this returns the
 // state as of the last confirmed batch write, not any optimistic pending state.
@@ -844,10 +864,20 @@ func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveC
 // mirroring replyFromBatch for the batched path. Exactly one command is ever
 // stashed while phasePersisting (further commands stash behind it in
 // Receive), so there is no remaining-replies counter to drain.
+//
+// A GetStateCommand that arrives while phase is phaseDirectReplying stashes
+// itself (see handleGetStateCommand) rather than reading stale state, but
+// handleDirectPersistResponse's UnstashAll already ran before that phase
+// began and won't run again for this cycle. UnstashAll here is what redelivers
+// it once phase drops back to phaseProcessing; since it only re-enqueues into
+// the mailbox tail, it is guaranteed to be processed after the reply this
+// function sends, preserving reply-before-read order. It is a no-op when
+// nothing stashed during the window.
 func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
 	entity.endCommandSpan(ctx.Context(), entity.directSpan, entity.directStartTime)
 	entity.directSpan = nil
 	entity.phase = phaseProcessing
+	ctx.UnstashAll()
 
 	if entity.directErr != nil {
 		err := entity.directErr
