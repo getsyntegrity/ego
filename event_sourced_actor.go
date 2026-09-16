@@ -81,9 +81,9 @@ type batchFlushTick struct{}
 
 // noTenantContext is the zero value of tenancy.TenantContext. Neither
 // tenancy.NewTenantContext nor tenancy.NewAdministrativeContext can ever
-// produce it (tenancy/tenant_context.go), so it safely marks "no tenant
-// recorded yet for this batch cycle" for EventSourcedActor.batchTenant,
-// distinct from any real resolved identity.
+// produce it (tenancy/tenant_context.go), so it safely marks "not yet
+// seeded" for EventSourcedActor.actorTenant, distinct from any real
+// resolved identity.
 var noTenantContext tenancy.TenantContext
 
 // batchEntry holds the pre-computed reply and observability context for
@@ -157,29 +157,35 @@ type EventSourcedActor struct {
 	// Engine.SendCommand at the trust boundary) before HandleCommand runs.
 	tenantAware bool
 
-	// batchTenant records the TenantContext of the first command buffered
-	// in the current batch cycle (T4-B, design.md D4). Every later command
-	// merged into the same batchBuffer before the next flush must carry the
-	// identical TenantContext — flushBatch (below) collapses the whole
-	// buffer into a single context.Background() Ask and therefore cannot
-	// attribute any tenant to an individual envelope, so homogeneity must be
-	// proven here instead. Read and written only through
-	// tenancy.Require/tenancy.VerifyUnchanged — never re-resolved.
-	// Holds noTenantContext (the zero value) when unset; MUST be reset to
-	// noTenantContext in resetBatch, or a tenant from a prior, already
-	// flushed batch cycle leaks into the homogeneity check of the next one.
+	// actorTenant records this actor's tenant identity for its full
+	// lifetime (D6, EGO-TENANT-002) — widened from the prior per-batch-cycle
+	// "batchTenant" scope (EGO-TENANT-006 T4-B). It is seeded from recover()
+	// when persisted event/snapshot metadata exists (Phase 3), or
+	// established on this actor's first successful persist otherwise (see
+	// establishActorTenant, called from processCommandAndReply and
+	// processAndBatch after a successful buildEnvelopes). Every later
+	// command's resolved TenantContext is compared against it via
+	// tenancy.VerifyUnchanged in both paths' pre-handler gates, rejecting a
+	// mismatch with ErrDenied (Phase 4) — the cross-tenant guard for the
+	// full actor lifetime, not merely one batch cycle. Read and written
+	// only through tenancy.Require/tenancy.VerifyUnchanged — never
+	// re-resolved. Holds noTenantContext (the zero value) when unset. Unlike
+	// the prior batchTenant, resetBatch does NOT clear this field: an
+	// actor's tenant identity must survive every batch cycle for its whole
+	// lifetime (D6 — actor-lifetime scope strictly subsumes batch-cycle
+	// scope; keeping a separate per-cycle field would be two checks proving
+	// one invariant).
 	//
-	// Blocker 3 fix (EGO-TENANT-006 review): the homogeneity check against
-	// batchTenant runs in processAndBatch's pre-handler gate, BEFORE
-	// entity.behavior.HandleCommand executes — not only afterward, at
-	// buffer-append time. latestState() returns entity.batchState (this
-	// batch's accumulated, unpersisted state) whenever a batch is already
-	// open, regardless of which tenant is calling; running HandleCommand
-	// against that state under a different tenant's identity is itself the
-	// leak, whether or not the handler goes on to produce any events.
-	// batchTenant is still only *established* (first written) after a
-	// successful buildEnvelopes, matching prior behavior for a fresh batch.
-	batchTenant tenancy.TenantContext
+	// Blocker 3 fix (EGO-TENANT-006 review), still in effect: the
+	// homogeneity check against actorTenant runs in processAndBatch's
+	// pre-handler gate, BEFORE entity.behavior.HandleCommand executes — not
+	// only afterward, at buffer-append time. latestState() returns
+	// entity.batchState (this batch's accumulated, unpersisted state)
+	// whenever a batch is already open, regardless of which tenant is
+	// calling; running HandleCommand against that state under a different
+	// tenant's identity is itself the leak, whether or not the handler goes
+	// on to produce any events.
+	actorTenant tenancy.TenantContext
 }
 
 var _ goakt.Actor = (*EventSourcedActor)(nil)
@@ -394,6 +400,27 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 
 	latestSeqNr := latestEvent.GetSequenceNumber()
 
+	// Seed/verify this actor's lifetime tenant identity from the latest
+	// event's carried metadata (D5/D6, EGO-TENANT-002). When
+	// recoverFromSnapshot already seeded actorTenant above, seedActorTenant
+	// cross-checks this event's tenant against it instead of overwriting —
+	// a mismatch here means the snapshot and the latest event disagree on
+	// tenant, which is exactly the data-integrity violation VerifyUnchanged
+	// exists to catch (ErrDenied). Absent or malformed metadata on a
+	// tenant-aware actor's persisted event is not tolerated: it means this
+	// event predates tenancy or was corrupted, and the actor must refuse to
+	// start rather than silently run without an identity (fail-closed,
+	// design.md D3 — UnmarshalMetadata's own ErrInvalid is the rejection).
+	if entity.tenantAware {
+		eventTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latestEvent.GetTenantMetadata()))
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal event tenant metadata: %w", err)
+		}
+		if err := entity.seedActorTenant(eventTenant); err != nil {
+			return err
+		}
+	}
+
 	if replayFrom <= latestSeqNr {
 		state, err = entity.replayEvents(ctx, state, replayFrom, latestSeqNr)
 		if err != nil {
@@ -417,6 +444,23 @@ func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initia
 
 	if snapshot == nil || snapshot.GetState() == nil {
 		return initial, 1, nil
+	}
+
+	// Seed this actor's lifetime tenant identity from the snapshot's carried
+	// metadata (D5, EGO-TENANT-002). This runs before the latest-event seed
+	// in recover() below, so with DeleteEventsOnSnapshot/EventsRetentionCount
+	// configured — where GetLatestEvent can return nil and a snapshot is the
+	// sole surviving record — the actor still has a tenant identity rather
+	// than recovering open (fail-closed, D3). Absent or malformed metadata on
+	// a tenant-aware actor's snapshot is refused the same way.
+	if entity.tenantAware {
+		snapshotTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(snapshot.GetTenantMetadata()))
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal snapshot tenant metadata: %w", err)
+		}
+		if err := entity.seedActorTenant(snapshotTenant); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	snapshotState, err := entity.decryptPayload(ctx, snapshot.GetState(), snapshot.GetIsEncrypted(), snapshot.GetEncryptionKeyId())
@@ -577,10 +621,33 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// any other caller that bypasses SendCommand (e.g. via NoSender with a
 	// fresh context.Background()) fails closed here instead of silently
 	// running without an identity.
+	//
+	// The resolved tc is captured (not merely checked for a non-error) so
+	// buildEnvelopes below can serialize it into each persisted event's
+	// tenant_metadata (EGO-TENANT-002 Phase 2) and establishActorTenant can
+	// seed this actor's lifetime identity from it (Phase 2/3).
+	//
+	// Net-new enforcement (Phase 4, design.md risk #3): before this fix,
+	// this gate only proved presence via tenancy.Require, never identity
+	// match against the actor — unlike processAndBatch's equivalent gate,
+	// which already compared against actorTenant. A cross-tenant command on
+	// a seeded, non-batched actor would run HandleCommand and persist
+	// against the wrong tenant's state. Mirrors processAndBatch's gate
+	// exactly: verify BEFORE HandleCommand runs, not only after
+	// buildEnvelopes.
+	var tc tenancy.TenantContext
 	if entity.tenantAware {
-		if _, err := tenancy.Require(goCtx); err != nil {
+		var err error
+		tc, err = tenancy.Require(goCtx)
+		if err != nil {
 			entity.sendErrorReply(ctx, err)
 			return
+		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(ctx, verifyErr)
+				return
+			}
 		}
 	}
 
@@ -595,7 +662,7 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		return
 	}
 
-	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, entity.currentState, entity.eventsCounter)
+	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, tc, entity.currentState, entity.eventsCounter)
 	if err != nil {
 		entity.sendErrorReply(ctx, err)
 		return
@@ -612,6 +679,12 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		return
 	}
 
+	// Establish this actor's lifetime tenant identity (D6) on its first
+	// successful persist, mirroring processAndBatch's equivalent step below.
+	// A no-op once actorTenant is already seeded (by recover(), Phase 3, or
+	// an earlier command on this actor).
+	entity.establishActorTenant(tc)
+
 	if err := entity.persistEvents(ctx, envelopes, eventsTopic); err != nil {
 		entity.sendErrorReply(ctx, err)
 		ctx.Shutdown()
@@ -627,8 +700,11 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 // the protobuf envelopes ready for persistence. The actor state is not modified.
 // startState and startCounter specify the base state and sequence number to
 // apply events against, allowing callers to chain calls across batched commands.
+// tc is the TenantContext resolved by the caller's pre-handler gate (zero
+// value in legacy mode); it is serialized into each envelope by marshalEvent
+// (EGO-TENANT-002 Phase 2) but never used to mutate actor state here.
 // Returns the envelopes, pending state, pending counter, and command timestamp.
-func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []Event, startState State, startCounter uint64) ([]*egopb.Event, State, uint64, time.Time, error) {
+func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []Event, tc tenancy.TenantContext, startState State, startCounter uint64) ([]*egopb.Event, State, uint64, time.Time, error) {
 	pendingState := startState
 	pendingCounter := startCounter
 	commandTime := time.Now()
@@ -648,7 +724,7 @@ func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []
 		pendingCounter++
 		pendingState = resultingState
 
-		envelope, err := entity.marshalEvent(goCtx, event, pendingCounter, commandTime, entity.shardNumber)
+		envelope, err := entity.marshalEvent(goCtx, event, tc, pendingCounter, commandTime, entity.shardNumber)
 		if err != nil {
 			return nil, nil, 0, time.Time{}, err
 		}
@@ -660,8 +736,11 @@ func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []
 }
 
 // marshalEvent serializes a domain event into a protobuf envelope, applying
-// encryption when an encryptor is configured.
-func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, seqNr uint64, ts time.Time, shard uint64) (*egopb.Event, error) {
+// encryption when an encryptor is configured. In tenant-aware mode, tc is
+// serialized onto the envelope's TenantMetadata field via
+// tenancy.MarshalMetadata (D9 carrier reuse, EGO-TENANT-002 Phase 2);
+// legacy mode writes no tenant metadata (D2).
+func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, tc tenancy.TenantContext, seqNr uint64, ts time.Time, shard uint64) (*egopb.Event, error) {
 	eventAny, _ := anypb.New(event)
 
 	var encKeyID string
@@ -686,7 +765,7 @@ func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, 
 		isEncrypted = true
 	}
 
-	return &egopb.Event{
+	envelope := &egopb.Event{
 		PersistenceId:   entity.persistenceID,
 		SequenceNumber:  seqNr,
 		IsDeleted:       false,
@@ -695,7 +774,13 @@ func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, 
 		Shard:           shard,
 		EncryptionKeyId: encKeyID,
 		IsEncrypted:     isEncrypted,
-	}, nil
+	}
+
+	if entity.tenantAware {
+		envelope.TenantMetadata = tenancy.MarshalMetadata(tc)
+	}
+
+	return envelope, nil
 }
 
 // verifyTenantForPersist re-confirms, from goCtx alone, that a valid tenant
@@ -711,6 +796,39 @@ func (entity *EventSourcedActor) verifyTenantForPersist(goCtx context.Context) e
 	}
 	_, err := tenancy.Require(goCtx)
 	return err
+}
+
+// establishActorTenant seeds entity.actorTenant with tc when it has not yet
+// been seeded (D6, EGO-TENANT-002). It is a no-op in legacy mode and a
+// no-op once actorTenant already holds a value — whether seeded earlier by
+// recover() (Phase 3) or by an earlier successful persist on this same
+// actor. This performs no comparison: cross-tenant rejection against an
+// already-seeded actorTenant is a separate, explicit gate in
+// processCommandAndReply and processAndBatch (Phase 4), not a side effect
+// of establishing it here.
+func (entity *EventSourcedActor) establishActorTenant(tc tenancy.TenantContext) {
+	if entity.tenantAware && entity.actorTenant == noTenantContext {
+		entity.actorTenant = tc
+	}
+}
+
+// seedActorTenant seeds entity.actorTenant with tc during recovery
+// (recoverFromSnapshot, recover; D5/D6, EGO-TENANT-002). Unlike
+// establishActorTenant, it is not a silent no-op once actorTenant already
+// holds a value: recovery can seed from two sources in sequence (a
+// snapshot, then the latest event), so a second call here cross-checks tc
+// against the value the first call seeded via tenancy.VerifyUnchanged,
+// surfacing ErrDenied when the snapshot and the latest event disagree on
+// tenant. It is a no-op in legacy mode (tenantAware == false).
+func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error {
+	if !entity.tenantAware {
+		return nil
+	}
+	if entity.actorTenant == noTenantContext {
+		entity.actorTenant = tc
+		return nil
+	}
+	return tenancy.VerifyUnchanged(entity.actorTenant, tc)
 }
 
 // persistEvents sends the event envelopes to the [eventsWriterActor] via a
@@ -785,13 +903,24 @@ func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
 
 // newSnapshotEnvelope creates a [egopb.Snapshot] with unencrypted state from
 // the current entity. Encryption is handled by the [snapshotsWriterActor].
+// In tenant-aware mode, the actor's established entity.actorTenant is
+// serialized onto the snapshot's TenantMetadata field (D5, EGO-TENANT-002
+// Phase 2): a snapshot may be taken with no in-flight command context (e.g.
+// after an asynchronous batch flush), so it cannot rely on a per-command
+// TenantContext the way marshalEvent does.
 func (entity *EventSourcedActor) newSnapshotEnvelope(state *anypb.Any) *egopb.Snapshot {
-	return &egopb.Snapshot{
+	snapshot := &egopb.Snapshot{
 		PersistenceId:  entity.persistenceID,
 		SequenceNumber: entity.eventsCounter,
 		State:          state,
 		Timestamp:      entity.lastCommandTime.UnixNano(),
 	}
+
+	if entity.tenantAware {
+		snapshot.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
+	}
+
+	return snapshot
 }
 
 // batchEnabled reports whether event batching is active for this entity.
@@ -860,10 +989,12 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// batched path must fail closed here too, before flushBatch's own
 	// context.Background() call is ever reached.
 	//
-	// Blocker 3 fix (EGO-TENANT-006 review): this gate also captures the
-	// resolved TenantContext (tc) and, if a batch is already open
-	// (entity.batchTenant != noTenantContext), verifies it against tc
-	// BEFORE entity.behavior.HandleCommand runs below — not only after
+	// Blocker 3 fix (EGO-TENANT-006 review), widened to actor-lifetime scope
+	// (D6, EGO-TENANT-002): this gate also captures the resolved
+	// TenantContext (tc) and, if actorTenant is already seeded (by
+	// recover(), Phase 3, or an earlier command on this actor — not merely
+	// a batch already open), verifies it against tc BEFORE
+	// entity.behavior.HandleCommand runs below — not only after
 	// buildEnvelopes, as this used to. state (via latestState()) is
 	// entity.batchState whenever a batch is open: another tenant's
 	// accumulated, unpersisted data. Deferring the homogeneity check until
@@ -871,7 +1002,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// against the wrong tenant's batchState, and — if it happened to
 	// produce zero events — the len(events)==0 branch below would reply
 	// with that wrong-tenant state before the (then-later) homogeneity
-	// check was ever reached. See design.md Decision D4/D8.
+	// check was ever reached. See design.md Decision D4/D6/D8.
 	var tc tenancy.TenantContext
 	if entity.tenantAware {
 		var requireErr error
@@ -883,8 +1014,8 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 			entity.sendErrorReply(ctx, requireErr)
 			return
 		}
-		if entity.batchTenant != noTenantContext {
-			if verifyErr := tenancy.VerifyUnchanged(entity.batchTenant, tc); verifyErr != nil {
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
 				if span != nil {
 					span.End()
 				}
@@ -927,7 +1058,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		return
 	}
 
-	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, state, counter)
+	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, tc, state, counter)
 	if err != nil {
 		if span != nil {
 			span.End()
@@ -936,19 +1067,15 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		return
 	}
 
-	// Defensive persistence invariant (T4-B, design.md D4): establish
-	// batchTenant for a fresh batch cycle, now that this command's
-	// envelopes are actually about to be appended. Homogeneity itself was
-	// already verified above, in the pre-handler gate, before
-	// HandleCommand ran (Blocker 3 fix) — flushBatch below still collapses
-	// the whole buffer into a single context.Background() Ask, so recording
-	// the tenant here is what lets the *next* command's pre-handler gate
-	// compare against it. batchTenant is cleared in resetBatch: a stale
-	// value surviving across cycles would wrongly reject the next cycle's
-	// first command.
-	if entity.tenantAware && entity.batchTenant == noTenantContext {
-		entity.batchTenant = tc
-	}
+	// Establish this actor's lifetime tenant identity (D6) on its first
+	// successful persist, mirroring processCommandAndReply's equivalent
+	// step. A no-op once actorTenant is already seeded (by recover(),
+	// Phase 3, or an earlier command on this actor) — homogeneity itself
+	// was already verified above, in the pre-handler gate, before
+	// HandleCommand ran (Blocker 3 fix). Unlike the prior per-batch-cycle
+	// "batchTenant", this is never cleared by resetBatch: actor-lifetime
+	// scope strictly subsumes batch-cycle scope (D6).
+	entity.establishActorTenant(tc)
 
 	entity.batchBuffer = append(entity.batchBuffer, envelopes...)
 	entity.batchState = pendingState
@@ -1178,8 +1305,9 @@ func (entity *EventSourcedActor) resetBatch() {
 	entity.batchNumEvents = 0
 	entity.remainingReplies = 0
 	entity.shutdownOnDrain = false
-	// T4-B (design.md D4): clear the tenant recorded for the batch cycle that
-	// just ended. Leaving it set would wrongly compare the next cycle's
-	// first command against this cycle's already-flushed tenant.
-	entity.batchTenant = noTenantContext
+	// entity.actorTenant (D6, EGO-TENANT-002) is deliberately NOT cleared
+	// here: it records the actor's tenant identity for its full lifetime,
+	// not merely the batch cycle that just ended. See its field doc comment
+	// above for the superseded per-batch-cycle "batchTenant" rationale this
+	// replaced.
 }
