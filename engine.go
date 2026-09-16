@@ -1162,9 +1162,14 @@ func buildSpawnOptionsFromConfig(config *spawnConfig) []goakt.SpawnOption {
 		goakt.WithSupervisor(newSupervisor(config.supervisorDirective)),
 	)
 
-	if config.batchThreshold > 0 {
-		sOptions = append(sOptions, goakt.WithStashing())
-	}
+	// Stashing is needed unconditionally, not only when batching is enabled:
+	// EventSourcedActor's direct (non-batched) command path also stashes the
+	// in-flight command around its async persist write (see persistAsync in
+	// event_sourced_actor.go, fixing issue #64). The stash buffer is inert
+	// until Stash is actually called, so enabling it here is a no-op for any
+	// spawn — including DurableStateActor's, via buildSpawnOptions — that
+	// never calls it.
+	sOptions = append(sOptions, goakt.WithStashing())
 
 	return sOptions
 }

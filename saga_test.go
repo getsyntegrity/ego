@@ -43,9 +43,9 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
-	"github.com/pablogore/ego/v4/tenancy"
 )
 
 func TestSagaStatus_String(t *testing.T) {
@@ -2005,7 +2005,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		// context.Background() dispatch through, this probe would record it.
 		targetProbe := newTenancyProbeEventSourcedBehavior(targetID)
 		_, err = actorSystem.Spawn(ctx, targetID, newEventSourcedActor(),
-			goakt.WithDependencies(targetProbe), goakt.WithLongLived())
+			goakt.WithDependencies(targetProbe), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		pause.For(500 * time.Millisecond)
 

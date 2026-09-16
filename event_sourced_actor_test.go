@@ -54,8 +54,8 @@ import (
 	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
 	mockadapter "github.com/pablogore/ego/v4/mocks/eventadapter"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -99,7 +99,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -208,7 +208,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -303,7 +303,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -372,7 +372,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -508,7 +508,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -639,7 +639,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -723,7 +723,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior))
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -768,7 +768,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -820,7 +820,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -895,7 +895,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -978,7 +978,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1065,7 +1065,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1154,7 +1154,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1242,7 +1242,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1342,7 +1342,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1431,7 +1431,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1554,7 +1554,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -1662,7 +1662,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1751,7 +1751,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -2340,7 +2340,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		// spawn with no behavior dependency
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2376,7 +2376,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2430,7 +2430,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2486,7 +2486,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2535,7 +2535,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2588,7 +2588,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2640,7 +2640,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2688,7 +2688,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2731,7 +2731,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2777,7 +2777,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2815,7 +2815,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -2872,7 +2872,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		entityCfg := &extensions.EntityConfig{SnapshotInterval: 1}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -2940,7 +2940,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			EventsRetentionCount:   0,
 		}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3003,7 +3003,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			DeleteSnapshotsOnSnapshot: true,
 		}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3065,7 +3065,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
-			goakt.WithLongLived())
+			goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3115,7 +3115,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
-			goakt.WithLongLived())
+			goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3179,6 +3179,326 @@ func (f *FailingHandleEventBehavior) UnmarshalBinary(data []byte) error {
 	}
 	f.id = msg.GetPersistenceId()
 	return nil
+}
+
+// TestEventSourcedActorGetStateDuringPersist is the permanent regression
+// suite for the P1 read-after-write consistency bug: GetStateCommand must
+// never observe entity.currentState while a direct (non-batched) persist
+// write is unsettled (phasePersisting/phaseDirectReplying), and it must
+// never receive a persist failure addressed to a different command.
+func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
+	type asyncReply struct {
+		reply any
+		err   error
+	}
+
+	t.Run("read during persist waits for confirmation then returns new state", func(t *testing.T) {
+		ctx := context.TODO()
+
+		persistenceID := uuid.NewString()
+		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		eventStream := eventstream.New()
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+
+		eventStore := new(mocks.EventsStore)
+		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event) {
+				close(started)
+				<-release
+			}).
+			Return(nil).Once()
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+
+		pause.For(time.Second)
+
+		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+		createState := reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
+		assert.EqualValues(t, 1, createState.StateReply.GetSequenceNumber())
+
+		creditDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
+			creditDone <- asyncReply{r, e}
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
+		}
+
+		stateDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
+			stateDone <- asyncReply{r, e}
+		}()
+
+		// give the GetStateCommand time to reach the mailbox and stash itself
+		// behind the in-flight write before we let that write complete.
+		pause.For(300 * time.Millisecond)
+
+		select {
+		case <-stateDone:
+			t.Fatal("GetStateCommand replied before the in-flight persist write was confirmed")
+		default:
+		}
+
+		close(release)
+
+		var credit asyncReply
+		select {
+		case credit = <-creditDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the credit command reply")
+		}
+		require.NoError(t, credit.err)
+		creditState := credit.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
+		assert.EqualValues(t, 2, creditState.StateReply.GetSequenceNumber())
+
+		var got asyncReply
+		select {
+		case got = <-stateDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the deferred GetStateCommand reply")
+		}
+		require.NoError(t, got.err)
+		commandReply := got.reply.(*egopb.CommandReply)
+		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+		stateReply := commandReply.GetReply().(*egopb.CommandReply_StateReply)
+		assert.EqualValues(t, 2, stateReply.StateReply.GetSequenceNumber())
+
+		resultingState := new(testpb.Account)
+		require.NoError(t, stateReply.StateReply.GetState().UnmarshalTo(resultingState))
+		assert.Equal(t, 600.00, resultingState.GetAccountBalance())
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("two concurrent commands preserve order and correct recipient", func(t *testing.T) {
+		ctx := context.TODO()
+
+		persistenceID := uuid.NewString()
+		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		eventStream := eventstream.New()
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+
+		eventStore := new(mocks.EventsStore)
+		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event) {
+				close(started)
+				<-release
+			}).
+			Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+
+		pause.For(time.Second)
+
+		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+
+		aDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
+			aDone <- asyncReply{r, e}
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for command A to enter phasePersisting")
+		}
+
+		bDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 5*time.Second)
+			bDone <- asyncReply{r, e}
+		}()
+
+		// give command B time to arrive and stash behind the in-flight write.
+		pause.For(300 * time.Millisecond)
+		close(release)
+
+		var a, b asyncReply
+		select {
+		case a = <-aDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for command A's reply")
+		}
+		select {
+		case b = <-bDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for command B's reply")
+		}
+
+		require.NoError(t, a.err)
+		aState := a.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
+		assert.EqualValues(t, 2, aState.StateReply.GetSequenceNumber())
+		aAccount := new(testpb.Account)
+		require.NoError(t, aState.StateReply.GetState().UnmarshalTo(aAccount))
+		assert.Equal(t, 600.00, aAccount.GetAccountBalance())
+
+		require.NoError(t, b.err)
+		bState := b.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
+		assert.EqualValues(t, 3, bState.StateReply.GetSequenceNumber())
+		bAccount := new(testpb.Account)
+		require.NoError(t, bState.StateReply.GetState().UnmarshalTo(bAccount))
+		assert.Equal(t, 650.00, bAccount.GetAccountBalance())
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("persistence error reaches the originating command only", func(t *testing.T) {
+		ctx := context.TODO()
+
+		persistenceID := uuid.NewString()
+		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		eventStream := eventstream.New()
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+
+		eventStore := new(mocks.EventsStore)
+		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event) {
+				close(started)
+				<-release
+			}).
+			Return(assert.AnError).Once()
+
+		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+
+		require.NoError(t, actorSystem.Start(ctx))
+		pause.For(time.Second)
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
+		require.NoError(t, err)
+		require.NotNil(t, pid)
+
+		pause.For(time.Second)
+
+		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+		require.NoError(t, err)
+
+		creditDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
+			creditDone <- asyncReply{r, e}
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
+		}
+
+		stateDone := make(chan asyncReply, 1)
+		go func() {
+			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
+			stateDone <- asyncReply{r, e}
+		}()
+
+		// give the deferred read time to arrive and stash behind the failing write.
+		pause.For(300 * time.Millisecond)
+		close(release)
+
+		var credit asyncReply
+		select {
+		case credit = <-creditDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the credit command reply")
+		}
+		require.NoError(t, credit.err)
+		creditReply := credit.reply.(*egopb.CommandReply)
+		require.IsType(t, new(egopb.CommandReply_ErrorReply), creditReply.GetReply())
+		errorReply := creditReply.GetReply().(*egopb.CommandReply_ErrorReply)
+		assert.Contains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error())
+
+		// The originating command's persist failure sets directShutdown, so the
+		// actor stops itself (pre-existing fail-fast behavior, unrelated to this
+		// fix) before it can dispatch the redelivered, deferred GetStateCommand.
+		// The contract this test protects is narrower than "the deferred read
+		// gets a normal reply": it must never receive the error reply meant for
+		// the command that actually failed. An Ask timeout against a
+		// now-stopped actor satisfies that (it is clearly not the mistaken
+		// error), whereas an ErrorReply carrying assert.AnError's message would
+		// prove the two commands' responses got cross-wired.
+		var deferred asyncReply
+		select {
+		case deferred = <-stateDone:
+		case <-time.After(8 * time.Second):
+			t.Fatal("timed out waiting for the deferred GetStateCommand to settle")
+		}
+		if deferred.err == nil {
+			deferredReply := deferred.reply.(*egopb.CommandReply)
+			if errorReply, ok := deferredReply.GetReply().(*egopb.CommandReply_ErrorReply); ok {
+				assert.NotContains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error(),
+					"deferred GetStateCommand must not receive the originating command's persist error")
+			}
+		}
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
 }
 
 func TestEventSourcedActorBatch(t *testing.T) {

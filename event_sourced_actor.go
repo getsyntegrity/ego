@@ -72,6 +72,15 @@ const (
 	// phaseReplying sends pre-computed replies to stashed commands after
 	// the batch write has been confirmed (or failed).
 	phaseReplying
+	// phasePersisting indicates a single (non-batched) command's persist
+	// write is in flight. Incoming commands are stashed until the writer
+	// responds. Mirrors phaseFlushing for the direct (batchThreshold == 0)
+	// path; see persistAsync.
+	phasePersisting
+	// phaseDirectReplying sends the reply to the single stashed command
+	// after its persist write has been confirmed (or failed). Mirrors
+	// phaseReplying for the direct path; see replyDirect.
+	phaseDirectReplying
 )
 
 // batchFlushTick is an internal timer message sent to self to trigger
@@ -101,10 +110,11 @@ type batchEntry struct {
 // [eventsWriterActor] before the in-memory state is updated. This guarantees
 // that the actor state always matches what is stored.
 //
-// The persistence Ask blocks the actor while the write is in flight. Incoming
-// commands queue in the mailbox and are processed in order after the write
-// completes, preserving command ordering and preventing concurrent state
-// mutations.
+// The persistence write is dispatched asynchronously via goakt's PipeTo, so
+// the actor's dispatcher worker is never blocked waiting on the writer child
+// (see persistAsync and flushBatch). The originating command is stashed and
+// redelivered once the write completes, preserving command ordering and
+// preventing concurrent state mutations without holding a worker idle.
 //
 // Snapshots and retention cleanup are handled asynchronously by dedicated child
 // actors and never add latency to command processing.
@@ -147,6 +157,23 @@ type EventSourcedActor struct {
 	shutdownOnDrain  bool
 	flushTimer       *time.Timer
 	batchMu          sync.Mutex
+
+	// Direct (non-batched) persist-in-flight fields. Active only while phase
+	// is phasePersisting or phaseDirectReplying. Mutually exclusive with the
+	// batching fields above: an entity is batch-mode or direct-mode for its
+	// entire lifetime (batchThreshold is static config, see batchEnabled),
+	// so the two families of fields are never both in use. Mirror
+	// batchState/batchCounter/batchTime/batchNumEvents and batchEntry's
+	// span/startTime for the single in-flight command (see persistAsync,
+	// handleDirectPersistResponse, replyDirect).
+	directPendingState   State
+	directPendingCounter uint64
+	directPendingTime    time.Time
+	directNumEvents      int
+	directStartTime      time.Time
+	directSpan           trace.Span
+	directErr            error
+	directShutdown       bool
 
 	// tenantAware reports whether the actor system was built from a Config
 	// with a tenancy.TenantResolver registered (extensions.TenancyMarker
@@ -230,17 +257,23 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 // When event batching is enabled (batchThreshold > 0) additional internal
 // message types are handled: batchFlushTick triggers a timer-based flush,
 // and persistEventsResponse carries the result of an asynchronous batch write.
+// For non-batched entities, persistEventsResponse instead carries the result
+// of the single in-flight direct-path write (see persistAsync).
 func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
 		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 		entity.spawnChildren(ctx)
 	case *egopb.GetStateCommand:
-		entity.getStateAndReply(ctx)
+		entity.handleGetStateCommand(ctx)
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
 	case *persistEventsResponse:
-		entity.handleBatchPersistResponse(ctx, msg)
+		if entity.batchEnabled() {
+			entity.handleBatchPersistResponse(ctx, msg)
+		} else {
+			entity.handleDirectPersistResponse(ctx, msg)
+		}
 	default:
 		command, ok := msg.(Command)
 		if !ok {
@@ -251,7 +284,14 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 			entity.handleCommandBatched(ctx, command)
 			return
 		}
-		entity.processCommandAndReply(ctx, command)
+		switch entity.phase {
+		case phasePersisting:
+			ctx.Stash()
+		case phaseDirectReplying:
+			entity.replyDirect(ctx)
+		default:
+			entity.processCommandAndReply(ctx, command)
+		}
 	}
 }
 
@@ -600,6 +640,26 @@ func (entity *EventSourcedActor) sendStateReply(ctx *goakt.ReceiveContext) {
 	})
 }
 
+// handleGetStateCommand dispatches a GetStateCommand from Receive, deferring
+// it via ctx.Stash() while a direct (non-batched) command's persist write is
+// unsettled (phasePersisting: entity.currentState is still the pre-write
+// value; phaseDirectReplying: the write is confirmed but the originating
+// command has not yet been replied to). Deferring in both phases guarantees
+// a read never observes stale state and never overtakes the write it raced
+// with (issue #64 P1 follow-up).
+//
+// Batch mode is untouched: entity.currentState there is likewise only
+// mutated on confirmed batch writes (see handleBatchPersistResponse), so
+// getStateAndReply already returns a consistent value regardless of
+// batchThreshold's flush phase.
+func (entity *EventSourcedActor) handleGetStateCommand(ctx *goakt.ReceiveContext) {
+	if !entity.batchEnabled() && (entity.phase == phasePersisting || entity.phase == phaseDirectReplying) {
+		ctx.Stash()
+		return
+	}
+	entity.getStateAndReply(ctx)
+}
+
 // getStateAndReply returns the last committed state of the entity without
 // processing any command. When event batching is enabled, this returns the
 // state as of the last confirmed batch write, not any optimistic pending state.
@@ -627,9 +687,10 @@ func (entity *EventSourcedActor) getStateAndReply(ctx *goakt.ReceiveContext) {
 	entity.sendStateReply(ctx)
 }
 
-// processCommandAndReply handles an incoming command by generating events,
-// persisting them through the [eventsWriterActor], and applying state changes
-// only after persistence is confirmed.
+// processCommandAndReply handles an incoming command by generating events and
+// dispatching them to the [eventsWriterActor] asynchronously; state changes
+// are applied only after persistence is confirmed (see persistAsync,
+// handleDirectPersistResponse, replyDirect).
 //
 // On persistence failure the actor replies with an error and shuts itself down
 // so the supervisor can restart it with clean state recovered from the store.
@@ -637,22 +698,17 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	goCtx := ctx.Context()
 	startTime := time.Now()
 
+	var span trace.Span
 	if entity.tracer != nil {
-		var span trace.Span
 		goCtx, span = entity.tracer.Start(goCtx, "ego.command",
 			trace.WithAttributes(
 				attribute.String("ego.persistence_id", entity.persistenceID),
 				attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
 			))
-		defer span.End()
 	}
 
 	if entity.metrics != nil {
 		entity.metrics.commandsTotal.Add(goCtx, 1)
-		defer func() {
-			duration := float64(time.Since(startTime).Milliseconds())
-			entity.metrics.commandsDuration.Record(goCtx, duration)
-		}()
 	}
 
 	// Pre-handler gate (T4-A): in tenant-aware mode, HandleCommand must never
@@ -681,11 +737,13 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		var err error
 		tc, err = tenancy.Require(goCtx)
 		if err != nil {
+			entity.endCommandSpan(goCtx, span, startTime)
 			entity.sendErrorReply(ctx, err)
 			return
 		}
 		if entity.actorTenant != noTenantContext {
 			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.endCommandSpan(goCtx, span, startTime)
 				entity.sendErrorReply(ctx, verifyErr)
 				return
 			}
@@ -694,17 +752,20 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 
 	events, err := entity.behavior.HandleCommand(goCtx, command, entity.currentState)
 	if err != nil {
+		entity.endCommandSpan(goCtx, span, startTime)
 		entity.sendErrorReply(ctx, err)
 		return
 	}
 
 	if len(events) == 0 {
+		entity.endCommandSpan(goCtx, span, startTime)
 		entity.sendStateReply(ctx)
 		return
 	}
 
 	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, tc, entity.currentState, entity.eventsCounter)
 	if err != nil {
+		entity.endCommandSpan(goCtx, span, startTime)
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -716,6 +777,7 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// re-invokes TenantResolver.Resolve. It is deliberately not the sole
 	// enforcement point: T4-A above already blocks HandleCommand itself.
 	if err := entity.verifyTenantForPersist(goCtx); err != nil {
+		entity.endCommandSpan(goCtx, span, startTime)
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -726,15 +788,119 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// an earlier command on this actor).
 	entity.establishActorTenant(tc)
 
-	if err := entity.persistEvents(ctx, envelopes, eventsTopic); err != nil {
-		entity.sendErrorReply(ctx, err)
-		ctx.Shutdown()
+	entity.persistAsync(ctx, envelopes, pendingState, pendingCounter, commandTime, startTime, span)
+}
+
+// endCommandSpan ends span (if tracing is enabled) and records the
+// commandsDuration metric (if metrics are enabled), measured from startTime.
+// Factored out so every processCommandAndReply exit path — early returns and
+// the async completion in replyDirect — records identically, regardless of
+// whether the command finished synchronously or after a persistAsync round
+// trip.
+func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trace.Span, startTime time.Time) {
+	if span != nil {
+		span.End()
+	}
+	if entity.metrics != nil {
+		duration := float64(time.Since(startTime).Milliseconds())
+		entity.metrics.commandsDuration.Record(goCtx, duration)
+	}
+}
+
+// persistAsync dispatches envelopes to the eventsWriter asynchronously via
+// ctx.PipeTo, mirroring flushBatch's approach for the batched path (see its
+// doc comment). Blocking the calling worker with a synchronous ctx.Ask here
+// let the entity's own eventsWriter child — which needs a worker from that
+// same shared dispatcher pool to reply — starve alongside every other
+// concurrently-persisting entity once the pool was exhausted (issue #64).
+// The originating command is stashed and redelivered by
+// handleDirectPersistResponse once the write completes.
+func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span) {
+	writer := entity.eventsWriter
+	timeout := entity.persistTimeout
+
+	entity.directPendingState = pendingState
+	entity.directPendingCounter = pendingCounter
+	entity.directPendingTime = commandTime
+	entity.directNumEvents = len(envelopes)
+	entity.directStartTime = startTime
+	entity.directSpan = span
+
+	ctx.Stash()
+
+	ctx.PipeTo(ctx.Self(), func() (any, error) {
+		return askEventsWriter(writer, envelopes, eventsTopic, timeout)
+	})
+
+	entity.phase = phasePersisting
+}
+
+// handleDirectPersistResponse processes the result PipeTo delivers after the
+// eventsWriter completes a single (non-batched) command's write, mirroring
+// handleBatchPersistResponse for the batched path.
+func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *persistEventsResponse) {
+	if entity.phase != phasePersisting {
 		return
 	}
 
-	entity.applyConfirmedState(goCtx, pendingState, pendingCounter, commandTime, len(envelopes))
+	if resp.Err != nil {
+		entity.directErr = resp.Err
+		entity.directShutdown = true
+		entity.phase = phaseDirectReplying
+		ctx.UnstashAll()
+		return
+	}
+
+	entity.applyConfirmedState(ctx.Context(), entity.directPendingState, entity.directPendingCounter, entity.directPendingTime, entity.directNumEvents)
 	entity.triggerSnapshotAndRetention(ctx)
+
+	entity.directErr = nil
+	entity.phase = phaseDirectReplying
+	ctx.UnstashAll()
+}
+
+// replyDirect delivers the reply to the single stashed command once
+// handleDirectPersistResponse has confirmed (or failed) its persist write,
+// mirroring replyFromBatch for the batched path. Exactly one command is ever
+// stashed while phasePersisting (further commands stash behind it in
+// Receive), so there is no remaining-replies counter to drain.
+//
+// A GetStateCommand that arrives while phase is phaseDirectReplying stashes
+// itself (see handleGetStateCommand) rather than reading stale state, but
+// handleDirectPersistResponse's UnstashAll already ran before that phase
+// began and won't run again for this cycle. UnstashAll here is what
+// redelivers it once phase drops back to phaseProcessing. GoAkt's own
+// unstashAll re-enqueues the stashed messages in their original order
+// ("prepends ... keeps the messages in the same order as received"), but
+// that ordering is among themselves, not relative to this actor's own
+// pending reply: a PID only ever runs one turn at a time (TrySchedule is a
+// no-op while the current turn is still Processing), so nothing this actor
+// unstashes can be dequeued and handled before the current Receive call
+// returns. We still send the reply before calling UnstashAll() so the
+// ordering is explicit in the code rather than relying on that scheduler
+// detail, and, on the error path, so the stash is drained before
+// ctx.Shutdown() tears the actor down. It is a no-op when nothing stashed
+// during the window.
+func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
+	entity.endCommandSpan(ctx.Context(), entity.directSpan, entity.directStartTime)
+	entity.directSpan = nil
+	entity.phase = phaseProcessing
+
+	if entity.directErr != nil {
+		err := entity.directErr
+		shutdown := entity.directShutdown
+		entity.directErr = nil
+		entity.directShutdown = false
+		entity.sendErrorReply(ctx, err)
+		ctx.UnstashAll()
+		if shutdown {
+			ctx.Shutdown()
+		}
+		return
+	}
+
 	entity.sendStateReply(ctx)
+	ctx.UnstashAll()
 }
 
 // buildEnvelopes computes the pending state from the given events and creates
@@ -872,24 +1038,32 @@ func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error
 	return tenancy.VerifyUnchanged(entity.actorTenant, tc)
 }
 
-// persistEvents sends the event envelopes to the [eventsWriterActor] via a
-// synchronous Ask and returns an error when persistence fails.
-func (entity *EventSourcedActor) persistEvents(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, topic string) error {
-	reply := ctx.Ask(entity.eventsWriter, &persistEventsRequest{
+// askEventsWriter sends envelopes to the eventsWriter over a plain
+// goakt.Ask call — safe to run inside a plain goroutine via ctx.PipeTo,
+// unlike ctx.Ask, which blocks the calling dispatcher worker (see
+// persistAsync and flushBatch). Any transport-level failure is embedded in
+// the returned *persistEventsResponse's Err field rather than returned as a
+// Go error, so PipeTo always delivers a persistEventsResponse message that
+// Receive already knows how to route.
+func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration) (*persistEventsResponse, error) {
+	reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
 		envelopes: envelopes,
 		topic:     topic,
-	}, entity.persistTimeout)
+	}, timeout)
+
+	if err != nil {
+		return &persistEventsResponse{Err: err}, nil
+	}
 
 	if reply == nil {
-		return fmt.Errorf("event writer returned no response")
+		return &persistEventsResponse{Err: fmt.Errorf("event writer returned no response")}, nil
 	}
 
-	persistReply, ok := reply.(*persistEventsResponse)
+	resp, ok := reply.(*persistEventsResponse)
 	if !ok {
-		return fmt.Errorf("unexpected response type %T from event writer", reply)
+		return &persistEventsResponse{Err: fmt.Errorf("unexpected response type %T from event writer", reply)}, nil
 	}
-
-	return persistReply.Err
+	return resp, nil
 }
 
 // applyConfirmedState updates the actor state after the events store has
@@ -1163,24 +1337,7 @@ func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 	timeout := entity.persistTimeout
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
-			envelopes: envelopes,
-			topic:     topic,
-		}, timeout)
-
-		if err != nil {
-			return &persistEventsResponse{Err: err}, nil
-		}
-
-		if reply == nil {
-			return &persistEventsResponse{Err: fmt.Errorf("event writer returned no response")}, nil
-		}
-
-		resp, ok := reply.(*persistEventsResponse)
-		if !ok {
-			return &persistEventsResponse{Err: fmt.Errorf("unexpected response type %T from event writer", reply)}, nil
-		}
-		return resp, nil
+		return askEventsWriter(writer, envelopes, topic, timeout)
 	})
 
 	entity.phase = phaseFlushing
