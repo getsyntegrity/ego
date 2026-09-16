@@ -74,6 +74,17 @@ type DurableStateActor struct {
 	// incoming context (set by Engine.SendCommand at the trust boundary)
 	// before HandleCommand runs.
 	tenantAware bool
+
+	// actorTenant records this actor's tenant identity for its full
+	// lifetime (DS1/DS2, EGO-TENANT-002 PR2), mirroring
+	// EventSourcedActor.actorTenant position-for-position. Seeded once in
+	// recoverFromStore (DS2) when recovering non-genesis state, or
+	// established from the first command's resolved TenantContext
+	// (establishActorTenant) when starting at genesis. Every subsequent
+	// command is checked against it via tenancy.VerifyUnchanged. Holds
+	// noTenantContext (the zero value, declared event_sourced_actor.go:96,
+	// same package) until seeded or established. No-op in legacy mode.
+	actorTenant tenancy.TenantContext
 }
 
 // implements the goakt.Actor interface
@@ -139,7 +150,7 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 		entity.actorSystem = ctx.ActorSystem()
 		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 	case *egopb.GetStateCommand:
-		entity.sendStateReply(ctx)
+		entity.getStateAndReply(ctx)
 	default:
 		msg := message.(Command)
 		entity.processCommand(ctx, msg)
@@ -156,15 +167,27 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 // ctx.Context() at shutdown is not the per-command context T4-B reasons
 // about; adding a gate here would just fail closed on a shutdown path for
 // no defensive benefit.
+//
+// Unseeded skip (DS3, EGO-TENANT-002 PR2): in tenant-aware mode, an actor
+// that starts at genesis and receives no command still has
+// actorTenant == noTenantContext when it stops. Flushing that state would
+// persist a DurableState whose tenant_metadata is an empty map, which DS2
+// then refuses to recover from — bricking the persistence ID permanently.
+// Skipping the flush here loses nothing (in-memory state is still exactly
+// InitialState() at version 0) and keeps fail-closed in the strong
+// direction: no tenant-less record is ever written. Legacy mode is
+// unaffected — it keeps today's unconditional flush.
 func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 	if entity.metrics != nil {
 		entity.metrics.entitiesActive.Add(ctx.Context(), -1)
 	}
-	return runner.
+	chain := runner.
 		New(runner.WithFailFast()).
-		AddRunner(func() error { return entity.stateStore.Ping(ctx.Context()) }).
-		AddRunner(func() error { return entity.persistStateAndPublish(ctx.Context()) }).
-		Run()
+		AddRunner(func() error { return entity.stateStore.Ping(ctx.Context()) })
+	if !entity.tenantAware || entity.actorTenant != noTenantContext {
+		chain = chain.AddRunner(func() error { return entity.persistStateAndPublish(ctx.Context()) })
+	}
+	return chain.Run()
 }
 
 // recoverFromStore reset the persistent actor to the latest state in case there is one
@@ -178,6 +201,24 @@ func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
 	if durableState == nil || proto.Equal(durableState, new(egopb.DurableState)) {
 		entity.currentState = entity.behavior.InitialState()
 		return nil
+	}
+
+	// Seed this actor's lifetime tenant identity from the recovered record's
+	// carried metadata (DS2, EGO-TENANT-002 PR2), before its state payload is
+	// touched. recoverFromStore is this actor's only recovery path — no
+	// snapshot, no replay — so there is a single seed source and no
+	// cross-check to perform: unlike EventSourcedActor's seedActorTenant,
+	// this assigns directly. Absent or malformed metadata on a tenant-aware
+	// actor's persisted record is not tolerated: it means this record
+	// predates tenancy or was corrupted, and the actor must refuse to start
+	// rather than silently run without an identity (fail-closed,
+	// UnmarshalMetadata's own ErrInvalid is the rejection).
+	if entity.tenantAware {
+		tc, err := tenancy.UnmarshalMetadata(tenancy.Metadata(durableState.GetTenantMetadata()))
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal durable state tenant metadata: %w", err)
+		}
+		entity.actorTenant = tc
 	}
 
 	currentState := entity.behavior.InitialState()
@@ -219,11 +260,27 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	// run without a TenantContext already attached by Engine.SendCommand.
 	// This reuses tenancy.Require, a read-only check of the context already
 	// in hand; it never calls a resolver and never re-resolves.
+	//
+	// Cross-tenant extension (DS1, EGO-TENANT-002 PR2): once actorTenant is
+	// seeded (DS2, recovery) or established (first command at genesis), a
+	// command resolving to a different tenant is rejected here — before
+	// HandleCommand runs and before entity.currentState/currentVersion are
+	// ever mutated (lines below), which is exactly why this identity check
+	// cannot live in verifyTenantForPersist/T4-B instead: by that point the
+	// foreign tenant's state would already be resident in memory.
 	if entity.tenantAware {
-		if _, err := tenancy.Require(ctx); err != nil {
+		tc, err := tenancy.Require(ctx)
+		if err != nil {
 			entity.sendErrorReply(receiveContext, err)
 			return
 		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(receiveContext, verifyErr)
+				return
+			}
+		}
+		entity.establishActorTenant(tc)
 	}
 
 	newState, newVersion, err := entity.behavior.HandleCommand(ctx, command, entity.currentVersion, entity.currentState)
@@ -271,6 +328,29 @@ func (entity *DurableStateActor) currentStateAny() *anypb.Any {
 		entity.cachedStateAny, _ = anypb.New(entity.currentState)
 	}
 	return entity.cachedStateAny
+}
+
+// getStateAndReply returns the last committed state of the entity without
+// processing any command. Mirrors EventSourcedActor.getStateAndReply's gate
+// (DS4, EGO-TENANT-002 PR2): Receive dispatches *egopb.GetStateCommand here
+// directly, bypassing processCommand and its T4-A gate entirely, so without
+// its own check any resolved tenant could read another tenant's full
+// committed durable state.
+func (entity *DurableStateActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+	if entity.tenantAware {
+		tc, err := tenancy.Require(ctx.Context())
+		if err != nil {
+			entity.sendErrorReply(ctx, err)
+			return
+		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(ctx, verifyErr)
+				return
+			}
+		}
+	}
+	entity.sendStateReply(ctx)
 }
 
 // sendStateReply sends a state reply message
@@ -340,6 +420,20 @@ func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) err
 	return err
 }
 
+// establishActorTenant seeds entity.actorTenant with tc when it has not yet
+// been seeded (DS1, EGO-TENANT-002 PR2), mirroring
+// EventSourcedActor.establishActorTenant. No-op in legacy mode and a no-op
+// once actorTenant already holds a value — whether seeded by
+// recoverFromStore (DS2) or by an earlier successful command on this same
+// actor. This performs no comparison: cross-tenant rejection against an
+// already-seeded actorTenant is the separate, explicit gate in
+// processCommand above.
+func (entity *DurableStateActor) establishActorTenant(tc tenancy.TenantContext) {
+	if entity.tenantAware && entity.actorTenant == noTenantContext {
+		entity.actorTenant = tc
+	}
+}
+
 // persistStateAndPublish persists the actor state and publishes it to the stream.
 func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) error {
 	durableState := &egopb.DurableState{
@@ -348,6 +442,14 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		ResultingState: entity.currentStateAny(),
 		Timestamp:      entity.lastCommandTime.UnixNano(),
 		Shard:          entity.shardNumber,
+	}
+
+	// DS3 (EGO-TENANT-002 PR2): write from entity.actorTenant, never from
+	// ctx — PostStop's ctx.Context() is a shutdown context that never
+	// carried a TenantContext, and actorTenant is already established by
+	// the time either caller (processCommand, PostStop) reaches here.
+	if entity.tenantAware {
+		durableState.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
 	}
 
 	if err := entity.stateStore.WriteState(ctx, durableState); err != nil {
