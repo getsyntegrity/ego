@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 
 	"github.com/pablogore/ego/v4/command"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
@@ -256,6 +257,48 @@ func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T
 	event, err := store.GetLatestEvent(ctx, entityID)
 	require.NoError(t, err)
 	assert.Nil(t, event, "the store must never be invoked for a command rejected on invalid metadata")
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking proves Dispatch
+// rejects a caller-constructed zero-value command.Envelope{} outright rather
+// than panicking. Envelope's fields are unexported but Go still allows an
+// empty struct literal from any package, so NewEnvelope's nil-payload guard
+// can be bypassed entirely; a nil Payload() previously reached
+// env.Payload().ProtoReflect() in Dispatch's telemetry span setup before any
+// validation ran, panicking on the nil proto.Message interface whenever
+// telemetry was configured.
+func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "EnvelopeWiringZeroValueEnvelope", store, WithLogger(DiscardLogger),
+		WithTelemetry(&Telemetry{Tracer: otel.Tracer("test")}))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, behavior))
+
+	var zeroEnv command.Envelope
+
+	require.NotPanics(t, func() {
+		result, err := engine.Dispatch(ctx, entityID, zeroEnv, time.Minute)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, command.ErrInvalidEnvelope)
+		assert.Equal(t, command.Result{}, result)
+	})
+
+	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a zero-value envelope")
+	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a zero-value envelope")
+
+	event, err := store.GetLatestEvent(ctx, entityID)
+	require.NoError(t, err)
+	assert.Nil(t, event, "the store must never be invoked for a zero-value envelope")
 
 	require.NoError(t, engine.Stop(ctx))
 }

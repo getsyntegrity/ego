@@ -766,6 +766,16 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 		return command.Result{}, ErrUndefinedEntityID
 	}
 
+	// env may be a caller-constructed zero-value command.Envelope{} (Envelope's
+	// fields are unexported, but Go allows an empty struct literal from any
+	// package). NewEnvelope rejects a nil payload, but that guard is bypassed
+	// entirely here, so Payload() can be nil. Reject it before the telemetry
+	// span below dereferences it via ProtoReflect(), which panics on a nil
+	// proto.Message interface.
+	if env.Payload() == nil {
+		return command.Result{}, command.ErrInvalidEnvelope
+	}
+
 	// Create a trace span that connects the caller's context (e.g. an HTTP
 	// request span) to the command dispatch, providing end-to-end visibility.
 	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
