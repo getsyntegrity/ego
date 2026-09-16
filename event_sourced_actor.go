@@ -497,8 +497,29 @@ func (entity *EventSourcedActor) replayEvents(ctx context.Context, state State, 
 
 // applyPersistedEvent decrypts, adapts, and applies a single persisted event
 // envelope to the given state.
+//
+// PR1 review-comment regression: recover() validated only latestEvent's
+// tenant metadata before this fix (D3's fail-closed intent applied to the
+// wrong event); every event strictly between the snapshot point and
+// latestSeqNr was replayed unchecked. An intermediate event belonging to
+// another tenant, or missing tenant metadata, would silently contaminate
+// recovered state as long as the *latest* event still carried the actor's
+// own tenant. By the time replayEvents runs, entity.actorTenant is already
+// seeded (recover() seeds it from the snapshot and/or latestEvent before
+// replaying), so every replayed event is cross-checked against it here,
+// fail-closed exactly like seedActorTenant.
 func (entity *EventSourcedActor) applyPersistedEvent(ctx context.Context, envelope *egopb.Event, state State) (State, error) {
 	seqNr := envelope.GetSequenceNumber()
+
+	if entity.tenantAware {
+		eventTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(envelope.GetTenantMetadata()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal event tenant metadata at sequence %d: %w", seqNr, err)
+		}
+		if err := tenancy.VerifyUnchanged(entity.actorTenant, eventTenant); err != nil {
+			return nil, fmt.Errorf("tenant mismatch replaying event at sequence %d: %w", seqNr, err)
+		}
+	}
 
 	evt, err := entity.decryptPayload(ctx, envelope.GetEvent(), envelope.GetIsEncrypted(), envelope.GetEncryptionKeyId())
 	if err != nil {
@@ -582,7 +603,27 @@ func (entity *EventSourcedActor) sendStateReply(ctx *goakt.ReceiveContext) {
 // getStateAndReply returns the last committed state of the entity without
 // processing any command. When event batching is enabled, this returns the
 // state as of the last confirmed batch write, not any optimistic pending state.
+//
+// PR1 review-comment regression: GetStateCommand is dispatched here directly
+// from Receive, bypassing processCommandAndReply/processAndBatch entirely.
+// Without its own gate this let any resolved tenant read another tenant's
+// full committed state. This mirrors processCommandAndReply's T4-A gate
+// exactly: require a resolved TenantContext and reject one that mismatches
+// this actor's already-seeded actorTenant.
 func (entity *EventSourcedActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+	if entity.tenantAware {
+		tc, err := tenancy.Require(ctx.Context())
+		if err != nil {
+			entity.sendErrorReply(ctx, err)
+			return
+		}
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				entity.sendErrorReply(ctx, verifyErr)
+				return
+			}
+		}
+	}
 	entity.sendStateReply(ctx)
 }
 
