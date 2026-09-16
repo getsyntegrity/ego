@@ -107,6 +107,13 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 	// resolver (internal/extensions.TenancyMarker), so the actor can never
 	// reach a TenantResolver through it.
 	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
+	// Computed here rather than in PostStart's Receive: PreStart runs on the
+	// actor's spawning goroutine before it is registered as running, so it
+	// happens-before any concurrent PostStop triggered by an early Shutdown/
+	// Kill. Reading shardNumber in PostStop (via persistStateAndPublish) while
+	// it was still being written from the dispatcher's PostStart handling was
+	// a genuine data race caught by -race.
+	entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency != nil {
@@ -150,7 +157,6 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 	switch message := ctx.Message().(type) {
 	case *goakt.PostStart:
 		entity.actorSystem = ctx.ActorSystem()
-		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
 	case *egopb.GetStateCommand:
 		entity.getStateAndReply(ctx)
 	default:
