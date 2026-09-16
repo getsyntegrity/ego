@@ -46,6 +46,11 @@ import (
 // dispatch path instead of inferring it.
 type envelopeCapturingEventSourcedBehavior struct {
 	id string
+	// delay, when non-zero, is slept at the top of HandleCommand and
+	// HandleEnvelope before applying the command — used to prove Dispatch
+	// bounds SendSync's wait to the Metadata deadline rather than the
+	// caller-supplied timeout when the deadline is tighter.
+	delay time.Duration
 
 	mu               sync.Mutex
 	handleCommandHit int
@@ -69,6 +74,9 @@ func (x *envelopeCapturingEventSourcedBehavior) InitialState() State {
 }
 
 func (x *envelopeCapturingEventSourcedBehavior) HandleCommand(_ context.Context, cmd Command, _ State) (events []Event, err error) {
+	if x.delay > 0 {
+		time.Sleep(x.delay)
+	}
 	x.mu.Lock()
 	x.handleCommandHit++
 	x.mu.Unlock()
@@ -76,6 +84,9 @@ func (x *envelopeCapturingEventSourcedBehavior) HandleCommand(_ context.Context,
 }
 
 func (x *envelopeCapturingEventSourcedBehavior) HandleEnvelope(_ context.Context, env command.Envelope, _ State) (events []Event, err error) {
+	if x.delay > 0 {
+		time.Sleep(x.delay)
+	}
 	x.mu.Lock()
 	x.handleEnvelope++
 	x.lastEnvelope = env
@@ -205,6 +216,114 @@ func TestEngineDispatchDispatchesHandleEnvelope(t *testing.T) {
 	assert.Zero(t, handleCommandHit)
 	assert.Equal(t, 1, handleEnvelopeHit)
 	assert.Equal(t, op, gotEnv.Metadata().OperationID())
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler proves
+// Dispatch validates env's Metadata against the same round-trip the
+// receiving actor depends on (command.MarshalMetadata/UnmarshalMetadata)
+// before ever calling SendSync. Without this check, a zero-value
+// command.Metadata{} (legal to embed in an Envelope since NewEnvelope does
+// not validate md) would reach the actor, fail UnmarshalMetadata there, and
+// silently fall back to HandleCommand — running the payload as a legacy
+// command instead of surfacing the caller's error.
+func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "EnvelopeWiringInvalidMetadata", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, behavior))
+
+	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, command.Metadata{})
+	require.NoError(t, err)
+
+	result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, command.ErrInvalidMetadata)
+	assert.Equal(t, command.Result{}, result)
+
+	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on invalid metadata")
+	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on invalid metadata")
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler proves
+// Dispatch rejects an Envelope whose Metadata deadline has already passed
+// outright — no SendSync call, no actor, no handler, no persistence —
+// rather than letting the command run and possibly persist after its
+// declared deadline.
+func TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "EnvelopeWiringExpiredDeadline", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, behavior))
+
+	op, err := command.NewOperationID("expired-deadline-" + entityID)
+	require.NoError(t, err)
+	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(-time.Minute)))
+	require.NoError(t, err)
+	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+	require.NoError(t, err)
+
+	result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
+	require.NoError(t, err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
+	assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
+	assert.ErrorIs(t, result.Err(), command.ErrTimedOut)
+
+	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on an already-expired deadline")
+	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on an already-expired deadline")
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineDispatchClampsTimeoutToDeadline proves Dispatch bounds
+// SendSync's wait to the Metadata deadline, not the (looser)
+// caller-supplied timeout, when the deadline is tighter: a handler slow
+// enough to outlive the deadline but well within timeout must not be
+// allowed to complete and persist past the deadline.
+func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "EnvelopeWiringDeadlineClamp", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	behavior := &envelopeCapturingEventSourcedBehavior{id: entityID, delay: 500 * time.Millisecond}
+	require.NoError(t, engine.Entity(ctx, behavior))
+
+	op, err := command.NewOperationID("deadline-clamp-" + entityID)
+	require.NoError(t, err)
+	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(100*time.Millisecond)))
+	require.NoError(t, err)
+	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = engine.Dispatch(ctx, entityID, env, 10*time.Second)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "SendSync must time out at the deadline rather than succeed at the handler's own 500ms")
+	assert.Less(t, elapsed, 400*time.Millisecond, "Dispatch must not wait anywhere near the 10s caller timeout when the deadline is 100ms out")
 
 	require.NoError(t, engine.Stop(ctx))
 }

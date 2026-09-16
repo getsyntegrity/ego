@@ -738,6 +738,14 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 // wire change (command_context.go). This does not yet cover a genuinely
 // remote or cluster hop — see the #60 report for that explicitly deferred
 // gap.
+//
+// Dispatch rejects env outright, before any SendSync call, in two cases:
+// Metadata that fails the same Marshal/UnmarshalMetadata round-trip the
+// receiving actor depends on (a plain error — a caller-side defect, never
+// silently downgraded to the HandleCommand fallback), and a Metadata
+// deadline already in the past (an OutcomeTimedOut Result). A deadline
+// still ahead but tighter than timeout takes precedence over it for the
+// SendSync call.
 func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command.Envelope, timeout time.Duration) (result command.Result, err error) {
 	if !engine.Started() {
 		return command.Result{}, ErrEngineNotStarted
@@ -769,6 +777,37 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 	ref := engine.actorSystem.Load()
 	if ref == nil {
 		return command.Result{}, ErrEngineNotStarted
+	}
+
+	// env's Metadata must round-trip through the same
+	// Marshal/UnmarshalMetadata pair the receiving actor uses to
+	// rematerialize it (command_context.go). Skipping this check lets an
+	// invalid Metadata (e.g. a zero-value command.Metadata{} slipped into
+	// NewEnvelope, which does not validate md) reach SendSync unchecked:
+	// the actor's UnmarshalMetadata then fails silently and
+	// dispatchToBehavior falls back to HandleCommand, running the payload
+	// as a legacy command instead of surfacing the caller's error.
+	if _, unmarshalErr := command.UnmarshalMetadata(command.MarshalMetadata(env.Metadata())); unmarshalErr != nil {
+		return command.Result{}, unmarshalErr
+	}
+
+	// A Metadata deadline bounds when the handler is allowed to run and
+	// persist, not merely how long the caller is willing to wait: a
+	// deadline already in the past is rejected outright (no dispatch, no
+	// actor, no handler, no persistence), and a deadline still ahead but
+	// tighter than the caller-supplied timeout takes precedence over it.
+	if deadline, ok := env.Metadata().Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			failure, failureErr := command.NewFailure("command: deadline already exceeded")
+			if failureErr != nil {
+				return command.Result{}, failureErr
+			}
+			return command.NewTimedOut(env.Metadata(), failure)
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
 	}
 
 	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
