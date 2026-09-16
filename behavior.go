@@ -27,6 +27,8 @@ import (
 
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/pablogore/ego/v4/command"
 )
 
 // Command is a command sent to an entity. It is an alias for [proto.Message],
@@ -64,6 +66,24 @@ type EventSourcedBehavior interface {
 	HandleEvent(ctx context.Context, event Event, priorState State) (state State, err error)
 }
 
+// EventSourcedEnvelopeBehavior is an additive, optional extension to
+// EventSourcedBehavior (#60, EGO-WRITE-00x runtime integration). A behavior
+// that also implements this interface receives the full command.Envelope —
+// the command together with its Metadata (operation/correlation/causation
+// IDs, timestamp) — instead of the bare Command. EventSourcedBehavior's
+// HandleCommand remains mandatory and is called unchanged whenever no
+// Metadata is available for the incoming command (e.g. the entity was
+// reached directly rather than through Engine.Dispatch/SendCommand), so
+// existing behaviors that do not implement this interface are unaffected.
+type EventSourcedEnvelopeBehavior interface {
+	EventSourcedBehavior
+	// HandleEnvelope is like HandleCommand but receives env, the full
+	// command.Envelope rematerialized on the actor side of a local dispatch
+	// (see command_context.go). It is preferred over HandleCommand whenever
+	// Metadata is available.
+	HandleEnvelope(ctx context.Context, env command.Envelope, priorState State) (events []Event, err error)
+}
+
 // DurableStateBehavior represents a type of Actor that persists its full state after processing each command instead of using event sourcing.
 // This type of Actor keeps its current state in memory during command handling and based upon the command response
 // persists its full state into a durable store. The store can be a SQL or NoSQL database.
@@ -89,4 +109,19 @@ type DurableStateBehavior interface {
 	// In case of successful validation and processing , the new state will be stored in the durable store depending upon response.
 	// The actor state will be updated with the newState only if the newVersion is 1 more than the already existing state.
 	HandleCommand(ctx context.Context, command Command, priorVersion uint64, priorState State) (newState State, newVersion uint64, err error)
+}
+
+// DurableStateEnvelopeBehavior is an additive, optional extension to
+// DurableStateBehavior (#60, EGO-WRITE-00x runtime integration), mirroring
+// EventSourcedEnvelopeBehavior: a behavior that also implements this
+// interface receives the full command.Envelope instead of the bare Command.
+// DurableStateBehavior's HandleCommand remains mandatory and is called
+// unchanged whenever no Metadata is available for the incoming command.
+type DurableStateEnvelopeBehavior interface {
+	DurableStateBehavior
+	// HandleEnvelope is like HandleCommand but receives env, the full
+	// command.Envelope rematerialized on the actor side of a local dispatch
+	// (see command_context.go). It is preferred over HandleCommand whenever
+	// Metadata is available.
+	HandleEnvelope(ctx context.Context, env command.Envelope, priorVersion uint64, priorState State) (newState State, newVersion uint64, err error)
 }

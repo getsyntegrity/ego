@@ -42,6 +42,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/encryption"
 	"github.com/pablogore/ego/v4/eventadapter"
@@ -724,6 +725,87 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	return err
 }
 
+// Dispatch sends env's payload to the entity identified by entityID and
+// returns the canonical command.Result (EGO-WRITE-003 adoption, #60). It is
+// the primitive SendCommand now adapts to: SendCommand builds an Envelope
+// around its bare Command and maps the Result back to the legacy
+// (State, uint64, error) shape (resultToLegacy).
+//
+// env's Metadata crosses the goakt actor boundary as a command.Carrier
+// attached to ctx (M-3, design.md option (c)): on a local hop goakt's
+// SendSync passes ctx through unchanged, so the receiving actor
+// rematerializes the same Metadata via command.UnmarshalMetadata without a
+// wire change (command_context.go). This does not yet cover a genuinely
+// remote or cluster hop — see the #60 report for that explicitly deferred
+// gap.
+func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command.Envelope, timeout time.Duration) (result command.Result, err error) {
+	if !engine.Started() {
+		return command.Result{}, ErrEngineNotStarted
+	}
+
+	// entityID is not defined
+	if entityID == "" {
+		return command.Result{}, ErrUndefinedEntityID
+	}
+
+	// Create a trace span that connects the caller's context (e.g. an HTTP
+	// request span) to the command dispatch, providing end-to-end visibility.
+	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
+		var span trace.Span
+		ctx, span = engine.telemetry.Tracer.Start(ctx, "ego.send_command",
+			trace.WithAttributes(
+				attribute.String("ego.entity_id", entityID),
+				attribute.String("ego.command_type", string(env.Payload().ProtoReflect().Descriptor().FullName())),
+			))
+		defer func() {
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			span.End()
+		}()
+	}
+
+	ref := engine.actorSystem.Load()
+	if ref == nil {
+		return command.Result{}, ErrEngineNotStarted
+	}
+
+	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
+	// here, at the single trust boundary between external callers and the
+	// actor runtime, and attach it to ctx before it ever reaches dispatch.
+	// A resolver error blocks the command outright: no dispatch, no actor,
+	// no handler, no persistence. Legacy mode (no resolver registered) is
+	// byte-identical: this whole block is skipped and ctx is untouched.
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return command.Result{}, resolveErr
+		}
+
+		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
+		if attachErr != nil {
+			return command.Result{}, attachErr
+		}
+		ctx = attachedCtx
+	}
+
+	ctx = attachCarrier(ctx, command.MarshalMetadata(env.Metadata()))
+
+	reply, sendErr := ref.noSender.SendSync(ctx, entityID, env.Payload(), timeout)
+	if sendErr != nil {
+		return command.Result{}, sendErr
+	}
+
+	// cast the reply as it supposes
+	commandReply, ok := reply.(*egopb.CommandReply)
+	if !ok {
+		return command.Result{}, ErrCommandReplyUnmarshalling
+	}
+
+	return resultFromReply(commandReply, env.Metadata())
+}
+
 // SendCommand sends a command to the specified entity and processes its response.
 //
 // This function dispatches a command to an entity identified by `entityID`. The entity validates the command, applies
@@ -746,70 +828,49 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 //   - revision: A monotonically increasing revision number representing the persisted state version.
 //   - err: An error if the command processing fails.
 //
-// nolint
+// SendCommand is a thin adapter over Dispatch (EGO-WRITE-003 adoption,
+// #60): it wraps cmd in a command.Envelope carrying freshly derived
+// Metadata and maps the resulting command.Result back to this legacy
+// shape. It remains fully supported; see design.md's Migration/Rollout
+// section for the deprecation timeline (not before Dispatch et al. have
+// run in production for a release, removal only in /v5).
 func (engine *Engine) SendCommand(ctx context.Context, entityID string, cmd Command, timeout time.Duration) (resultingState State, revision uint64, err error) {
-	if !engine.Started() {
-		return nil, 0, ErrEngineNotStarted
-	}
-
-	// entityID is not defined
-	if entityID == "" {
-		return nil, 0, ErrUndefinedEntityID
-	}
-
-	// Create a trace span that connects the caller's context (e.g. an HTTP
-	// request span) to the command dispatch, providing end-to-end visibility.
-	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
-		var span trace.Span
-		ctx, span = engine.telemetry.Tracer.Start(ctx, "ego.send_command",
-			trace.WithAttributes(
-				attribute.String("ego.entity_id", entityID),
-				attribute.String("ego.command_type", string(cmd.ProtoReflect().Descriptor().FullName())),
-			))
-		defer func() {
-			if err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-			}
-			span.End()
-		}()
-	}
-
-	ref := engine.actorSystem.Load()
-	if ref == nil {
-		return nil, 0, ErrEngineNotStarted
-	}
-
-	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
-	// here, at the single trust boundary between external callers and the
-	// actor runtime, and attach it to ctx before it ever reaches dispatch.
-	// A resolver error blocks the command outright: no dispatch, no actor,
-	// no handler, no persistence. Legacy mode (no resolver registered) is
-	// byte-identical: this whole block is skipped and ctx is untouched.
-	if engine.tenantResolver != nil {
-		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
-		if resolveErr != nil {
-			return nil, 0, resolveErr
-		}
-
-		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
-		if attachErr != nil {
-			return nil, 0, attachErr
-		}
-		ctx = attachedCtx
-	}
-
-	reply, err := ref.noSender.SendSync(ctx, entityID, cmd, timeout)
+	md, err := engine.deriveMetadata(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// cast the reply as it supposes
-	commandReply, ok := reply.(*egopb.CommandReply)
-	if ok {
-		return parseCommandReply(commandReply)
+	env, err := command.NewEnvelope(cmd, md)
+	if err != nil {
+		return nil, 0, err
 	}
-	return nil, 0, ErrCommandReplyUnmarshalling
+
+	result, err := engine.Dispatch(ctx, entityID, env, timeout)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return resultToLegacy(result)
+}
+
+// deriveMetadata builds a SendCommand call's Metadata: a child derived
+// (Metadata.Derive, D7) from a Carrier already attached to ctx — e.g. a
+// behavior's HandleCommand that itself calls SendCommand while already
+// inside a Dispatch — so nested legacy call sites get a causally-chained
+// operation for free, or a fresh root Metadata otherwise.
+//
+// It never touches ctx's tenancy attachment: Metadata's own tenant slot is
+// intentionally left unset here. Populating it is tenant+aggregate identity
+// propagation into command.Metadata, which is #54's scope, not #60's.
+func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, error) {
+	op, err := command.GenerateOperationID()
+	if err != nil {
+		return command.Metadata{}, err
+	}
+	if parent, ok := metadataFromContext(ctx); ok {
+		return parent.Derive(op)
+	}
+	return command.NewMetadata(op)
 }
 
 // AddEventPublishers registers one or more event publishers with the eGo engine.
@@ -1156,6 +1217,67 @@ func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
 		return state, 0, err
 	}
 	return state, 0, errors.New("no state received")
+}
+
+// resultFromReply maps a wire-level egopb.CommandReply onto the canonical
+// command.Result taxonomy, carrying md (the dispatched Envelope's own
+// Metadata, since the wire reply itself carries none back) as the Result's
+// Metadata.
+//
+// egopb.ErrorReply -> command.OutcomeFailed is a deliberately lossy mapping
+// (#60's Alcance calls this out explicitly): the wire protocol has no way
+// to distinguish a domain rejection from an application failure, a timeout
+// or a cancellation, so every CommandReply_ErrorReply becomes OutcomeFailed
+// regardless of its true cause. An empty ErrorReply.Message (never produced
+// by this repo's own sendErrorReply call sites, but not ruled out for an
+// external egopb.CommandReply) is substituted with a placeholder, since
+// command.NewFailure rejects an empty message.
+func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
+	switch r := reply.GetReply().(type) {
+	case *egopb.CommandReply_StateReply:
+		msg, err := r.StateReply.GetState().UnmarshalNew()
+		if err != nil {
+			return command.Result{}, err
+		}
+
+		state, ok := msg.(State)
+		if !ok {
+			return command.Result{}, fmt.Errorf("got %s", r.StateReply.GetState().GetTypeUrl())
+		}
+		return command.NewSuccess(md, state, r.StateReply.GetSequenceNumber())
+	case *egopb.CommandReply_ErrorReply:
+		message := r.ErrorReply.GetMessage()
+		if message == "" {
+			message = "command: empty error reply message"
+		}
+		failure, err := command.NewFailure(message)
+		if err != nil {
+			return command.Result{}, err
+		}
+		return command.NewFailed(md, failure)
+	}
+	return command.Result{}, errors.New("no state received")
+}
+
+// resultToLegacy maps a command.Result back onto SendCommand's legacy
+// (State, uint64, error) shape: OutcomeSuccess unpacks to (state, revision,
+// nil), OutcomeSuccessNoState unpacks to (nil, 0, nil) exactly like the
+// original zero-events branch of SendCommand did, and every other outcome
+// (Rejected, Failed, TimedOut, Canceled) unpacks to (nil, 0, result.Err()).
+// result.Err() classifies via errors.Is against command.ErrRejected et al.,
+// but its Error() string is byte-identical to what the pre-#60 SendCommand
+// returned for the same reply (a plain errors.New(message)), so no existing
+// caller comparing error strings observes a behavior change.
+func resultToLegacy(result command.Result) (State, uint64, error) {
+	switch result.Outcome() {
+	case command.OutcomeSuccess:
+		state, _ := result.State()
+		return state, result.Revision(), nil
+	case command.OutcomeSuccessNoState:
+		return nil, 0, nil
+	default:
+		return nil, 0, result.Err()
+	}
 }
 
 func buildSpawnOptions(opts ...SpawnOption) []goakt.SpawnOption {

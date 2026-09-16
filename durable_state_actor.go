@@ -33,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
@@ -323,7 +324,7 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 		candidateTenant = tc
 	}
 
-	newState, newVersion, err := entity.behavior.HandleCommand(ctx, command, entity.currentVersion, entity.currentState)
+	newState, newVersion, err := entity.dispatchToBehavior(ctx, command, entity.currentVersion, entity.currentState)
 	if err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
@@ -352,6 +353,27 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	}
 
 	entity.sendStateReply(receiveContext)
+}
+
+// dispatchToBehavior invokes entity.behavior against cmd, preferring
+// HandleEnvelope over HandleCommand when both entity.behavior implements
+// DurableStateEnvelopeBehavior and a command.Metadata is available on ctx
+// (#60, M-3). See EventSourcedActor.dispatchToBehavior for the full
+// rationale — this mirrors it for the durable-state path.
+func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
+	envBehavior, ok := entity.behavior.(DurableStateEnvelopeBehavior)
+	if !ok {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	md, ok := metadataFromContext(ctx)
+	if !ok {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	env, err := command.NewEnvelope(cmd, md)
+	if err != nil {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	return envBehavior.HandleEnvelope(ctx, env, priorVersion, priorState)
 }
 
 // currentStateAny returns the cached anypb.Any of currentState, computing it

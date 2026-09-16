@@ -28,6 +28,8 @@ import (
 
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/pablogore/ego/v4/command"
 )
 
 // SagaBehavior defines a long-running business process that coordinates
@@ -90,6 +92,14 @@ type SagaCommand struct {
 	Command Command
 	// Timeout is the maximum time to wait for a response.
 	Timeout time.Duration
+	// Metadata is an optional command.Metadata for this dispatch (#60).
+	// When left as the zero value, SagaActor derives one automatically
+	// from the saga's own root Metadata (correlation inherited, causation
+	// set to the saga's root operation — "la operación disparadora").
+	// A behavior that needs finer control (e.g. a custom correlation
+	// scope, a deadline) can call Metadata.Derive itself and set the
+	// result here instead.
+	Metadata command.Metadata
 }
 
 // SagaStatus represents the current status of a saga.
