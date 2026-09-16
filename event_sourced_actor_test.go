@@ -2011,17 +2011,18 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 	require.NoError(t, actorSystem.Stop(ctx))
 }
 
-// TestEventSourcedActorResetBatchClearsTenantLeak is the RED-before-fix
-// demonstration for the resetBatch leak explicitly called out in design.md:
-// resetBatch must clear batchTenant, or a tenant recorded by one flushed
-// batch cycle wrongly contaminates the homogeneity check of the very next
-// cycle. BatchThreshold is 1, so each command completes a full,
-// self-contained batch cycle (buffer, flush, reply, resetBatch) before the
-// next command is sent. The second command uses a DIFFERENT tenant than
-// the first and must succeed: it is the first command of its own, brand
-// new cycle, not a homogeneity violation against the previous cycle's
-// already-flushed tenant.
-func TestEventSourcedActorResetBatchClearsTenantLeak(t *testing.T) {
+// TestEventSourcedActorResetBatchDoesNotClearActorTenant covers design.md
+// D6 (EGO-TENANT-002): actorTenant is scoped to the actor's full lifetime,
+// not to one batch cycle, so resetBatch must NOT clear it — superseding the
+// prior "batchTenant" behavior, where resetBatch cleared the per-cycle field
+// and a new cycle's first command from any tenant was accepted regardless of
+// which tenant the previous, already-flushed cycle belonged to. BatchThreshold
+// is 1, so each command completes a full, self-contained batch cycle (buffer,
+// flush, reply, resetBatch) before the next command is sent. The second
+// command uses a DIFFERENT tenant than the first and must now be REJECTED:
+// actorTenant, seeded by the first cycle's persist, survives resetBatch and
+// is compared against every later command for this actor's entire lifetime.
+func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 	ctx := context.TODO()
 
 	eventStore := testkit.NewEventsStore()
@@ -2075,18 +2076,35 @@ func TestEventSourcedActorResetBatchClearsTenantLeak(t *testing.T) {
 	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
 		"the first cycle's only command must succeed")
 
-	// Second cycle: tenant B, a brand new batch cycle. Without clearing
-	// batchTenant in resetBatch, this is wrongly compared against tenant
-	// A's stale, already-flushed value and rejected.
+	// Second cycle: tenant B, a brand new batch cycle. actorTenant (seeded
+	// as tenant A by the first cycle's persist) is NOT cleared by
+	// resetBatch, so this cross-tenant command must be rejected — even
+	// though it is the first command of its own, freshly reset cycle.
 	ctxB, err := tenancy.Attach(ctx, tenantB)
 	require.NoError(t, err)
 	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 10}, 5*time.Second)
+	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
+	commandReply, ok = reply.(*egopb.CommandReply)
+	require.True(t, ok)
+	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
+	require.True(t, ok,
+		"a different tenant's command in a brand new batch cycle must still be "+
+			"rejected against actorTenant, seeded by the previous, already-flushed cycle")
+
+	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
+		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
+
+	// A third command from the SAME tenant (A) that established actorTenant
+	// must still succeed in its own brand new batch cycle: actorTenant
+	// surviving resetBatch is a cross-tenant guard, not a "one cycle only"
+	// restriction on the tenant that originally established it.
+	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 20}, 5*time.Second)
 	require.NoError(t, err)
 	commandReply, ok = reply.(*egopb.CommandReply)
 	require.True(t, ok)
 	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"a new tenant's command starting a brand new batch cycle must not be "+
-			"compared against the previous, already-flushed cycle's tenant")
+		"the tenant that established actorTenant must still succeed across later batch cycles")
 
 	require.NoError(t, eventStore.Disconnect(ctx))
 	eventStream.Close()

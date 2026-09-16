@@ -27,6 +27,10 @@ message Event {
   string encryption_key_id = 8;
   // When true, the event payload is encrypted.
   bool is_encrypted = 9;
+  // Carries the tenant identity attached when this event was persisted,
+  // serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+  // Empty when tenancy is not in use.
+  map<string, string> tenant_metadata = 10;
 }
 
 // CommandReply specifies the reply to a command sent to
@@ -105,6 +109,10 @@ message Snapshot {
   string encryption_key_id = 5;
   // When true, the snapshot state is encrypted.
   bool is_encrypted = 6;
+  // Carries the tenant identity attached when this snapshot was taken,
+  // serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+  // Empty when tenancy is not in use.
+  map<string, string> tenant_metadata = 7;
 }
 
 // DurableState defines the durable state behavior
@@ -120,4 +128,8 @@ message DurableState {
   int64 timestamp = 5;
   // Specifies the shard number
   uint64 shard = 6;
+  // Carries the tenant identity attached when this state was persisted,
+  // serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+  // Empty when tenancy is not in use.
+  map<string, string> tenant_metadata = 7;
 }

@@ -41,9 +41,13 @@ type Event struct {
 	// Empty when the event is not encrypted.
 	EncryptionKeyId string `protobuf:"bytes,8,opt,name=encryption_key_id,json=encryptionKeyId,proto3" json:"encryption_key_id,omitempty"`
 	// When true, the event payload is encrypted.
-	IsEncrypted   bool `protobuf:"varint,9,opt,name=is_encrypted,json=isEncrypted,proto3" json:"is_encrypted,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	IsEncrypted bool `protobuf:"varint,9,opt,name=is_encrypted,json=isEncrypted,proto3" json:"is_encrypted,omitempty"`
+	// Carries the tenant identity attached when this event was persisted,
+	// serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+	// Empty when tenancy is not in use.
+	TenantMetadata map[string]string `protobuf:"bytes,10,rep,name=tenant_metadata,json=tenantMetadata,proto3" json:"tenant_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Event) Reset() {
@@ -130,6 +134,13 @@ func (x *Event) GetIsEncrypted() bool {
 		return x.IsEncrypted
 	}
 	return false
+}
+
+func (x *Event) GetTenantMetadata() map[string]string {
+	if x != nil {
+		return x.TenantMetadata
+	}
+	return nil
 }
 
 // CommandReply specifies the reply to a command sent to
@@ -561,9 +572,13 @@ type Snapshot struct {
 	// Empty when the snapshot is not encrypted.
 	EncryptionKeyId string `protobuf:"bytes,5,opt,name=encryption_key_id,json=encryptionKeyId,proto3" json:"encryption_key_id,omitempty"`
 	// When true, the snapshot state is encrypted.
-	IsEncrypted   bool `protobuf:"varint,6,opt,name=is_encrypted,json=isEncrypted,proto3" json:"is_encrypted,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	IsEncrypted bool `protobuf:"varint,6,opt,name=is_encrypted,json=isEncrypted,proto3" json:"is_encrypted,omitempty"`
+	// Carries the tenant identity attached when this snapshot was taken,
+	// serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+	// Empty when tenancy is not in use.
+	TenantMetadata map[string]string `protobuf:"bytes,7,rep,name=tenant_metadata,json=tenantMetadata,proto3" json:"tenant_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Snapshot) Reset() {
@@ -638,6 +653,13 @@ func (x *Snapshot) GetIsEncrypted() bool {
 	return false
 }
 
+func (x *Snapshot) GetTenantMetadata() map[string]string {
+	if x != nil {
+		return x.TenantMetadata
+	}
+	return nil
+}
+
 // DurableState defines the durable state behavior
 // actor
 type DurableState struct {
@@ -651,9 +673,13 @@ type DurableState struct {
 	// Specifies the timestamp
 	Timestamp int64 `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	// Specifies the shard number
-	Shard         uint64 `protobuf:"varint,6,opt,name=shard,proto3" json:"shard,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Shard uint64 `protobuf:"varint,6,opt,name=shard,proto3" json:"shard,omitempty"`
+	// Carries the tenant identity attached when this state was persisted,
+	// serialized via tenancy.MarshalMetadata's ego.tenant.* keys (EGO-TENANT-002).
+	// Empty when tenancy is not in use.
+	TenantMetadata map[string]string `protobuf:"bytes,7,rep,name=tenant_metadata,json=tenantMetadata,proto3" json:"tenant_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DurableState) Reset() {
@@ -721,11 +747,18 @@ func (x *DurableState) GetShard() uint64 {
 	return 0
 }
 
+func (x *DurableState) GetTenantMetadata() map[string]string {
+	if x != nil {
+		return x.TenantMetadata
+	}
+	return nil
+}
+
 var File_ego_ego_proto protoreflect.FileDescriptor
 
 const file_ego_ego_proto_rawDesc = "" +
 	"\n" +
-	"\rego/ego.proto\x12\x05egopb\x1a\x19google/protobuf/any.proto\"\xab\x02\n" +
+	"\rego/ego.proto\x12\x05egopb\x1a\x19google/protobuf/any.proto\"\xb9\x03\n" +
 	"\x05Event\x12%\n" +
 	"\x0epersistence_id\x18\x01 \x01(\tR\rpersistenceId\x12'\n" +
 	"\x0fsequence_number\x18\x02 \x01(\x04R\x0esequenceNumber\x12\x1d\n" +
@@ -735,7 +768,12 @@ const file_ego_ego_proto_rawDesc = "" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12\x14\n" +
 	"\x05shard\x18\a \x01(\x04R\x05shard\x12*\n" +
 	"\x11encryption_key_id\x18\b \x01(\tR\x0fencryptionKeyId\x12!\n" +
-	"\fis_encrypted\x18\t \x01(\bR\visEncryptedJ\x04\b\x05\x10\x06\"\x83\x01\n" +
+	"\fis_encrypted\x18\t \x01(\bR\visEncrypted\x12I\n" +
+	"\x0ftenant_metadata\x18\n" +
+	" \x03(\v2 .egopb.Event.TenantMetadataEntryR\x0etenantMetadata\x1aA\n" +
+	"\x13TenantMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x05\x10\x06\"\x83\x01\n" +
 	"\fCommandReply\x124\n" +
 	"\vstate_reply\x18\x01 \x01(\v2\x11.egopb.StateReplyH\x00R\n" +
 	"stateReply\x124\n" +
@@ -760,20 +798,28 @@ const file_ego_ego_proto_rawDesc = "" +
 	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"Z\n" +
 	"\fProjectionId\x12'\n" +
 	"\x0fprojection_name\x18\x01 \x01(\tR\x0eprojectionName\x12!\n" +
-	"\fshard_number\x18\x02 \x01(\x04R\vshardNumber\"\xf3\x01\n" +
+	"\fshard_number\x18\x02 \x01(\x04R\vshardNumber\"\x84\x03\n" +
 	"\bSnapshot\x12%\n" +
 	"\x0epersistence_id\x18\x01 \x01(\tR\rpersistenceId\x12'\n" +
 	"\x0fsequence_number\x18\x02 \x01(\x04R\x0esequenceNumber\x12*\n" +
 	"\x05state\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x05state\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\x12*\n" +
 	"\x11encryption_key_id\x18\x05 \x01(\tR\x0fencryptionKeyId\x12!\n" +
-	"\fis_encrypted\x18\x06 \x01(\bR\visEncrypted\"\xcf\x01\n" +
+	"\fis_encrypted\x18\x06 \x01(\bR\visEncrypted\x12L\n" +
+	"\x0ftenant_metadata\x18\a \x03(\v2#.egopb.Snapshot.TenantMetadataEntryR\x0etenantMetadata\x1aA\n" +
+	"\x13TenantMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe4\x02\n" +
 	"\fDurableState\x12%\n" +
 	"\x0epersistence_id\x18\x01 \x01(\tR\rpersistenceId\x12%\n" +
 	"\x0eversion_number\x18\x02 \x01(\x04R\rversionNumber\x12=\n" +
 	"\x0fresulting_state\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x0eresultingState\x12\x1c\n" +
 	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\x12\x14\n" +
-	"\x05shard\x18\x06 \x01(\x04R\x05shardBt\n" +
+	"\x05shard\x18\x06 \x01(\x04R\x05shard\x12P\n" +
+	"\x0ftenant_metadata\x18\a \x03(\v2'.egopb.DurableState.TenantMetadataEntryR\x0etenantMetadata\x1aA\n" +
+	"\x13TenantMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01Bt\n" +
 	"\tcom.egopbB\bEgoProtoH\x02P\x01Z'github.com/pablogore/ego/v4/egopb;egopb\xa2\x02\x03EXX\xaa\x02\x05Egopb\xca\x02\x05Egopb\xe2\x02\x11Egopb\\GPBMetadata\xea\x02\x05Egopbb\x06proto3"
 
 var (
@@ -788,7 +834,7 @@ func file_ego_ego_proto_rawDescGZIP() []byte {
 	return file_ego_ego_proto_rawDescData
 }
 
-var file_ego_ego_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_ego_ego_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_ego_ego_proto_goTypes = []any{
 	(*Event)(nil),           // 0: egopb.Event
 	(*CommandReply)(nil),    // 1: egopb.CommandReply
@@ -800,20 +846,26 @@ var file_ego_ego_proto_goTypes = []any{
 	(*ProjectionId)(nil),    // 7: egopb.ProjectionId
 	(*Snapshot)(nil),        // 8: egopb.Snapshot
 	(*DurableState)(nil),    // 9: egopb.DurableState
-	(*anypb.Any)(nil),       // 10: google.protobuf.Any
+	nil,                     // 10: egopb.Event.TenantMetadataEntry
+	nil,                     // 11: egopb.Snapshot.TenantMetadataEntry
+	nil,                     // 12: egopb.DurableState.TenantMetadataEntry
+	(*anypb.Any)(nil),       // 13: google.protobuf.Any
 }
 var file_ego_ego_proto_depIdxs = []int32{
-	10, // 0: egopb.Event.event:type_name -> google.protobuf.Any
-	2,  // 1: egopb.CommandReply.state_reply:type_name -> egopb.StateReply
-	3,  // 2: egopb.CommandReply.error_reply:type_name -> egopb.ErrorReply
-	10, // 3: egopb.StateReply.state:type_name -> google.protobuf.Any
-	10, // 4: egopb.Snapshot.state:type_name -> google.protobuf.Any
-	10, // 5: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	13, // 0: egopb.Event.event:type_name -> google.protobuf.Any
+	10, // 1: egopb.Event.tenant_metadata:type_name -> egopb.Event.TenantMetadataEntry
+	2,  // 2: egopb.CommandReply.state_reply:type_name -> egopb.StateReply
+	3,  // 3: egopb.CommandReply.error_reply:type_name -> egopb.ErrorReply
+	13, // 4: egopb.StateReply.state:type_name -> google.protobuf.Any
+	13, // 5: egopb.Snapshot.state:type_name -> google.protobuf.Any
+	11, // 6: egopb.Snapshot.tenant_metadata:type_name -> egopb.Snapshot.TenantMetadataEntry
+	13, // 7: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
+	12, // 8: egopb.DurableState.tenant_metadata:type_name -> egopb.DurableState.TenantMetadataEntry
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_ego_ego_proto_init() }
@@ -831,7 +883,7 @@ func file_ego_ego_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ego_ego_proto_rawDesc), len(file_ego_ego_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
