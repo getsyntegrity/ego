@@ -868,16 +868,23 @@ func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveC
 // A GetStateCommand that arrives while phase is phaseDirectReplying stashes
 // itself (see handleGetStateCommand) rather than reading stale state, but
 // handleDirectPersistResponse's UnstashAll already ran before that phase
-// began and won't run again for this cycle. UnstashAll here is what redelivers
-// it once phase drops back to phaseProcessing; since it only re-enqueues into
-// the mailbox tail, it is guaranteed to be processed after the reply this
-// function sends, preserving reply-before-read order. It is a no-op when
-// nothing stashed during the window.
+// began and won't run again for this cycle. UnstashAll here is what
+// redelivers it once phase drops back to phaseProcessing. GoAkt's own
+// unstashAll re-enqueues the stashed messages in their original order
+// ("prepends ... keeps the messages in the same order as received"), but
+// that ordering is among themselves, not relative to this actor's own
+// pending reply: a PID only ever runs one turn at a time (TrySchedule is a
+// no-op while the current turn is still Processing), so nothing this actor
+// unstashes can be dequeued and handled before the current Receive call
+// returns. We still send the reply before calling UnstashAll() so the
+// ordering is explicit in the code rather than relying on that scheduler
+// detail, and, on the error path, so the stash is drained before
+// ctx.Shutdown() tears the actor down. It is a no-op when nothing stashed
+// during the window.
 func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
 	entity.endCommandSpan(ctx.Context(), entity.directSpan, entity.directStartTime)
 	entity.directSpan = nil
 	entity.phase = phaseProcessing
-	ctx.UnstashAll()
 
 	if entity.directErr != nil {
 		err := entity.directErr
@@ -885,6 +892,7 @@ func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
 		entity.directErr = nil
 		entity.directShutdown = false
 		entity.sendErrorReply(ctx, err)
+		ctx.UnstashAll()
 		if shutdown {
 			ctx.Shutdown()
 		}
@@ -892,6 +900,7 @@ func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
 	}
 
 	entity.sendStateReply(ctx)
+	ctx.UnstashAll()
 }
 
 // buildEnvelopes computes the pending state from the given events and creates
