@@ -54,8 +54,8 @@ import (
 	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
 	mockadapter "github.com/pablogore/ego/v4/mocks/eventadapter"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -99,7 +99,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -208,7 +208,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -303,7 +303,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -372,7 +372,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		persistentActor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -508,7 +508,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -639,7 +639,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
@@ -723,7 +723,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior))
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -768,7 +768,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -820,7 +820,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -895,7 +895,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -978,7 +978,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1065,7 +1065,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1154,7 +1154,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1242,7 +1242,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1342,7 +1342,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1431,7 +1431,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1554,7 +1554,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -1662,7 +1662,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create the persistence actor using the behavior previously created
 		actor := newEventSourcedActor()
 		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -1751,7 +1751,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -2340,7 +2340,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		// spawn with no behavior dependency
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2376,7 +2376,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2430,7 +2430,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2486,7 +2486,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2535,7 +2535,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2588,7 +2588,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2640,7 +2640,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2688,7 +2688,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2731,7 +2731,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2777,7 +2777,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -2815,7 +2815,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -2872,7 +2872,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		entityCfg := &extensions.EntityConfig{SnapshotInterval: 1}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -2940,7 +2940,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			EventsRetentionCount:   0,
 		}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3003,7 +3003,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			DeleteSnapshotsOnSnapshot: true,
 		}
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3065,7 +3065,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
-			goakt.WithLongLived())
+			goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -3115,7 +3115,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
-			goakt.WithLongLived())
+			goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 

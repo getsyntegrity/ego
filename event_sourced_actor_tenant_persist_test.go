@@ -38,8 +38,8 @@ import (
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -434,7 +434,7 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior),
-		goakt.WithLongLived())
+		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -507,7 +507,7 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior),
-		goakt.WithLongLived())
+		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -577,7 +577,7 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior),
-		goakt.WithLongLived())
+		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -644,7 +644,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior),
-		goakt.WithLongLived())
+		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -666,7 +666,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	restarted := newEventSourcedActor()
 	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
 		goakt.WithDependencies(behavior),
-		goakt.WithLongLived())
+		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
