@@ -9,9 +9,10 @@ ego's write path: persisted `egopb.Event`/`Snapshot`/`DurableState`, and the
 becomes unforgeable data through real dispatch, including a saga hop and an
 actor restart.
 
-**PR1 (`#73`) already proved this for the event-sourced actor, and PR2
-(`#77`) already proved it for the durable-state actor.** PR3 (saga + e2e)
-is the only requirement group still open. Status is marked per requirement
+**PR1 (`#73`) proved this for the event-sourced actor, PR2 (`#77`) proved
+it for the durable-state actor, and PR3 (`#78`) proved it for the saga —
+including the real-dispatch e2e requirement.** All three PRs are merged;
+no requirement group in this spec is open. Status is marked per requirement
 below; do not treat a PROVEN tag as speculative.
 
 ## Implementation Status
@@ -20,11 +21,11 @@ below; do not treat a PROVEN tag as speculative.
 |---|---|---|---|
 | Tenant metadata persisted on record | PROVEN (PR1 `#73`) | PROVEN (PR2 `#77`) | n/a |
 | Fail-closed on missing/invalid/cross-tenant (TA3) | PROVEN (PR1) | PROVEN (PR2) | n/a |
-| Actor-lifetime tenant identity | PROVEN (PR1) | PROVEN (PR2) | PENDING (PR3) |
-| `TenantContext` reconstruction at async boundary | PROVEN (PR1, `recover()`) | PROVEN (PR2, `recoverFromStore`) | PENDING (PR3) |
-| Tenant-less or cross-tenant event rejected at boundary | PROVEN (PR1) | PROVEN (PR2) | PENDING (PR3) |
-| Real-dispatch end-to-end integrity | n/a | n/a | PENDING (PR3) |
-| No parallel envelope/serialization/resolver | HELD (PR1, PR2; must hold PR3) | — | — |
+| Actor-lifetime tenant identity | PROVEN (PR1) | PROVEN (PR2) | PROVEN (PR3 `#78`) |
+| `TenantContext` reconstruction at async boundary | PROVEN (PR1, `recover()`) | PROVEN (PR2, `recoverFromStore`) | PROVEN (PR3, `eventContext`/`recover()`) |
+| Tenant-less or cross-tenant event rejected at boundary | PROVEN (PR1) | PROVEN (PR2) | PROVEN (PR3, `bindOrVerify` + SG4 defer-past-`HandleEvent` correction) |
+| Real-dispatch end-to-end integrity | n/a | n/a | PROVEN (PR3, `TestTenantWritePathE2E`) |
+| No parallel envelope/serialization/resolver | HELD (PR1, PR2, PR3) | — | — |
 
 ## Requirements
 
@@ -108,7 +109,7 @@ the system MUST reconstruct `TenantContext` from carried metadata via
 `tenancy.UnmarshalMetadata`. This applies to the five `SagaActor`
 `context.Background()` reset sites.
 
-#### Scenario: Saga boundary reconstructs tenant identity after context reset (PENDING — PR3)
+#### Scenario: Saga boundary reconstructs tenant identity after context reset (PROVEN — PR3 `#78`, `eventContext`)
 - GIVEN a `SagaActor` step at one of its five `context.Background()` reset sites
 - WHEN the saga crosses that boundary using the received event's carried metadata
 - THEN `TenantContext` is reconstructed before the step executes
@@ -133,22 +134,22 @@ opt-in capability with its own authorization and identity model (for
 example, per-`(saga, tenant)` actor instantiation) — never a silent
 consequence of the current one-actor-per-`behavior.ID()` spawn model.
 
-#### Scenario: Saga rejects a tenant-less event at a reset site (PENDING — PR3)
+#### Scenario: Saga rejects a tenant-less event at a reset site (PROVEN — PR3 `#78`, `TestSagaActorEventContext`)
 - GIVEN an event reaching a `SagaActor` boundary with no or undecodable tenant metadata
 - WHEN the saga attempts to reconstruct `TenantContext` for that event
 - THEN the event is rejected with `ErrInvalid` and no tenant binding is formed or changed
 
-#### Scenario: Saga binds to the first valid tenant it observes (PENDING — PR3)
+#### Scenario: Saga binds to the first valid tenant it observes (PROVEN — PR3 `#78`, `TestSagaActorBindOnFirstEvent`)
 - GIVEN a freshly started `SagaActor` instance with no tenant bound yet
 - WHEN it processes its first event carrying valid, decodable tenant metadata
 - THEN it binds to that tenant as its actor-lifetime identity
 
-#### Scenario: Saga rejects an event from a different tenant once bound (PENDING — PR3)
+#### Scenario: Saga rejects an event from a different tenant once bound (PROVEN — PR3 `#78`, `TestSagaActorBindOnFirstEvent`)
 - GIVEN a `SagaActor` instance already bound to tenant A
 - WHEN an event carrying tenant B's metadata reaches a reset site
 - THEN it is rejected with `ErrDenied`, with no state mutation and no command dispatch
 
-#### Scenario: Saga replay validates every event against the tenant seeded by the first replayed event (PENDING — PR3)
+#### Scenario: Saga replay validates every event against the tenant seeded by the first replayed event (PROVEN — PR3 `#78`, `TestSagaActorRecoverReplayTenantValidation`)
 - GIVEN a `SagaActor` recovering by replaying its persisted events
 - WHEN a replayed event's tenant differs from the tenant established by the first replayed event
 - THEN recovery fails closed, mirroring the event-sourced actor's replay-path gate
@@ -160,7 +161,7 @@ At least one automated test MUST exercise the real dispatch path —
 identity remains intact end-to-end. `TestSendCommandTenantResolution` does
 NOT satisfy this requirement; it stops short of the saga hop.
 
-#### Scenario: Tenant survives a real saga hop (PENDING — PR3)
+#### Scenario: Tenant survives a real saga hop (PROVEN — PR3 `#78`, `TestTenantWritePathE2E`)
 - GIVEN a command sent via `Engine.SendCommand` under a resolved tenant
 - WHEN it traverses the actor and a saga hop that resets context
 - THEN the tenant identity observed at the saga hop matches the originating tenant

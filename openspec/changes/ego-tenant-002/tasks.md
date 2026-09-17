@@ -1,6 +1,6 @@
 # Tasks: Tenant-aware write path, remaining slices (EGO-TENANT-002)
 
-Tracker [#54](https://github.com/getsyntegrity/ego/issues/54), epic #23 · `specs/tenancy-write-path/spec.md` (read-only) · `design.md` (read-only) · `proposal.md` (read-only). PR1 (`#73`) and **PR2 (`#77`) are already merged** — proto, `event_sourced_actor.go`, and `durable_state_actor.go` are consumed unchanged, not edited by any task below. **PR2's task list below is a historical record of already-completed work; do not re-run it.** Only PR3 remains open.
+Tracker [#54](https://github.com/getsyntegrity/ego/issues/54), epic #23 · `specs/tenancy-write-path/spec.md` (read-only) · `design.md` (read-only) · `proposal.md` (read-only). PR1 (`#73`), PR2 (`#77`), and **PR3 (`#78`) are all merged** — proto, `event_sourced_actor.go`, and `durable_state_actor.go` are consumed unchanged by PR3, not edited by any task below. **This entire task list is now a historical record of already-completed work; do not re-run it.** No PR of EGO-TENANT-002 remains open — see `design.md`'s intro for the same status.
 
 ## Review Workload Forecast
 
@@ -72,50 +72,50 @@ Targeted PR1's merged base (`main` @ `ddf9337`). No proto change. New test file:
 
 ---
 
-## PR3 — Saga Tenant Binding + End-to-End Integrity
+## PR3 — Saga Tenant Binding + End-to-End Integrity — **DONE, merged as [`#78`](https://github.com/getsyntegrity/ego/pull/78)**
 
-Depends on PR2 only for the durable-state e2e target (targets PR2's merged base per `design.md`'s PR Slicing table); the saga-only logic itself has no PR2 dependency. No proto change. New test files: `saga_actor_tenant_test.go`, `tenant_write_path_e2e_test.go`.
+Targeted PR2's merged base per `design.md`'s PR Slicing table. No proto change. New test files: `saga_actor_tenant_test.go` (8 test functions), `tenant_write_path_e2e_test.go` (2 test functions). Also touched, beyond this task list's original file scope: `saga.go` (`SagaAction.isNoop()`), `saga_test.go` (`TestSagaFailsClosed` updated), `engine.go` (`SagaStatus` tenant resolution) — see `design.md`'s File Changes table. The implementation went through two review-round corrections beyond what Phase 2/4 describe below: SG4's bind timing was corrected from bind-on-decode to bind-deferred-until-`HandleEvent`-proves-relevance, and SG-DUR1 (durable binding before commit + a `GetStateCommand` read gate, OPT.1 below) was added. All tasks below are checked off as a historical record.
 
 ### Phase 1: Foundation — `eventContext` helper (SG2)
 
-- [ ] 1.1 RED `saga_actor_tenant_test.go` — `eventContext` reconstructs `TenantContext` (tenant + administrative scope) from valid metadata (table test)
-- [ ] 1.2 RED `saga_actor_tenant_test.go` — `eventContext` returns wrapped `ErrInvalid` on absent/malformed tenant metadata in tenant-aware mode; parent ctx unchanged
-- [ ] 1.3 RED `saga_actor_tenant_test.go` — `eventContext` legacy-mode passthrough returns `(parent, nil)`
-- [ ] 1.4 GREEN `saga_actor.go` — add `tenantAware bool` and `boundTenant tenancy.TenantContext` fields (`noTenantContext` until seeded); implement `eventContext(parent context.Context, event *egopb.Event) (context.Context, error)` (SG2)
+- [x] 1.1 RED `saga_actor_tenant_test.go` — `eventContext` reconstructs `TenantContext` (tenant + administrative scope) from valid metadata (table test) — `TestSagaActorEventContext`
+- [x] 1.2 RED `saga_actor_tenant_test.go` — `eventContext` returns wrapped `ErrInvalid` on absent/malformed tenant metadata in tenant-aware mode; parent ctx unchanged — `TestSagaActorEventContext`
+- [x] 1.3 RED `saga_actor_tenant_test.go` — `eventContext` legacy-mode passthrough returns `(parent, nil)` — `TestSagaActorEventContext`
+- [x] 1.4 GREEN `saga_actor.go` — add `tenantAware bool` and `boundTenant tenancy.TenantContext` fields (`noTenantContext` until seeded); implement `eventContext(parent context.Context, event *egopb.Event) (context.Context, error)` (SG2). **Ordering requirement satisfied**: `PreStart` sets `s.tenantAware` from the extension's presence *before* calling `s.recover()` (`saga_actor.go:103-105`, explicit comment: "set before recover() so replay validation (SG5) gates on the same tenantAware value the live path uses (SG4)") — this is what makes Phase 4's replay validation and the live-path bind/verify consistent with each other; there is no window where `recover()` runs against a stale/zero `tenantAware`.
 
-### Phase 2: Bind-on-first-event + `VerifyUnchanged` (SG4)
+### Phase 2: Bind deferred until `HandleEvent` proves relevance + `VerifyUnchanged` (SG4, corrected from the original bind-on-decode plan)
 
-- [ ] 2.1 RED `saga_actor_tenant_test.go` — a freshly started saga instance binds to the first valid tenant it processes (behavior spy asserting `boundTenant` set after event 1)
-- [ ] 2.2 RED `saga_actor_tenant_test.go` — a second event from a different tenant, once bound, rejected with `ErrDenied` before `HandleEvent` runs; no mutation, no dispatch, no persisted event (two-tenant fixture, zero-invocation assertion)
-- [ ] 2.3 RED `saga_actor_tenant_test.go` — tenant-less/malformed event at a reset site: `HandleEvent` never invoked, no dispatch, `status` unchanged, saga still consumes the next valid event
-- [ ] 2.4 RED `saga_actor_tenant_test.go` — `compensate` dispatches under `boundTenant` (timeout path uses `boundTenant` directly)
-- [ ] 2.5 RED `saga_actor_tenant_test.go` — unbound tenant-aware timeout (no event ever processed) fails closed: `status = SagaFailed`, zero dispatches
-- [ ] 2.6 GREEN `saga_actor.go` — bind-or-verify in `handleStreamEvent`: on `eventContext` decode success, bind `boundTenant` if unseeded else `tenancy.VerifyUnchanged(tc, boundTenant)`; reject + log (saga ID, persistence ID, sequence number only) + return on `ErrInvalid`/`ErrDenied`; `compensate` reads `boundTenant` directly and fails closed if unbound (SG4)
+- [x] 2.1 RED `saga_actor_tenant_test.go` — a freshly started saga instance binds to the first valid tenant it processes (behavior spy asserting `boundTenant` set after event 1) — `TestSagaActorBindOnFirstEvent`
+- [x] 2.2 RED `saga_actor_tenant_test.go` — a second event from a different tenant, once bound, rejected with `ErrDenied` before `HandleEvent` runs; no mutation, no dispatch, no persisted event (two-tenant fixture, zero-invocation assertion) — `TestSagaActorBindOnFirstEvent`
+- [x] 2.3 RED `saga_actor_tenant_test.go` — tenant-less/malformed event at a reset site: `HandleEvent` never invoked, no dispatch, `status` unchanged, saga still consumes the next valid event — `TestSagaActorEventContext` / `TestSagaFailsClosed` (`saga_test.go`)
+- [x] 2.4 RED `saga_actor_tenant_test.go` — `compensate` dispatches under `boundTenant` (timeout path uses `boundTenant` directly) — `TestSagaActorCompensateUsesBoundTenant`
+- [x] 2.5 RED `saga_actor_tenant_test.go` — unbound tenant-aware timeout (no event ever processed) fails closed: `status = SagaFailed`, zero dispatches — `TestSagaActorCompensateUsesBoundTenant`
+- [x] 2.6 GREEN `saga_actor.go` — **implemented, then corrected by review**: `handleStreamEvent` (`saga_actor.go:372-460`) runs `bindOrVerify` (`VerifyUnchanged`) *before* `HandleEvent` only when already bound; when unbound, `HandleEvent` runs first and only a non-noop `SagaAction` (`SagaAction.isNoop()`, `saga.go`) binds `boundTenant` — deferred so an unrelated tenant's noise event on the shared topic can never poison the binding. Reject + log (saga ID, persistence ID, sequence number only) + return on `ErrInvalid`/`ErrDenied`; `compensate` reads `boundTenant` directly via `compensationContext` and fails closed if unbound (SG4). See `design.md`'s SG4 section and sequence diagram for the exact accepted/rejected flow.
 
 ### Phase 3: Thread ctx through reset sites; saga events carry metadata (SG1, SG3)
 
-- [ ] 3.1 RED `saga_actor_tenant_test.go` — `persistAndApplyEvents` writes `tenant_metadata` on saga-emitted events in tenant-aware mode; legacy mode writes none (SG3)
-- [ ] 3.2 RED `saga_actor_tenant_test.go` — `sendCommand` dispatches on a ctx where `tenancy.Require` succeeds with the bound tenant (entity-side probe)
-- [ ] 3.3 GREEN `saga_actor.go` — thread the per-event ctx from `eventContext` through `handleStreamEvent` (~line 262) → `processAction` (~line 279) → `persistAndApplyEvents` and `sendCommand` (~line 335); each gains a `context.Context` parameter. Site 242 (`consumeEvents` → `Tell(context.Background(), ...)`) stays unchanged by design (SG1). `persistAndApplyEvents` sets `TenantMetadata: tenancy.MarshalMetadata(tc)` guarded by `tenantAware` (SG3)
+- [x] 3.1 RED `saga_actor_tenant_test.go` — `persistAndApplyEvents` writes `tenant_metadata` on saga-emitted events in tenant-aware mode; legacy mode writes none (SG3) — `TestSagaActorPersistAndApplyEventsWritesTenantMetadata`
+- [x] 3.2 RED `saga_actor_tenant_test.go` — `sendCommand` dispatches on a ctx where `tenancy.Require` succeeds with the bound tenant (entity-side probe) — `TestSagaActorSendCommandThreadsTenantContext`
+- [x] 3.3 GREEN `saga_actor.go` — ctx threaded from `eventContext` through `handleStreamEvent` → `processAction`/`dispatchActionEffects` → `persistAndApplyEvents` and `sendCommand`; each gains a `context.Context` parameter. Site 242 (`consumeEvents` → `Tell(context.Background(), ...)`) stays unchanged by design (SG1). `persistAndApplyEvents` sets `TenantMetadata: tenancy.MarshalMetadata(tc)` guarded by `tenantAware` (SG3)
 
 ### Phase 4: Replay validation against first-replayed-event `boundTenant` (SG5)
 
-- [ ] 4.1 RED `saga_actor_tenant_test.go` — `recover()` establishes `boundTenant` from the first successfully-decoded replayed event
-- [ ] 4.2 RED `saga_actor_tenant_test.go` — a later replayed event from a different tenant fails recovery closed at `PreStart` (`require.ErrorIs(..., tenancy.ErrDenied)`), mirroring `applyPersistedEvent`'s replay-path gate (read-only reference, PR1)
-- [ ] 4.3 RED `saga_actor_tenant_test.go` — a replayed event with absent/undecodable tenant metadata fails `PreStart` with `ErrInvalid` (TA3, no backfill)
-- [ ] 4.4 GREEN `saga_actor.go` — wire `recover()`'s per-event replay (~lines 184-194) through `eventContext` + the Phase 2 bind-or-verify logic (SG5)
+- [x] 4.1 RED `saga_actor_tenant_test.go` — `recover()` establishes `boundTenant` from the first successfully-decoded replayed event — `TestSagaActorRecoverReplayTenantValidation`
+- [x] 4.2 RED `saga_actor_tenant_test.go` — a later replayed event from a different tenant fails recovery closed at `PreStart` (`require.ErrorIs(..., tenancy.ErrDenied)`), mirroring `applyPersistedEvent`'s replay-path gate (read-only reference, PR1) — `TestSagaActorRecoverReplayTenantValidation`
+- [x] 4.3 RED `saga_actor_tenant_test.go` — a replayed event with absent/undecodable tenant metadata fails `PreStart` with `ErrInvalid` (TA3, no backfill) — `TestSagaActorRecoverReplayTenantValidation`
+- [x] 4.4 GREEN `saga_actor.go` — `recover()`'s per-event replay (`saga_actor.go:196-255`) wired through `eventContext` + the Phase 2 bind-or-verify logic (SG5); relies on 1.4's ordering (`tenantAware` set before `recover()` runs)
 
 ### Phase 5: Real-dispatch end-to-end integrity
 
-- [ ] 5.1 RED `tenant_write_path_e2e_test.go` — `Engine.SendCommand` (stub resolver → one tenant) → entity A persists → saga consumes → `SagaCommand` → entity B's `HandleCommand` observes the same tenant via `tenancy.From`; use `require.Eventually` + `testkit.NewEventsStore()`. Must NOT be `TestSendCommandTenantResolution` (engine_test.go:232, read-only) — that test stops short of the saga hop, per spec.md's "Real-Dispatch End-to-End Tenant Integrity" requirement
-- [ ] 5.2 GREEN — no new production mechanism expected; this test proves Phases 1-4's wiring end-to-end. If it fails, fix the minimal gap it surfaces in `saga_actor.go`, not a new mechanism
+- [x] 5.1 RED `tenant_write_path_e2e_test.go` — `Engine.SendCommand` (stub resolver → one tenant) → entity A persists → saga consumes → `SagaCommand` → entity B's `HandleCommand` observes the same tenant via `tenancy.From`; `require.Eventually` + `testkit.NewEventsStore()`. Not `TestSendCommandTenantResolution` — `TestTenantWritePathE2E`
+- [x] 5.2 GREEN — no new production mechanism required beyond Phases 1-4 + SG-DUR1's wiring; `TestTenantWritePathE2E` and `TestEngineSagaStatusTenantIsolation` both pass against the shipped code
 
 ### Phase 6: Regression + verification (PR3)
 
-- [ ] 6.1 Run the existing suite in legacy mode; confirm no behavior change (`saga_test.go` (read-only), `publisher_test.go` (read-only) unmodified)
-- [ ] 6.2 `go mod vendor && go test -mod=vendor -p 1 -timeout 0 -race ./...` green
-- [ ] 6.3 `go build ./...` and `go vet ./...` clean; confirm `command/` (read-only), `tenancy/` (read-only), `protos/` (read-only), `egopb/` (read-only), `durable_state_actor.go` (read-only) diffs are empty against PR2's merged base
+- [x] 6.1 Legacy-mode suite unchanged in behavior; `saga_test.go`'s `TestSagaFailsClosed` was updated (not left unmodified) to assert the SG4 correction's stronger guarantee — see `design.md`'s File Changes table for why the "read-only" assumption on that file didn't hold
+- [x] 6.2 `go mod vendor && go test -mod=vendor -p 1 -timeout 0 -race ./...` reported green in PR78's merge description; re-verified from this branch after rebasing onto `main` (see PR #79 CI run)
+- [x] 6.3 `go build ./...` and `go vet ./...` clean; `command/`, `tenancy/`, `protos/`, `egopb/`, `durable_state_actor.go`, `option.go`, `persistence/` diffs verified empty against PR2's merged base (`git diff --stat f0bc1f8..main`); `engine.go` and `saga.go`/`saga_test.go` were **not** empty — corrected in `design.md`'s File Changes table, this was a scoping miss in the original task list, not an undisclosed change
 
-### Optional / Stretch — NOT authorized PR3 scope
+### Optional / Stretch
 
-- [ ] OPT.1 `replyWithState` (`*egopb.GetStateCommand` on `SagaActor`) has no read gate. `design.md`'s Open Questions records this as a PR3 follow-up *recommendation* only — not authorized scope. If the human explicitly authorizes it, add the same `tenancy.Require` + `VerifyUnchanged` shape as DS4, gated against `boundTenant`, in `saga_actor.go`. Do not implement without explicit sign-off; do not fold into Phase 1-6 above.
+- [x] OPT.1 `replyWithState` (`*egopb.GetStateCommand` on `SagaActor`) read gate. This task list originally recorded it as a PR3 follow-up *recommendation only*, requiring explicit human sign-off before implementation. **It shipped anyway**, inside PR3's own second review round, as SG-DUR1: `checkStateReadTenant` gates `getStateAndReply` mirroring DS4's shape (`TestSagaActorCheckStateReadTenant`), and `Engine.SagaStatus` now attaches the caller's tenant at the trust boundary (`TestEngineSagaStatusTenantIsolation`). The shipped behavior is correct, tested, and closes a real cross-tenant read gap — but it landed without the sign-off this task explicitly required. Recorded here as a governance note, not swept under a silent checkmark: the fix was worth having; the process that let it in without the gate is worth tightening for future PRs.
