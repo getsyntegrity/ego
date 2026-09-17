@@ -23,6 +23,7 @@
 package command
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,13 +37,14 @@ import (
 // already guarantees they can never collide with these reserved names or
 // with the "ego." prefix.
 const (
-	carrierKeyOperationID   = "ego.cmd.operation_id"
-	carrierKeyCorrelationID = "ego.cmd.correlation_id"
-	carrierKeyCausationID   = "ego.cmd.causation_id"
-	carrierKeyTimestamp     = "ego.cmd.timestamp"
-	carrierKeyDeadline      = "ego.cmd.deadline"
-	carrierKeyPrincipalID   = "ego.cmd.principal_id"
-	carrierKeyPrincipalKind = "ego.cmd.principal_kind"
+	carrierKeyOperationID      = "ego.cmd.operation_id"
+	carrierKeyCorrelationID    = "ego.cmd.correlation_id"
+	carrierKeyCausationID      = "ego.cmd.causation_id"
+	carrierKeyTimestamp        = "ego.cmd.timestamp"
+	carrierKeyDeadline         = "ego.cmd.deadline"
+	carrierKeyPrincipalID      = "ego.cmd.principal_id"
+	carrierKeyPrincipalKind    = "ego.cmd.principal_kind"
+	carrierKeyExpectedRevision = "ego.cmd.expected_revision"
 )
 
 // carrierCmdPrefix and carrierTenantPrefix are the only two namespaces a
@@ -84,6 +86,9 @@ func MarshalMetadata(m Metadata) Carrier {
 	}
 	if deadline, ok := m.Deadline(); ok {
 		c[carrierKeyDeadline] = deadline.Format(time.RFC3339Nano)
+	}
+	if revision, ok := m.ExpectedRevision(); ok {
+		c[carrierKeyExpectedRevision] = strconv.FormatUint(revision, 10)
 	}
 	if principal, ok := m.Principal(); ok {
 		c[carrierKeyPrincipalID] = principal.ID()
@@ -148,6 +153,14 @@ func UnmarshalMetadata(c Carrier) (Metadata, error) {
 			return Metadata{}, NewError(ErrInvalidMetadata, "command: carrier deadline is not a valid RFC3339 timestamp", err)
 		}
 		opts = append(opts, WithDeadline(deadline))
+	}
+
+	if rawRevision, ok := c[carrierKeyExpectedRevision]; ok {
+		revision, err := strconv.ParseUint(rawRevision, 10, 64)
+		if err != nil {
+			return Metadata{}, NewError(ErrInvalidMetadata, "command: carrier expected revision is not a valid unsigned integer", err)
+		}
+		opts = append(opts, WithExpectedRevision(revision))
 	}
 
 	if principalID, ok := c[carrierKeyPrincipalID]; ok {

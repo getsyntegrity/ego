@@ -61,6 +61,24 @@ func TestOutcomeStringPerKind(t *testing.T) {
 	}
 }
 
+func TestNewRejectedConcurrencyConflictCodeCheckableWithoutStringInspection(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	f, err := command.NewFailure("expected revision mismatch", command.WithFailureCode(command.CodeConcurrencyConflict))
+	require.NoError(t, err)
+
+	r, err := command.NewRejected(md, f)
+	require.NoError(t, err)
+
+	failure, ok := r.Failure()
+	require.True(t, ok)
+	code, ok := failure.Code()
+	require.True(t, ok)
+	require.Equal(t, command.CodeConcurrencyConflict, code)
+}
+
 func TestOutcomeKindsMutuallyExclusive(t *testing.T) {
 	kinds := []command.Outcome{
 		command.OutcomeSuccess, command.OutcomeSuccessNoState, command.OutcomeRejected,

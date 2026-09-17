@@ -96,6 +96,47 @@ func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
 	require.Equal(t, command.CausationID(parentOp), causation)
 }
 
+func TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	payload := timestamppb.New(time.Unix(100, 0))
+	env, err := command.NewEnvelope(payload, md)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(env.Metadata())
+	require.NotContains(t, carrier, "ego.cmd.expected_revision")
+
+	roundTripped, err := command.UnmarshalMetadata(carrier)
+	require.NoError(t, err)
+
+	rebuilt, err := command.NewEnvelope(payload, roundTripped)
+	require.NoError(t, err)
+
+	_, ok := rebuilt.Metadata().ExpectedRevision()
+	require.False(t, ok)
+}
+
+func TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	md, err := command.NewMetadata(op, command.WithTimestamp(ts))
+	require.NoError(t, err)
+
+	payload := timestamppb.New(time.Unix(100, 0))
+	env, err := command.NewEnvelope(payload, md)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(env.Metadata())
+	require.Equal(t, command.Carrier{
+		"ego.cmd.operation_id":   string(op),
+		"ego.cmd.correlation_id": string(command.CorrelationID(op)),
+		"ego.cmd.timestamp":      ts.Format(time.RFC3339Nano),
+	}, carrier)
+}
+
 func TestEnvelopeDeriveRejectsNilPayload(t *testing.T) {
 	op := mustOperationID(t, "op-1")
 	md, err := command.NewMetadata(op)

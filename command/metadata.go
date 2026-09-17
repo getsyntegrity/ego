@@ -42,14 +42,15 @@ const reservedCustomPrefix = "ego."
 // reservedCustomKeys names every canonical Metadata field so a custom key
 // can never shadow one, even unprefixed (D6, AC6).
 var reservedCustomKeys = map[string]struct{}{
-	"operation_id":   {},
-	"correlation_id": {},
-	"causation_id":   {},
-	"timestamp":      {},
-	"deadline":       {},
-	"principal_id":   {},
-	"principal_kind": {},
-	"tenant":         {},
+	"operation_id":      {},
+	"correlation_id":    {},
+	"causation_id":      {},
+	"timestamp":         {},
+	"deadline":          {},
+	"principal_id":      {},
+	"principal_kind":    {},
+	"tenant":            {},
+	"expected_revision": {},
 }
 
 // Metadata is the canonical, runtime-independent metadata carried by every
@@ -71,6 +72,9 @@ type Metadata struct {
 	timestamp     time.Time
 	deadline      time.Time
 	hasDeadline   bool
+
+	expectedRevision    uint64
+	hasExpectedRevision bool
 }
 
 // MetadataOption configures optional Metadata fields at construction or
@@ -148,6 +152,21 @@ func WithDeadline(t time.Time) MetadataOption {
 	}
 }
 
+// WithExpectedRevision sets an optional write precondition for the target
+// aggregate (WRITE-004, AC1/AC2): absent means an unconditional (legacy)
+// write, revision == 0 means genesis (no prior commit may exist), and
+// revision > 0 means the persisted revision MUST equal exactly revision.
+// Zero is a meaningful, distinct value here, never a stand-in for
+// "unspecified" — the same explicit-presence pattern already used by
+// WithDeadline/CausationID.
+func WithExpectedRevision(revision uint64) MetadataOption {
+	return func(m *Metadata) error {
+		m.expectedRevision = revision
+		m.hasExpectedRevision = true
+		return nil
+	}
+}
+
 // NewMetadata builds a root Metadata for op. Correlation defaults to
 // CorrelationID(op) unless overridden by WithCorrelationID; the root
 // carries no causation. Timestamp defaults to time.Now().UTC() unless
@@ -216,6 +235,13 @@ func (m Metadata) Timestamp() time.Time {
 // Deadline returns this operation's optional deadline, if set.
 func (m Metadata) Deadline() (time.Time, bool) {
 	return m.deadline, m.hasDeadline
+}
+
+// ExpectedRevision returns this metadata's optional write precondition. The
+// second return value is false when no precondition was set, which MUST be
+// read as "unconditional write" — never as revision 0 (genesis).
+func (m Metadata) ExpectedRevision() (uint64, bool) {
+	return m.expectedRevision, m.hasExpectedRevision
 }
 
 // Derive builds a child Metadata for a new operation op from m (D7):

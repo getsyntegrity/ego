@@ -76,6 +76,12 @@ func (o Outcome) String() string {
 	}
 }
 
+// CodeConcurrencyConflict is the canonical, framework-emitted Failure code
+// (WRITE-004, AC5) for a write precondition that was not satisfied at
+// commit, carried via WithFailureCode + NewRejected. It introduces no new
+// Outcome kind — the six-kind taxonomy is unchanged.
+const CodeConcurrencyConflict = "concurrency_conflict"
+
 // Failure carries the detail of a non-success Result: a required
 // human-readable message, an optional caller-defined code, and an
 // optional underlying cause.
