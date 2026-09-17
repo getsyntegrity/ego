@@ -33,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
@@ -323,7 +324,17 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 		candidateTenant = tc
 	}
 
-	newState, newVersion, err := entity.behavior.HandleCommand(ctx, command, entity.currentVersion, entity.currentState)
+	// Deadline pre-handler gate: ctx carries the effective deadline
+	// Engine.Dispatch computed (min of ctx's own deadline, the envelope
+	// Metadata's deadline, and the caller's timeout). If it has already
+	// expired or been canceled, fail closed before the handler runs — the
+	// handler must never execute past the deadline.
+	if err := checkDeadline(ctx, "before handler execution"); err != nil {
+		entity.sendErrorReply(receiveContext, err)
+		return
+	}
+
+	newState, newVersion, err := entity.dispatchToBehavior(ctx, command, entity.currentVersion, entity.currentState)
 	if err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
@@ -331,6 +342,20 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 
 	// check whether the pre-conditions have met
 	if err := entity.checkPreconditions(newState, newVersion); err != nil {
+		entity.sendErrorReply(receiveContext, err)
+		return
+	}
+
+	// Deadline post-handler/pre-persist gate: the handler above may have run
+	// long enough for the deadline to expire while it was in flight —
+	// context.WithDeadline does not preempt a handler that ignores its
+	// context, so this re-check is the actual barrier that stops a late
+	// handler output from ever reaching commitState. newState/newVersion are
+	// discarded here, never applied to entity.currentState/currentVersion or
+	// persisted: commitState (DS1/DS-DUR, #77) is the only place those fields
+	// are mutated, and only after WriteState confirms the durable write, so
+	// there is nothing to unwind on this gate's error path.
+	if err := checkDeadline(ctx, "before persistence"); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
@@ -352,6 +377,27 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	}
 
 	entity.sendStateReply(receiveContext)
+}
+
+// dispatchToBehavior invokes entity.behavior against cmd, preferring
+// HandleEnvelope over HandleCommand when both entity.behavior implements
+// DurableStateEnvelopeBehavior and a command.Metadata is available on ctx
+// (#60, M-3). See EventSourcedActor.dispatchToBehavior for the full
+// rationale — this mirrors it for the durable-state path.
+func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
+	envBehavior, ok := entity.behavior.(DurableStateEnvelopeBehavior)
+	if !ok {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	md, ok := metadataFromContext(ctx)
+	if !ok {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	env, err := command.NewEnvelope(cmd, md)
+	if err != nil {
+		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
+	}
+	return envBehavior.HandleEnvelope(ctx, env, priorVersion, priorState)
 }
 
 // currentStateAny returns the cached anypb.Any of currentState, computing it

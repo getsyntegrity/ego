@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/encryption"
 	"github.com/pablogore/ego/v4/eventadapter"
@@ -615,6 +616,35 @@ func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
 	return entity.cachedStateAny
 }
 
+// dispatchToBehavior invokes entity.behavior against cmd, preferring
+// HandleEnvelope over HandleCommand when both entity.behavior implements
+// EventSourcedEnvelopeBehavior and a command.Metadata is available on
+// goCtx (#60, M-3). goCtx must already be unwrapped from the receiving
+// ReceiveContext via ctx.Context(): on a local dispatch this is the same
+// context.Context Engine.Dispatch attached a command.Carrier to (see
+// command_context.go), so metadataFromContext rematerializes it here
+// without any wire-format change. Any behavior that does not implement the
+// optional interface, or any command reached without Metadata (e.g. a
+// caller that bypasses Engine.Dispatch/SendCommand), falls back to
+// HandleCommand unchanged — this method is called from both the
+// non-batched (processCommandAndReply) and batched (processAndBatch) paths
+// so both dispatch identically.
+func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd Command, priorState State) ([]Event, error) {
+	envBehavior, ok := entity.behavior.(EventSourcedEnvelopeBehavior)
+	if !ok {
+		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
+	}
+	md, ok := metadataFromContext(goCtx)
+	if !ok {
+		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
+	}
+	env, err := command.NewEnvelope(cmd, md)
+	if err != nil {
+		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
+	}
+	return envBehavior.HandleEnvelope(goCtx, env, priorState)
+}
+
 // sendErrorReply sends a [egopb.CommandReply] containing the given error.
 func (entity *EventSourcedActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
 	ctx.Response(&egopb.CommandReply{
@@ -750,7 +780,17 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 		}
 	}
 
-	events, err := entity.behavior.HandleCommand(goCtx, command, entity.currentState)
+	// Deadline pre-handler gate: goCtx carries the effective deadline
+	// Engine.Dispatch computed (min of ctx's own deadline, the envelope
+	// Metadata's deadline, and the caller's timeout). If it has already
+	// expired or been canceled, fail closed before the handler runs — the
+	// handler must never execute past the deadline.
+	if err := checkDeadline(goCtx, "before handler execution"); err != nil {
+		entity.sendErrorReply(ctx, err)
+		return
+	}
+
+	events, err := entity.dispatchToBehavior(goCtx, command, entity.currentState)
 	if err != nil {
 		entity.endCommandSpan(goCtx, span, startTime)
 		entity.sendErrorReply(ctx, err)
@@ -766,6 +806,17 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	envelopes, pendingState, pendingCounter, commandTime, err := entity.buildEnvelopes(goCtx, events, tc, entity.currentState, entity.eventsCounter)
 	if err != nil {
 		entity.endCommandSpan(goCtx, span, startTime)
+		entity.sendErrorReply(ctx, err)
+		return
+	}
+
+	// Deadline post-handler/pre-persist gate: the handler above may have run
+	// long enough for the deadline to expire while it was in flight —
+	// context.WithDeadline does not preempt a handler that ignores its
+	// context, so this re-check is the actual barrier that stops a late
+	// handler output from mutating currentState or reaching the store.
+	// envelopes/pendingState/pendingCounter are discarded, never persisted.
+	if err := checkDeadline(goCtx, "before persistence"); err != nil {
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -1240,7 +1291,18 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		}
 	}
 
-	events, err := entity.behavior.HandleCommand(goCtx, command, state)
+	// Deadline pre-handler gate: same barrier as processCommandAndReply — see
+	// its comment for the rationale. Must fail closed here too, before the
+	// handler ever runs against batchState.
+	if deadlineErr := checkDeadline(goCtx, "before handler execution"); deadlineErr != nil {
+		if span != nil {
+			span.End()
+		}
+		entity.sendErrorReply(ctx, deadlineErr)
+		return
+	}
+
+	events, err := entity.dispatchToBehavior(goCtx, command, state)
 	if err != nil {
 		if span != nil {
 			span.End()
@@ -1279,6 +1341,21 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 			span.End()
 		}
 		entity.sendErrorReply(ctx, err)
+		return
+	}
+
+	// Deadline post-handler/pre-batch-append gate: the handler above may
+	// have run long enough for the deadline to expire while it was in
+	// flight. This is the barrier that keeps an expired command's output
+	// out of the shared batch state entirely — envelopes/pendingState/
+	// pendingCounter are discarded here, never appended to batchBuffer/
+	// batchState/batchEntries, so a later flushBatch never persists them and
+	// a subsequent valid command on this actor is unaffected.
+	if deadlineErr := checkDeadline(goCtx, "before persistence"); deadlineErr != nil {
+		if span != nil {
+			span.End()
+		}
+		entity.sendErrorReply(ctx, deadlineErr)
 		return
 	}
 

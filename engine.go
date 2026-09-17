@@ -32,6 +32,7 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	goakterrors "github.com/tochemey/goakt/v4/errors"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/passivation"
 	"github.com/tochemey/goakt/v4/supervisor"
@@ -42,6 +43,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/encryption"
 	"github.com/pablogore/ego/v4/eventadapter"
@@ -724,6 +726,194 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	return err
 }
 
+// Dispatch sends env's payload to the entity identified by entityID and
+// returns the canonical command.Result (EGO-WRITE-003 adoption, #60). It is
+// the primitive SendCommand now adapts to: SendCommand builds an Envelope
+// around its bare Command and maps the Result back to the legacy
+// (State, uint64, error) shape (resultToLegacy).
+//
+// env's Metadata crosses the goakt actor boundary as a command.Carrier
+// attached to ctx (M-3, design.md option (c)): on a local hop goakt's
+// SendSync passes ctx through unchanged, so the receiving actor
+// rematerializes the same Metadata via command.UnmarshalMetadata without a
+// wire change (command_context.go). This does not yet cover a genuinely
+// remote or cluster hop — see the #60 report for that explicitly deferred
+// gap.
+//
+// Dispatch rejects env outright, before any SendSync call, in three cases:
+// Metadata that fails the same Marshal/UnmarshalMetadata round-trip the
+// receiving actor depends on (a plain error — a caller-side defect, never
+// silently downgraded to the HandleCommand fallback), ctx already done
+// (canceled or its own deadline expired), and an effective deadline already
+// in the past (an OutcomeTimedOut/OutcomeCanceled Result).
+//
+// The effective deadline is min(ctx's own deadline if any, env.Metadata()'s
+// deadline if any, now+timeout) — not merely how long the caller is willing
+// to wait for a reply. It is propagated into a derived, cancelable ctx (via
+// context.WithDeadline) passed to SendSync, so the target actor can itself
+// detect and fail closed on it — both before invoking the handler and again
+// before persisting anything — since context.WithDeadline alone does not
+// preempt a handler that ignores its context. See checkDeadline
+// (deadline_gate.go) and its call sites in EventSourcedActor/
+// DurableStateActor for the actor-side half of this.
+func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command.Envelope, timeout time.Duration) (result command.Result, err error) {
+	if !engine.Started() {
+		return command.Result{}, ErrEngineNotStarted
+	}
+
+	// entityID is not defined
+	if entityID == "" {
+		return command.Result{}, ErrUndefinedEntityID
+	}
+
+	// env may be a caller-constructed zero-value command.Envelope{} (Envelope's
+	// fields are unexported, but Go allows an empty struct literal from any
+	// package). NewEnvelope rejects a nil payload, but that guard is bypassed
+	// entirely here, so Payload() can be nil. Reject it before the telemetry
+	// span below dereferences it via ProtoReflect(), which panics on a nil
+	// proto.Message interface.
+	if env.Payload() == nil {
+		return command.Result{}, command.ErrInvalidEnvelope
+	}
+
+	// Create a trace span that connects the caller's context (e.g. an HTTP
+	// request span) to the command dispatch, providing end-to-end visibility.
+	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
+		var span trace.Span
+		ctx, span = engine.telemetry.Tracer.Start(ctx, "ego.send_command",
+			trace.WithAttributes(
+				attribute.String("ego.entity_id", entityID),
+				attribute.String("ego.command_type", string(env.Payload().ProtoReflect().Descriptor().FullName())),
+			))
+		defer func() {
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			span.End()
+		}()
+	}
+
+	ref := engine.actorSystem.Load()
+	if ref == nil {
+		return command.Result{}, ErrEngineNotStarted
+	}
+
+	// env's Metadata must round-trip through the same
+	// Marshal/UnmarshalMetadata pair the receiving actor uses to
+	// rematerialize it (command_context.go). Skipping this check lets an
+	// invalid Metadata (e.g. a zero-value command.Metadata{} slipped into
+	// NewEnvelope, which does not validate md) reach SendSync unchecked:
+	// the actor's UnmarshalMetadata then fails silently and
+	// dispatchToBehavior falls back to HandleCommand, running the payload
+	// as a legacy command instead of surfacing the caller's error.
+	if _, unmarshalErr := command.UnmarshalMetadata(command.MarshalMetadata(env.Metadata())); unmarshalErr != nil {
+		return command.Result{}, unmarshalErr
+	}
+
+	// ctx may already be done — canceled by the caller, or past its own
+	// deadline — before Dispatch even starts. Reject outright rather than
+	// let SendSync discover it a moment later after paying for tenant
+	// resolution and carrier attachment.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		failure, failureErr := command.NewFailure("command: context already done before dispatch", command.WithFailureCause(ctxErr))
+		if failureErr != nil {
+			return command.Result{}, failureErr
+		}
+		if errors.Is(ctxErr, context.Canceled) {
+			return command.NewCanceled(env.Metadata(), failure)
+		}
+		return command.NewTimedOut(env.Metadata(), failure)
+	}
+
+	// Effective deadline = min(ctx's own deadline if any, env.Metadata()'s
+	// deadline if any, now+timeout). This bounds when the handler is
+	// allowed to run and persist, not merely how long the caller is willing
+	// to wait for a reply.
+	deadline := time.Now().Add(timeout)
+	if mdDeadline, ok := env.Metadata().Deadline(); ok && mdDeadline.Before(deadline) {
+		deadline = mdDeadline
+	}
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if !deadline.After(time.Now()) {
+		failure, failureErr := command.NewFailure("command: deadline already exceeded")
+		if failureErr != nil {
+			return command.Result{}, failureErr
+		}
+		return command.NewTimedOut(env.Metadata(), failure)
+	}
+
+	// Derive a cancelable, deadline-bound ctx and propagate it (not just a
+	// shrunk timeout duration) all the way to SendSync and, through it, to
+	// the target actor's goCtx — this is what makes the actor-side
+	// checkDeadline gates possible.
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithDeadline(ctx, deadline)
+	defer cancel()
+	timeout = time.Until(deadline)
+
+	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
+	// here, at the single trust boundary between external callers and the
+	// actor runtime, and attach it to ctx before it ever reaches dispatch.
+	// A resolver error blocks the command outright: no dispatch, no actor,
+	// no handler, no persistence. Legacy mode (no resolver registered) is
+	// byte-identical: this whole block is skipped and ctx is untouched.
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return command.Result{}, resolveErr
+		}
+
+		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
+		if attachErr != nil {
+			return command.Result{}, attachErr
+		}
+		ctx = attachedCtx
+	}
+
+	ctx = attachCarrier(ctx, command.MarshalMetadata(env.Metadata()))
+
+	reply, sendErr := ref.noSender.SendSync(ctx, entityID, env.Payload(), timeout)
+	if sendErr != nil {
+		// SendSync/goakt's Ask races ctx.Done() against its own internal
+		// timer derived from the timeout argument. When ctx.Done() wins it
+		// returns errors.Join(ctx.Err(), goakterrors.ErrRequestTimeout); when
+		// the internal timer wins instead it returns the bare, unwrapped
+		// goakterrors.ErrRequestTimeout — neither ctx.Canceled nor
+		// ctx.DeadlineExceeded. Since Dispatch aligns ctx's deadline and
+		// timeout to the same instant, either race outcome is possible, so
+		// both must classify as a Result (Timed/CanceledOut carries the same
+		// contract as the pre-dispatch checks above) rather than a bare
+		// plumbing error, since it is exactly the deadline/cancellation the
+		// command package models.
+		if errors.Is(sendErr, context.Canceled) {
+			failure, failureErr := command.NewFailure("command: caller context canceled while waiting for reply", command.WithFailureCause(sendErr))
+			if failureErr != nil {
+				return command.Result{}, failureErr
+			}
+			return command.NewCanceled(env.Metadata(), failure)
+		}
+		if errors.Is(sendErr, context.DeadlineExceeded) || errors.Is(sendErr, goakterrors.ErrRequestTimeout) {
+			failure, failureErr := command.NewFailure("command: deadline exceeded while waiting for reply", command.WithFailureCause(sendErr))
+			if failureErr != nil {
+				return command.Result{}, failureErr
+			}
+			return command.NewTimedOut(env.Metadata(), failure)
+		}
+		return command.Result{}, sendErr
+	}
+
+	// cast the reply as it supposes
+	commandReply, ok := reply.(*egopb.CommandReply)
+	if !ok {
+		return command.Result{}, ErrCommandReplyUnmarshalling
+	}
+
+	return resultFromReply(commandReply, env.Metadata())
+}
+
 // SendCommand sends a command to the specified entity and processes its response.
 //
 // This function dispatches a command to an entity identified by `entityID`. The entity validates the command, applies
@@ -746,70 +936,49 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 //   - revision: A monotonically increasing revision number representing the persisted state version.
 //   - err: An error if the command processing fails.
 //
-// nolint
+// SendCommand is a thin adapter over Dispatch (EGO-WRITE-003 adoption,
+// #60): it wraps cmd in a command.Envelope carrying freshly derived
+// Metadata and maps the resulting command.Result back to this legacy
+// shape. It remains fully supported; see design.md's Migration/Rollout
+// section for the deprecation timeline (not before Dispatch et al. have
+// run in production for a release, removal only in /v5).
 func (engine *Engine) SendCommand(ctx context.Context, entityID string, cmd Command, timeout time.Duration) (resultingState State, revision uint64, err error) {
-	if !engine.Started() {
-		return nil, 0, ErrEngineNotStarted
-	}
-
-	// entityID is not defined
-	if entityID == "" {
-		return nil, 0, ErrUndefinedEntityID
-	}
-
-	// Create a trace span that connects the caller's context (e.g. an HTTP
-	// request span) to the command dispatch, providing end-to-end visibility.
-	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
-		var span trace.Span
-		ctx, span = engine.telemetry.Tracer.Start(ctx, "ego.send_command",
-			trace.WithAttributes(
-				attribute.String("ego.entity_id", entityID),
-				attribute.String("ego.command_type", string(cmd.ProtoReflect().Descriptor().FullName())),
-			))
-		defer func() {
-			if err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-			}
-			span.End()
-		}()
-	}
-
-	ref := engine.actorSystem.Load()
-	if ref == nil {
-		return nil, 0, ErrEngineNotStarted
-	}
-
-	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
-	// here, at the single trust boundary between external callers and the
-	// actor runtime, and attach it to ctx before it ever reaches dispatch.
-	// A resolver error blocks the command outright: no dispatch, no actor,
-	// no handler, no persistence. Legacy mode (no resolver registered) is
-	// byte-identical: this whole block is skipped and ctx is untouched.
-	if engine.tenantResolver != nil {
-		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
-		if resolveErr != nil {
-			return nil, 0, resolveErr
-		}
-
-		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
-		if attachErr != nil {
-			return nil, 0, attachErr
-		}
-		ctx = attachedCtx
-	}
-
-	reply, err := ref.noSender.SendSync(ctx, entityID, cmd, timeout)
+	md, err := engine.deriveMetadata(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// cast the reply as it supposes
-	commandReply, ok := reply.(*egopb.CommandReply)
-	if ok {
-		return parseCommandReply(commandReply)
+	env, err := command.NewEnvelope(cmd, md)
+	if err != nil {
+		return nil, 0, err
 	}
-	return nil, 0, ErrCommandReplyUnmarshalling
+
+	result, err := engine.Dispatch(ctx, entityID, env, timeout)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return resultToLegacy(result)
+}
+
+// deriveMetadata builds a SendCommand call's Metadata: a child derived
+// (Metadata.Derive, D7) from a Carrier already attached to ctx — e.g. a
+// behavior's HandleCommand that itself calls SendCommand while already
+// inside a Dispatch — so nested legacy call sites get a causally-chained
+// operation for free, or a fresh root Metadata otherwise.
+//
+// It never touches ctx's tenancy attachment: Metadata's own tenant slot is
+// intentionally left unset here. Populating it is tenant+aggregate identity
+// propagation into command.Metadata, which is #54's scope, not #60's.
+func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, error) {
+	op, err := command.GenerateOperationID()
+	if err != nil {
+		return command.Metadata{}, err
+	}
+	if parent, ok := metadataFromContext(ctx); ok {
+		return parent.Derive(op)
+	}
+	return command.NewMetadata(op)
 }
 
 // AddEventPublishers registers one or more event publishers with the eGo engine.
@@ -1156,6 +1325,73 @@ func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
 		return state, 0, err
 	}
 	return state, 0, errors.New("no state received")
+}
+
+// resultFromReply maps a wire-level egopb.CommandReply onto the canonical
+// command.Result taxonomy, carrying md (the dispatched Envelope's own
+// Metadata, since the wire reply itself carries none back) as the Result's
+// Metadata.
+//
+// egopb.ErrorReply -> command.OutcomeFailed is a deliberately lossy mapping
+// (#60's Alcance calls this out explicitly): the wire protocol has no way
+// to distinguish a domain rejection from an application failure, a timeout
+// or a cancellation, so every CommandReply_ErrorReply becomes OutcomeFailed
+// regardless of its true cause — with one recognized exception: a message
+// produced by an actor's checkDeadline gate (deadline_gate.go), identified
+// by its errActorDeadlineExceeded/errActorContextCanceled prefix, maps to
+// OutcomeTimedOut/OutcomeCanceled instead, so a mid-handler deadline
+// rejection is classifiable the same way a pre-dispatch one is. An empty
+// ErrorReply.Message (never produced by this repo's own sendErrorReply call
+// sites, but not ruled out for an external egopb.CommandReply) is
+// substituted with a placeholder, since command.NewFailure rejects an empty
+// message.
+func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
+	switch r := reply.GetReply().(type) {
+	case *egopb.CommandReply_StateReply:
+		state, err := r.StateReply.GetState().UnmarshalNew()
+		if err != nil {
+			return command.Result{}, err
+		}
+		return command.NewSuccess(md, state, r.StateReply.GetSequenceNumber())
+	case *egopb.CommandReply_ErrorReply:
+		message := r.ErrorReply.GetMessage()
+		if message == "" {
+			message = "command: empty error reply message"
+		}
+		failure, err := command.NewFailure(message)
+		if err != nil {
+			return command.Result{}, err
+		}
+		switch {
+		case strings.HasPrefix(message, errActorContextCanceled.Error()):
+			return command.NewCanceled(md, failure)
+		case strings.HasPrefix(message, errActorDeadlineExceeded.Error()):
+			return command.NewTimedOut(md, failure)
+		}
+		return command.NewFailed(md, failure)
+	}
+	return command.Result{}, errors.New("no state received")
+}
+
+// resultToLegacy maps a command.Result back onto SendCommand's legacy
+// (State, uint64, error) shape: OutcomeSuccess unpacks to (state, revision,
+// nil), OutcomeSuccessNoState unpacks to (nil, 0, nil) exactly like the
+// original zero-events branch of SendCommand did, and every other outcome
+// (Rejected, Failed, TimedOut, Canceled) unpacks to (nil, 0, result.Err()).
+// result.Err() classifies via errors.Is against command.ErrRejected et al.,
+// but its Error() string is byte-identical to what the pre-#60 SendCommand
+// returned for the same reply (a plain errors.New(message)), so no existing
+// caller comparing error strings observes a behavior change.
+func resultToLegacy(result command.Result) (State, uint64, error) {
+	switch result.Outcome() {
+	case command.OutcomeSuccess:
+		state, _ := result.State()
+		return state, result.Revision(), nil
+	case command.OutcomeSuccessNoState:
+		return nil, 0, nil
+	default:
+		return nil, 0, result.Err()
+	}
 }
 
 func buildSpawnOptions(opts ...SpawnOption) []goakt.SpawnOption {

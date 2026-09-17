@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/pablogore/ego/v4/command"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
@@ -72,6 +73,14 @@ type SagaActor struct {
 	// noTenantContext (declared in event_sourced_actor.go) until seeded.
 	boundTenant tenancy.TenantContext
 
+	// rootMetadata is this saga instance's own root command.Metadata (#60,
+	// M-3), established once in PreStart from sagaID. Every command the
+	// saga dispatches (sendCommand, compensate) derives a fresh child from
+	// it via attachCommandMetadata, so the receiving actor can
+	// rematerialize a causally-chained Metadata exactly as it would for a
+	// command reached through Engine.Dispatch/SendCommand.
+	rootMetadata command.Metadata
+
 	// actorSystem, logger and self are stored during PostStart so that the
 	// consumeEvents goroutine can use them safely after the ReceiveContext
 	// from PostStart has been returned to the pool.
@@ -103,6 +112,15 @@ func (s *SagaActor) PreStart(ctx *goakt.Context) error {
 	// Presence-only signal, set before recover() so replay validation (SG5)
 	// gates on the same tenantAware value the live path uses (SG4).
 	s.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
+
+	rootOp, err := command.NewOperationID(s.sagaID)
+	if err != nil {
+		return fmt.Errorf("saga: invalid saga id for root command metadata: %w", err)
+	}
+	s.rootMetadata, err = command.NewMetadata(rootOp)
+	if err != nil {
+		return fmt.Errorf("saga: failed to build root command metadata: %w", err)
+	}
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency == nil {
@@ -598,10 +616,54 @@ func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantC
 	return nil
 }
 
+// attachCommandMetadata resolves the command.Metadata for one outgoing
+// dispatched SagaCommand and attaches it to ctx via a command.Carrier (#60,
+// M-3), the same mechanism Engine.Dispatch uses. This is what closes
+// sendCommand's/compensate's former bare context.Background() bypass: every
+// command a saga sends now carries a causally-chained Metadata to the
+// receiving actor, so a behavior implementing
+// EventSourcedEnvelopeBehavior/DurableStateEnvelopeBehavior sees it exactly
+// as it would for a command reached through Engine.Dispatch/SendCommand,
+// instead of always falling back to HandleCommand for saga-originated
+// traffic.
+//
+// explicit is cmd.Metadata: when the behavior set it explicitly (non-zero
+// OperationID), it is used as-is, giving the behavior full control over the
+// correlation/causation chain for that one command. Otherwise a fresh child
+// is derived from s.rootMetadata (established once in PreStart from the
+// saga's own id — "la operación disparadora"): correlation inherited,
+// causation set to the saga's root operation. A saga has no caller-supplied
+// per-request context to propagate — it reacts to events asynchronously off
+// its own subscription, not a synchronous caller chain — so, unlike
+// Engine.deriveMetadata, there is no "nested call" case to detect here. On
+// the rare failure of GenerateOperationID (crypto/rand exhaustion) this
+// logs and returns ctx unchanged: the command still dispatches, just
+// without Metadata, degrading exactly like any other caller that bypasses
+// Engine.Dispatch/SendCommand (see metadataFromContext).
+func (s *SagaActor) attachCommandMetadata(ctx context.Context, explicit command.Metadata) context.Context {
+	if explicit.OperationID() != "" {
+		return attachCarrier(ctx, command.MarshalMetadata(explicit))
+	}
+
+	op, err := command.GenerateOperationID()
+	if err != nil {
+		s.logger.Warn("saga: failed to generate operation id for outgoing command; dispatching without metadata", "saga_id", s.sagaID, "error", err)
+		return ctx
+	}
+	md, err := s.rootMetadata.Derive(op)
+	if err != nil {
+		s.logger.Warn("saga: failed to derive command metadata; dispatching without metadata", "saga_id", s.sagaID, "error", err)
+		return ctx
+	}
+	return attachCarrier(ctx, command.MarshalMetadata(md))
+}
+
 // sendCommand sends a command to an entity and handles the result. ctx
 // carries the saga's tenant identity (attached by the caller) through the
 // dispatch to entity B, so the receiving entity's own T4-A gate observes the
-// same tenant the saga was bound to (SG1).
+// same tenant the saga was bound to (SG1). attachCommandMetadata further
+// layers this saga's causally-chained command.Metadata (#60, M-3) on top,
+// without erasing the tenant identity ctx already carries.
 func (s *SagaActor) sendCommand(ctx context.Context, cmd SagaCommand) {
 	timeout := cmd.Timeout
 	if timeout == 0 {
@@ -609,7 +671,7 @@ func (s *SagaActor) sendCommand(ctx context.Context, cmd SagaCommand) {
 	}
 
 	noSender := s.actorSystem.NoSender()
-	reply, err := noSender.SendSync(ctx, cmd.EntityID, cmd.Command, timeout)
+	reply, err := noSender.SendSync(s.attachCommandMetadata(ctx, cmd.Metadata), cmd.EntityID, cmd.Command, timeout)
 	if err != nil {
 		action, handleErr := s.behavior.HandleError(ctx, cmd.EntityID, err, s.currentState)
 		if handleErr != nil {
@@ -665,7 +727,7 @@ func (s *SagaActor) compensate(ctx context.Context, logger kitlog.Logger, actorS
 		}
 
 		noSender := actorSystem.NoSender()
-		if _, err := noSender.SendSync(ctx, cmd.EntityID, cmd.Command, timeout); err != nil {
+		if _, err := noSender.SendSync(s.attachCommandMetadata(ctx, cmd.Metadata), cmd.EntityID, cmd.Command, timeout); err != nil {
 			logger.Error("saga: compensation command failed", "saga_id", s.sagaID, "entity_id", cmd.EntityID, "error", err)
 			s.status = SagaFailed
 			return
