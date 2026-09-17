@@ -194,3 +194,61 @@ func TestTenantWritePathE2E(t *testing.T) {
 
 	require.NoError(t, engine.Stop(ctx))
 }
+
+// TestEngineSagaStatusTenantIsolation covers the PR#78 review round 2 P1
+// finding that Engine.SagaStatus sent its query under the caller's raw ctx,
+// never resolving or attaching a TenantContext, so SagaActor's own gate
+// (checkStateReadTenant) always saw a tenant-less ctx: a tenant-aware
+// resolver would reject every caller, tenant-matching or not, defeating the
+// isolation checkStateReadTenant is supposed to enforce.
+func TestEngineSagaStatusTenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	resolver := &countingTenantResolver{id: "acme"}
+	engine := newTestEngine(t, "SagaStatusTenantIsolation", store, WithTenantResolver(resolver))
+	require.NoError(t, engine.Start(ctx))
+
+	entityAID := uuid.NewString()
+	entityA := NewAccountEventSourcedBehavior(entityAID)
+	require.NoError(t, engine.Entity(ctx, entityA))
+
+	sagaID := "saga-" + uuid.NewString()
+	saga := &callbackSagaBehavior{
+		id: sagaID,
+		handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+			created, ok := event.(*testpb.AccountCreated)
+			if !ok || created.GetAccountId() != entityAID {
+				return &SagaAction{}, nil
+			}
+			return &SagaAction{Complete: true}, nil
+		},
+	}
+	require.NoError(t, engine.Saga(ctx, saga, 0))
+
+	_, _, err := engine.SendCommand(ctx, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		_, statusErr := engine.SagaStatus(ctx, sagaID, 5*time.Second)
+		return statusErr == nil
+	}, 10*time.Second, 50*time.Millisecond, "the saga must bind to acme via the triggering event before SagaStatus can succeed")
+
+	t.Run("the tenant the saga bound to can read its own status", func(t *testing.T) {
+		info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
+		require.NoError(t, err, "SagaStatus must resolve and attach the caller's tenant, not send the query under a bare ctx")
+		assert.NotNil(t, info)
+	})
+
+	t.Run("a different resolved tenant is rejected, not just any tenant-less caller", func(t *testing.T) {
+		resolver.id = "globex"
+		defer func() { resolver.id = "acme" }()
+
+		_, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
+		require.Error(t, err, "SagaStatus for a saga bound to a different tenant must be rejected")
+	})
+
+	require.NoError(t, engine.Stop(ctx))
+}

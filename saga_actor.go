@@ -30,6 +30,7 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/eventstream"
@@ -177,7 +178,7 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 			s.compensate(sagaCtx, s.logger, ctx.ActorSystem())
 		}
 	case *egopb.GetStateCommand:
-		s.replyWithState(ctx)
+		s.getStateAndReply(ctx)
 	default:
 		ctx.Unhandled()
 	}
@@ -231,6 +232,16 @@ func (s *SagaActor) recover(ctx context.Context) error {
 		eventMsg, err := envelope.GetEvent().UnmarshalNew()
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal saga event at sequence %d: %w", envelope.GetSequenceNumber(), err)
+		}
+
+		// A tenant-binding marker (persistTenantBinding, SG-DUR1) carries no
+		// business payload — it exists solely to give a first action with no
+		// Events of its own a durable record to recover boundTenant from — so
+		// bindOrVerify above already did this envelope's only job. Calling
+		// ApplyEvent for it would hand the behavior a payload type it never
+		// emitted and never expects.
+		if _, isBindingMarker := eventMsg.(*emptypb.Empty); isBindingMarker {
+			continue
 		}
 
 		s.currentState, err = s.behavior.ApplyEvent(eventCtx, eventMsg, s.currentState)
@@ -405,11 +416,44 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 		if action.isNoop() {
 			return
 		}
-		if err := s.bindOrVerify(ctx); err != nil {
+
+		if !s.tenantAware {
+			s.processAction(ctx, action)
+			return
+		}
+
+		tc, err := tenancy.Require(ctx)
+		if err != nil {
 			s.logger.Error("saga: rejected stream event, tenant mismatch",
 				"saga_id", s.sagaID, "persistence_id", event.GetPersistenceId(), "sequence_number", event.GetSequenceNumber(), "error", err)
 			return
 		}
+
+		// Durably record ownership BEFORE boundTenant is set in memory and
+		// before any external effect (command, completion, compensation)
+		// runs (SG-DUR1). If action carries its own Events, persisting them
+		// (with tenant metadata, SG3) IS that durable record. Otherwise — a
+		// perfectly valid action with only Commands, Complete or Compensate —
+		// persist a tenant-only binding marker, so a restart can still
+		// recover boundTenant and reject a different tenant's later event
+		// instead of coming back unbound and letting another tenant claim
+		// this sagaID. Either branch returns before boundTenant is ever set
+		// if the write fails, so a failed first WriteEvents leaves zero
+		// residual appropriation: a retry, same or different tenant, starts
+		// clean.
+		if len(action.Events) > 0 {
+			if err := s.persistAndApplyEvents(ctx, action.Events); err != nil {
+				s.logger.Error("saga: failed to persist events", "saga_id", s.sagaID, "error", err)
+				return
+			}
+		} else if err := s.persistTenantBinding(ctx, tc); err != nil {
+			s.logger.Error("saga: failed to persist tenant binding", "saga_id", s.sagaID, "error", err)
+			return
+		}
+
+		s.boundTenant = tc
+		s.dispatchActionEffects(ctx, action)
+		return
 	}
 
 	s.processAction(ctx, action)
@@ -433,6 +477,16 @@ func (s *SagaActor) processAction(ctx context.Context, action *SagaAction) {
 		}
 	}
 
+	s.dispatchActionEffects(ctx, action)
+}
+
+// dispatchActionEffects sends action's commands and applies its
+// completion/compensation outcome. Split out from processAction so
+// handleStreamEvent's first-bind path (SG-DUR1) can durably persist
+// ownership (events or a tenant-binding marker) and set boundTenant itself,
+// then dispatch effects here without processAction persisting action.Events
+// a second time.
+func (s *SagaActor) dispatchActionEffects(ctx context.Context, action *SagaAction) {
 	// Send commands to entities
 	for _, cmd := range action.Commands {
 		s.sendCommand(ctx, cmd)
@@ -457,6 +511,13 @@ func (s *SagaActor) processAction(ctx context.Context, action *SagaAction) {
 // a missing/invalid tenant on ctx fails closed without persisting or
 // mutating anything. A no-op tenant-wise in legacy mode: no metadata is
 // written, byte-identical to pre-PR3 behavior.
+//
+// Envelopes and the resulting state are computed into local variables and
+// s.eventsCounter/s.currentState are only assigned after WriteEvents
+// succeeds (SG-DUR1, PR#78 review round 2 P1): mutating them first, as a
+// prior revision did, left them advanced in memory even when nothing was
+// actually persisted, mirroring the exact "mutate before the persist
+// boundary" hazard DS1 already ruled unsafe for DurableStateActor.
 func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) error {
 	var tc tenancy.TenantContext
 	if s.tenantAware {
@@ -467,13 +528,15 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 		}
 	}
 
-	var envelopes []*egopb.Event
+	nextCounter := s.eventsCounter
+	nextState := s.currentState
+	envelopes := make([]*egopb.Event, 0, len(events))
 	for _, event := range events {
-		s.eventsCounter++
+		nextCounter++
 		eventAny, _ := anypb.New(event)
 		envelope := &egopb.Event{
 			PersistenceId:  s.sagaID,
-			SequenceNumber: s.eventsCounter,
+			SequenceNumber: nextCounter,
 			IsDeleted:      false,
 			Event:          eventAny,
 			Timestamp:      time.Now().UnixNano(),
@@ -483,14 +546,56 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 		}
 		envelopes = append(envelopes, envelope)
 
-		newState, err := s.behavior.ApplyEvent(ctx, event, s.currentState)
+		newState, err := s.behavior.ApplyEvent(ctx, event, nextState)
 		if err != nil {
 			return fmt.Errorf("failed to apply saga event: %w", err)
 		}
-		s.currentState = newState
+		nextState = newState
 	}
 
-	return s.eventsStore.WriteEvents(ctx, envelopes)
+	if err := s.eventsStore.WriteEvents(ctx, envelopes); err != nil {
+		return err
+	}
+
+	s.eventsCounter = nextCounter
+	s.currentState = nextState
+	return nil
+}
+
+// persistTenantBinding durably records tc as this saga instance's tenant
+// before it is ever set on s.boundTenant, for the first-bind case where the
+// triggering action carries no Events of its own to serve as that durable
+// record (SG-DUR1, PR#78 review round 2 P1: "a valid action with only
+// Commands, Complete or Compensate" — TestTenantWritePathE2E's own saga is
+// exactly this shape). The marker carries no business payload
+// (behavior.ApplyEvent is deliberately never called for it, see recover's
+// *emptypb.Empty check) — other saga instances subscribed to the same
+// eventsTopic see it like any other event type they don't recognize and
+// their own HandleEvent relevance filter returns noop for it, the same
+// tolerance the design already requires for arbitrary irrelevant domain
+// events crossing the shared topic (SG2).
+func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantContext) error {
+	markerAny, err := anypb.New(&emptypb.Empty{})
+	if err != nil {
+		return fmt.Errorf("failed to marshal saga tenant-binding marker: %w", err)
+	}
+
+	nextCounter := s.eventsCounter + 1
+	envelope := &egopb.Event{
+		PersistenceId:  s.sagaID,
+		SequenceNumber: nextCounter,
+		IsDeleted:      false,
+		Event:          markerAny,
+		Timestamp:      time.Now().UnixNano(),
+		TenantMetadata: tenancy.MarshalMetadata(tc),
+	}
+
+	if err := s.eventsStore.WriteEvents(ctx, []*egopb.Event{envelope}); err != nil {
+		return err
+	}
+
+	s.eventsCounter = nextCounter
+	return nil
 }
 
 // sendCommand sends a command to an entity and handles the result. ctx
@@ -583,4 +688,51 @@ func (s *SagaActor) replyWithState(ctx *goakt.ReceiveContext) {
 		},
 	}
 	ctx.Response(reply)
+}
+
+// getStateAndReply returns the saga's current state without processing any
+// event. Mirrors DurableStateActor.getStateAndReply's gate (the DS4 shape,
+// PR#78 review round 2 P1): Receive dispatched *egopb.GetStateCommand
+// straight to replyWithState, bypassing handleStreamEvent and bindOrVerify
+// entirely, so any caller who knew a sagaID could read another tenant's
+// saga state even though the instance is now bound to exactly one tenant
+// for its lifetime (SG4).
+func (s *SagaActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+	if err := s.checkStateReadTenant(ctx.Context()); err != nil {
+		s.sendErrorReply(ctx, err)
+		return
+	}
+	s.replyWithState(ctx)
+}
+
+// checkStateReadTenant enforces getStateAndReply's isolation: legacy mode is
+// a no-op; tenant-aware mode requires ctx to carry a TenantContext
+// (ErrMissing otherwise) and, once this instance is bound, requires it to
+// match boundTenant (ErrDenied on mismatch, via VerifyUnchanged). An
+// unbound tenant-aware saga has no owner yet to check against, so any
+// resolved tenant may read its (still-initial) state — mirrors
+// DurableStateActor.getStateAndReply's own unseeded case.
+func (s *SagaActor) checkStateReadTenant(ctx context.Context) error {
+	if !s.tenantAware {
+		return nil
+	}
+	tc, err := tenancy.Require(ctx)
+	if err != nil {
+		return err
+	}
+	if s.boundTenant != noTenantContext {
+		return tenancy.VerifyUnchanged(s.boundTenant, tc)
+	}
+	return nil
+}
+
+// sendErrorReply sends an error as a reply message.
+func (s *SagaActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
+	ctx.Response(&egopb.CommandReply{
+		Reply: &egopb.CommandReply_ErrorReply{
+			ErrorReply: &egopb.ErrorReply{
+				Message: err.Error(),
+			},
+		},
+	})
 }
