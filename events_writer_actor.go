@@ -94,7 +94,7 @@ func (a *eventsWriterActor) PostStop(_ *goakt.Context) error {
 // only after the write succeeds. The result including any error is returned via
 // Response so the parent receives the reply through its Ask call.
 func (a *eventsWriterActor) handlePersistEvents(ctx *goakt.ReceiveContext, req *persistEventsRequest) {
-	if err := a.eventsStore.WriteEvents(ctx.Context(), req.envelopes); err != nil {
+	if err := a.eventsStore.WriteEvents(ctx.Context(), req.envelopes, persistence.Unconditional()); err != nil {
 		ctx.Response(&persistEventsResponse{Err: err})
 		return
 	}

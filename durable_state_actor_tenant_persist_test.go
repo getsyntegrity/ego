@@ -42,6 +42,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -148,7 +149,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("seeds actorTenant from valid persisted metadata", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA))))
+		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -179,7 +180,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("fails closed when tenant-aware and persisted metadata is absent", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(nil)))
+		require.NoError(t, durableStore.WriteState(ctx, newDurableState(nil), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -196,7 +197,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("fails closed when tenant-aware and persisted metadata is malformed", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"})))
+		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"}), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -213,7 +214,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("legacy mode never seeds actorTenant, even when metadata is present", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA))))
+		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -787,7 +788,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 	t.Run("recoverFromStore treats it as genesis, not a fail-closed rejection", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0)))
+		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -806,7 +807,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 	t.Run("a committed (version > 0) record still fails closed on missing metadata", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(1)))
+		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(1), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -824,7 +825,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 		durableStore := testkit.NewDurableStore()
 		behavior := newTenancyProbeDurableStateBehavior(persistenceID)
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0)))
+		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0), persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 

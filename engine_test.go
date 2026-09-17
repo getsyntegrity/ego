@@ -827,7 +827,7 @@ func TestEngineProjectionsOwnHandlers(t *testing.T) {
 		Event:          event,
 		Timestamp:      time.Now().Unix(),
 		Shard:          3,
-	}}))
+	}}, persistence.Unconditional()))
 
 	// Both projections poll independently; each must observe the event
 	// through its own handler.

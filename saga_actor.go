@@ -571,7 +571,7 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 		nextState = newState
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, envelopes); err != nil {
+	if err := s.eventsStore.WriteEvents(ctx, envelopes, persistence.Unconditional()); err != nil {
 		return err
 	}
 
@@ -608,7 +608,7 @@ func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantC
 		TenantMetadata: tenancy.MarshalMetadata(tc),
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, []*egopb.Event{envelope}); err != nil {
+	if err := s.eventsStore.WriteEvents(ctx, []*egopb.Event{envelope}, persistence.Unconditional()); err != nil {
 		return err
 	}
 

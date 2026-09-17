@@ -531,7 +531,7 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 		durableState.TenantMetadata = tenancy.MarshalMetadata(candidateTenant)
 	}
 
-	if err := entity.stateStore.WriteState(ctx, durableState); err != nil {
+	if err := entity.stateStore.WriteState(ctx, durableState, persistence.Unconditional()); err != nil {
 		return err
 	}
 
@@ -570,7 +570,7 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		durableState.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
 	}
 
-	if err := entity.stateStore.WriteState(ctx, durableState); err != nil {
+	if err := entity.stateStore.WriteState(ctx, durableState, persistence.Unconditional()); err != nil {
 		return err
 	}
 
