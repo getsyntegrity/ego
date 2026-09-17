@@ -210,6 +210,7 @@ func TestNewMetadataWithCustomRejectsCanonicalKey(t *testing.T) {
 	canonical := []string{
 		"operation_id", "correlation_id", "causation_id",
 		"timestamp", "deadline", "principal_id", "principal_kind", "tenant",
+		"expected_revision",
 	}
 	for _, key := range canonical {
 		_, err := command.NewMetadata(op, command.WithCustom(key, "x"))
