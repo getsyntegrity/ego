@@ -155,6 +155,89 @@ func TestEventStore_WriteEvents_GenesisConflictsOnExisting(t *testing.T) {
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
 }
 
+// ---------------------------------------------------------------------------
+// newEventLog: duplicate SequenceNumber must not accumulate (regression)
+// ---------------------------------------------------------------------------
+//
+// Before the eventLog restructuring, events were keyed by
+// EventKey{PersistenceID, SequenceNumber} in a sync.Map: writing the same key
+// again silently overwrote the prior entry, so every read path observed
+// exactly one event per (PersistenceID, SequenceNumber) pair. These tests
+// prove the eventLog-based representation preserves that observable
+// semantic through ReplayEvents, GetLatestEvent, GetShardEvents,
+// ShardOffsets, and DeleteEvents.
+
+func TestEventStore_WriteEvents_DuplicateSequenceNumberOverwritesNotAccumulates(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
+
+	replayed, err := store.ReplayEvents(ctx, "dup-sn", 1, 10, 100)
+	require.NoError(t, err)
+	assert.Len(t, replayed, 1, "rewriting SequenceNumber 1 must not produce two visible events")
+
+	latest, err := store.GetLatestEvent(ctx, "dup-sn")
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+}
+
+func TestEventStore_WriteEvents_DuplicateSequenceNumberWithinConditionalWriteOverwrites(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectRevision(1)))
+
+	replayed, err := store.ReplayEvents(ctx, "dup-sn-conditional", 1, 10, 100)
+	require.NoError(t, err)
+	assert.Len(t, replayed, 1, "a conditional rewrite of SequenceNumber 1 must not produce two visible events")
+
+	latest, err := store.GetLatestEvent(ctx, "dup-sn-conditional")
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+}
+
+func TestEventStore_WriteEvents_DuplicateSequenceNumberDoesNotDuplicateShardEventsOrOffsets(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
+
+	shardEvents, _, err := store.GetShardEvents(ctx, 1, 0, 100)
+	require.NoError(t, err)
+	assert.Len(t, shardEvents, 1, "rewriting SequenceNumber 1 must not duplicate its shard's events")
+
+	offsets, err := store.ShardOffsets(ctx)
+	require.NoError(t, err)
+	require.Contains(t, offsets, uint64(1))
+	assert.Equal(t, shardEvents[0].GetTimestamp(), offsets[1], "the duplicate rewrite must not skew the shard's offset beyond its single surviving event")
+}
+
+func TestEventStore_WriteEvents_DuplicateSequenceNumberThenDeleteEventsLeavesNoResidual(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 2), persistence.Unconditional()))
+
+	require.NoError(t, store.DeleteEvents(ctx, "dup-sn-delete", 1))
+
+	replayed, err := store.ReplayEvents(ctx, "dup-sn-delete", 1, 10, 100)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1, "deleting up to SequenceNumber 1 must leave exactly the surviving event, not a residual duplicate")
+	assert.EqualValues(t, 2, replayed[0].GetSequenceNumber())
+}
+
 func TestEventStore_WriteEvents_ConditionalBatchMustShareOnePersistenceID(t *testing.T) {
 	ctx := context.TODO()
 	store := NewEventsStore()

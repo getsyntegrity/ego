@@ -206,10 +206,17 @@ func (x *EventStore) writeUnconditional(events []*egopb.Event) error {
 }
 
 // newEventLog builds the successor log for old (nil for a nonexistent
-// persistenceID) by appending newEvents, advancing revision to the highest
-// SequenceNumber seen. old is never mutated; a wholly new *eventLog is
-// published so that CompareAndSwap's pointer-identity comparison stays
-// meaningful.
+// persistenceID) by merging newEvents into old.events, advancing revision to
+// the highest SequenceNumber seen. old is never mutated; a wholly new
+// *eventLog is published so that CompareAndSwap's pointer-identity comparison
+// stays meaningful.
+//
+// A newEvent whose SequenceNumber collides with one already in the log
+// replaces that entry in place rather than appending a duplicate, matching
+// the pre-eventLog representation's behavior: events were keyed by
+// EventKey{PersistenceID, SequenceNumber} in a sync.Map, so writing the same
+// key again silently overwrote the prior entry and Range() always observed
+// exactly one event per (PersistenceID, SequenceNumber) pair.
 func newEventLog(old *eventLog, newEvents []*egopb.Event) *eventLog {
 	var revision uint64
 	var existing []*egopb.Event
@@ -218,12 +225,23 @@ func newEventLog(old *eventLog, newEvents []*egopb.Event) *eventLog {
 		existing = old.events
 	}
 
-	merged := make([]*egopb.Event, 0, len(existing)+len(newEvents))
-	merged = append(merged, existing...)
-	merged = append(merged, newEvents...)
+	merged := make([]*egopb.Event, len(existing), len(existing)+len(newEvents))
+	copy(merged, existing)
+
+	indexBySequence := make(map[uint64]int, len(merged))
+	for i, event := range merged {
+		indexBySequence[event.GetSequenceNumber()] = i
+	}
 
 	for _, event := range newEvents {
-		if sn := event.GetSequenceNumber(); sn > revision {
+		sn := event.GetSequenceNumber()
+		if i, ok := indexBySequence[sn]; ok {
+			merged[i] = event
+		} else {
+			indexBySequence[sn] = len(merged)
+			merged = append(merged, event)
+		}
+		if sn > revision {
 			revision = sn
 		}
 	}
