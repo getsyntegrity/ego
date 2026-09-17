@@ -962,6 +962,24 @@ func (engine *Engine) SagaStatus(ctx context.Context, sagaID string, timeout tim
 		return nil, ErrEngineNotStarted
 	}
 
+	// Tenant-aware mode: resolve the caller's tenant identity at this trust
+	// boundary and attach it to ctx before the query reaches the saga actor,
+	// mirroring SendCommand. Without this, SagaActor.checkStateReadTenant
+	// would see a tenant-less ctx and reject every tenant-aware caller with
+	// ErrMissing, instead of enforcing isolation against a foreign tenant.
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+
+		attachedCtx, attachErr := tenancy.Attach(ctx, tenantContext)
+		if attachErr != nil {
+			return nil, attachErr
+		}
+		ctx = attachedCtx
+	}
+
 	reply, err := ref.noSender.SendSync(ctx, sagaID, new(egopb.GetStateCommand), timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get saga status for %s: %w", sagaID, err)

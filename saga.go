@@ -73,6 +73,15 @@ type SagaAction struct {
 	Compensate bool
 }
 
+// isNoop reports whether the action has no observable effect: nothing to
+// persist, no command to dispatch, no completion, no compensation. A saga
+// behavior returns such an action for stream events it recognizes as
+// irrelevant (SG4: this lets the caller skip tenant binding for events the
+// saga was never going to act on).
+func (a *SagaAction) isNoop() bool {
+	return a == nil || (len(a.Commands) == 0 && len(a.Events) == 0 && !a.Complete && !a.Compensate)
+}
+
 // SagaCommand represents a command to send to another entity.
 type SagaCommand struct {
 	// EntityID is the target entity's persistence ID.
