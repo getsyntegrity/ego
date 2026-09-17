@@ -161,14 +161,20 @@ type EventSourcedActor struct {
 	batchMu          sync.Mutex
 
 	// batchBase and batchHasPrecondition implement D9's base-anchored
-	// precondition for the batched path. batchBase is set to eventsCounter
-	// when a new batch opens (the first command folded into an otherwise
-	// empty batchEntries) and is the store revision the eventual flush
-	// appends onto. batchHasPrecondition records whether any command
-	// admitted into this batch cycle declared an ExpectedRevision at all;
-	// see resolveBatchPrecondition for how the two combine into the single
-	// WritePrecondition the flush's one atomic write carries. Both are
-	// cleared by resetBatch alongside the rest of the batch-cycle state.
+	// precondition for the batched path. batchBase is set once, when a new
+	// batch opens (the founding command folded into an otherwise empty
+	// batchEntries): to the founder's own declared ExpectedRevision when it
+	// declares one, else to eventsCounter. Either way it is the physical
+	// store revision the eventual flush appends onto, and it never moves
+	// again for the rest of that batch cycle — a later admitted command's
+	// own declared revision was already checked against the running logical
+	// counter by the admission gate, so it must not overwrite batchBase with
+	// a logical mid-batch value the store was never actually at.
+	// batchHasPrecondition records whether ANY command admitted into this
+	// batch cycle declared an ExpectedRevision at all — not only the
+	// founder; see resolveBatchPrecondition for how the two combine into the
+	// single WritePrecondition the flush's one atomic write carries. Both
+	// are cleared by resetBatch alongside the rest of the batch-cycle state.
 	batchBase            uint64
 	batchHasPrecondition bool
 
@@ -1393,6 +1399,25 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		return
 	}
 
+	// A non-founding command that reaches this point has, by the admission
+	// gate just above, declared ExpectedRevision == counter (or declared
+	// nothing at all). Record "this batch cycle owes a real precondition"
+	// right here, unconditionally, rather than deferring it to the
+	// events-seeding block further down: that block sits after the
+	// len(events)==0 early return below, so a command that is admitted with
+	// a declared revision but goes on to produce zero events of its own
+	// (e.g. an idempotent no-op) would otherwise never reach it, silently
+	// losing its declared guarantee exactly like the bug this whole
+	// mechanism exists to prevent — the fact that it produced no events of
+	// its own does not mean the batch's physical CAS may stop honoring the
+	// revision it was admitted under. The founder's own case is unaffected
+	// (len(entity.batchEntries) is still 0 for it here) and continues to be
+	// seeded only once its events are confirmed, per batchBase's field
+	// comment below.
+	if len(entity.batchEntries) > 0 && hasRevision {
+		entity.batchHasPrecondition = true
+	}
+
 	events, err := entity.dispatchToBehavior(goCtx, command, state)
 	if err != nil {
 		if span != nil {
@@ -1462,17 +1487,39 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 
 	// Seed the batch's base revision (design.md D9) the moment a fresh
 	// batch opens (batchEntries still empty at this point in the call).
-	// batchBase anchors the eventual flush's precondition to what the
-	// founding command itself declared — mirroring preconditionFromRevision's
-	// D4 mapping for the single-command (direct) path exactly, just deferred
-	// to flush time. A founding command is always admitted regardless of
-	// what it declares (see the admission gate above), but its own stale
-	// declared revision is still caught: the store's CAS on flush validates
-	// batchBase against the real store revision, exactly as it would for a
-	// non-batched command declaring the same value. batchHasPrecondition
-	// records whether anything was declared at all, since a batch where
-	// nothing was ever declared must flush unconditionally rather than
-	// anchoring to whatever counter happened to be current.
+	// batchBase anchors the eventual flush's precondition to the physical
+	// store revision the batch's events actually append onto: the founding
+	// command's own declared revision when it declares one — mirroring
+	// preconditionFromRevision's D4 mapping for the single-command (direct)
+	// path exactly, just deferred to flush time — or, when the founder
+	// declares nothing, `counter` (== entity.eventsCounter at this point,
+	// since batchEntries is still empty), the real pre-batch store revision.
+	// A founding command is always admitted regardless of what it declares
+	// (see the admission gate above), but its own stale declared revision is
+	// still caught: the store's CAS on flush validates batchBase against the
+	// real store revision, exactly as it would for a non-batched command
+	// declaring the same value.
+	//
+	// batchBase is set only here, once, and never moves afterward — every
+	// later admitted command's own declared revision (if any) was already
+	// validated by the admission gate above against the running logical
+	// counter, which is exactly equivalent to re-checking it against
+	// batchBase at flush time (design.md D9 step 3's equivalence argument),
+	// so a later command's declared revision must never overwrite batchBase:
+	// doing so would anchor the physical CAS to a logical mid-batch revision
+	// the store was never at, guaranteeing every such flush fails.
+	//
+	// batchHasPrecondition, separately, must reflect whether ANY admitted
+	// command in this batch cycle declared a revision — not merely the
+	// founder — since design.md D9 step 3 resolves to Unconditional() only
+	// when "no admitted command declared one". A batch founded unconditional
+	// still owes a later admitted command's explicit ExpectedRevision a real
+	// CAS precondition; leaving batchHasPrecondition pinned to the founder's
+	// own hasRevision would silently downgrade that later command's declared
+	// guarantee to Unconditional() at flush, which is the bug this comment
+	// block prevents. The non-founder case is handled above, immediately
+	// after the admission gate (and before the len(events)==0 early return),
+	// so only the founder's own seeding remains here.
 	if len(entity.batchEntries) == 0 {
 		entity.batchHasPrecondition = hasRevision
 		if hasRevision {
