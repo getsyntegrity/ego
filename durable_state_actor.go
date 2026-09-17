@@ -24,6 +24,7 @@ package ego
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -371,12 +372,70 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 		return
 	}
 
-	if err := entity.commitState(ctx, newState, newVersion, time.Now(), candidateTenant); err != nil {
+	// ExpectedRevision (CONTRACT-EXPECTED-REVISION-v1) is read from command
+	// metadata here, immediately before the conditional write, and only
+	// travels to commitState/WriteState — it never reached dispatchToBehavior
+	// above and never mutated entity.currentVersion/entity.currentState
+	// (spec: "ExpectedRevision Is Read as a Write Precondition, Not Domain
+	// Input"). Mirrors EventSourcedActor.processCommandAndReply's equivalent
+	// extraction point (design.md D4/D8).
+	revision, hasRevision := expectedRevisionFromContext(ctx)
+	precondition := preconditionFromRevision(revision, hasRevision)
+
+	if err := entity.commitState(ctx, newState, newVersion, time.Now(), candidateTenant, precondition); err != nil {
+		// D10 for DurableStateActor (no shutdown/restart path, unlike
+		// EventSourcedActor): re-run recovery in place, best-effort, rather
+		// than tearing the actor down, whenever this actor cannot prove its
+		// in-memory currentVersion is still in sync with StorageRevision.
+		//
+		// Run BEFORE sendErrorReply, not after: sendErrorReply completes the
+		// ask/reply protocol and unblocks the caller while this goroutine's
+		// mailbox turn is still technically in flight, so any in-memory
+		// mutation performed after it races a caller-triggered shutdown
+		// (observed via -race). Recovering first means the actor is fully
+		// settled in memory by the time the caller can act on the reply.
+		entity.recoverFromConflictIfNeeded(ctx, err)
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
 
 	entity.sendStateReply(receiveContext)
+}
+
+// recoverFromConflictIfNeeded implements D10's post-conflict handling for
+// DurableStateActor. EventSourcedActor's equivalent (shouldStayAliveAfterConflict)
+// shuts itself down whenever it is not provably in sync, letting the
+// supervisor restart it into recover(); DurableStateActor has no such
+// shutdown/restart path, so it re-runs recoverFromStore in place instead,
+// best-effort, under the same "not provably in sync" condition.
+//
+// Called before sendErrorReply (see processCommand) so the in-memory
+// recovery is fully settled before the caller can observe the reply and act
+// on it (e.g. trigger a shutdown) — see the -race note there.
+//
+// A recoverFromStore failure here is deliberately swallowed (best-effort,
+// matching this file's other _ = call sites): the failed command has
+// already been replied to, and the next command's own recovery attempt (or
+// its own conflict) will retry the same corrective read.
+func (entity *DurableStateActor) recoverFromConflictIfNeeded(ctx context.Context, err error) {
+	if entity.provablyInSyncAfterConflict(err) {
+		return
+	}
+	_ = entity.recoverFromStore(ctx)
+}
+
+// provablyInSyncAfterConflict mirrors EventSourcedActor.shouldStayAliveAfterConflict's
+// structure: it reports whether err is a *persistence.ConflictError whose
+// reported ActualRevision is known and equal to entity.currentVersion — the
+// only case where entity.currentVersion is already known to match
+// StorageRevision without a corrective read.
+func (entity *DurableStateActor) provablyInSyncAfterConflict(err error) bool {
+	var conflictErr *persistence.ConflictError
+	if !errors.As(err, &conflictErr) {
+		return false
+	}
+	actual, ok := conflictErr.ActualRevision()
+	return ok && actual == entity.currentVersion
 }
 
 // dispatchToBehavior invokes entity.behavior against cmd, preferring
@@ -514,7 +573,18 @@ func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) err
 // actorTenant) happens immediately after WriteState succeeds and before
 // Publish, so a Publish failure can never un-appropriate what the store
 // already durably committed.
-func (entity *DurableStateActor) commitState(ctx context.Context, newState State, newVersion uint64, commandTime time.Time, candidateTenant tenancy.TenantContext) error {
+//
+// precondition is the caller's ExpectedRevision (CONTRACT-EXPECTED-REVISION-v1),
+// already translated to a persistence.WritePrecondition by processCommand,
+// and is the sole authority WriteState's conditional write is decided
+// against — never entity.currentVersion, which may be stale relative to the
+// store's own StorageRevision (spec: "Conditional Write Delegates the
+// Compare-and-Commit to Persistence"). On a *persistence.ConflictError from
+// WriteState, this returns before any of the in-memory mutation below or the
+// Publish call runs, so a rejected write leaves currentState/currentVersion/
+// actorTenant/cachedStateAny exactly as they were (spec: "No partial commit
+// on conflict").
+func (entity *DurableStateActor) commitState(ctx context.Context, newState State, newVersion uint64, commandTime time.Time, candidateTenant tenancy.TenantContext, precondition persistence.WritePrecondition) error {
 	newStateAny, err := anypb.New(newState)
 	if err != nil {
 		return err
@@ -531,7 +601,7 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 		durableState.TenantMetadata = tenancy.MarshalMetadata(candidateTenant)
 	}
 
-	if err := entity.stateStore.WriteState(ctx, durableState, persistence.Unconditional()); err != nil {
+	if err := entity.stateStore.WriteState(ctx, durableState, precondition); err != nil {
 		return err
 	}
 
