@@ -131,12 +131,16 @@ serialization.
 - THEN the store's own compare-and-swap — not caller ordering — determines
   which one commits
 
-### Requirement: Two Independent EventStore Writers, Same Expected Revision (AC9, T8 — architectural gate)
+### Requirement: Two Independent EventStore Writers, Same Expected Revision (AC9, T8, T11 — architectural gate)
 
 Two independent writers issuing `WriteEvents` against the same
 persistenceID with the same exact-revision(N) precondition, started
 concurrently with no shared serialization, MUST yield exactly one success
-and exactly one concurrency-conflict error.
+and exactly one concurrency-conflict error. Because both writers call
+`WriteEvents` directly — no actor, no mailbox between them — this scenario
+is also the T11 proof that the guarantee is enforced by persistence itself,
+not by mailbox/actor serialization; nothing later in the actor-integration
+PRs (PR3/PR4) needs to re-demonstrate it.
 
 #### Scenario: Concurrent same-revision writers split exactly 1/1
 
@@ -146,12 +150,14 @@ and exactly one concurrency-conflict error.
 - THEN exactly one call commits and exactly one returns a concurrency
   conflict — never two commits, never two conflicts
 
-### Requirement: Two Independent StateStore Writers, Same Expected Revision (AC10, T9 — architectural gate)
+### Requirement: Two Independent StateStore Writers, Same Expected Revision (AC10, T9, T11 — architectural gate)
 
 Two independent writers issuing `WriteState` against the same
 persistenceID with the same exact-revision(N) precondition, started
 concurrently with no shared serialization, MUST yield exactly one success
-and exactly one concurrency-conflict error.
+and exactly one concurrency-conflict error. As with the `EventsStore` half
+above, both writers call `WriteState` directly with no actor/mailbox in the
+path — this is the T11 proof for `StateStore`.
 
 #### Scenario: Concurrent same-revision writers split exactly 1/1
 
@@ -244,7 +250,7 @@ this spec's.
 |---|---|
 | AC3 | Atomic Conditional Write — EventsStore; Explicit Write Precondition Type; Revision Model Mapping for Current Adapters |
 | AC4 | Atomic Conditional Write — StateStore; Explicit Write Precondition Type; Revision Model Mapping for Current Adapters |
-| AC9 | Real Compare-and-Swap in testkit Stores; Two Independent EventStore Writers, Same Expected Revision (T8) |
-| AC10 | Real Compare-and-Swap in testkit Stores; Two Independent StateStore Writers, Same Expected Revision (T9) |
+| AC9 | Real Compare-and-Swap in testkit Stores; Two Independent EventStore Writers, Same Expected Revision (T8, T11) |
+| AC10 | Real Compare-and-Swap in testkit Stores; Two Independent StateStore Writers, Same Expected Revision (T9, T11) |
 | AC11 | Concurrent Genesis Writers (T10) |
 | AC12 | Breaking-Change Declaration and Migration Path |

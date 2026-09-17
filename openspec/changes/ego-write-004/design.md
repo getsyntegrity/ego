@@ -182,10 +182,10 @@ Canonical grammar (D7), one line, no wrapping prefix:
 | Unit — `command` | presence, genesis≠absence, carrier round-trip, no `Derive` inheritance, code constant, six outcomes intact | T5 (contract half) |
 | Unit — `persistence` | precondition states, zero-value rejection, scope error, `Error()`/`Parse` round trip | — |
 | Unit — `ego` | classifier registry: conflict→Rejected, non-prefix-overlap invariant, unwrapped-error invariant | — |
-| Concurrency — testkit | unserialized goroutines under `-race`; success==1 ∧ conflict==1 | T1–T4, T8, T9, T10 |
-| Integration — ES | real actor + real store; stale revision leaves storage unchanged; batch merge + forced flush | T6, T11 |
+| Concurrency — testkit | unserialized goroutines under `-race`; success==1 ∧ conflict==1; T11: same unserialized-writer construction is the proof the guarantee is persistence-owned, not mailbox-owned | T1–T4, T8, T9, T10, T11 |
+| Integration — ES | real actor + real store; stale revision leaves storage unchanged; batch merge + forced flush | T6 |
 | Integration — DS | real actor + real store; `checkPreconditions` passes yet conflict still rejects | T7 |
-| E2E / compat | legacy commands unchanged end to end; guarantee survives bypassing mailbox ordering | T5, T11 |
+| E2E / compat | legacy commands unchanged end to end | T5 |
 
 ## Threat Matrix
 
