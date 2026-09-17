@@ -38,6 +38,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -87,8 +88,9 @@ func TestEventsWriterActor(t *testing.T) {
 		}
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
-			envelopes: envelopes,
-			topic:     "topic.events.0",
+			envelopes:    envelopes,
+			topic:        "topic.events.0",
+			precondition: persistence.Unconditional(),
 		}, 5*time.Second)
 		require.NoError(t, err)
 		require.NotNil(t, reply)
@@ -215,8 +217,9 @@ func TestEventsWriterActor(t *testing.T) {
 		pause.For(time.Second)
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
-			envelopes: nil,
-			topic:     "topic.events.0",
+			envelopes:    nil,
+			topic:        "topic.events.0",
+			precondition: persistence.Unconditional(),
 		}, 5*time.Second)
 		require.NoError(t, err)
 		require.NotNil(t, reply)
