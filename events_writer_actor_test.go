@@ -125,7 +125,7 @@ func TestEventsWriterActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 		sub := eventStream.AddSubscriber()

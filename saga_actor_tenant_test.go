@@ -40,6 +40,7 @@ import (
 
 	"github.com/pablogore/ego/v4/egopb"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -477,7 +478,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 
 		sagaID := "saga-" + uuid.NewString()
 		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}))
+		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -507,7 +508,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 		sagaID := "saga-" + uuid.NewString()
 		firstEvent := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
 		secondEvent := newAnyEvent(t, sagaID, 2, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantB))
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{firstEvent, secondEvent}))
+		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{firstEvent, secondEvent}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -531,7 +532,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 
 		sagaID := "saga-" + uuid.NewString()
 		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}))
+		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -677,7 +678,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 		require.NoError(t, err)
 
 		failingStore := new(mocks.EventsStore)
-		failingStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError).Once()
+		failingStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError).Once()
 
 		var handleEventCalls int
 		behavior := &callbackSagaBehavior{
