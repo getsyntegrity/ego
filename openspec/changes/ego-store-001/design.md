@@ -1,6 +1,6 @@
 # Design — Persistence store contract, canonical form (EGO-STORE-001)
 
-Ratification only. WRITE-004's decisions (design.md, `docs/propose-ego-write-004`) are not restated here — they are cited where this change depends on them.
+Ratification only. WRITE-004's decisions (`openspec/changes/ego-write-004/design.md`, shipped on `main`) are not restated here — they are cited where this change depends on them.
 
 ## D1 — `EventsStore` and `StateStore` stay separate interfaces
 

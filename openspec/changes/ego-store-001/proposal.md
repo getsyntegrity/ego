@@ -6,7 +6,7 @@
 | Date | 2026-09-17 |
 | Phase | `sdd-propose` — proposed |
 | Tracker | [`#70`](https://github.com/getsyntegrity/ego/issues/70), epic [`#13`](https://github.com/getsyntegrity/ego/issues/13) |
-| Depends on | [`#65`](https://github.com/getsyntegrity/ego/issues/65) WRITE-004 (**merged**, tracker `docs/propose-ego-write-004`@`d031ce5`) — ratified authority for `WritePrecondition`/`ConflictError`/CAS |
+| Depends on | [`#65`](https://github.com/getsyntegrity/ego/issues/65) WRITE-004 (**completed**, `main`@`9435db9`) — ratified authority for `WritePrecondition`/`ConflictError`/CAS |
 | Blocks | TENANT-003 (EventStore isolation), not yet filed — cited as blocked by #23 |
 | Does not block | [`#66`](https://github.com/getsyntegrity/ego/issues/66) WRITE-005, [`#67`](https://github.com/getsyntegrity/ego/issues/67) WRITE-006 — both already have everything they need from WRITE-004 |
 
