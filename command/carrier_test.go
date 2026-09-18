@@ -23,6 +23,7 @@
 package command_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -193,6 +194,90 @@ func TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace(t *testing.T) {
 
 	_, err = command.UnmarshalMetadata(carrier)
 	require.ErrorIs(t, err, command.ErrReservedKey)
+}
+
+func TestCarrierRoundTripExpectedRevisionPresent(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op, command.WithExpectedRevision(7))
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	require.Equal(t, "7", carrier["ego.cmd.expected_revision"])
+
+	got, err := command.UnmarshalMetadata(carrier)
+	require.NoError(t, err)
+
+	revision, ok := got.ExpectedRevision()
+	require.True(t, ok)
+	require.Equal(t, uint64(7), revision)
+}
+
+func TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	require.NotContains(t, carrier, "ego.cmd.expected_revision")
+
+	got, err := command.UnmarshalMetadata(carrier)
+	require.NoError(t, err)
+
+	_, ok := got.ExpectedRevision()
+	require.False(t, ok)
+}
+
+func TestUnmarshalMetadataRejectsMalformedExpectedRevision(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	carrier["ego.cmd.expected_revision"] = "not-a-number"
+
+	_, err = command.UnmarshalMetadata(carrier)
+	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+}
+
+func TestUnmarshalMetadataRejectsNegativeExpectedRevision(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	carrier["ego.cmd.expected_revision"] = "-1"
+
+	_, err = command.UnmarshalMetadata(carrier)
+	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+}
+
+func TestUnmarshalMetadataRejectsExpectedRevisionOverflow(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	// math.MaxUint64 + 1, one past the largest value strconv.ParseUint(_, 10, 64) accepts.
+	carrier["ego.cmd.expected_revision"] = "18446744073709551616"
+
+	_, err = command.UnmarshalMetadata(carrier)
+	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+}
+
+func TestCarrierRoundTripExpectedRevisionMaxUint64(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	md, err := command.NewMetadata(op, command.WithExpectedRevision(math.MaxUint64))
+	require.NoError(t, err)
+
+	carrier := command.MarshalMetadata(md)
+	require.Equal(t, "18446744073709551615", carrier["ego.cmd.expected_revision"])
+
+	got, err := command.UnmarshalMetadata(carrier)
+	require.NoError(t, err)
+
+	revision, ok := got.ExpectedRevision()
+	require.True(t, ok)
+	require.Equal(t, uint64(math.MaxUint64), revision)
 }
 
 func TestCarrierDelegatesTenantSerializationToTenancyPackage(t *testing.T) {

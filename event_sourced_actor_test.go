@@ -54,6 +54,7 @@ import (
 	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
 	mockadapter "github.com/pablogore/ego/v4/mocks/eventadapter"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -869,7 +870,7 @@ func TestEventSourcedActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 			Shard:          0,
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1313,7 +1314,7 @@ func TestEventSourcedActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 			Shard:          0,
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -2567,7 +2568,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2618,7 +2619,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2667,7 +2668,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          eventAny,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2714,7 +2715,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          &anypb.Any{TypeUrl: "type.googleapis.com/unknown.TypeThatDoesNotExist", Value: []byte{}},
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2759,7 +2760,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          eventAny,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}))
+		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
 
 		// use a behavior that returns an error from HandleEvent
 		behavior := NewFailingHandleEventBehavior(persistenceID)
@@ -2912,7 +2913,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		eventStore.EXPECT().DeleteEvents(mock.Anything, persistenceID, uint64(2)).Return(assert.AnError)
 
 		snapshotStore := new(mocks.SnapshotStore)
@@ -2976,7 +2977,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Times(4)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(4)
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
@@ -3098,7 +3099,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -3205,9 +3206,9 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event) {
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
@@ -3311,14 +3312,14 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event) {
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
 			Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -3408,9 +3409,9 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event) {
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
@@ -3923,7 +3924,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 
@@ -3973,7 +3974,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 

@@ -81,13 +81,57 @@ func (d *DurableStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-// WriteState persist durable state for a given persistenceID.
+// WriteState persist durable state for a given persistenceID, subject to precondition. See
+// persistence.StateStore for the full contract. The conditional path is decided by a single
+// sync.Map CompareAndSwap (exact-revision) or LoadOrStore (genesis) attempt against the store
+// itself: a failed attempt is a terminal conflict, never retried, since retrying would silently
+// convert a declared, no-longer-valid expectation into success.
 // nolint
-func (d *DurableStore) WriteState(_ context.Context, state *egopb.DurableState) error {
+func (d *DurableStore) WriteState(_ context.Context, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
 	if !d.connected.Load() {
 		return errors.New("durable store is not connected")
 	}
-	d.db.Store(state.GetPersistenceId(), state)
+	if !precondition.Valid() {
+		return persistence.ErrInvalidPrecondition
+	}
+
+	persistenceID := state.GetPersistenceId()
+
+	if precondition.IsUnconditional() {
+		d.db.Store(persistenceID, state)
+		return nil
+	}
+
+	raw, exists := d.db.Load(persistenceID)
+	var current *egopb.DurableState
+	if exists {
+		current = raw.(*egopb.DurableState)
+	}
+
+	if precondition.IsGenesis() {
+		if exists {
+			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
+		}
+		if actual, loaded := d.db.LoadOrStore(persistenceID, state); loaded {
+			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
+		}
+		return nil
+	}
+
+	expectedRevision, _ := precondition.Revision()
+	if !exists || current.GetVersionNumber() != expectedRevision {
+		if exists {
+			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
+		}
+		return persistence.NewConflictError(persistenceID, precondition)
+	}
+
+	if !d.db.CompareAndSwap(persistenceID, current, state) {
+		if actual, ok := d.db.Load(persistenceID); ok {
+			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
+		}
+		return persistence.NewConflictError(persistenceID, precondition)
+	}
 	return nil
 }
 

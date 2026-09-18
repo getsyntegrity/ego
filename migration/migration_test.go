@@ -37,6 +37,7 @@ import (
 
 	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -104,7 +105,7 @@ func writeLegacyEvent(t *testing.T, store *testkit.EventStore, persistenceID str
 	evt := new(egopb.Event)
 	require.NoError(t, proto.Unmarshal(raw, evt))
 
-	require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{evt}))
+	require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{evt}, persistence.Unconditional()))
 }
 
 func TestMigratorRun(t *testing.T) {

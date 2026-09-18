@@ -24,6 +24,7 @@ package ego
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -158,6 +159,24 @@ type EventSourcedActor struct {
 	shutdownOnDrain  bool
 	flushTimer       *time.Timer
 	batchMu          sync.Mutex
+
+	// batchBase and batchHasPrecondition implement D9's base-anchored
+	// precondition for the batched path. batchBase is set once, when a new
+	// batch opens (the founding command folded into an otherwise empty
+	// batchEntries): to the founder's own declared ExpectedRevision when it
+	// declares one, else to eventsCounter. Either way it is the physical
+	// store revision the eventual flush appends onto, and it never moves
+	// again for the rest of that batch cycle — a later admitted command's
+	// own declared revision was already checked against the running logical
+	// counter by the admission gate, so it must not overwrite batchBase with
+	// a logical mid-batch value the store was never actually at.
+	// batchHasPrecondition records whether ANY command admitted into this
+	// batch cycle declared an ExpectedRevision at all — not only the
+	// founder; see resolveBatchPrecondition for how the two combine into the
+	// single WritePrecondition the flush's one atomic write carries. Both
+	// are cleared by resetBatch alongside the rest of the batch-cycle state.
+	batchBase            uint64
+	batchHasPrecondition bool
 
 	// Direct (non-batched) persist-in-flight fields. Active only while phase
 	// is phasePersisting or phaseDirectReplying. Mutually exclusive with the
@@ -645,6 +664,57 @@ func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd C
 	return envBehavior.HandleEnvelope(goCtx, env, priorState)
 }
 
+// expectedRevisionFromContext extracts the ExpectedRevision metadata field
+// (design.md D5) from goCtx, if any. It reuses metadataFromContext — the
+// same lookup dispatchToBehavior performs — so both the direct and batched
+// paths agree on how a command's declared precondition intention is
+// recovered. A command reached without envelope metadata (e.g. one that
+// bypasses Engine.Dispatch/SendCommand) is treated identically to one that
+// carries metadata but declares no ExpectedRevision: both resolve to "no
+// declared revision" and, via preconditionFromRevision, to Unconditional().
+func expectedRevisionFromContext(goCtx context.Context) (uint64, bool) {
+	md, ok := metadataFromContext(goCtx)
+	if !ok {
+		return 0, false
+	}
+	return md.ExpectedRevision()
+}
+
+// preconditionFromRevision resolves an ExpectedRevision metadata value to
+// the persistence.WritePrecondition it names (design.md D4): no declared
+// revision maps to Unconditional() (legacy compatibility, D8), 0 maps to
+// ExpectGenesis(), and any N > 0 maps to ExpectRevision(N).
+func preconditionFromRevision(revision uint64, hasRevision bool) persistence.WritePrecondition {
+	if !hasRevision {
+		return persistence.Unconditional()
+	}
+	if revision == 0 {
+		return persistence.ExpectGenesis()
+	}
+	return persistence.ExpectRevision(revision)
+}
+
+// shouldStayAliveAfterConflict implements design.md D10: after a failed
+// persist, the actor may keep running only when it can prove its own
+// in-memory state still matches the store. That is true exactly when err
+// unwraps to a *persistence.ConflictError whose ActualRevision() is known
+// and equals entity.eventsCounter — the actor's own last-confirmed
+// revision, unchanged by a failed write. In that case nothing this actor
+// didn't already know about landed between its last confirmed write and
+// this rejected attempt, so discarding the pending write and continuing is
+// safe. Any other outcome (a non-conflict failure, or a conflict whose
+// actual revision is unknown or disagrees with eventsCounter) means this
+// actor's view may already be stale relative to the store, so it must shut
+// down and let the supervisor rebuild it via recover().
+func (entity *EventSourcedActor) shouldStayAliveAfterConflict(err error) bool {
+	var conflictErr *persistence.ConflictError
+	if !errors.As(err, &conflictErr) {
+		return false
+	}
+	actual, ok := conflictErr.ActualRevision()
+	return ok && actual == entity.eventsCounter
+}
+
 // sendErrorReply sends a [egopb.CommandReply] containing the given error.
 func (entity *EventSourcedActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
 	ctx.Response(&egopb.CommandReply{
@@ -839,7 +909,10 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// an earlier command on this actor).
 	entity.establishActorTenant(tc)
 
-	entity.persistAsync(ctx, envelopes, pendingState, pendingCounter, commandTime, startTime, span)
+	revision, hasRevision := expectedRevisionFromContext(goCtx)
+	precondition := preconditionFromRevision(revision, hasRevision)
+
+	entity.persistAsync(ctx, envelopes, pendingState, pendingCounter, commandTime, startTime, span, precondition)
 }
 
 // endCommandSpan ends span (if tracing is enabled) and records the
@@ -866,7 +939,7 @@ func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trac
 // concurrently-persisting entity once the pool was exhausted (issue #64).
 // The originating command is stashed and redelivered by
 // handleDirectPersistResponse once the write completes.
-func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span) {
+func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span, precondition persistence.WritePrecondition) {
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout
 
@@ -880,7 +953,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 	ctx.Stash()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, eventsTopic, timeout)
+		return askEventsWriter(writer, envelopes, eventsTopic, timeout, precondition)
 	})
 
 	entity.phase = phasePersisting
@@ -896,7 +969,7 @@ func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveC
 
 	if resp.Err != nil {
 		entity.directErr = resp.Err
-		entity.directShutdown = true
+		entity.directShutdown = !entity.shouldStayAliveAfterConflict(resp.Err)
 		entity.phase = phaseDirectReplying
 		ctx.UnstashAll()
 		return
@@ -1096,10 +1169,11 @@ func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error
 // the returned *persistEventsResponse's Err field rather than returned as a
 // Go error, so PipeTo always delivers a persistEventsResponse message that
 // Receive already knows how to route.
-func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration) (*persistEventsResponse, error) {
+func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition) (*persistEventsResponse, error) {
 	reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
-		envelopes: envelopes,
-		topic:     topic,
+		envelopes:    envelopes,
+		topic:        topic,
+		precondition: precondition,
 	}, timeout)
 
 	if err != nil {
@@ -1302,6 +1376,48 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 		return
 	}
 
+	// Admission gate (design.md D9): a command declaring ExpectedRevision=E
+	// joins the currently open batch only if E == counter (the revision
+	// the batch reaches immediately before this command's own events). A
+	// command declaring nothing always joins. This only matters once a
+	// batch is already open (batchEntries non-empty) — the command that
+	// opens a fresh batch always founds it, since there is nothing yet to
+	// be inconsistent with; see batchBase's field comment. This is a
+	// batching-boundary decision only, never a commit decision: an
+	// inadmissible command forces an early flush of what is already
+	// staged, then stashes itself to be reprocessed as a fresh command
+	// once that flush's reply drains (replyFromBatch's surplus-message
+	// path). The store's CAS remains the sole authority over whether any
+	// given precondition actually holds.
+	revision, hasRevision := expectedRevisionFromContext(goCtx)
+	if len(entity.batchEntries) > 0 && hasRevision && revision != counter {
+		if span != nil {
+			span.End()
+		}
+		entity.flushBatch(ctx)
+		ctx.Stash()
+		return
+	}
+
+	// A non-founding command that reaches this point has, by the admission
+	// gate just above, declared ExpectedRevision == counter (or declared
+	// nothing at all). Record "this batch cycle owes a real precondition"
+	// right here, unconditionally, rather than deferring it to the
+	// events-seeding block further down: that block sits after the
+	// len(events)==0 early return below, so a command that is admitted with
+	// a declared revision but goes on to produce zero events of its own
+	// (e.g. an idempotent no-op) would otherwise never reach it, silently
+	// losing its declared guarantee exactly like the bug this whole
+	// mechanism exists to prevent — the fact that it produced no events of
+	// its own does not mean the batch's physical CAS may stop honoring the
+	// revision it was admitted under. The founder's own case is unaffected
+	// (len(entity.batchEntries) is still 0 for it here) and continues to be
+	// seeded only once its events are confirmed, per batchBase's field
+	// comment below.
+	if len(entity.batchEntries) > 0 && hasRevision {
+		entity.batchHasPrecondition = true
+	}
+
 	events, err := entity.dispatchToBehavior(goCtx, command, state)
 	if err != nil {
 		if span != nil {
@@ -1369,6 +1485,50 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// scope strictly subsumes batch-cycle scope (D6).
 	entity.establishActorTenant(tc)
 
+	// Seed the batch's base revision (design.md D9) the moment a fresh
+	// batch opens (batchEntries still empty at this point in the call).
+	// batchBase anchors the eventual flush's precondition to the physical
+	// store revision the batch's events actually append onto: the founding
+	// command's own declared revision when it declares one — mirroring
+	// preconditionFromRevision's D4 mapping for the single-command (direct)
+	// path exactly, just deferred to flush time — or, when the founder
+	// declares nothing, `counter` (== entity.eventsCounter at this point,
+	// since batchEntries is still empty), the real pre-batch store revision.
+	// A founding command is always admitted regardless of what it declares
+	// (see the admission gate above), but its own stale declared revision is
+	// still caught: the store's CAS on flush validates batchBase against the
+	// real store revision, exactly as it would for a non-batched command
+	// declaring the same value.
+	//
+	// batchBase is set only here, once, and never moves afterward — every
+	// later admitted command's own declared revision (if any) was already
+	// validated by the admission gate above against the running logical
+	// counter, which is exactly equivalent to re-checking it against
+	// batchBase at flush time (design.md D9 step 3's equivalence argument),
+	// so a later command's declared revision must never overwrite batchBase:
+	// doing so would anchor the physical CAS to a logical mid-batch revision
+	// the store was never at, guaranteeing every such flush fails.
+	//
+	// batchHasPrecondition, separately, must reflect whether ANY admitted
+	// command in this batch cycle declared a revision — not merely the
+	// founder — since design.md D9 step 3 resolves to Unconditional() only
+	// when "no admitted command declared one". A batch founded unconditional
+	// still owes a later admitted command's explicit ExpectedRevision a real
+	// CAS precondition; leaving batchHasPrecondition pinned to the founder's
+	// own hasRevision would silently downgrade that later command's declared
+	// guarantee to Unconditional() at flush, which is the bug this comment
+	// block prevents. The non-founder case is handled above, immediately
+	// after the admission gate (and before the len(events)==0 early return),
+	// so only the founder's own seeding remains here.
+	if len(entity.batchEntries) == 0 {
+		entity.batchHasPrecondition = hasRevision
+		if hasRevision {
+			entity.batchBase = revision
+		} else {
+			entity.batchBase = counter
+		}
+	}
+
 	entity.batchBuffer = append(entity.batchBuffer, envelopes...)
 	entity.batchState = pendingState
 	entity.batchCounter = pendingCounter
@@ -1412,12 +1572,31 @@ func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 	envelopes := entity.batchBuffer
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout
+	precondition := entity.resolveBatchPrecondition()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, topic, timeout)
+		return askEventsWriter(writer, envelopes, topic, timeout, precondition)
 	})
 
 	entity.phase = phaseFlushing
+}
+
+// resolveBatchPrecondition implements design.md D9's resolution step: the
+// one atomic write a flush performs carries a single WritePrecondition
+// covering every command folded into the batch. When no admitted command
+// declared a revision at all, the flush is unconditional. Otherwise the
+// batch's base revision (batchBase, seeded when the batch opened) decides
+// between ExpectGenesis (an empty store) and ExpectRevision(batchBase) —
+// mirroring preconditionFromRevision's D4 mapping, but anchored to the
+// batch's base rather than a single command's own declared revision.
+func (entity *EventSourcedActor) resolveBatchPrecondition() persistence.WritePrecondition {
+	if !entity.batchHasPrecondition {
+		return persistence.Unconditional()
+	}
+	if entity.batchBase == 0 {
+		return persistence.ExpectGenesis()
+	}
+	return persistence.ExpectRevision(entity.batchBase)
 }
 
 // handleBatchFlushTick is invoked when the flush window timer expires.
@@ -1465,7 +1644,7 @@ func (entity *EventSourcedActor) handleBatchPersistResponse(ctx *goakt.ReceiveCo
 			entity.batchEntries[i].reply = errReply
 		}
 		entity.remainingReplies = len(entity.batchEntries)
-		entity.shutdownOnDrain = true
+		entity.shutdownOnDrain = !entity.shouldStayAliveAfterConflict(resp.Err)
 		entity.phase = phaseReplying
 		ctx.UnstashAll()
 		return
@@ -1580,6 +1759,8 @@ func (entity *EventSourcedActor) resetBatch() {
 	entity.batchNumEvents = 0
 	entity.remainingReplies = 0
 	entity.shutdownOnDrain = false
+	entity.batchBase = 0
+	entity.batchHasPrecondition = false
 	// entity.actorTenant (D6, EGO-TENANT-002) is deliberately NOT cleared
 	// here: it records the actor's tenant identity for its full lifetime,
 	// not merely the batch cycle that just ended. See its field doc comment

@@ -1336,15 +1336,20 @@ func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
 // (#60's Alcance calls this out explicitly): the wire protocol has no way
 // to distinguish a domain rejection from an application failure, a timeout
 // or a cancellation, so every CommandReply_ErrorReply becomes OutcomeFailed
-// regardless of its true cause — with one recognized exception: a message
-// produced by an actor's checkDeadline gate (deadline_gate.go), identified
-// by its errActorDeadlineExceeded/errActorContextCanceled prefix, maps to
+// regardless of its true cause — with two recognized exceptions, applied by
+// classifyErrorReply's ordered registry (reply_classification.go, design.md
+// D8): a message produced by an actor's checkDeadline gate
+// (deadline_gate.go), identified by its
+// errActorDeadlineExceeded/errActorContextCanceled prefix, maps to
 // OutcomeTimedOut/OutcomeCanceled instead, so a mid-handler deadline
-// rejection is classifiable the same way a pre-dispatch one is. An empty
-// ErrorReply.Message (never produced by this repo's own sendErrorReply call
-// sites, but not ruled out for an external egopb.CommandReply) is
-// substituted with a placeholder, since command.NewFailure rejects an empty
-// message.
+// rejection is classifiable the same way a pre-dispatch one is; and a
+// message produced by a conditional write's *persistence.ConflictError
+// (D3/D7), identified by its persistence.ErrConcurrencyConflict prefix,
+// maps to OutcomeRejected with Failure.Code() ==
+// command.CodeConcurrencyConflict (D6). An empty ErrorReply.Message (never
+// produced by this repo's own sendErrorReply call sites, but not ruled out
+// for an external egopb.CommandReply) is substituted with a placeholder,
+// since command.NewFailure rejects an empty message.
 func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
 	switch r := reply.GetReply().(type) {
 	case *egopb.CommandReply_StateReply:
@@ -1358,17 +1363,7 @@ func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Re
 		if message == "" {
 			message = "command: empty error reply message"
 		}
-		failure, err := command.NewFailure(message)
-		if err != nil {
-			return command.Result{}, err
-		}
-		switch {
-		case strings.HasPrefix(message, errActorContextCanceled.Error()):
-			return command.NewCanceled(md, failure)
-		case strings.HasPrefix(message, errActorDeadlineExceeded.Error()):
-			return command.NewTimedOut(md, failure)
-		}
-		return command.NewFailed(md, failure)
+		return classifyErrorReply(md, message)
 	}
 	return command.Result{}, errors.New("no state received")
 }

@@ -1065,7 +1065,7 @@ func TestSagaActor(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()

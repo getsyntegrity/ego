@@ -210,6 +210,7 @@ func TestNewMetadataWithCustomRejectsCanonicalKey(t *testing.T) {
 	canonical := []string{
 		"operation_id", "correlation_id", "causation_id",
 		"timestamp", "deadline", "principal_id", "principal_kind", "tenant",
+		"expected_revision",
 	}
 	for _, key := range canonical {
 		_, err := command.NewMetadata(op, command.WithCustom(key, "x"))
@@ -321,6 +322,51 @@ func TestMetadataDeriveCustomNotInherited(t *testing.T) {
 	_, ok := child.CustomValue("region")
 	require.False(t, ok)
 	require.Empty(t, child.Custom())
+}
+
+func TestNewMetadataWithoutExpectedRevision(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+
+	md, err := command.NewMetadata(op)
+	require.NoError(t, err)
+
+	_, ok := md.ExpectedRevision()
+	require.False(t, ok)
+}
+
+func TestNewMetadataWithExpectedRevisionZeroIsGenesisNotAbsence(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+
+	md, err := command.NewMetadata(op, command.WithExpectedRevision(0))
+	require.NoError(t, err)
+
+	got, ok := md.ExpectedRevision()
+	require.True(t, ok)
+	require.Equal(t, uint64(0), got)
+}
+
+func TestNewMetadataWithExpectedRevisionPositive(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+
+	md, err := command.NewMetadata(op, command.WithExpectedRevision(42))
+	require.NoError(t, err)
+
+	got, ok := md.ExpectedRevision()
+	require.True(t, ok)
+	require.Equal(t, uint64(42), got)
+}
+
+func TestMetadataDeriveDoesNotInheritExpectedRevision(t *testing.T) {
+	op := mustOperationID(t, "op-1")
+	parent, err := command.NewMetadata(op, command.WithExpectedRevision(5))
+	require.NoError(t, err)
+
+	childOp := mustOperationID(t, "op-2")
+	child, err := parent.Derive(childOp)
+	require.NoError(t, err)
+
+	_, ok := child.ExpectedRevision()
+	require.False(t, ok)
 }
 
 func TestMetadataDerivePrincipalInheritedUnlessOverridden(t *testing.T) {

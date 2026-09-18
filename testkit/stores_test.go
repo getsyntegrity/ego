@@ -33,6 +33,7 @@ import (
 
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/encryption"
+	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 )
 
@@ -102,7 +103,7 @@ func TestEventStore_WriteAndReplayEvents(t *testing.T) {
 		{PersistenceId: "entity-1", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
 
-	require.NoError(t, store.WriteEvents(ctx, events))
+	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 	t.Run("replay all events", func(t *testing.T) {
 		replayed, err := store.ReplayEvents(ctx, "entity-1", 1, 3, 10)
@@ -143,7 +144,7 @@ func TestEventStore_GetLatestEvent(t *testing.T) {
 			{PersistenceId: "latest-test", SequenceNumber: 5, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 			{PersistenceId: "latest-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events))
+		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 		latest, err := store.GetLatestEvent(ctx, "latest-test")
 		require.NoError(t, err)
@@ -165,7 +166,7 @@ func TestEventStore_DeleteEvents(t *testing.T) {
 		{PersistenceId: "del-test", SequenceNumber: 2, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		{PersistenceId: "del-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
-	require.NoError(t, store.WriteEvents(ctx, events))
+	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 	err := store.DeleteEvents(ctx, "del-test", 2)
 	require.NoError(t, err)
@@ -197,7 +198,7 @@ func TestEventStore_PersistenceIDs(t *testing.T) {
 			{PersistenceId: "pid-b", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 			{PersistenceId: "pid-c", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events))
+		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 		ids, nextToken, err := store.PersistenceIDs(ctx, 2, "")
 		require.NoError(t, err)
@@ -232,7 +233,7 @@ func TestEventStore_GetShardEvents(t *testing.T) {
 			{PersistenceId: "shard-test-2", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 1, Shard: 5},
 			{PersistenceId: "shard-test-3", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 2, Shard: 6},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events))
+		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 		result, nextOffset, err := store.GetShardEvents(ctx, 5, 0, 10)
 		require.NoError(t, err)
@@ -254,7 +255,7 @@ func TestEventStore_ShardOffsets(t *testing.T) {
 		{PersistenceId: "sn-2", SequenceNumber: 1, Event: anyEvent, Timestamp: 300, Shard: 2},
 		{PersistenceId: "sn-3", SequenceNumber: 1, Event: anyEvent, Timestamp: 200, Shard: 1},
 	}
-	require.NoError(t, store.WriteEvents(ctx, events))
+	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
 
 	offsets, err := store.ShardOffsets(ctx)
 	require.NoError(t, err)
@@ -327,7 +328,7 @@ func TestDurableStore_WriteAndGetState(t *testing.T) {
 	}
 
 	t.Run("write and read state", func(t *testing.T) {
-		require.NoError(t, store.WriteState(ctx, state))
+		require.NoError(t, store.WriteState(ctx, state, persistence.Unconditional()))
 		got, err := store.GetLatestState(ctx, "ds-entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, got)
@@ -349,7 +350,7 @@ func TestDurableStore_WriteState_NotConnected(t *testing.T) {
 	store := NewDurableStore()
 	anyState, _ := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 100})
 	state := &egopb.DurableState{PersistenceId: "entity-1", ResultingState: anyState, VersionNumber: 1}
-	err := store.WriteState(ctx, state)
+	err := store.WriteState(ctx, state, persistence.Unconditional())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }

@@ -35,8 +35,9 @@ import (
 // [eventsWriterActor] to persist a batch of event envelopes and publish them
 // to the event stream.
 type persistEventsRequest struct {
-	envelopes []*egopb.Event
-	topic     string
+	envelopes    []*egopb.Event
+	topic        string
+	precondition persistence.WritePrecondition
 }
 
 // persistEventsResponse is sent from the [eventsWriterActor] back to the
@@ -94,7 +95,7 @@ func (a *eventsWriterActor) PostStop(_ *goakt.Context) error {
 // only after the write succeeds. The result including any error is returned via
 // Response so the parent receives the reply through its Ask call.
 func (a *eventsWriterActor) handlePersistEvents(ctx *goakt.ReceiveContext, req *persistEventsRequest) {
-	if err := a.eventsStore.WriteEvents(ctx.Context(), req.envelopes); err != nil {
+	if err := a.eventsStore.WriteEvents(ctx.Context(), req.envelopes, req.precondition); err != nil {
 		ctx.Response(&persistEventsResponse{Err: err})
 		return
 	}
