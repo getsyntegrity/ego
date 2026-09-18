@@ -24,6 +24,7 @@ package ego
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -124,6 +125,66 @@ func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 	if !ok || actualRevision != 5 {
 		t.Fatalf("got recovered actual revision %d (ok=%v), want 5", actualRevision, ok)
 	}
+}
+
+// TestClassifyErrorReplyWrappedConflictDegradesToFailed is task 5.3's test
+// for design.md D7's unwrapped-error invariant: "a *ConflictError MUST
+// reach sendErrorReply unwrapped -- no fmt.Errorf("...: %w", err) prefix --
+// or classification degrades to OutcomeFailed. [...] A store whose error
+// does not conform simply does not classify: the caller sees today's
+// OutcomeFailed, never a wrong conflict." This documents the invariant
+// rather than weakening it: classifyErrorReply matches by
+// strings.HasPrefix against the message, so a non-empty prefix in front of
+// the *ConflictError's own Error() text makes the sentinel match fail and
+// the message fall through to the registry's default (OutcomeFailed), not
+// to OutcomeRejected/concurrency_conflict.
+func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
+	md := newTestMetadata(t)
+	conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
+
+	t.Run("unwrapped conflict classifies as concurrency_conflict", func(t *testing.T) {
+		result, err := classifyErrorReply(md, conflictErr.Error())
+		if err != nil {
+			t.Fatalf("classifyErrorReply: %v", err)
+		}
+		if result.Outcome() != command.OutcomeRejected {
+			t.Fatalf("got outcome %s, want OutcomeRejected", result.Outcome())
+		}
+		failure, ok := result.Failure()
+		if !ok {
+			t.Fatalf("result.Failure() ok = false, want true")
+		}
+		code, hasCode := failure.Code()
+		if !hasCode || code != command.CodeConcurrencyConflict {
+			t.Fatalf("got code %q (hasCode=%v), want %q", code, hasCode, command.CodeConcurrencyConflict)
+		}
+	})
+
+	t.Run("prefix-wrapped conflict degrades to OutcomeFailed, not OutcomeRejected", func(t *testing.T) {
+		wrapped := fmt.Errorf("actor: %w", conflictErr)
+		message := wrapped.Error()
+
+		result, err := classifyErrorReply(md, message)
+		if err != nil {
+			t.Fatalf("classifyErrorReply: %v", err)
+		}
+		if result.Outcome() != command.OutcomeFailed {
+			t.Fatalf("got outcome %s, want OutcomeFailed (D7: a wrapped ConflictError must not classify as concurrency_conflict)", result.Outcome())
+		}
+		if !errors.Is(result.Err(), command.ErrFailed) {
+			t.Fatalf("result.Err() does not classify as command.ErrFailed")
+		}
+
+		failure, ok := result.Failure()
+		if !ok {
+			t.Fatalf("result.Failure() ok = false, want true")
+		}
+		if code, hasCode := failure.Code(); hasCode {
+			if code == command.CodeConcurrencyConflict {
+				t.Fatalf("a prefix-wrapped ConflictError must never classify as %q", command.CodeConcurrencyConflict)
+			}
+		}
+	})
 }
 
 func TestClassifyErrorReplyDefaultsToFailed(t *testing.T) {
