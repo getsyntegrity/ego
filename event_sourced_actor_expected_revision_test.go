@@ -24,6 +24,7 @@ package ego
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -404,4 +405,140 @@ func TestEventSourcedBatchedExpectedRevisionSuccessAndConflict(t *testing.T) {
 	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
 	require.Equal(t, command.OutcomeSuccess, result.Outcome())
 	assert.EqualValues(t, 2, result.Revision())
+}
+
+// -----------------------------------------------------------------------
+// Task 3.9: the handler's received arguments must contain no
+// ExpectedRevision value. Mirrors PR4's
+// TestDurableStateHandlerShapeUnchangedByExpectedRevision, but adapted to
+// EventSourcedBehavior's actual signature: HandleCommand(ctx, cmd,
+// priorState) has no priorVersion parameter at all (behavior.go), so
+// there is no version-shaped slot ExpectedRevision could leak into. The
+// meaningful, still-adapted proof is that priorState observed by the
+// handler always reflects the actor's real, store-confirmed state and
+// never anything derived from the command's declared ExpectedRevision --
+// including when a wildly bogus ExpectedRevision (unrelated to the real
+// revision) is declared, which later causes the write itself to be
+// rejected downstream as a concurrency_conflict but must have no bearing
+// on what the handler already saw, since extraction happens only after
+// dispatchToBehavior returns (design.md D9 step 1, spec: "ExpectedRevision
+// Extracted for the Persist Request Only").
+// -----------------------------------------------------------------------
+
+// revisionProbeEventSourcedBehavior records every HandleCommand
+// invocation's observed priorState balance, so task 3.9 can assert what
+// the handler actually received, independent of what ExpectedRevision the
+// dispatched command's metadata carried.
+type revisionProbeEventSourcedBehavior struct {
+	id string
+
+	mu            sync.Mutex
+	priorBalances []float64
+}
+
+var _ EventSourcedBehavior = (*revisionProbeEventSourcedBehavior)(nil)
+
+func newRevisionProbeEventSourcedBehavior(id string) *revisionProbeEventSourcedBehavior {
+	return &revisionProbeEventSourcedBehavior{id: id}
+}
+
+func (x *revisionProbeEventSourcedBehavior) ID() string {
+	return x.id
+}
+
+func (x *revisionProbeEventSourcedBehavior) InitialState() State {
+	return new(testpb.Account)
+}
+
+func (x *revisionProbeEventSourcedBehavior) HandleCommand(_ context.Context, cmd Command, priorState State) ([]Event, error) {
+	account, _ := priorState.(*testpb.Account)
+	x.mu.Lock()
+	x.priorBalances = append(x.priorBalances, account.GetAccountBalance())
+	x.mu.Unlock()
+
+	switch c := cmd.(type) {
+	case *testpb.CreateAccount:
+		return []Event{
+			&testpb.AccountCreated{AccountId: x.id, AccountBalance: c.GetAccountBalance()},
+		}, nil
+	case *testpb.CreditAccount:
+		return []Event{
+			&testpb.AccountCredited{AccountId: c.GetAccountId(), AccountBalance: c.GetBalance()},
+		}, nil
+	default:
+		return nil, errors.New("unhandled command")
+	}
+}
+
+func (x *revisionProbeEventSourcedBehavior) HandleEvent(_ context.Context, event Event, priorState State) (State, error) {
+	switch evt := event.(type) {
+	case *testpb.AccountCreated:
+		return &testpb.Account{AccountId: evt.GetAccountId(), AccountBalance: evt.GetAccountBalance()}, nil
+	case *testpb.AccountCredited:
+		account := priorState.(*testpb.Account)
+		return &testpb.Account{
+			AccountId:      account.GetAccountId(),
+			AccountBalance: account.GetAccountBalance() + evt.GetAccountBalance(),
+		}, nil
+	default:
+		return nil, errors.New("unhandled event")
+	}
+}
+
+func (x *revisionProbeEventSourcedBehavior) MarshalBinary() ([]byte, error) {
+	return json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: x.id})
+}
+
+func (x *revisionProbeEventSourcedBehavior) UnmarshalBinary(data []byte) error {
+	aux := struct {
+		ID string `json:"id"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	x.id = aux.ID
+	return nil
+}
+
+// observedPriorBalances returns every priorState balance HandleCommand has
+// been called with so far, in call order.
+func (x *revisionProbeEventSourcedBehavior) observedPriorBalances() []float64 {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return append([]float64(nil), x.priorBalances...)
+}
+
+func TestEventSourcedHandlerArgumentsNeverCarryExpectedRevision(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "ES-handler-shape", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	behavior := newRevisionProbeEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, behavior))
+
+	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+	require.Equal(t, command.OutcomeSuccess, created.Outcome())
+	require.EqualValues(t, 1, created.Revision())
+
+	// A deliberately bogus ExpectedRevision, unrelated to the real revision
+	// (1): if it ever leaked into priorState, the handler's observed
+	// balance would read something other than the actor's real,
+	// store-confirmed balance (500). The write itself is later rejected
+	// downstream as a concurrency_conflict (proven by
+	// TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict), but that
+	// must have no bearing on what the handler already saw.
+	conflicted := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(999999))
+	require.Equal(t, command.OutcomeRejected, conflicted.Outcome())
+
+	balances := behavior.observedPriorBalances()
+	require.Len(t, balances, 2, "HandleCommand must still be invoked for the rejected command -- ExpectedRevision is extracted only after dispatchToBehavior returns")
+	assert.EqualValues(t, 0, balances[0], "genesis call must see the initial zero-value state, not ExpectedRevision=0 reinterpreted as anything else")
+	assert.EqualValues(t, 500, balances[1], "second call must see the actor's real, store-confirmed balance (500), never anything derived from the declared ExpectedRevision (999999)")
 }
