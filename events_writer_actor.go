@@ -69,8 +69,17 @@ func newEventsWriterActor() *eventsWriterActor {
 
 // PreStart loads the events store and event stream from the actor system extensions.
 func (a *eventsWriterActor) PreStart(ctx *goakt.Context) error {
-	a.eventsStore = ctx.Extension(extensions.EventsStoreExtensionID).(*extensions.EventsStore).Underlying()
-	a.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
+	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	if err != nil {
+		return err
+	}
+
+	a.eventsStore = eventsStoreExt.Underlying()
+	a.eventsStream = eventsStreamExt.Underlying()
 	return nil
 }
 

@@ -248,8 +248,16 @@ func newEventSourcedActor() *EventSourcedActor {
 // recovers the actor state from the events and snapshot stores. Child actors
 // are spawned in PostStart where [goakt.ReceiveContext] is available.
 func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
-	entity.eventsStore = ctx.Extension(extensions.EventsStoreExtensionID).(*extensions.EventsStore).Underlying()
-	entity.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
+	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	if err != nil {
+		return err
+	}
+	entity.eventsStore = eventsStoreExt.Underlying()
+	entity.eventsStream = eventsStreamExt.Underlying()
 	entity.persistenceID = ctx.ActorName()
 	entity.persistTimeout = defaultPersistTimeout
 	// Presence-only signal: tenant-aware mode is active when the engine

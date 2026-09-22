@@ -233,6 +233,38 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
+	t.Run("returns an error instead of panicking when the events store extension is missing", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+
+		// Deliberately omit extensions.NewEventsStore: this reproduces an
+		// eventsWriterActor being spawned against an actor system that never
+		// registered (or already reset, e.g. via shutdown) the events store
+		// extension. Before the fix for issue #99, the unchecked type
+		// assertion in PreStart panicked with an unrecoverable "interface
+		// conversion" error that crashed the whole process instead of
+		// failing this one Spawn call.
+		actorSystem, err := goakt.NewActorSystem("TestWriterMissingExtSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStream(eventStream),
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		pause.For(time.Second)
+
+		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", newEventsWriterActor())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
 	t.Run("marks unhandled messages as unhandled", func(t *testing.T) {
 		ctx := context.TODO()
 
