@@ -30,6 +30,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   Records written with a context now go through the `*Context` methods, so a kit-logger configured with its OpenTelemetry decorator (`pkg/logger/otel`) stamps `trace_id`/`span_id` on eGo's records for free.
 
+- **`persistence.EventsStore`, `persistence.StateStore` and `persistence.SnapshotStore` now key every record by the pair `(persistence.Scope, persistence_id)`, not `persistence_id` alone (EGO-TENANT-003).** Every record-addressing method gained a required `scope persistence.Scope` parameter, immediately after `ctx`:
+
+  ```go
+  // EventsStore
+  WriteEvents(ctx, events []*egopb.Event, precondition WritePrecondition) error ->
+  WriteEvents(ctx, scope persistence.Scope, events []*egopb.Event, precondition WritePrecondition) error
+
+  DeleteEvents(ctx, persistenceID string, toSequenceNumber uint64) error ->
+  DeleteEvents(ctx, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error
+
+  ReplayEvents(ctx, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) ->
+  ReplayEvents(ctx, scope persistence.Scope, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error)
+
+  GetLatestEvent(ctx, persistenceID string) (*egopb.Event, error) ->
+  GetLatestEvent(ctx, scope persistence.Scope, persistenceID string) (*egopb.Event, error)
+
+  PersistenceIDs(ctx, pageSize uint64, pageToken string) ([]string, string, error) ->
+  PersistenceIDs(ctx, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error)
+
+  // StateStore
+  WriteState(ctx, state *egopb.DurableState, precondition WritePrecondition) error ->
+  WriteState(ctx, scope persistence.Scope, state *egopb.DurableState, precondition WritePrecondition) error
+
+  GetLatestState(ctx, persistenceID string) (*egopb.DurableState, error) ->
+  GetLatestState(ctx, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error)
+
+  // SnapshotStore
+  WriteSnapshot(ctx, snapshot *egopb.Snapshot) error ->
+  WriteSnapshot(ctx, scope persistence.Scope, snapshot *egopb.Snapshot) error
+
+  GetLatestSnapshot(ctx, persistenceID string) (*egopb.Snapshot, error) ->
+  GetLatestSnapshot(ctx, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error)
+
+  DeleteSnapshots(ctx, persistenceID string, toSequenceNumber uint64) error ->
+  DeleteSnapshots(ctx, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error
+  ```
+
+  `Connect`, `Disconnect` and `Ping` on all three interfaces are deliberately unchanged: connection lifecycle is not record-addressing, so it carries no tenant boundary. `EventsStore.GetShardEvents` and `EventsStore.ShardOffsets` are also unchanged, for a different reason: both are shard-level projection reads, not `(scope, persistence_id)`-addressed record reads, and read-side/projection isolation across tenants is EGO-TENANT-004's scope — explicitly not decided by this change.
+
+  `persistence.ConflictError` now carries a `Scope` — `NewConflictError(scope, persistenceID, expected, opts...)` requires it, and `(*ConflictError).Scope()` recovers it — and its canonical wire grammar gained a `scope=` field ahead of `persistence_id=`:
+
+  ```
+  ego: concurrency conflict: scope=<unscoped|tenant:<id>>, persistence_id=<id>, expected=<unconditional|genesis|N>, actual=<M|unknown>
+  ```
+
+  `persistence.ParseConflictError` already parses the new field. Anything else that parses `(*ConflictError).Error()`'s text directly, instead of using `errors.As` or `ParseConflictError`, must be updated to account for it.
+
+  **Upgrade recipe for an external store adapter:** accept the new `scope persistence.Scope` parameter on every method listed above, and fold it into the record key STRUCTURALLY — for a SQL-backed store that means a real tenant column that participates in the primary key and in every `WHERE` clause, not a string concatenated onto the existing `persistence_id` column. `persistence.Scope.String()` (`"unscoped"`, `"tenant:<id>"`) is a diagnostic rendering only and must never become a storage key: nothing at the string level stops a tenant literally named `"unscoped"` from rendering as `"tenant:unscoped"`, so a store that reduces `Scope` to its string before keying loses the structural guarantee `Scope.Equal` provides. Key on the `Scope` value itself (or its kind and `TenantID()`), never on `String()`.
+
+  **Zero-migration guarantee:** an adapter that maps `persistence.Unscoped()` onto its existing key layout unchanged needs no data migration and no backfill for a deployment that never activates tenancy (no `tenancy.TenantResolver` configured) — every call already carries `Unscoped()` today, before and after the adapter is upgraded. A deployment that *adopts* tenancy on existing data does need a migration: every row written before this change was written under `Unscoped()`, which is a real, distinct `Scope` value, not a wildcard that matches every tenant. Adopting tenancy does not retroactively assign those rows to a tenant — an operator must deliberately decide, per existing `persistence_id`, which tenant (if any) it now belongs to, and either keep serving it under `Unscoped()` or re-key it under a chosen tenant `Scope`. This change does not ship that migration tool; it is deployment-specific and stays outside EGO-TENANT-003's scope.
+
+  **`persistence/conformance` is the acceptance test.** An adapter author wires it into their own test package:
+
+  ```go
+  func TestPostgresEventsStoreConformance(t *testing.T) {
+      conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
+          return newPostgresEventsStore(t) // a fresh, empty store per subtest
+      })
+  }
+  ```
+
+  `conformance.RunStateStoreConformance` and `conformance.RunSnapshotStoreConformance` cover the other two interfaces the same way (see `testkit/conformance_test.go` for the exact wiring against this repo's own stores). Passing the applicable suites is the evidence of EGO-TENANT-003 compliance.
+
+  **Known limitation:** a GoAkt actor's name is still the caller-supplied `entityID`/`sagaID`, not tenant-qualified, so two tenants that happen to use the same entity id contend for one actor. This is fail-closed and leak-free — the actor binds to whichever tenant's spawn wins the race, and every command from the other tenant is rejected before any store is ever touched — but the losing tenant simply cannot use that entity id until a follow-up gives actors tenant-qualified identity.
+
 ### 🐛 Bug Fixes
 
 - **`migration.WithLogger(nil)` no longer panics.** The migrator stored whatever the option supplied, so a nil — or a typed-nil such as `(*myLogger)(nil)` — replaced the default and the first log call inside `Run` dereferenced it. `migration.New` now resolves the logger after applying every option, so a nil or typed-nil logger falls back to `ego.DefaultLogger()`, the same semantics the engine already applied to `ego.WithLogger`. The `ego.ResolveLogger` helper exposes that single rule to packages outside the root instead of each one re-implementing typed-nil detection.

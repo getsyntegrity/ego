@@ -37,6 +37,7 @@ eGo deliberately does not hide the actor runtime. Your application creates and o
 - [Sagas and process managers](#sagas-and-process-managers)
 - [Clustering](#clustering)
 - [Persistence](#persistence)
+    - [Tenant scoping](#tenant-scoping)
 - [Encryption and schema evolution](#encryption-and-schema-evolution)
 - [Observability](#observability)
 - [Logging](#logging)
@@ -503,6 +504,12 @@ import (
 ```
 
 Applications own store connectivity: connect stores before starting the actor system and disconnect them after the engine and actor system have stopped.
+
+### Tenant scoping
+
+Every record-addressing method on `EventsStore`, `StateStore`, and `SnapshotStore` takes a `persistence.Scope`: a persisted record's effective identity is the pair `(Scope, persistence_id)`, never `persistence_id` alone. `persistence.Unscoped()` is the scope every call carries when no [`tenancy.TenantResolver`](./tenancy/resolver.go) is configured, so a deployment that never activates tenancy is unaffected. Registering one with `ego.WithTenantResolver` — including the built-in `tenancy.WithSingleTenant(id)` for a deployment with exactly one tenant and no per-call plumbing — makes the engine resolve a real tenant `Scope` and bind it to each entity/saga actor at spawn.
+
+A custom store adapter must key its records on `(Scope, persistence_id)` structurally, e.g. a real tenant column in a SQL primary key and every `WHERE` clause — never by concatenating `Scope.String()`, which is a diagnostic rendering only. [`persistence/conformance`](./persistence/conformance) is the isolation acceptance suite: wire `conformance.RunEventsStoreConformance` (and its `RunStateStoreConformance`/`RunSnapshotStoreConformance` equivalents) into the adapter's own tests, the way [`testkit/conformance_test.go`](./testkit/conformance_test.go) does for the in-repo stores. See the `[Unreleased]` entry in [CHANGELOG.md](./CHANGELOG.md) for the full breaking-change and migration details.
 
 ## Encryption and schema evolution
 

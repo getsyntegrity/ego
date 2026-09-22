@@ -1,10 +1,19 @@
 # Tasks — EventStore tenant isolation (EGO-TENANT-003)
 
-Tracker `#92`, epic `#23`. This change carries exactly one atomic task,
-capped by this repository's hard 4-5-task spec-sizing rule at "as many
-tasks as this slice needs, no more" — this slice needs one. The remaining
-isolation work does not fit in this change; it is named below as an
-explicit follow-up chain of later, separately-authorized SDD changes.
+Tracker `#92`, epic `#23`. All five slices this change was cut into (T1–T5)
+are complete, each committed on `feat/ego-tenant-003-eventstore-isolation`.
+The remaining isolation work — read-side/projection isolation, an
+administrative bypass path, and tenant-qualified actor identity — does not
+fit in this change; it is named below as an explicit follow-up chain of
+later, separately-authorized SDD changes.
+
+| Task | Summary | Commit |
+| --- | --- | --- |
+| T1 | Introduce `persistence.Scope` | `0154133` |
+| T2 | Extend the tenant-aware SPI (`EventsStore`/`StateStore`/`SnapshotStore` take `Scope`) | `787550a` |
+| T3 | Cross-tenant store conformance suite | `5b1d16f` |
+| T4 | Engine/actor wiring | `99eccad` |
+| T5 | Migration and compatibility documentation | this commit |
 
 ## T1 — Introduce `persistence.Scope`
 
@@ -58,6 +67,122 @@ change (`go build -mod=vendor ./...`, `go test -mod=vendor
 `go vet -mod=vendor ./persistence/...`) — all clean. No production
 interface signature was changed; `Scope` exists as an unused-by-any-store
 type at the end of this slice, exactly as scoped.
+
+## T2 — Extend the tenant-aware SPI
+
+- [x] 2.1 Changed every record-addressing method on `EventsStore`
+      (`WriteEvents`, `DeleteEvents`, `ReplayEvents`, `GetLatestEvent`,
+      `PersistenceIDs`), `StateStore` (`WriteState`, `GetLatestState`), and
+      `SnapshotStore` (`WriteSnapshot`, `GetLatestSnapshot`,
+      `DeleteSnapshots`) to take a `scope Scope` parameter immediately
+      after `ctx`, mirroring `WritePrecondition`'s placement (design.md,
+      "What this slice deliberately leaves open for T2-T5"). `Connect`,
+      `Disconnect`, `Ping`, `GetShardEvents`, and `ShardOffsets` were left
+      unchanged, deliberately: the first three are connection lifecycle,
+      not record addressing; the last two are shard-level projection
+      reads, whose tenant isolation is EGO-TENANT-004's scope.
+      Req: `specs/persistence-tenant-isolation/spec.md` - "Effective
+      Identity Is The Pair (Scope, persistence_id)".
+- [x] 2.2 Re-keyed the in-repo `testkit` stores (`EventStore`,
+      `DurableStore`, `SnapshotStore`; `testkit/eventstore.go`,
+      `testkit/durablestore.go`, `testkit/snapshotstore.go`) structurally on
+      `(Scope, persistenceID)` - never on `Scope.String()` or a
+      concatenated string - with an invalid zero-value `Scope` rejected via
+      `ErrInvalidScope` before any state is touched. The WRITE-004
+      CAS/precondition compare now happens within a scope, so
+      `ExpectGenesis()` succeeds for a second tenant on a `persistenceID`
+      the first tenant already owns; `testkit/scope_test.go` (new, 238
+      lines) pins this directly.
+- [x] 2.3 Gave `persistence.ConflictError` a required `Scope` constructor
+      parameter (`NewConflictError(scope, persistenceID, expected, ...)`,
+      recovered via `(*ConflictError).Scope()`) and extended its canonical
+      wire grammar and `ParseConflictError` with a `scope=` field ahead of
+      `persistence_id=` (`persistence/conflict.go`,
+      `persistence/conflict_test.go`).
+- [x] 2.4 Hand-updated the three generated mocks
+      (`mocks/persistence/events_store.go`, `snapshot_store.go`,
+      `state_store.go`) and the ad-hoc test fakes
+      (`preconditionSpyEventsStore`, `slowEventsStore`, `slowStateStore`) to
+      the new signatures, and updated every production call site (actors,
+      engine, `migration/migration.go`, saga) to pass `persistence.Unscoped()`
+      for now, each marked `// TENANT-003 T4: carries the resolved tenant
+      scope once entity actors bind one at spawn.` - so this slice is
+      observably a no-op for existing non-tenant deployments.
+      `example/cluster` is a separate Go module excluded from the main
+      build/test; its `PostgresEventStore.WriteEvents` was already stale on
+      the pre-WRITE-004 signature before this change and was left as is.
+- [x] 2.5 `go build -mod=vendor ./...` and the full `go test -mod=vendor
+      ./...` (excluding `example/cluster`) both clean after the call-site
+      updates; 45 files touched across production code, tests, and mocks
+      (see the commit's own `--stat`).
+
+**Evidence**: commit `787550a`. Production:
+`persistence/events_store.go`, `persistence/state_store.go`,
+`persistence/snapshot_store.go`, `persistence/conflict.go`,
+`testkit/eventstore.go`, `testkit/durablestore.go`,
+`testkit/snapshotstore.go`, `migration/migration.go`, plus every actor and
+engine call site listed in the commit. Tests: new `testkit/scope_test.go`,
+`persistence/conflict_test.go` extended, and every existing test file that
+called a store method updated to the new signature (see the commit's
+`--stat` for the full 45-file list). The interface change alone is
+sufficient evidence of the break: any pre-T2 implementation of
+`EventsStore`/`StateStore`/`SnapshotStore` fails to compile against this
+package, exactly as the doc comments' manual-verification recipe
+describes.
+
+## T3 — Cross-tenant conformance suite
+
+- [x] 3.1 Added `persistence/conformance`, a store-agnostic,
+      factory-driven suite (`RunEventsStoreConformance`,
+      `RunStateStoreConformance`, `RunSnapshotStoreConformance`, each
+      taking a `func(t *testing.T) <Store>` that must return a fresh, empty
+      store per subtest) proving EGO-TENANT-003's isolation requirements
+      directly against `EventsStore`, `StateStore`, and `SnapshotStore`
+      implementations, independent of any actor or mailbox - the issue's
+      own acceptance-criteria wording, "tests cross-tenant
+      direct-store/conformance independientes del mailbox del actor".
+      Req: `specs/persistence-tenant-isolation/spec.md`.
+- [x] 3.2 The matrix (`persistence/conformance/events.go`,
+      `state.go`, `snapshot.go`) covers, per store: read isolation
+      (`ReadIsolation/OtherTenantGetsNothing`,
+      `ReadIsolation/UnscopedAndTenantDoNotCrossRead`,
+      `ReadIsolation/BothTenantsReadTheirOwnRecord`), write isolation
+      including scoped delete (`WriteIsolation/OtherTenantWriteLeavesRecordUntouched`,
+      `WriteIsolation/DeleteIsScoped`), WRITE-004 CAS semantics preserved
+      per scope (`CAS/ExpectGenesisSucceedsForNewTenantOnEstablishedID`,
+      `CAS/ExpectRevisionConflictCarriesItsScope`,
+      `CAS/ConflictInOneScopeNotObservableInAnother`), `PersistenceIDs`
+      enumeration isolation for `EventsStore`
+      (`Enumeration/PersistenceIDsScopedToOwnTenant`), and the
+      `Unscoped()`-vs-tenant-named-"unscoped" forging guard
+      (`Unscoped/NeverCollidesWithTenantNamedUnscoped`) on all three.
+- [x] 3.3 Connected/disconnected around every subtest
+      (`persistence/conformance/check.go`'s `runConformance`), skipping a
+      subtest (not failing it) when `Connect` reports the store
+      unreachable, so an external adapter's CI with no live database is
+      never misread as a passing isolation proof.
+- [x] 3.4 Wired all three suites into the in-repo stores
+      (`testkit/conformance_test.go`: `TestEventStoreConformance`,
+      `TestDurableStoreConformance`, `TestSnapshotStoreConformance`),
+      proving both that the suite is usable end to end and that T2's
+      implementations are correct.
+- [x] 3.5 Wrote the suite's own permanent self-check,
+      `TestConformanceCatchesNonIsolatingStore`
+      (`testkit/conformance_test.go`), which runs the same named checks
+      (via `CaptureEventsStoreChecks`/`CaptureStateStoreChecks`/
+      `CaptureSnapshotStoreChecks`, `persistence/conformance/check.go`)
+      against wrappers that collapse every caller-supplied `Scope` to
+      `Unscoped()` before delegating to an otherwise-correct store -
+      exactly the shape of a naive tenant_metadata-only adapter. Verified
+      RED first, directly: every one of the 10 event checks genuinely
+      failed against the non-isolating wrapper before the capturing
+      harness existed, then GREEN once the capture harness asserted on the
+      expected failures instead of propagating them.
+
+**Evidence**: commit `5b1d16f`. New package:
+`persistence/conformance/{doc,check,events,state,snapshot,helpers}.go`
+(1,134 lines added). Wiring and self-check: `testkit/conformance_test.go`
+(194 lines added).
 
 ## T4 — Engine/actor wiring
 
@@ -181,29 +306,142 @@ adapted for the new spawn-time resolve and the `scope` field. All 6 new
 tests observed RED (for the reason named above) and GREEN. Full
 verification command results are recorded in this change's commit.
 
-## Follow-up chain (not part of this change; named here per this
-## repository's 4-5-task spec cap, each a separate, later SDD change)
+## T5 — Migration and compatibility documentation
 
-- **T2 — Extend the tenant-aware SPI**: change
-  `EventsStore.WriteEvents`/`ReplayEvents`/`GetLatestEvent`/etc.,
-  `StateStore.WriteState`/`GetLatestState`, and `SnapshotStore`'s methods
-  to take a `persistence.Scope` parameter (placement and exact signature
-  shape is T2's own design decision — see design.md, "What this slice
-  deliberately leaves open"); update the `testkit` stores' keying to the
-  pair `(Scope, persistence_id)`; regenerate/update any mocks; update
-  every production call site (actors, migration tooling, projection
-  runner) to pass `Unscoped()` until T4 wires a real tenant through. This
-  is expected to be a breaking-signature change of similar shape and size
-  to `ego-write-004`'s PR2 (SPI break + testkit CAS + mock regen + call
-  sites) and should be planned as its own chained-PR sequence.
-- **T3 — Cross-tenant conformance suite**: a test suite proving read and
-  write isolation directly against the `testkit` stores (independent of
-  any actor mailbox, mirroring `ego-store-001`'s T3.3 finding that
-  direct-against-store evidence is stronger than actor-mediated evidence)
-  — two tenants presenting the same `persistence_id` must not observe or
-  overwrite each other's records, under `-race`.
-- **T5 — Migration and compatibility documentation**: write the
-  external-adapter migration guidance for this breaking change, in the
-  style of the WRITE-004 breaking-change block already present at the top
-  of `persistence/events_store.go` ("Breaking change: WriteEvents gained a
-  required precondition parameter").
+- [x] 5.1 Added a Breaking Changes entry to `CHANGELOG.md`'s
+      `[Unreleased]` section: the old/new signature for every changed
+      method on `EventsStore`, `StateStore`, and `SnapshotStore`; why
+      `Connect`/`Disconnect`/`Ping`/`GetShardEvents`/`ShardOffsets` did
+      NOT change; that `ConflictError` and its wire grammar gained a
+      `scope=` field; the structural-key upgrade recipe (real column,
+      never `Scope.String()`); the zero-migration guarantee for a
+      deployment that never activates tenancy, and what an operator must
+      deliberately decide for a deployment that adopts tenancy on
+      existing data; the `persistence/conformance` acceptance-test
+      wiring; and the shared-actor-name known limitation.
+- [x] 5.2 Added a "Tenant scoping" subsection to `readme.md`'s existing
+      `## Persistence` section, pointing at `persistence/conformance` and
+      `tenancy.WithSingleTenant`/`ego.WithTenantResolver`, and added it to
+      the table of contents.
+- [x] 5.3 Reconciled this task file with reality: T2 and T3 were
+      committed (`787550a`, `5b1d16f`) but the "Follow-up chain" section
+      still listed them as unchecked bullets. Replaced that section with
+      completed T2/T3 task blocks carrying their real evidence, and this
+      T5 block, plus the acceptance-criteria mapping below.
+- [x] 5.4 Verified no production code or test logic changed:
+      `go build -mod=vendor ./...` stays clean, and `git diff --stat`
+      touches only `CHANGELOG.md`, `readme.md`, and this file.
+
+**Evidence**: `CHANGELOG.md`, `readme.md`, this file
+(`openspec/changes/ego-tenant-003/tasks.md`). Commit: this commit (see
+`git log -1` on `feat/ego-tenant-003-eventstore-isolation` for its SHA).
+
+## Follow-up chain (not part of this change; each a separate, later,
+## explicitly-authorized SDD change)
+
+- **Read-side/projection isolation (EGO-TENANT-004)**: `GetShardEvents`
+  and `ShardOffsets` stayed deliberately unscoped in T2 (see
+  `persistence/events_store.go`'s doc comment); projection consumers do
+  not yet filter by tenant. This is the next slice of the isolation work
+  this issue started.
+- **Idempotency (#66)**: not addressed by this change.
+- **Atomic multi-event append (#67)**: not addressed by this change.
+- **Administrative bypass path (TENANT-008)**: `Engine.Entity` and
+  `Engine.DurableStateEntity` refuse an administrative-scope spawn
+  outright (`ErrAdministrativeScopeEntitySpawn`, T4.1); a deliberate,
+  audited administrative bypass is out of scope here and left to
+  TENANT-008.
+- **Tenant-qualified actor identity**: the known limitation documented in
+  `design.md` and the CHANGELOG entry above — a GoAkt actor's name is the
+  bare `entityID`/`sagaID`, not `(tenant, entityID)`, so two tenants
+  sharing an id contend for one actor (fail-closed, not a leak). Deriving
+  the actor name from the tenant is its own design pass, since it likely
+  touches cluster placement/rebalancing and any tooling that addresses an
+  actor by bare entity id.
+
+## Acceptance criteria (issue #92) — evidence mapping
+
+Issue #92 lists eight acceptance criteria. Each is mapped below to the
+concrete test, file, or spec requirement that satisfies it, or marked
+partial with what remains.
+
+1. **Tenant-aware store mutations and reads receive an explicit tenant
+   scope and do not depend only on descriptive metadata.** MET. Every
+   record-addressing method on `EventsStore`/`StateStore`/`SnapshotStore`
+   takes a `scope Scope` parameter (`persistence/events_store.go`,
+   `state_store.go`, `snapshot_store.go`); `tenant_metadata` is
+   documented and enforced as non-authoritative — `persistence.Scope`'s
+   doc comment's "tenant_metadata stays non-authoritative" section, and
+   `resolveScope`'s cross-check via `tenancy.VerifyUnchanged`
+   (`TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant`,
+   `event_sourced_actor_tenant_persist_test.go`) proves a disagreeing
+   `tenant_metadata` is rejected rather than trusted.
+
+2. **Two tenants with the same `persistence_id` do not share an effective
+   storage identity.** MET. The `testkit` stores key structurally on
+   `(Scope, persistenceID)` (T2, `787550a`); proven directly by
+   `ReadIsolation/BothTenantsReadTheirOwnRecord` in
+   `persistence/conformance/{events,state,snapshot}.go`.
+
+3. **A tenant cannot read state/events belonging to another tenant through
+   a `persistence_id` collision.** MET.
+   `ReadIsolation/OtherTenantGetsNothing` and
+   `ReadIsolation/UnscopedAndTenantDoNotCrossRead`
+   (`persistence/conformance/{events,state,snapshot}.go`) prove this at
+   the store level; `TestEventSourcedActorPreStartFailsClosedWithoutTenantScope`
+   and `TestEventSourcedActorSpawnBindsExactTenantScope`
+   (`event_sourced_actor_scope_test.go`) prove it at the actor level.
+
+4. **A tenant cannot modify another tenant's revision/state/event
+   stream.** MET. `WriteIsolation/OtherTenantWriteLeavesRecordUntouched`
+   and `WriteIsolation/DeleteIsScoped`
+   (`persistence/conformance/events.go`, `snapshot.go`;
+   `stateOtherTenantWriteLeavesRecordUntouched` in `state.go`) at the
+   store level; `TestEngineEraseEntityCannotEraseAnotherTenantsRecord`
+   (`engine_erase_entity_tenant_test.go`) at the engine level.
+
+5. **WRITE-004's optimistic concurrency semantics are preserved within
+   each tenant scope.** MET.
+   `CAS/ExpectGenesisSucceedsForNewTenantOnEstablishedID`,
+   `CAS/ExpectRevisionConflictCarriesItsScope`, and
+   `CAS/ConflictInOneScopeNotObservableInAnother`
+   (`persistence/conformance/events.go`, `state.go`) prove the persisted
+   revision a precondition compares against is scoped; `ConflictError`
+   carries its `Scope` (`persistence/conflict.go`).
+
+6. **`single_tenant_mode` keeps working without tenant plumbing invented
+   by the application.** MET, with a naming correction: there is no
+   literal `single_tenant_mode` flag in the code. The implemented form is
+   the built-in resolver `tenancy.WithSingleTenant(id)`
+   (`tenancy/resolver.go`), registered once via `ego.WithTenantResolver`.
+   `TestSendCommandSingleTenantZeroPlumbing` (`engine_test.go`) proves a
+   command succeeds with a plain `context.Background()` and zero
+   `tenancy.Attach`/`tenancy.Require` calls at the call site; T4's
+   `resolveScope` binds the same `persistence.Scope` machinery for this
+   resolver as for any multi-tenant resolver (`TestSendCommandResolverSwapIdenticalSequence`,
+   same file) — there is no special-cased single-tenant code path to
+   diverge from the isolation guarantees above.
+
+7. **Cross-tenant direct-store/conformance tests exist, independent of
+   the actor mailbox.** MET. `persistence/conformance` (T3, `5b1d16f`) is
+   exactly this: a factory-driven suite that never constructs an actor or
+   mailbox, wired into the in-repo stores by
+   `testkit/conformance_test.go`. Its own permanent regression guard,
+   `TestConformanceCatchesNonIsolatingStore`, proves the suite is not a
+   tautology — it genuinely fails against a store that ignores `Scope`.
+
+8. **Compatibility and migration of existing implementations are
+   explicit.** PARTIALLY MET. The compatibility contract itself is fully
+   explicit: the `CHANGELOG.md` `[Unreleased]` entry and the doc comments
+   on `EventsStore`/`StateStore`/`SnapshotStore` state the old/new
+   signatures, the structural-key upgrade recipe, and the zero-migration
+   guarantee for a deployment that never activates tenancy (every call
+   already carries `Unscoped()`, unchanged). What remains unmet: this
+   change ships no migration *tool* for a deployment that adopts tenancy
+   on already-existing data. Existing rows have no tenant of their own —
+   they were written under `Unscoped()`, a real and distinct scope, not a
+   wildcard — and this change is explicit that assigning them to a
+   tenant is a deliberate, deployment-specific operator decision this
+   repository does not automate. A reader adopting tenancy on a live,
+   already-populated store needs to plan that migration themselves; nothing
+   here does it for them.
