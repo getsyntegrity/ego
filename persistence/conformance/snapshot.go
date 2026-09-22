@@ -63,7 +63,7 @@ var SnapshotStoreChecks = []Check[persistence.SnapshotStore]{
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: snapshotUnscopedNeverCollidesWithForgedTenant},
 }
 
-func snapshotOtherTenantGetsNothing(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotOtherTenantGetsNothing(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "read-isolation"
@@ -75,7 +75,7 @@ func snapshotOtherTenantGetsNothing(t require.TestingT, ctx context.Context, sto
 	require.Nil(t, got, "tenant B must not see tenant A's snapshot")
 }
 
-func snapshotUnscopedAndTenantDoNotCrossRead(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotUnscopedAndTenantDoNotCrossRead(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 
 	const idWrittenByTenant = "unscoped-cross-read-tenant-wrote"
@@ -91,7 +91,7 @@ func snapshotUnscopedAndTenantDoNotCrossRead(t require.TestingT, ctx context.Con
 	require.Nil(t, gotTenant, "a tenant scope must not see a snapshot written only under Unscoped()")
 }
 
-func snapshotBothTenantsReadOwnRecord(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotBothTenantsReadOwnRecord(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "both-write-own-read"
@@ -110,7 +110,7 @@ func snapshotBothTenantsReadOwnRecord(t require.TestingT, ctx context.Context, s
 	require.Equal(t, float64(222), snapshotMarker(t, gotB), "tenant B must read back its own snapshot, never tenant A's")
 }
 
-func snapshotOtherTenantWriteLeavesRecordUntouched(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "write-isolation"
@@ -131,7 +131,7 @@ func snapshotOtherTenantWriteLeavesRecordUntouched(t require.TestingT, ctx conte
 	require.True(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's snapshot for the same persistence_id and sequence number")
 }
 
-func snapshotDeleteIsScoped(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotDeleteIsScoped(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "delete-isolation"
@@ -151,7 +151,7 @@ func snapshotDeleteIsScoped(t require.TestingT, ctx context.Context, store persi
 	require.Nil(t, gotB, "tenant B's own snapshot must actually be gone after its own scoped delete")
 }
 
-func snapshotUnscopedNeverCollidesWithForgedTenant(t require.TestingT, ctx context.Context, store persistence.SnapshotStore) {
+func snapshotUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
 	forgedTenant := mustTenantScope(t, "unscoped")
 	const id = "forging-guard"
 

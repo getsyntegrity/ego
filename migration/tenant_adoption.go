@@ -395,7 +395,7 @@ func (a *TenantAdopter) Run(ctx context.Context) (*AdoptionReport, error) {
 	for _, id := range ids {
 		report.Scanned++
 
-		if failure, stop := a.processAggregate(ctx, id, report); failure != nil {
+		if stop, failure := a.processAggregate(ctx, id, report); failure != nil {
 			if stop {
 				return report, failure
 			}
@@ -421,18 +421,18 @@ func (a *TenantAdopter) Run(ctx context.Context) (*AdoptionReport, error) {
 // target-scope resolution, and per-kind adoption. It returns the last
 // recorded failure (nil when the id completed without one) and whether
 // WithFailFast requires Run to stop immediately.
-func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report *AdoptionReport) (failure error, stop bool) {
+func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report *AdoptionReport) (stop bool, failure error) {
 	tenantID, ok, err := a.assign(ctx, id)
 	if err != nil {
 		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("tenant assignment: %w", err)}
 		report.Failed++
 		report.Failures = append(report.Failures, f)
 		a.logger.ErrorContext(ctx, "tenant adoption: assignment failed", "persistence_id", id, "error", err)
-		return f, a.failFast
+		return a.failFast, f
 	}
 	if !ok {
 		report.SkippedByAssignment++
-		return nil, false
+		return false, nil
 	}
 	report.Assigned++
 
@@ -441,7 +441,7 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("assigned tenant %q is not a valid target scope: %w", tenantID, err)}
 		report.Failed++
 		report.Failures = append(report.Failures, f)
-		return f, a.failFast
+		return a.failFast, f
 	}
 
 	tenantContext, err := tenancy.NewTenantContext(target.TenantID())
@@ -453,7 +453,7 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("building tenant context for %q: %w", tenantID, err)}
 		report.Failed++
 		report.Failures = append(report.Failures, f)
-		return f, a.failFast
+		return a.failFast, f
 	}
 	metadata := tenancy.MarshalMetadata(tenantContext)
 
@@ -491,27 +491,27 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 	switch {
 	case aggFailure != nil:
 		report.Failed++
-		return aggFailure, a.failFast
+		return a.failFast, aggFailure
 	case !found:
 		f := AdoptionFailure{PersistenceID: id, Err: errNoSourceRecords}
 		report.Failed++
 		report.Failures = append(report.Failures, f)
-		return f, a.failFast
+		return a.failFast, f
 	case copied:
 		report.Copied++
 		if !a.write {
 			// Dry-run: Copied reflects the plan, but nothing was actually
 			// written, so nothing was actually verified or deleted.
-			return nil, false
+			return false, nil
 		}
 		report.Verified++
 		if deleted {
 			report.SourceDeleted++
 		}
-		return nil, false
+		return false, nil
 	default:
 		report.AlreadyPresent++
-		return nil, false
+		return false, nil
 	}
 }
 

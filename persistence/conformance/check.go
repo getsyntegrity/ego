@@ -52,7 +52,7 @@ type Lifecycle interface {
 // path.
 type Check[S Lifecycle] struct {
 	Name string
-	Run  func(t require.TestingT, ctx context.Context, store S)
+	Run  func(ctx context.Context, t require.TestingT, store S)
 }
 
 // CheckResult reports one Check's outcome when run captured (see
@@ -82,7 +82,7 @@ func runConformance[S Lifecycle](t *testing.T, checks []Check[S], newStore func(
 			t.Cleanup(func() {
 				_ = store.Disconnect(ctx)
 			})
-			c.Run(t, ctx, store)
+			c.Run(ctx, t, store)
 		})
 	}
 }
@@ -136,7 +136,7 @@ func captureChecks[S Lifecycle](checks []Check[S], newStore func() S) []CheckRes
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.Run(capture, ctx, store)
+			c.Run(ctx, capture, store)
 		}()
 		wg.Wait()
 

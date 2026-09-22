@@ -66,7 +66,7 @@ var StateStoreChecks = []Check[persistence.StateStore]{
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: stateUnscopedNeverCollidesWithForgedTenant},
 }
 
-func stateOtherTenantGetsNothing(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateOtherTenantGetsNothing(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "read-isolation"
@@ -78,7 +78,7 @@ func stateOtherTenantGetsNothing(t require.TestingT, ctx context.Context, store 
 	require.Nil(t, got, "tenant B must not see tenant A's record")
 }
 
-func stateUnscopedAndTenantDoNotCrossRead(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateUnscopedAndTenantDoNotCrossRead(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 
 	const idWrittenByTenant = "unscoped-cross-read-tenant-wrote"
@@ -94,7 +94,7 @@ func stateUnscopedAndTenantDoNotCrossRead(t require.TestingT, ctx context.Contex
 	require.Nil(t, gotTenant, "a tenant scope must not see a record written only under Unscoped()")
 }
 
-func stateBothTenantsReadOwnRecord(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateBothTenantsReadOwnRecord(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "both-write-own-read"
@@ -113,7 +113,7 @@ func stateBothTenantsReadOwnRecord(t require.TestingT, ctx context.Context, stor
 	require.Equal(t, float64(222), stateMarker(t, gotB), "tenant B must read back its own record, never tenant A's")
 }
 
-func stateOtherTenantWriteLeavesRecordUntouched(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "write-isolation"
@@ -134,7 +134,7 @@ func stateOtherTenantWriteLeavesRecordUntouched(t require.TestingT, ctx context.
 // stateExpectGenesisSucceedsForNewTenant mirrors
 // eventsExpectGenesisSucceedsForNewTenant: it is the sharpest check for
 // StateStore too, for the identical reason — see that function's comment.
-func stateExpectGenesisSucceedsForNewTenant(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateExpectGenesisSucceedsForNewTenant(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "genesis-cross-tenant"
@@ -150,7 +150,7 @@ func stateExpectGenesisSucceedsForNewTenant(t require.TestingT, ctx context.Cont
 	require.Equal(t, float64(222), stateMarker(t, gotB))
 }
 
-func stateExpectRevisionConflictCarriesScope(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateExpectRevisionConflictCarriesScope(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	const id = "conflict-carries-scope"
 
@@ -165,7 +165,7 @@ func stateExpectRevisionConflictCarriesScope(t require.TestingT, ctx context.Con
 	require.True(t, conflictErr.Scope().Equal(tenantA), "the conflict must carry the scope the failed write actually targeted")
 }
 
-func stateConflictNotObservableInAnotherScope(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateConflictNotObservableInAnotherScope(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "conflict-not-cross-scope"
@@ -179,7 +179,7 @@ func stateConflictNotObservableInAnotherScope(t require.TestingT, ctx context.Co
 	require.NoError(t, err, "a conflict raised in tenant A's scope must not be observable in tenant B's scope")
 }
 
-func stateUnscopedNeverCollidesWithForgedTenant(t require.TestingT, ctx context.Context, store persistence.StateStore) {
+func stateUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.StateStore) {
 	forgedTenant := mustTenantScope(t, "unscoped")
 	const id = "forging-guard"
 
