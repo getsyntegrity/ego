@@ -24,7 +24,6 @@ package persistence
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -46,8 +45,24 @@ var ErrInvalidPrecondition = errors.New("persistence: write precondition is not 
 var ErrPreconditionScope = errors.New("persistence: conditional write spans multiple persistence ids")
 
 // conflictGrammarPrefix is the fixed, parseable prefix of ConflictError's
-// canonical wire message. ParseConflictError is its exact inverse.
-const conflictGrammarPrefix = "ego: concurrency conflict: scope="
+// canonical wire message, including its grammar version. ParseConflictError
+// is its exact inverse. It begins with ErrConcurrencyConflict's text, which
+// is what reply classification matches on (reply_classification.go), so a
+// message in any grammar version still classifies as a concurrency
+// conflict even when it cannot be parsed back into a *ConflictError.
+const conflictGrammarPrefix = "ego: concurrency conflict: grammar=v1, scope="
+
+// Fixed field separators of the v1 grammar. Variable fields (the tenant id
+// and the persistence id) are always Go-quoted (strconv.Quote), so none of
+// these can appear unescaped inside them.
+const (
+	conflictTenantScopePrefix  = "tenant:"
+	conflictPersistenceIDField = ", persistence_id="
+	conflictExpectedField      = ", expected="
+	conflictActualField        = ", actual="
+	conflictUnknownActualToken = "unknown"
+	conflictUnscopedToken      = "unscoped"
+)
 
 // ConflictOption configures a ConflictError at construction time.
 type ConflictOption func(*ConflictError)
@@ -120,57 +135,86 @@ func (e *ConflictError) Is(target error) bool {
 	return errors.Is(target, ErrConcurrencyConflict) || target == ErrConcurrencyConflict
 }
 
-// Error renders e using the canonical conflict grammar:
+// Error renders e using the canonical v1 conflict grammar:
 //
-//	ego: concurrency conflict: scope=<unscoped|tenant:<id>>, persistence_id=<id>, expected=<unconditional|genesis|N>, actual=<M|unknown>
+//	ego: concurrency conflict: grammar=v1, scope=<unscoped|tenant:"<id>">, persistence_id="<id>", expected=<unconditional|genesis|N>, actual=<M|unknown>
 //
-// scope is rendered via Scope.String(), which is documented as a
-// diagnostic-only rendering (see persistence.Scope). That is exactly what
-// this use is: a human/log-readable error message, never a storage or cache
-// key. ParseConflictError is its exact inverse.
+// Both identifiers are rendered with strconv.Quote, an exact reversible
+// encoding: a tenant id or persistence id may contain any text the tenancy
+// and persistence packages accept — commas, equals signs, quotes, the
+// grammar's own field separators, non-ASCII text — without making the
+// message ambiguous. The scope is rendered from its kind and TenantID(),
+// never from Scope.String(), which stays a diagnostic rendering only.
+// ParseConflictError is its exact inverse.
 func (e *ConflictError) Error() string {
-	actual := "unknown"
+	actual := conflictUnknownActualToken
 	if e.hasActual {
 		actual = strconv.FormatUint(e.actualRevision, 10)
 	}
-	return fmt.Sprintf("%s%s, persistence_id=%s, expected=%s, actual=%s", conflictGrammarPrefix, e.scope.String(), e.persistenceID, e.expected.String(), actual)
+	return conflictGrammarPrefix + formatConflictScope(e.scope) +
+		conflictPersistenceIDField + strconv.Quote(e.persistenceID) +
+		conflictExpectedField + e.expected.String() +
+		conflictActualField + actual
+}
+
+// formatConflictScope renders scope's v1 grammar token. The zero value
+// renders as Scope.String()'s "unspecified", which ParseConflictError
+// rejects rather than reconstructing an invalid Scope.
+func formatConflictScope(scope Scope) string {
+	switch {
+	case scope.IsUnscoped():
+		return conflictUnscopedToken
+	case scope.Valid():
+		return conflictTenantScopePrefix + strconv.Quote(string(scope.TenantID()))
+	default:
+		return scope.String()
+	}
 }
 
 // ParseConflictError parses message produced by (*ConflictError).Error(),
 // returning the reconstructed error and true on success. It is the exact
-// inverse of Error(): for any *ConflictError e, ParseConflictError(e.Error())
-// reconstructs an equivalent error. It returns false for any message that
-// does not match the canonical grammar.
+// inverse of Error(): for any *ConflictError e with a valid scope,
+// ParseConflictError(e.Error()) reconstructs an equivalent error whose
+// Error() is byte-identical. It returns false for any message that is not
+// canonical v1 grammar, including a non-canonical quoting or number that
+// Error() would never produce.
 //
-// Reconstructing scope from its rendered text mirrors this function's
-// existing handling of the expected precondition token (parsePreconditionToken):
-// it is a best-effort textual replay confined to wire-message diagnostics
-// (e.g. recovering a *ConflictError cause from an egopb.CommandReply's error
-// message), never used to build a storage or cache key. It is not a
-// violation of persistence.Scope's "never key on String()" rule, which
-// governs store record identity, not error-message reconstruction.
+// Compatibility policy: only grammar=v1 is reconstructed. The
+// pre-TENANT-003 rendering (no scope) and the earlier unversioned scope=
+// rendering are rejected rather than guessed at — the first carries no
+// scope to attribute, and the second is ambiguous for valid identifiers.
+// Such a message still classifies as a concurrency conflict by its
+// sentinel prefix, only without a recoverable cause. A future grammar
+// change bumps the version, so an older parser rejects it the same way.
+//
+// This is error-message reconstruction confined to wire diagnostics (e.g.
+// recovering a *ConflictError cause from an egopb.CommandReply's error
+// message), never a storage or cache key.
 func ParseConflictError(message string) (*ConflictError, bool) {
 	rest, ok := strings.CutPrefix(message, conflictGrammarPrefix)
 	if !ok {
 		return nil, false
 	}
 
-	scopePart, rest, ok := strings.Cut(rest, ", persistence_id=")
+	scope, rest, ok := cutConflictScope(rest)
 	if !ok {
 		return nil, false
 	}
 
-	scope, ok := parseScopeToken(scopePart)
+	rest, ok = strings.CutPrefix(rest, conflictPersistenceIDField)
+	if !ok {
+		return nil, false
+	}
+	persistenceID, rest, ok := cutQuoted(rest)
 	if !ok {
 		return nil, false
 	}
 
-	idPart, rest, ok := strings.Cut(rest, ", expected=")
+	rest, ok = strings.CutPrefix(rest, conflictExpectedField)
 	if !ok {
 		return nil, false
 	}
-
-	expectedPart, actualPart, ok := strings.Cut(rest, ", actual=")
+	expectedPart, actualPart, ok := strings.Cut(rest, conflictActualField)
 	if !ok {
 		return nil, false
 	}
@@ -181,34 +225,66 @@ func ParseConflictError(message string) (*ConflictError, bool) {
 	}
 
 	var opts []ConflictOption
-	if actualPart != "unknown" {
-		actual, err := strconv.ParseUint(actualPart, 10, 64)
-		if err != nil {
+	if actualPart != conflictUnknownActualToken {
+		actual, ok := parseCanonicalUint(actualPart)
+		if !ok {
 			return nil, false
 		}
 		opts = append(opts, WithActualRevision(actual))
 	}
 
-	return NewConflictError(scope, idPart, expected, opts...), true
+	return NewConflictError(scope, persistenceID, expected, opts...), true
 }
 
-// parseScopeToken is the exact inverse of Scope.String() for the tokens
-// that grammar can produce ("unscoped", "tenant:<id>"). It never produces
-// the invalid zero value of Scope; a token it cannot map to a valid Scope
-// (including "unspecified", Scope's zero-value rendering, and a "tenant:"
-// token whose id fails tenancy validation) is rejected.
-func parseScopeToken(token string) (Scope, bool) {
-	if token == Unscoped().String() {
-		return Unscoped(), true
+// cutConflictScope parses the scope token at the start of s and returns the
+// remainder. It never produces the invalid zero value of Scope: an unknown
+// token, or a tenant id that fails tenancy validation, is rejected.
+func cutConflictScope(s string) (Scope, string, bool) {
+	if rest, ok := strings.CutPrefix(s, conflictUnscopedToken); ok {
+		return Unscoped(), rest, true
 	}
-	if tenantID, ok := strings.CutPrefix(token, "tenant:"); ok {
-		scope, err := NewTenantScope(tenancy.TenantID(tenantID))
-		if err != nil {
-			return Scope{}, false
-		}
-		return scope, true
+	rest, ok := strings.CutPrefix(s, conflictTenantScopePrefix)
+	if !ok {
+		return Scope{}, "", false
 	}
-	return Scope{}, false
+	tenantID, rest, ok := cutQuoted(rest)
+	if !ok {
+		return Scope{}, "", false
+	}
+	scope, err := NewTenantScope(tenancy.TenantID(tenantID))
+	if err != nil {
+		return Scope{}, "", false
+	}
+	return scope, rest, true
+}
+
+// cutQuoted parses the canonical strconv.Quote rendering at the start of s
+// and returns the unquoted value and the remainder. A raw (backquoted)
+// string or any escape strconv.Quote would not produce is rejected, so each
+// value has exactly one accepted rendering.
+func cutQuoted(s string) (string, string, bool) {
+	if !strings.HasPrefix(s, `"`) {
+		return "", "", false
+	}
+	quoted, err := strconv.QuotedPrefix(s)
+	if err != nil {
+		return "", "", false
+	}
+	value, err := strconv.Unquote(quoted)
+	if err != nil || strconv.Quote(value) != quoted {
+		return "", "", false
+	}
+	return value, s[len(quoted):], true
+}
+
+// parseCanonicalUint parses token as a base-10 uint64 only when it is the
+// exact strconv.FormatUint rendering (no sign, no leading zeros).
+func parseCanonicalUint(token string) (uint64, bool) {
+	value, err := strconv.ParseUint(token, 10, 64)
+	if err != nil || strconv.FormatUint(value, 10) != token {
+		return 0, false
+	}
+	return value, true
 }
 
 // parsePreconditionToken is the exact inverse of WritePrecondition.String()
@@ -222,8 +298,8 @@ func parsePreconditionToken(token string) (WritePrecondition, bool) {
 	case "genesis":
 		return ExpectGenesis(), true
 	default:
-		revision, err := strconv.ParseUint(token, 10, 64)
-		if err != nil {
+		revision, ok := parseCanonicalUint(token)
+		if !ok {
 			return WritePrecondition{}, false
 		}
 		return ExpectRevision(revision), true

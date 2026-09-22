@@ -100,9 +100,14 @@ type at the end of this slice, exactly as scoped.
 - [x] 2.3 Gave `persistence.ConflictError` a required `Scope` constructor
       parameter (`NewConflictError(scope, persistenceID, expected, ...)`,
       recovered via `(*ConflictError).Scope()`) and extended its canonical
-      wire grammar and `ParseConflictError` with a `scope=` field ahead of
-      `persistence_id=` (`persistence/conflict.go`,
-      `persistence/conflict_test.go`).
+      wire grammar and `ParseConflictError` with the scope
+      (`persistence/conflict.go`, `persistence/conflict_test.go`). Review of
+      #98 found the first, unversioned `scope=` rendering ambiguous for valid
+      tenant ids containing `", persistence_id="`; it is now `grammar=v1`
+      with both identifiers `strconv.Quote`d, an exact inverse pinned by
+      `TestParseConflictErrorRoundTripsAdversarialIdentifiers` and
+      `FuzzParseConflictErrorRoundTrip`. Older renderings are rejected, not
+      reconstructed, and still classify by the sentinel prefix.
 - [x] 2.4 Hand-updated the three generated mocks
       (`mocks/persistence/events_store.go`, `snapshot_store.go`,
       `state_store.go`) and the ad-hoc test fakes

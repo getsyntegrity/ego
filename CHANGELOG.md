@@ -69,13 +69,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   `Connect`, `Disconnect` and `Ping` on all three interfaces are deliberately unchanged: connection lifecycle is not record-addressing, so it carries no tenant boundary. `EventsStore.GetShardEvents` and `EventsStore.ShardOffsets` are also unchanged, for a different reason: both are shard-level projection reads, not `(scope, persistence_id)`-addressed record reads, and read-side/projection isolation across tenants is EGO-TENANT-004's scope — explicitly not decided by this change.
 
-  `persistence.ConflictError` now carries a `Scope` — `NewConflictError(scope, persistenceID, expected, opts...)` requires it, and `(*ConflictError).Scope()` recovers it — and its canonical wire grammar gained a `scope=` field ahead of `persistence_id=`:
+  `persistence.ConflictError` now carries a `Scope` — `NewConflictError(scope, persistenceID, expected, opts...)` requires it, and `(*ConflictError).Scope()` recovers it — and its canonical wire grammar is now versioned, carries the scope, and quotes both identifiers:
 
   ```
-  ego: concurrency conflict: scope=<unscoped|tenant:<id>>, persistence_id=<id>, expected=<unconditional|genesis|N>, actual=<M|unknown>
+  ego: concurrency conflict: grammar=v1, scope=<unscoped|tenant:"<id>">, persistence_id="<id>", expected=<unconditional|genesis|N>, actual=<M|unknown>
   ```
 
-  `persistence.ParseConflictError` already parses the new field. Anything else that parses `(*ConflictError).Error()`'s text directly, instead of using `errors.As` or `ParseConflictError`, must be updated to account for it.
+  The tenant id and the persistence id are rendered with `strconv.Quote`, so an identifier containing commas, equals signs, quotes, the grammar's own field separators, or non-ASCII text can no longer make the message ambiguous; `persistence.ParseConflictError(err.Error())` is an exact inverse for every valid scope and persistence id, and rejects any non-canonical rendering. Only `grammar=v1` is parsed back: a message in the previous unversioned `persistence_id=<id>` grammar (for example from a node not yet upgraded) still classifies as `concurrency_conflict` by its unchanged `ego: concurrency conflict` prefix, but no `*ConflictError` cause is reconstructed for it. Anything else that parses `(*ConflictError).Error()`'s text directly, instead of using `errors.As` or `ParseConflictError`, must be updated.
 
   **Upgrade recipe for an external store adapter:** accept the new `scope persistence.Scope` parameter on every method listed above, and fold it into the record key STRUCTURALLY — for a SQL-backed store that means a real tenant column that participates in the primary key and in every `WHERE` clause, not a string concatenated onto the existing `persistence_id` column. `persistence.Scope.String()` (`"unscoped"`, `"tenant:<id>"`) is a diagnostic rendering only and must never become a storage key: nothing at the string level stops a tenant literally named `"unscoped"` from rendering as `"tenant:unscoped"`, so a store that reduces `Scope` to its string before keying loses the structural guarantee `Scope.Equal` provides. Key on the `Scope` value itself (or its kind and `TenantID()`), never on `String()`.
 

@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,22 +92,22 @@ func TestConflictErrorErrorMessageCanonicalGrammar(t *testing.T) {
 		{
 			name:     "unscoped, unconditional with unknown actual",
 			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.Unconditional()),
-			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=unknown",
+			expected: "ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id=\"agg-1\", expected=unconditional, actual=unknown",
 		},
 		{
 			name:     "unscoped, genesis with known actual",
 			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-2", persistence.ExpectGenesis(), persistence.WithActualRevision(1)),
-			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-2, expected=genesis, actual=1",
+			expected: "ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id=\"agg-2\", expected=genesis, actual=1",
 		},
 		{
 			name:     "unscoped, exact revision with known actual",
 			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-3", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
-			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-3, expected=4, actual=9",
+			expected: "ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id=\"agg-3\", expected=4, actual=9",
 		},
 		{
 			name:     "tenant scope, exact revision with known actual",
 			err:      persistence.NewConflictError(tenantScope, "agg-4", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
-			expected: "ego: concurrency conflict: scope=tenant:tenant-a, persistence_id=agg-4, expected=4, actual=9",
+			expected: "ego: concurrency conflict: grammar=v1, scope=tenant:\"tenant-a\", persistence_id=\"agg-4\", expected=4, actual=9",
 		},
 	}
 
@@ -152,6 +153,38 @@ func TestParseConflictErrorRejectsMalformedMessages(t *testing.T) {
 	tests := []string{
 		"",
 		"not a conflict message",
+		// Compatibility policy: neither earlier rendering is reconstructed.
+		// The pre-TENANT-003 grammar carried no scope, and the unversioned
+		// scope= grammar was ambiguous for valid tenant and persistence ids.
+		// Both still classify as a concurrency conflict by the unchanged
+		// sentinel prefix (reply_classification.go), without a cause.
+		"ego: concurrency conflict: persistence_id=agg-1, expected=unconditional, actual=unknown",
+		"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=unknown",
+		"ego: concurrency conflict: scope=tenant:tenant-a, persistence_id=agg-1, expected=4, actual=9",
+		// Unknown or missing grammar version.
+		`ego: concurrency conflict: grammar=v2, scope=unscoped, persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=, scope=unscoped, persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		// Scope token.
+		`ego: concurrency conflict: grammar=v1, scope=unspecified, persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=tenant:tenant-a, persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=tenant:"", persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=tenant:" padded", persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=tenant:"a\tb", persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		"ego: concurrency conflict: grammar=v1, scope=tenant:`raw`, persistence_id=\"agg-1\", expected=unconditional, actual=unknown",
+		`ego: concurrency conflict: grammar=v1, scope=tenant:"\u0061cme", persistence_id="agg-1", expected=unconditional, actual=unknown`,
+		// Persistence id token.
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1, expected=unconditional, actual=unknown`,
+		"ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id=`agg-1`, expected=unconditional, actual=unknown",
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="\x61gg-1", expected=unconditional, actual=unknown`,
+		// Precondition and actual revision tokens.
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=bogus, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=04, actual=unknown`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=unconditional, actual=not-a-number`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=unconditional, actual=09`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=unconditional`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1", expected=unconditional, actual=unknown, extra=1`,
+		`ego: concurrency conflict: grammar=v1, scope=unscoped, persistence_id="agg-1",expected=unconditional, actual=unknown`,
 		"ego: concurrency conflict: persistence_id=agg-1",
 		"ego: concurrency conflict: scope=unscoped",
 		"ego: concurrency conflict: scope=unspecified, persistence_id=agg-1, expected=unconditional, actual=unknown",
@@ -175,4 +208,74 @@ func TestConflictErrorDoesNotMatchUnrelatedSentinel(t *testing.T) {
 
 	assert.NotErrorIs(t, err, persistence.ErrInvalidPrecondition)
 	assert.NotErrorIs(t, err, persistence.ErrPreconditionScope)
+}
+
+// adversarialConflictIDs are valid tenant ids and persistence ids that
+// contain the grammar's own delimiters, quoting characters, and non-ASCII
+// text: every one must survive ParseConflictError(err.Error()) exactly.
+var adversarialConflictIDs = []string{
+	"a, persistence_id=x",
+	"x, expected=4, actual=9",
+	`quote " inside`,
+	`back\slash`,
+	"equals=sign,comma",
+	"scope=tenant:\"forged\"",
+	"grammar=v1, scope=unscoped",
+	"テナント-東京",
+	"emoji 🚀 id",
+	"tenant:unscoped",
+	"unscoped",
+}
+
+func TestParseConflictErrorRoundTripsAdversarialIdentifiers(t *testing.T) {
+	persistenceIDs := append([]string{"", "line\nbreak", "nul\x00byte", "bad utf8 \xff\xfe", "\t leading tab"}, adversarialConflictIDs...)
+
+	var scopes []persistence.Scope
+	scopes = append(scopes, persistence.Unscoped())
+	for _, id := range adversarialConflictIDs {
+		scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
+		require.NoError(t, err, "fixture tenant id must be valid: %q", id)
+		scopes = append(scopes, scope)
+	}
+
+	for _, scope := range scopes {
+		for _, persistenceID := range persistenceIDs {
+			original := persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(7), persistence.WithActualRevision(8))
+			parsed, ok := persistence.ParseConflictError(original.Error())
+			require.True(t, ok, "must parse: %s", original.Error())
+			assert.True(t, original.Scope().Equal(parsed.Scope()), "scope must round-trip: %s", original.Error())
+			assert.Equal(t, persistenceID, parsed.PersistenceID())
+			assert.Equal(t, original.Error(), parsed.Error())
+			assert.ErrorIs(t, parsed, persistence.ErrConcurrencyConflict)
+		}
+	}
+}
+
+// FuzzParseConflictErrorRoundTrip checks the exact-inverse contract over
+// arbitrary identifiers; its seed corpus runs as part of the ordinary test
+// suite.
+func FuzzParseConflictErrorRoundTrip(f *testing.F) {
+	for _, id := range adversarialConflictIDs {
+		f.Add(id, id, uint64(3), true)
+	}
+	f.Add("acme", "", uint64(0), false)
+
+	f.Fuzz(func(t *testing.T, tenantID, persistenceID string, revision uint64, tenantScoped bool) {
+		scope := persistence.Unscoped()
+		if tenantScoped {
+			tenantScope, err := persistence.NewTenantScope(tenancy.TenantID(tenantID))
+			if err != nil {
+				t.Skip("not a valid tenant id")
+			}
+			scope = tenantScope
+		}
+		original := persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(revision), persistence.WithActualRevision(revision+1))
+		parsed, ok := persistence.ParseConflictError(original.Error())
+		if !ok {
+			t.Fatalf("did not parse: %q", original.Error())
+		}
+		if !original.Scope().Equal(parsed.Scope()) || parsed.PersistenceID() != persistenceID || parsed.Error() != original.Error() {
+			t.Fatalf("round trip mismatch: %q -> %q", original.Error(), parsed.Error())
+		}
+	})
 }
