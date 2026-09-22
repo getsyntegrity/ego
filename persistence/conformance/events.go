@@ -25,6 +25,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,7 @@ var EventsStoreChecks = []Check[persistence.EventsStore]{
 	{Name: "CAS/ExpectRevisionConflictCarriesItsScope", Run: eventsExpectRevisionConflictCarriesScope},
 	{Name: "CAS/ConflictInOneScopeNotObservableInAnother", Run: eventsConflictNotObservableInAnotherScope},
 	{Name: "Enumeration/PersistenceIDsScopedToOwnTenant", Run: eventsPersistenceIDsScopedToOwnTenant},
+	{Name: "Enumeration/PersistenceIDsPaginationCoversEveryIDExactlyOnce", Run: eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce},
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: eventsUnscopedNeverCollidesWithForgedTenant},
 }
 
@@ -231,6 +233,61 @@ func eventsPersistenceIDsScopedToOwnTenant(ctx context.Context, t require.Testin
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{sharedID}, idsB)
 	require.NotContains(t, idsB, aOnlyID)
+}
+
+// eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce proves
+// PersistenceIDs's pagination contract (persistence.EventsStore.PersistenceIDs's
+// doc comment) holds across multiple page boundaries: writing enough
+// aggregates in one scope to force several pages at a small page size, then
+// iterating from an empty token until an empty token is returned, must
+// yield exactly the set of ids written — none skipped, none duplicated. A
+// store that hands back the first NOT-yet-returned key as its token, while
+// resuming strictly after that same token on the following page, silently
+// skips exactly that key at every page boundary (see
+// testkit/eventstore.go's PersistenceIDs doc comment for the exact defect
+// this guards against).
+func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+	tenant := mustTenantScope(t, "pagination-tenant")
+
+	const pageSize = 4
+	const total = 3*pageSize + 1 // forces at least four pages at pageSize
+	want := make(map[string]struct{}, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("pagination-id-%03d", i)
+		want[id] = struct{}{}
+		require.NoError(t, store.WriteEvents(ctx, tenant, eventBatch(t, id, 1, float64(i)), persistence.Unconditional()))
+	}
+
+	got := make(map[string]int, total)
+	var pageToken string
+	pages := 0
+	for {
+		ids, nextToken, err := store.PersistenceIDs(ctx, tenant, pageSize, pageToken)
+		require.NoError(t, err)
+		pages++
+		require.LessOrEqual(t, pages, total+1, "pagination did not terminate: nextPageToken never became empty")
+		for _, id := range ids {
+			got[id]++
+		}
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+
+	gotIDs := make(map[string]struct{}, len(got))
+	for id, count := range got {
+		require.Equal(t, 1, count, "persistence id %q was returned more than once across pages", id)
+		gotIDs[id] = struct{}{}
+	}
+	require.Equal(t, want, gotIDs, "pagination must cover every written persistence id exactly once, with none skipped at a page boundary")
+
+	// This sanity check comes last, deliberately: a store that silently
+	// skips ids at page boundaries can also terminate in fewer pages than
+	// expected (fewer ids returned per page overall), so the coverage
+	// assertion above is the sharper, more diagnostic failure and must be
+	// seen first.
+	require.GreaterOrEqual(t, pages, 4, "the test setup must actually force multiple pages")
 }
 
 func eventsUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.EventsStore) {

@@ -377,6 +377,20 @@ func (x *EventStore) GetLatestEvent(_ context.Context, scope persistence.Scope, 
 // invalid scope is rejected with ErrInvalidScope before anything is read,
 // and this never enumerates a persistenceID that belongs to a different
 // scope.
+//
+// Token resolution (see persistence.EventsStore.PersistenceIDs's doc
+// comment for the full pagination contract this satisfies): nextPageToken
+// is the LAST key actually RETURNED on this page, never the first key held
+// back for the next one. The prior implementation returned
+// keys[endIndex] — the first key NOT yet returned — as the token, while
+// startIndex on the following call resumed strictly AFTER that same token
+// (key > pageToken). Those two facts together meant the key stored as the
+// token was never itself returned by any page: it was silently skipped at
+// every page boundary. Making the token a cursor over what the caller has
+// already CONSUMED (keys[endIndex-1]), while keeping the same strict `>`
+// comparison on the next call, makes the two agree: resuming strictly
+// after "the last thing I've seen" is exactly the cursor semantics callers
+// expect, and no id is ever skipped or duplicated across a page boundary.
 func (x *EventStore) PersistenceIDs(_ context.Context, scope persistence.Scope, pageSize uint64, pageToken string) (persistenceIDs []string, nextPageToken string, err error) {
 	if !scope.Valid() {
 		return nil, "", persistence.ErrInvalidScope
@@ -414,10 +428,13 @@ func (x *EventStore) PersistenceIDs(_ context.Context, scope persistence.Scope, 
 	}
 	persistenceIDs = keys[startIndex:endIndex]
 
-	// step 4: determine the nextPageToken
+	// step 4: determine the nextPageToken. Guarded on len(persistenceIDs) > 0
+	// so a degenerate pageSize == 0 call (which returns no items and thus
+	// cannot advance startIndex on the next call) terminates instead of
+	// looping forever on the same empty page.
 	switch {
-	case endIndex < len(keys):
-		nextPageToken = keys[endIndex]
+	case endIndex < len(keys) && len(persistenceIDs) > 0:
+		nextPageToken = persistenceIDs[len(persistenceIDs)-1]
 	default:
 		nextPageToken = ""
 	}

@@ -66,7 +66,13 @@
 //
 // TenantAdopter defaults to dry-run (plans and reports, writes nothing) and
 // never deletes source data unless WithSourceDeletion is also set, and then
-// only after a copy has been read back and verified.
+// only after a copy has been read back and matched, via proto.Equal, against
+// the exact record this tool intended to write (the source record with
+// tenant_metadata replaced by the target tenant's; events matched by
+// SequenceNumber rather than slice position or count) — not merely a
+// count, sequence number, or version number, none of which can detect a
+// corrupted payload, a dropped tenant_metadata, or a missing encryption
+// envelope.
 //
 // Durable-state enumeration limitation: persistence.EventsStore has
 // PersistenceIDs to enumerate a scope, but neither persistence.SnapshotStore

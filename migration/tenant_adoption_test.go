@@ -25,6 +25,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -42,6 +44,80 @@ import (
 	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
+
+// corruptingEventsStore wraps a persistence.EventsStore and, for writes
+// targeting corruptScope only, runs mangle on a clone of every event before
+// delegating the write. It exists to prove the events verification in
+// adoptEvents (tenant_adoption.go) catches a corrupted write that the OLD
+// verification (a bare len(written) != len(sourceEvents) count check) could
+// not: mangle preserves the event count and every SequenceNumber, changing
+// only what a count-only check cannot see.
+type corruptingEventsStore struct {
+	persistence.EventsStore
+	corruptScope persistence.Scope
+	mangle       func(*egopb.Event)
+}
+
+func (c *corruptingEventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+	if !scope.Equal(c.corruptScope) {
+		return c.EventsStore.WriteEvents(ctx, scope, events, precondition)
+	}
+	corrupted := make([]*egopb.Event, len(events))
+	for i, e := range events {
+		clone, ok := proto.Clone(e).(*egopb.Event)
+		if !ok {
+			return errors.New("corruptingEventsStore: clone failed")
+		}
+		c.mangle(clone)
+		corrupted[i] = clone
+	}
+	return c.EventsStore.WriteEvents(ctx, scope, corrupted, precondition)
+}
+
+// corruptingSnapshotStore is corruptingEventsStore's snapshot-store
+// counterpart: it corrupts a write's SNAPSHOT while preserving its
+// SequenceNumber, which is all the OLD verification
+// (written.GetSequenceNumber() != snapshot.GetSequenceNumber()) ever
+// checked.
+type corruptingSnapshotStore struct {
+	persistence.SnapshotStore
+	corruptScope persistence.Scope
+	mangle       func(*egopb.Snapshot)
+}
+
+func (c *corruptingSnapshotStore) WriteSnapshot(ctx context.Context, scope persistence.Scope, snapshot *egopb.Snapshot) error {
+	if !scope.Equal(c.corruptScope) {
+		return c.SnapshotStore.WriteSnapshot(ctx, scope, snapshot)
+	}
+	clone, ok := proto.Clone(snapshot).(*egopb.Snapshot)
+	if !ok {
+		return errors.New("corruptingSnapshotStore: clone failed")
+	}
+	c.mangle(clone)
+	return c.SnapshotStore.WriteSnapshot(ctx, scope, clone)
+}
+
+// corruptingStateStore is corruptingEventsStore's durable-state-store
+// counterpart: it corrupts a write's STATE while preserving its
+// VersionNumber, which is all the OLD verification
+// (written.GetVersionNumber() != state.GetVersionNumber()) ever checked.
+type corruptingStateStore struct {
+	persistence.StateStore
+	corruptScope persistence.Scope
+	mangle       func(*egopb.DurableState)
+}
+
+func (c *corruptingStateStore) WriteState(ctx context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
+	if !scope.Equal(c.corruptScope) {
+		return c.StateStore.WriteState(ctx, scope, state, precondition)
+	}
+	clone, ok := proto.Clone(state).(*egopb.DurableState)
+	if !ok {
+		return errors.New("corruptingStateStore: clone failed")
+	}
+	c.mangle(clone)
+	return c.StateStore.WriteState(ctx, scope, clone, precondition)
+}
 
 // newLegacyEvent builds a plain (non-tenant) event for persistenceID at
 // seqNr, exactly as pre-tenancy code would have written it: no
@@ -671,4 +747,205 @@ func TestTenantAdopterExplicitPersistenceIDsForDurableStateOnly(t *testing.T) {
 	state, err := stateStore.GetLatestState(ctx, target, id)
 	require.NoError(t, err)
 	assert.NotNil(t, state)
+}
+
+// TestTenantAdopterEventsVerificationCatchesCorruptedWrite is the
+// adversarial proof for the second review defect: a verification that only
+// compares len(written) != len(sourceEvents) cannot detect a write that
+// dropped the payload and tenant_metadata while preserving the event count
+// and every sequence number. corruptingEventsStore simulates exactly that
+// faulty adapter. The fixed verification (verifyEventsMatchBySequence) must
+// fail this aggregate, name its persistence id, and — critically — never
+// delete the source, even though WithSourceDeletion was requested.
+func TestTenantAdopterEventsVerificationCatchesCorruptedWrite(t *testing.T) {
+	ctx := context.Background()
+	base := testkit.NewEventsStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "corrupt-events-1"
+	source := persistence.Unscoped()
+	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100),
+		newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	corrupting := &corruptingEventsStore{
+		EventsStore:  base,
+		corruptScope: target,
+		mangle: func(e *egopb.Event) {
+			// Right count, right sequence number, wrong everything else:
+			// the payload is dropped and tenant_metadata never lands.
+			e.TenantMetadata = nil
+			e.Event = nil
+		},
+	}
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(corrupting),
+		WithWriteEnabled(),
+		WithSourceDeletion(),
+	)
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err, "a per-aggregate verification failure must not abort the whole run")
+
+	assert.Equal(t, 1, report.Failed, "a corrupted target write must be reported as a failure, not silently verified")
+	require.Len(t, report.Failures, 1)
+	assert.Equal(t, id, report.Failures[0].PersistenceID)
+	assert.Contains(t, report.Failures[0].Err.Error(), id, "the failure must name the persistence id that differed")
+	assert.Zero(t, report.SourceDeleted, "a failed verification must never delete the source, even with WithSourceDeletion")
+
+	sourceEvents, err := base.ReplayEvents(ctx, source, id, 1, 2, 10)
+	require.NoError(t, err)
+	assert.Len(t, sourceEvents, 2, "the source copy must remain fully intact after a failed verification")
+}
+
+// TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite is the
+// snapshot-store counterpart of the events test above: a verification that
+// only compares SequenceNumber cannot detect a snapshot whose STATE payload
+// was corrupted while its sequence number was preserved.
+func TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite(t *testing.T) {
+	ctx := context.Background()
+	base := testkit.NewSnapshotStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "corrupt-snapshot-1"
+	source := persistence.Unscoped()
+	require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 100)))
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	corrupting := &corruptingSnapshotStore{
+		SnapshotStore: base,
+		corruptScope:  target,
+		mangle: func(s *egopb.Snapshot) {
+			// Right sequence number, wrong state payload entirely.
+			payload, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: 999})
+			require.NoError(t, err)
+			s.State = payload
+		},
+	}
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithSnapshotStore(corrupting),
+		WithPersistenceIDs(id), // no events store: SnapshotStore has no enumeration method
+		WithWriteEnabled(),
+		WithSourceDeletion(),
+	)
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.Failed, "a snapshot whose payload differs from the source must fail verification even though its sequence number matches")
+	require.Len(t, report.Failures, 1)
+	assert.Equal(t, id, report.Failures[0].PersistenceID)
+	assert.Contains(t, report.Failures[0].Err.Error(), id)
+	assert.Zero(t, report.SourceDeleted, "a failed verification must never delete the source")
+
+	sourceSnap, err := base.GetLatestSnapshot(ctx, source, id)
+	require.NoError(t, err)
+	require.NotNil(t, sourceSnap, "the source snapshot must remain intact after a failed verification")
+}
+
+// TestTenantAdopterStateVerificationCatchesCorruptedWrite is the
+// durable-state counterpart: a verification that only compares
+// VersionNumber cannot detect a durable state whose payload was corrupted
+// while its version number was preserved. adoptState never deletes (there
+// is no delete method on persistence.StateStore), but its verification
+// still feeds AdoptionReport.Verified/Failed, so it must be held to the
+// same standard.
+func TestTenantAdopterStateVerificationCatchesCorruptedWrite(t *testing.T) {
+	ctx := context.Background()
+	base := testkit.NewDurableStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "corrupt-state-1"
+	source := persistence.Unscoped()
+	require.NoError(t, base.WriteState(ctx, source, newLegacyDurableState(t, id, 3, 100), persistence.Unconditional()))
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	corrupting := &corruptingStateStore{
+		StateStore:   base,
+		corruptScope: target,
+		mangle: func(s *egopb.DurableState) {
+			// Right version number, wrong resulting-state payload entirely.
+			payload, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: 999})
+			require.NoError(t, err)
+			s.ResultingState = payload
+		},
+	}
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithStateStore(corrupting),
+		WithPersistenceIDs(id), // no events store: StateStore has no enumeration method
+		WithWriteEnabled(),
+	)
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.Failed, "a durable state whose payload differs from the source must fail verification even though its version number matches")
+	require.Len(t, report.Failures, 1)
+	assert.Equal(t, id, report.Failures[0].PersistenceID)
+	assert.Contains(t, report.Failures[0].Err.Error(), id)
+}
+
+// TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages is the
+// migration-level regression for the first review defect: PersistenceIDs
+// pagination used to silently skip one id at every page boundary (see
+// testkit/eventstore.go's PersistenceIDs doc comment), and
+// collectPersistenceIDs (tenant_adoption.go) drives this tool's entire scan
+// off that enumeration — a real run could report success while leaving
+// aggregates unadopted. This writes more aggregates than fit in one page at
+// a small configured page size and asserts every single one is scanned and
+// adopted, none skipped at a page boundary.
+func TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages(t *testing.T) {
+	ctx := context.Background()
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+
+	const pageSize = 4
+	const total = 3*pageSize + 1 // forces at least four PersistenceIDs pages
+	source := persistence.Unscoped()
+	assignments := make(map[string]tenancy.TenantID, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("adopt-page-%03d", i)
+		require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, int64(i))}, persistence.Unconditional()))
+		assignments[id] = "acme"
+	}
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(assignments),
+		WithEventsStore(eventsStore),
+		WithScanPageSize(pageSize),
+		WithWriteEnabled(),
+	)
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, total, report.Scanned, "every persistence id must be scanned exactly once; none skipped at a PersistenceIDs page boundary")
+	assert.Equal(t, total, report.Copied)
+	assert.Zero(t, report.Failed)
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	for id := range assignments {
+		evt, err := eventsStore.GetLatestEvent(ctx, target, id)
+		require.NoError(t, err)
+		assert.NotNil(t, evt, "persistence id %q must have been adopted, not skipped at a page boundary", id)
+	}
 }

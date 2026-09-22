@@ -101,8 +101,10 @@ const (
 	// nothing was overwritten.
 	StatusAlreadyPresent RecordStatus = "already_present"
 	// StatusSourceDeleted means the record was copied, the copy was read
-	// back and verified, and the source-scope copy was then removed
-	// (WithSourceDeletion only).
+	// back and matched the source record byte-for-byte (proto.Equal against
+	// the exact record this tool intended to write — the source record with
+	// tenant_metadata replaced by the target tenant's), and the source-scope
+	// copy was then removed (WithSourceDeletion only).
 	StatusSourceDeleted RecordStatus = "source_deleted"
 	// StatusFailed means an unexpected error occurred while adopting this
 	// record kind. See RecordOutcome.Err for detail.
@@ -181,7 +183,12 @@ type AdoptionReport struct {
 	// scope; nothing was written.
 	AlreadyPresent int
 	// Verified is the number of copied aggregates whose target-scope copy
-	// was read back and matched the source. Always 0 in dry-run.
+	// was read back and matched the source: a full proto.Equal match of the
+	// exact record this tool intended to write (the source record with
+	// tenant_metadata replaced by the target tenant's) — not a proxy check
+	// against a count, sequence number, or version number alone, none of
+	// which can detect a corrupted payload, a dropped tenant_metadata, or a
+	// missing encryption envelope. Always 0 in dry-run.
 	Verified int
 	// SourceDeleted is the number of aggregates for which at least one
 	// record kind's source-scope copy was removed after a verified copy
@@ -278,8 +285,15 @@ func WithWriteEnabled() AdoptionOption {
 
 // WithSourceDeletion opts in to removing an aggregate's source-scope copy
 // once (and only once) its target-scope copy has been read back and
-// verified. Without this option the source scope is never modified. A
-// failed verification never deletes, regardless of this option.
+// verified against the FULL record this tool intended to write — a
+// proto.Equal match of the source record with tenant_metadata replaced by
+// the target tenant's, events matched by SequenceNumber rather than slice
+// position or count — not merely a count, sequence number, or version
+// number. A count/sequence/version-only check cannot detect a truncated
+// write, a dropped payload or tenant_metadata, or a missing encryption
+// envelope; a full-record match can, and does. Without this option the
+// source scope is never modified. A failed verification never deletes,
+// regardless of this option.
 //
 // Durable state is never deleted by this option: persistence.StateStore has
 // no delete method in the SPI (see state_store.go), so a durable-state
@@ -580,8 +594,8 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, target persi
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target events: %w", err)}
 	}
-	if len(written) != len(sourceEvents) {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target events: wrote %d, read back %d", len(sourceEvents), len(written))}
+	if err := verifyEventsMatchBySequence(id, cloned, written); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: err}
 	}
 
 	if a.deleteSource {
@@ -639,8 +653,14 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, target per
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot: %w", err)}
 	}
-	if written == nil || written.GetSequenceNumber() != snapshot.GetSequenceNumber() {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot: expected sequence %d, got %v", snapshot.GetSequenceNumber(), written)}
+	// Full-record match, not a sequence-number proxy: clone is exactly the
+	// record this tool intended to write (the source snapshot with
+	// tenant_metadata replaced by target's), so anything proto.Equal
+	// disagrees on — payload, tenant_metadata, timestamps, encryption
+	// envelope — means the store did not durably persist what was written,
+	// and the source must not be deleted.
+	if written == nil || !proto.Equal(clone, written) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot for persistence_id %q: read-back does not match what was written (expected sequence %d)", id, snapshot.GetSequenceNumber())}
 	}
 
 	if a.deleteSource {
@@ -698,11 +718,55 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, target persis
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state: %w", err)}
 	}
-	if written == nil || written.GetVersionNumber() != state.GetVersionNumber() {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state: expected version %d, got %v", state.GetVersionNumber(), written)}
+	// Full-record match, not a version-number proxy: clone is exactly the
+	// record this tool intended to write. adoptState never deletes (there is
+	// no delete method on persistence.StateStore), but its verification
+	// still feeds AdoptionReport.Verified, so it must be just as strict as
+	// the events/snapshot checks above.
+	if written == nil || !proto.Equal(clone, written) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state for persistence_id %q: read-back does not match what was written (expected version %d)", id, state.GetVersionNumber())}
 	}
 
 	return RecordOutcome{Status: StatusCopied}
+}
+
+// verifyEventsMatchBySequence proves that written — the target scope's
+// read-back — is exactly expected, matched by SequenceNumber rather than
+// slice position or count: a store that returns events in a different order
+// would still pass a position-based comparison, and a store that corrupts a
+// payload while preserving the count would still pass the old
+// len(written) != len(sourceEvents) check. Every expected event must be
+// present in written under the same sequence number and proto.Equal it
+// exactly; no extra sequence numbers may appear in written; a sequence
+// number is never expected more than once (WriteEvents already guards a
+// batch to one persistence_id, and eGo's own event log de-duplicates by
+// sequence number — see testkit/eventstore.go's newEventLog). On any
+// mismatch the returned error names id and the sequence number that
+// differed, so the caller never deletes based on a check that cannot detect
+// corruption.
+func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) error {
+	expectedBySeq := make(map[uint64]*egopb.Event, len(expected))
+	for _, e := range expected {
+		expectedBySeq[e.GetSequenceNumber()] = e
+	}
+	writtenBySeq := make(map[uint64]*egopb.Event, len(written))
+	for _, e := range written {
+		writtenBySeq[e.GetSequenceNumber()] = e
+	}
+
+	if len(writtenBySeq) != len(expectedBySeq) {
+		return fmt.Errorf("verify target events for persistence_id %q: wrote %d distinct sequence numbers, read back %d", id, len(expectedBySeq), len(writtenBySeq))
+	}
+	for seq, want := range expectedBySeq {
+		got, ok := writtenBySeq[seq]
+		if !ok {
+			return fmt.Errorf("verify target events for persistence_id %q: sequence %d is missing from the target read-back", id, seq)
+		}
+		if !proto.Equal(want, got) {
+			return fmt.Errorf("verify target events for persistence_id %q: sequence %d does not match what was written", id, seq)
+		}
+	}
+	return nil
 }
 
 // pingStores preflights every configured store, exactly like Migrator.Run.

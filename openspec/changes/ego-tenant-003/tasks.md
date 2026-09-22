@@ -5,7 +5,9 @@ are complete, each committed on `feat/ego-tenant-003-eventstore-isolation`.
 The remaining isolation work — read-side/projection isolation, an
 administrative bypass path, and tenant-qualified actor identity — does not
 fit in this change; it is named below as an explicit follow-up chain of
-later, separately-authorized SDD changes.
+later, separately-authorized SDD changes. T7 is a later addition: two P1
+defects a review of the pull request for this branch (`getsyntegrity/ego#98`)
+found in T6's own tenant-adoption tool, fixed on the same branch.
 
 | Task | Summary | Commit |
 | --- | --- | --- |
@@ -14,7 +16,8 @@ later, separately-authorized SDD changes.
 | T3 | Cross-tenant store conformance suite | `5b1d16f` |
 | T4 | Engine/actor wiring | `99eccad` |
 | T5 | Migration and compatibility documentation | `c3a4ece` |
-| T6 | Tenant adoption tool for existing `Unscoped()` data | this commit |
+| T6 | Tenant adoption tool for existing `Unscoped()` data | `40a7d0b` |
+| T7 | Review fix: full-record verification before source deletion, `PersistenceIDs` pagination off-by-one | this commit |
 
 ## T1 — Introduce `persistence.Scope`
 
@@ -446,8 +449,116 @@ untouched, idempotent re-run, never-overwrite-an-existing-target,
 opt-in source deletion only after verification, per-aggregate failure
 does not abort the run, and explicit ids for a durable-state-only
 deployment), `migration/migration.go` (package doc extended),
-`CHANGELOG.md`, `readme.md`, this file. Commit: this commit (see `git log
--1` on `feat/ego-tenant-003-eventstore-isolation` for its SHA).
+`CHANGELOG.md`, `readme.md`, this file. Commit: `40a7d0b`.
+
+## T7 — Review fix: full-record verification and the `PersistenceIDs` off-by-one
+
+A review of `getsyntegrity/ego#98` (this branch, issue `#92`) found two P1
+defects in T6's own tenant-adoption tool. Both were confirmed against the
+source before being fixed here; this task records what the review caught
+and how each was closed.
+
+- [x] 7.1 **Defect: `PersistenceIDs` pagination silently skipped one id at
+      every page boundary.** `testkit/eventstore.go`'s `PersistenceIDs`
+      returned `keys[endIndex]` — the first key NOT yet returned — as
+      `nextPageToken`, while the following page resumed strictly AFTER
+      that same token (`key > pageToken`). The key handed back as the
+      token was therefore never itself returned by any page. This is
+      PRE-EXISTING on upstream `main` (`e28593c`; the older `Migrator` has
+      the same exposure) but became a real data-loss risk here because
+      `TenantAdopter.collectPersistenceIDs` drives the adoption scan off
+      this exact enumeration: a run could report success while leaving
+      some aggregates unadopted.
+      Fix: `nextPageToken` is now the LAST key actually RETURNED on the
+      page (`persistenceIDs[len(persistenceIDs)-1]`), not the first key
+      held back — a cursor over what the caller has consumed, agreeing
+      with the unchanged `>` comparison on the next call. Guarded so a
+      degenerate `pageSize == 0` call (no items returned) terminates
+      instead of looping on an empty page.
+      Contract: `persistence.EventsStore.PersistenceIDs`'s doc comment
+      (`persistence/events_store.go`) now states the pagination contract
+      normatively for every implementation, in this repo or external:
+      opaque token, no skip, no duplicate, empty token means done.
+      Pinned by: `persistence/conformance/events.go`'s new
+      `Enumeration/PersistenceIDsPaginationCoversEveryIDExactlyOnce`
+      check, which writes 13 ids at page size 4 (forcing 4 pages) and
+      asserts the collected set equals exactly what was written, no
+      duplicates — run via `RunEventsStoreConformance`/wired into
+      `testkit/conformance_test.go`'s `TestEventStoreConformance` like
+      every other check in the suite. RED observed directly: reverting
+      the token fix and re-running just this subtest reproduced the exact
+      skip (`pagination-id-004` and `pagination-id-009` missing from the
+      collected set at page size 4/total 13). GREEN after restoring.
+      Direct regressions: `testkit/stores_test.go`'s
+      `TestEventStore_PersistenceIDsPaginationExhaustive` (10 ids, page
+      size 3) and a strengthened assertion in the existing
+      `TestEventStore_PersistenceIDs`. Adopter-level regression:
+      `migration/tenant_adoption_test.go`'s
+      `TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages` (13
+      aggregates, `WithScanPageSize(4)`) asserts every one is scanned and
+      adopted.
+- [x] 7.2 **Defect: source deletion happened after a verification that
+      could not detect corruption.** `adoptEvents`/`adoptSnapshot`/
+      `adoptState` (`migration/tenant_adoption.go`) verified a copy by
+      comparing only a proxy field — event count
+      (`len(written) != len(sourceEvents)`), snapshot sequence number, or
+      durable-state version number — then, for events and snapshots,
+      deleted the SOURCE scope on success. A faulty adapter, a truncated
+      write, or a write that dropped the payload, `tenant_metadata`, or an
+      encryption envelope satisfied all three old checks, so the source
+      was destroyed anyway. `adoptState` never deletes (no delete method
+      exists on `persistence.StateStore`), but its verification was
+      exactly as wrong and fed `AdoptionReport.Verified` just the same.
+      Fix: every kind now verifies the FULL record — a `proto.Equal` match
+      against the exact record this tool intended to write (the source
+      record with `tenant_metadata` replaced by the target's). Events are
+      matched by `SequenceNumber` via the new `verifyEventsMatchBySequence`
+      helper, not by slice position or count, so a store that reorders or
+      corrupts a payload while preserving the count/sequence no longer
+      passes.
+      Tests (written first per this repo's strict TDD, RED observed, then
+      GREEN): `migration/tenant_adoption_test.go` gained
+      `corruptingEventsStore`/`corruptingSnapshotStore`/
+      `corruptingStateStore` — adversarial store wrappers that corrupt a
+      write to the TARGET scope only (dropped payload/`tenant_metadata`
+      for events; a different state payload for snapshot and durable
+      state) while preserving exactly the field the old check compared
+      (count, sequence number, version number). Three new tests
+      (`TestTenantAdopterEventsVerificationCatchesCorruptedWrite`,
+      `TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite`,
+      `TestTenantAdopterStateVerificationCatchesCorruptedWrite`) assert
+      the aggregate is reported failed, the failure names the persistence
+      id, and — for events and snapshot, with `WithSourceDeletion()`
+      requested — the source is NOT deleted. RED observed directly:
+      temporarily restoring the old proxy checks made all three tests
+      fail exactly as expected (`report.Failed == 0`, `SourceDeleted == 1`
+      for events, corruption silently accepted). GREEN after restoring the
+      full-record checks.
+      Docs corrected to match reality (they previously said "read back and
+      verified" without stating the check was a proxy, which was
+      technically true but easy to over-read as the current state):
+      `migration/tenant_adoption.go`'s `StatusSourceDeleted`,
+      `AdoptionReport.Verified`, and `WithSourceDeletion` doc comments;
+      `migration/migration.go`'s package doc; `CHANGELOG.md`'s TENANT-003
+      entry.
+- [x] 7.3 Ran the full verification suite: `go build -mod=vendor ./...`,
+      `go vet -mod=vendor ./...` clean; `go test -mod=vendor -count=1
+      ./migration/... ./persistence/... ./testkit/...` three times, all
+      clean; `go test -mod=vendor -count=1 -v ./testkit/ -run Conformance`
+      shows the new pagination subtest passing alongside the existing
+      ones; `golangci-lint` reports the same 14 pre-existing `revive`
+      findings in `command/errors.go`/`tenancy/errors.go` and zero new
+      findings.
+
+**Evidence**: `persistence/events_store.go` (contract doc comment),
+`testkit/eventstore.go` (pagination fix), `persistence/conformance/events.go`
+(new conformance check), `testkit/stores_test.go` (direct regression),
+`migration/tenant_adoption.go` (full-record verification,
+`verifyEventsMatchBySequence`, corrected doc comments),
+`migration/tenant_adoption_test.go` (adversarial wrappers, 5 new tests),
+`migration/migration.go` (package doc corrected), `CHANGELOG.md`. Refs `#92`.
+Commit: this commit (see `git log -1` on
+`feat/ego-tenant-003-eventstore-isolation` for its SHA).
 
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)

@@ -24,6 +24,7 @@ package testkit
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -205,12 +206,62 @@ func TestEventStore_PersistenceIDs(t *testing.T) {
 		assert.Len(t, ids, 2)
 		assert.NotEmpty(t, nextToken)
 
-		ids2, _, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, nextToken)
+		ids2, nextToken2, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, nextToken)
 		require.NoError(t, err)
-		assert.NotEmpty(t, ids2)
+		assert.Equal(t, []string{"pid-c"}, ids2, "the third id must still be returned by the second page, not skipped at the page boundary")
+		assert.Empty(t, nextToken2, "no ids remain, so the token must signal iteration is complete")
 	})
 
 	require.NoError(t, store.Disconnect(ctx))
+}
+
+// TestEventStore_PersistenceIDsPaginationExhaustive is a direct regression
+// for the off-by-one at every page boundary: PersistenceIDs used to hand
+// back keys[endIndex] (the first key NOT yet returned) as nextPageToken,
+// while the following call resumed strictly AFTER that same token. That key
+// was therefore never returned by any page. This writes enough persistence
+// ids to force several pages at a small page size and asserts that
+// iterating to exhaustion returns every id exactly once, matching the
+// contract now stated on persistence.EventsStore.PersistenceIDs's doc
+// comment. See also persistence/conformance/events.go's
+// eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce, which pins the
+// same contract for every conforming store implementation.
+func TestEventStore_PersistenceIDsPaginationExhaustive(t *testing.T) {
+	ctx := context.TODO()
+	store := NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	const pageSize = 3
+	const total = 10 // forces at least four pages at pageSize
+	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
+	require.NoError(t, err)
+
+	want := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("pagination-exhaustive-%02d", i)
+		want = append(want, id)
+		event := &egopb.Event{PersistenceId: id, SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1}
+		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
+	}
+
+	var got []string
+	var pageToken string
+	pages := 0
+	for {
+		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), pageSize, pageToken)
+		require.NoError(t, err)
+		pages++
+		require.LessOrEqual(t, pages, total+1, "pagination did not terminate")
+		got = append(got, ids...)
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+
+	assert.GreaterOrEqual(t, pages, 4, "the test setup must actually force multiple pages")
+	assert.ElementsMatch(t, want, got, "every written id must be returned exactly once across pages, none skipped at a page boundary")
 }
 
 func TestEventStore_GetShardEvents(t *testing.T) {

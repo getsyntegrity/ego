@@ -129,6 +129,16 @@ type EventsStore interface {
 	// PersistenceIDs returns the distinct list of all the persistence ids in the journal store
 	// that belong to scope. An invalid (zero-value) scope returns ErrInvalidScope. This never
 	// enumerates a persistenceID that belongs to a different scope.
+	//
+	// Pagination contract (normative — every implementation, in this repo or external, MUST
+	// satisfy this): nextPageToken is opaque to the caller. A caller MUST NOT interpret,
+	// construct, or compare it, only pass it back verbatim as pageToken on the following call.
+	// Starting from pageToken == "" and calling repeatedly, each time with the previously
+	// returned nextPageToken, until an empty nextPageToken is returned, MUST yield every
+	// persistence id in scope EXACTLY ONCE — no id skipped, and no id returned twice. An empty
+	// returned nextPageToken means the iteration is complete; it MUST NOT be returned while ids
+	// in scope remain unlisted. persistence/conformance's Enumeration group pins this contract
+	// with a check that forces multiple pages and asserts exact, duplicate-free coverage.
 	PersistenceIDs(ctx context.Context, scope Scope, pageSize uint64, pageToken string) (persistenceIDs []string, nextPageToken string, err error)
 	// GetShardEvents returns the next (limit) events after the offset in the journal for a given
 	// shard. Deliberately unchanged/unscoped in this slice: this is a shard-level projection read,
