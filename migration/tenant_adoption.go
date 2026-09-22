@@ -56,6 +56,18 @@ var ErrAssignmentRequired = errors.New("migration: a TenantAssignment is require
 // work.
 var ErrNoStoresConfigured = errors.New("migration: at least one of WithEventsStore, WithSnapshotStore, or WithStateStore is required")
 
+// ErrInvalidScanPageSize is returned by NewTenantAdopter when WithScanPageSize
+// was given zero: a zero page enumerates no persistence ids, so the run
+// would scan nothing and still report success.
+var ErrInvalidScanPageSize = errors.New("migration: WithScanPageSize must be greater than zero")
+
+// errSourceChangedDuringAdoption is the per-kind failure recorded when a
+// WithSourceDeletion run finds that the source gained records while this
+// aggregate was being adopted: records newer than the verified copy would be
+// left only in the source, so the run refuses to delete, or to report the
+// deletion as a success.
+var errSourceChangedDuringAdoption = errors.New("migration: the source changed while it was being adopted; the source must not receive writes during a WithSourceDeletion run")
+
 // errNoSourceRecords is the per-aggregate failure recorded when an id was
 // assigned a tenant but none of the configured stores actually held any
 // record for it in the source scope — most often a caller mistake in the
@@ -305,7 +317,8 @@ func WithSourceScope(scope persistence.Scope) AdoptionOption {
 }
 
 // WithScanPageSize sets the page size used to enumerate persistence IDs
-// from the events store. Default is 500.
+// from the events store. Default is 500. Zero is rejected by
+// NewTenantAdopter (ErrInvalidScanPageSize): it would enumerate nothing.
 func WithScanPageSize(size uint64) AdoptionOption {
 	return adoptionOptionFunc(func(a *TenantAdopter) { a.pageSize = size })
 }
@@ -330,6 +343,13 @@ func WithWriteEnabled() AdoptionOption {
 // envelope; a full-record match can, and does. Without this option the
 // source scope is never modified. A failed verification never deletes,
 // regardless of this option.
+//
+// The source must not receive writes while a WithSourceDeletion run is in
+// progress: the SPI offers no atomic read-verify-delete. The run re-reads
+// the source before and after each deletion, so a source that gained newer
+// records is either left undeleted or reported as failed — never as
+// source_deleted — and the newer records always stay in the source; a
+// write landing after that final re-read is outside what the tool can see.
 //
 // Durable state is never deleted by this option: persistence.StateStore has
 // no delete method in the SPI (see state_store.go), so a durable-state
@@ -414,6 +434,9 @@ func NewTenantAdopter(assign TenantAssignment, opts ...AdoptionOption) (*TenantA
 
 	if a.eventsStore == nil && a.snapshotStore == nil && a.stateStore == nil {
 		return nil, ErrNoStoresConfigured
+	}
+	if a.pageSize == 0 {
+		return nil, ErrInvalidScanPageSize
 	}
 
 	return a, nil
@@ -658,8 +681,20 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 	}
 
 	if a.deleteSource {
+		// Nothing makes read-verify-delete atomic in the SPI, so the source
+		// is re-read on both sides of the deletion: a source that grew since
+		// it was read is never deleted, and one that grew during the delete
+		// is never reported as deleted. Either way the newer events stay in
+		// the source. A write landing after the second check is outside what
+		// this tool can observe; WithSourceDeletion requires a quiesced source.
+		if err := a.checkSourceEventsNotBeyond(ctx, id, maxSeq, "nothing was deleted"); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
 		if err := a.eventsStore.DeleteEvents(ctx, a.sourceScope, id, maxSeq); err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source events: %w", err)}
+		}
+		if err := a.checkSourceEventsNotBeyond(ctx, id, maxSeq, "the verified events were deleted, but the newer ones remain only in the source"); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
 		}
 		return RecordOutcome{Status: StatusSourceDeleted}
 	}
@@ -734,8 +769,16 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 	}
 
 	if a.deleteSource {
+		// Same two-sided re-read as adoptEvents: never delete a source that
+		// gained a newer snapshot, and never report a deletion that raced one.
+		if err := a.checkSourceSnapshotNotBeyond(ctx, id, snapshot.GetSequenceNumber(), "nothing was deleted"); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
 		if err := a.snapshotStore.DeleteSnapshots(ctx, a.sourceScope, id, snapshot.GetSequenceNumber()); err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source snapshot: %w", err)}
+		}
+		if err := a.checkSourceSnapshotNotBeyond(ctx, id, snapshot.GetSequenceNumber(), "the verified snapshot was deleted, but the newer one remains only in the source"); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
 		}
 		return RecordOutcome{Status: StatusSourceDeleted}
 	}
@@ -860,6 +903,32 @@ func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) er
 		if !proto.Equal(want, got) {
 			return fmt.Errorf("verify target events for persistence_id %q: sequence %d does not match what was written", id, seq)
 		}
+	}
+	return nil
+}
+
+// checkSourceEventsNotBeyond fails with errSourceChangedDuringAdoption when
+// the source now holds an event after verified, the highest sequence number
+// this run copied and verified. outcome says what that means for the source.
+func (a *TenantAdopter) checkSourceEventsNotBeyond(ctx context.Context, id string, verified uint64, outcome string) error {
+	latest, err := a.eventsStore.GetLatestEvent(ctx, a.sourceScope, id)
+	if err != nil {
+		return fmt.Errorf("re-read source events: %w", err)
+	}
+	if latest != nil && latest.GetSequenceNumber() > verified {
+		return fmt.Errorf("%w: persistence_id %q kind %s: source holds sequence %d beyond the verified %d; %s", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), verified, outcome)
+	}
+	return nil
+}
+
+// checkSourceSnapshotNotBeyond is checkSourceEventsNotBeyond for snapshots.
+func (a *TenantAdopter) checkSourceSnapshotNotBeyond(ctx context.Context, id string, verified uint64, outcome string) error {
+	latest, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
+	if err != nil {
+		return fmt.Errorf("re-read source snapshot: %w", err)
+	}
+	if latest != nil && latest.GetSequenceNumber() > verified {
+		return fmt.Errorf("%w: persistence_id %q kind %s: source holds a snapshot at %d beyond the verified %d; %s", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified, outcome)
 	}
 	return nil
 }

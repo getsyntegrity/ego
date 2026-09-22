@@ -1464,3 +1464,138 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		assert.Zero(t, second.Failed)
 	})
 }
+
+func TestNewTenantAdopterRejectsZeroScanPageSize(t *testing.T) {
+	_, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(testkit.NewEventsStore()), WithScanPageSize(0))
+	require.ErrorIs(t, err, ErrInvalidScanPageSize, "a zero page size would scan nothing and report success")
+}
+
+// racingEventsStore appends a new source event at a chosen moment, simulating
+// a legacy writer that is still accepting writes while the adopter runs.
+type racingEventsStore struct {
+	persistence.EventsStore
+	source persistence.Scope
+	target persistence.Scope
+	late   *egopb.Event
+	// onTargetRead appends late during the target read-back verification;
+	// otherwise it is appended at the start of the source DeleteEvents call.
+	onTargetRead bool
+	fired        bool
+}
+
+func (r *racingEventsStore) fire(ctx context.Context) error {
+	if r.fired {
+		return nil
+	}
+	r.fired = true
+	return r.EventsStore.WriteEvents(ctx, r.source, []*egopb.Event{r.late}, persistence.Unconditional())
+}
+
+func (r *racingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := r.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
+	if err == nil && r.onTargetRead && scope.Equal(r.target) && len(events) > 0 {
+		if fireErr := r.fire(ctx); fireErr != nil {
+			return nil, fireErr
+		}
+	}
+	return events, err
+}
+
+func (r *racingEventsStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	if !r.onTargetRead && scope.Equal(r.source) {
+		if err := r.fire(ctx); err != nil {
+			return err
+		}
+	}
+	return r.EventsStore.DeleteEvents(ctx, scope, persistenceID, toSequenceNumber)
+}
+
+// TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites covers
+// a source that keeps accepting writes during a deleting run: the run must
+// never report source_deleted while an event exists only in the source.
+func TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name         string
+		onTargetRead bool
+		wantSource   int
+	}{
+		{name: "a write after verification but before deletion prevents the deletion", onTargetRead: true, wantSource: 3},
+		{name: "a write racing the deletion is detected and not reported as success", onTargetRead: false, wantSource: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := testkit.NewEventsStore()
+			require.NoError(t, base.Connect(ctx))
+			id := "racing-" + uuid.NewString()
+			require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+				newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+			}, persistence.Unconditional()))
+
+			store := &racingEventsStore{EventsStore: base, source: source, target: target,
+				late: newLegacyEvent(t, id, 3, 300), onTargetRead: tc.onTargetRead}
+			adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion())
+			require.NoError(t, err)
+
+			report, err := adopter.Run(ctx)
+			require.NoError(t, err)
+			assert.Zero(t, report.SourceDeleted, "a source that changed during the run must not be reported as deleted")
+			assert.Equal(t, 1, report.Failed)
+			require.Len(t, report.Failures, 1)
+			assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+
+			remaining, err := base.ReplayEvents(ctx, source, id, 1, 10, 10)
+			require.NoError(t, err)
+			assert.Len(t, remaining, tc.wantSource, "the event written during the run must still exist in the source")
+		})
+	}
+}
+
+// racingSnapshotStore writes a newer source snapshot as the adopter deletes
+// the adopted one.
+type racingSnapshotStore struct {
+	persistence.SnapshotStore
+	source persistence.Scope
+	late   *egopb.Snapshot
+	fired  bool
+}
+
+func (r *racingSnapshotStore) DeleteSnapshots(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	if !r.fired && scope.Equal(r.source) {
+		r.fired = true
+		if err := r.SnapshotStore.WriteSnapshot(ctx, r.source, r.late); err != nil {
+			return err
+		}
+	}
+	return r.SnapshotStore.DeleteSnapshots(ctx, scope, persistenceID, toSequenceNumber)
+}
+
+func TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	base := testkit.NewSnapshotStore()
+	require.NoError(t, base.Connect(ctx))
+	const id = "racing-snapshot"
+	require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 2, 200)))
+
+	store := &racingSnapshotStore{SnapshotStore: base, source: source, late: newLegacySnapshot(t, id, 3, 300)}
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithSnapshotStore(store), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, report.SourceDeleted)
+	assert.Equal(t, 1, report.Failed)
+	require.Len(t, report.Failures, 1)
+	assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+
+	latest, err := base.GetLatestSnapshot(ctx, source, id)
+	require.NoError(t, err)
+	require.NotNil(t, latest, "the snapshot written during the run must survive")
+	assert.EqualValues(t, 3, latest.GetSequenceNumber())
+}

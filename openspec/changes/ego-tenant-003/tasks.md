@@ -702,6 +702,18 @@ Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
       saga), `TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner`
       (also under a targeted `-race`), `TestEngineRespawnInLegacyModeIsUnchanged`.
 
+- [x] 8.4 Codex review of `063b212`: a remote PID's binding is read through
+      goakt's `RemoteDependencies`, which reports failure as "no
+      dependencies", so it is retried and an unreadable binding is
+      `ErrSpawnTenantUnverified` rather than a false mismatch
+      (`TestVerifyTenantBindingDistinguishesMismatchFromUnverifiable`);
+      `WithSourceDeletion` re-reads the source around each deletion and never
+      reports a source that grew as deleted
+      (`TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites`,
+      `TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites`);
+      `WithScanPageSize(0)` is rejected
+      (`TestNewTenantAdopterRejectsZeroScanPageSize`).
+
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)
 
