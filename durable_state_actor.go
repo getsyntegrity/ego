@@ -107,7 +107,8 @@ type DurableStateActor struct {
 	// two tenants using the same entityID still map to the SAME actor
 	// instance. Whichever tenant's spawn reaches PreStart first binds scope
 	// (and actorTenant); a later spawn attempt for the same entityID under a
-	// different tenant fails PreStart, and a later command from a different
+	// different tenant is rejected with ErrSpawnTenantMismatch
+	// (engine.go's verifySpawnedTenant), and a later command from a different
 	// tenant against an already-running instance is denied by the existing
 	// actorTenant cross-check in processCommand. Fail-closed and leak-free,
 	// but the second tenant cannot use that entity id at all — a functional

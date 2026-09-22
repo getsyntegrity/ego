@@ -267,10 +267,17 @@ binds that actor's `scope` (and `actorTenant`) to whichever tenant won the
 race, permanently for that actor's lifetime. Every later spawn attempt or
 command for that same id, from the *other* tenant, is rejected:
 
-- A second spawn attempt for the same id fails outright, because GoAkt
-  will not create a second actor under a name that is already taken (or,
-  if it lands on an already-running instance's mailbox as a command
-  instead, is rejected by the same cross-tenant command gate below).
+- A second spawn attempt for the same id under a different tenant fails
+  with `ErrSpawnTenantMismatch` (also `tenancy.ErrDenied`). GoAkt's local
+  `Spawn` returns an already-running actor's PID with a nil error, and
+  concurrent spawns of one name coalesce onto one execution, so the engine
+  checks the *returned* actor's own spawn binding — its
+  `EntityTenantScope` dependency, the value its `PreStart` bound into its
+  `scope` — after `Spawn` returns (`engine.go`'s `verifySpawnedTenant`).
+  Checking the actor that actually holds the name, rather than a pre-check
+  before spawning, leaves no window: two concurrent spawns under different
+  tenants produce exactly one winner. A spawn under the *same* tenant is an
+  idempotent success.
 - A command from the non-owning tenant against the already-running actor
   is rejected by the existing `actorTenant` cross-check in
   `processCommandAndReply` / `processAndBatch` (`EventSourcedActor`),

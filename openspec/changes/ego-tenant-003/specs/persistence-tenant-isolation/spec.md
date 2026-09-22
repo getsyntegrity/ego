@@ -260,7 +260,9 @@ an explicit non-goal of T4, deferred to a follow-up ticket (see
 - WHEN tenant B attempts to spawn or send a command for the same entity
   id `"order-42"`
 - THEN the attempt is rejected before any store read or write happens on
-  tenant B's behalf, and tenant A's actor and data are unaffected —
+  tenant B's behalf — a spawn with the typed `ErrSpawnTenantMismatch`,
+  never a success that hands back tenant A's actor — and tenant A's actor
+  and data are unaffected —
   tenant B simply cannot use that entity id, which is a functional
   availability limitation, not a cross-tenant data exposure
 
@@ -273,9 +275,10 @@ above end to end: T3. Engine/actor wiring that resolves a real
 `tenancy.TenantContext` into a `Scope` instead of always passing
 `Unscoped()`: T4. External-adapter migration documentation: T5. Any
 redefinition of `WritePrecondition`, `ConflictError`, or CAS ownership:
-`ego-write-004` (`#65`), unchanged and un-reopened. Any change to
-`tenancy`'s own API or its stdlib-only constraint: out of scope entirely —
-this specification only adds a new consumer of `tenancy.TenantID`.
+`ego-write-004` (`#65`), unchanged and un-reopened. `tenancy`'s
+stdlib-only constraint: unchanged. Its API gains only the additive
+`FixedTenantResolver` capability interface described above; nothing else
+in `tenancy` changes.
 
 **Non-goal (T4):** tenant-qualified actor identity. T4 deliberately does
 not change how an actor is named or addressed — it remains the bare

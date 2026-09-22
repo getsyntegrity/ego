@@ -671,6 +671,32 @@ and how each was closed.
 Commit: this commit (see `git log -1` on
 `feat/ego-tenant-003-eventstore-isolation` for its SHA).
 
+## T8 — PR #98 review round 2 and the spawn-contract correction
+
+Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
+`PreStart` still orders `requireExtension` → `tenantAware` →
+`resolveScope` → recovery/store access.
+
+- [x] 8.1 Adoption re-runs after `WithSourceDeletion` are a no-op: an
+      existing target is `already_present` only when equivalent (every
+      record owned by the assigned tenant, and containing the source
+      exactly while it exists); otherwise `errTargetNotEquivalent`. Read-back
+      with a duplicate sequence row no longer verifies. Evidence:
+      `TestTenantAdopterSourceDeletingReRunIsIdempotent`,
+      `...SnapshotOnlyReRunAfterDeletionIsIdempotent`,
+      `...MissingSourceClassification`,
+      `...EventsVerificationRejectsDuplicateSequenceRows`.
+- [x] 8.2 `ConflictError` wire grammar is `grammar=v1` with quoted
+      identifiers (see 2.3).
+- [x] 8.3 Spec/implementation contradiction found and fixed in code, per
+      the ratified spec: a local re-spawn of a live id under a different
+      tenant returned nil (GoAkt returns the running PID). The engine now
+      checks the returned actor's spawn binding and fails with
+      `ErrSpawnTenantMismatch`. Evidence:
+      `TestEngineRespawnUnderAnotherTenantIsRejected` (entity, durable state,
+      saga), `TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner`
+      (also under a targeted `-race`), `TestEngineRespawnInLegacyModeIsUnchanged`.
+
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)
 
@@ -681,11 +707,11 @@ Commit: this commit (see `git log -1` on
   this issue started.
 - **Idempotency (#66)**: not addressed by this change.
 - **Atomic multi-event append (#67)**: not addressed by this change.
-- **Administrative bypass path (TENANT-008)**: `Engine.Entity` and
-  `Engine.DurableStateEntity` refuse an administrative-scope spawn
-  outright (`ErrAdministrativeScopeEntitySpawn`, T4.1); a deliberate,
-  audited administrative bypass is out of scope here and left to
-  TENANT-008.
+- **Administrative bypass path (TENANT-008)**: an administrative scope
+  can never act as an aggregate tenant — it cannot declare a spawn
+  (`ErrSpawnTenantUndetermined`, 4.8), command a tenant-bound entity, or
+  scope an erasure (`TestAdministrativeScopeIsNeverAnAggregateTenantScope`);
+  a deliberate, audited administrative bypass is left to TENANT-008.
 - **Tenant-qualified actor identity**: the known limitation documented in
   `design.md` and the CHANGELOG entry above — a GoAkt actor's name is the
   bare `entityID`/`sagaID`, not `(tenant, entityID)`, so two tenants

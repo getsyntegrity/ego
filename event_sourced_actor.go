@@ -255,10 +255,10 @@ type EventSourcedActor struct {
 	// actor instance: whichever tenant's spawn reaches PreStart first
 	// binds scope (and actorTenant, see resolveScope), and every later
 	// spawn attempt or command for that same entityID under a DIFFERENT
-	// tenant is denied — a spawn under a different tenant fails PreStart
-	// via the actorTenant pre-seed/seedActorTenant cross-check once an
-	// instance is already recovering under the first tenant, and a
-	// command against an already-running instance is denied by the
+	// tenant is denied — a spawn under a different tenant is rejected by
+	// Engine.Entity with ErrSpawnTenantMismatch after comparing the
+	// returned actor's own spawn binding (engine.go's verifySpawnedTenant),
+	// and a command against an already-running instance is denied by the
 	// existing actorTenant cross-check in processCommandAndReply/
 	// processAndBatch. This is fail-closed and leak-free — no cross-tenant
 	// read or write ever happens — but it means the second tenant cannot
