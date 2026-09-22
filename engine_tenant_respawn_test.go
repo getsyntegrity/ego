@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -187,4 +188,46 @@ func TestEngineRespawnInLegacyModeIsUnchanged(t *testing.T) {
 	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id)), "legacy respawn of a live id stays a no-op success")
 	// WithTenant is ignored in legacy mode, exactly as before.
 	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme"))))
+}
+
+// TestVerifyTenantBindingDistinguishesMismatchFromUnverifiable pins how the
+// post-Spawn check classifies what it can read of the returned actor's
+// binding. A remote PID's binding is read through a remote call that
+// reports failure as "no dependencies", so it is retried, and a binding
+// that still cannot be read is ErrSpawnTenantUnverified — fail closed, but
+// never presented as a proven cross-tenant conflict.
+func TestVerifyTenantBindingDistinguishesMismatchFromUnverifiable(t *testing.T) {
+	requested := extensions.NewEntityTenantScope("acme")
+	lookupReturning := func(results ...*extensions.EntityTenantScope) (func() *extensions.EntityTenantScope, *int) {
+		calls := 0
+		return func() *extensions.EntityTenantScope {
+			result := results[min(calls, len(results)-1)]
+			calls++
+			return result
+		}, &calls
+	}
+
+	t.Run("same tenant", func(t *testing.T) {
+		lookup, _ := lookupReturning(extensions.NewEntityTenantScope("acme"))
+		require.NoError(t, verifyTenantBinding("order-1", requested, lookup, 1))
+	})
+
+	t.Run("different tenant is a mismatch", func(t *testing.T) {
+		lookup, _ := lookupReturning(extensions.NewEntityTenantScope("globex"))
+		requireSpawnTenantMismatch(t, verifyTenantBinding("order-1", requested, lookup, 3))
+	})
+
+	t.Run("a transiently unreadable remote binding is retried", func(t *testing.T) {
+		lookup, calls := lookupReturning(nil, nil, extensions.NewEntityTenantScope("acme"))
+		require.NoError(t, verifyTenantBinding("order-1", requested, lookup, 3))
+		assert.Equal(t, 3, *calls)
+	})
+
+	t.Run("a binding that stays unreadable is unverified, not a mismatch", func(t *testing.T) {
+		lookup, calls := lookupReturning(nil)
+		err := verifyTenantBinding("order-1", requested, lookup, 3)
+		require.ErrorIs(t, err, ErrSpawnTenantUnverified)
+		assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
+		assert.Equal(t, 3, *calls)
+	})
 }

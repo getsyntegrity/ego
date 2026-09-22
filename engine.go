@@ -111,6 +111,13 @@ var (
 	// error also matches tenancy.ErrDenied and carries a *tenancy.Error.
 	// Re-spawning a live id under the SAME tenant stays an idempotent success.
 	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
+	// ErrSpawnTenantUnverified is returned by Entity, DurableStateEntity, and
+	// Saga in tenant-aware mode when the tenant binding of the actor a spawn
+	// returned could not be read — for a remote PID, the owning node did not
+	// answer the dependency lookup. The spawn fails closed, but unlike
+	// ErrSpawnTenantMismatch it asserts no cross-tenant conflict; retrying the
+	// spawn is safe, since a same-tenant re-spawn is idempotent.
+	ErrSpawnTenantUnverified = errors.New("eGo: the spawned actor's tenant binding could not be verified")
 	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
 	// tenancy is active (extensions.TenancyExtensionID is registered) but no
 	// valid extensions.EntityTenantScope dependency was injected at spawn
@@ -736,22 +743,33 @@ func (engine *Engine) spawnTenantScope(config *spawnConfig) (*extensions.EntityT
 	return nil, ErrSpawnTenantUndetermined
 }
 
+// spawnBindingLookupAttempts bounds how many times verifySpawnedTenant reads
+// a REMOTE actor's binding. goakt's PID.Dependencies reports a failed
+// remote lookup as "no dependencies" rather than as an error, so a single
+// empty answer cannot tell "unbound" from "the owning node did not answer".
+const spawnBindingLookupAttempts = 3
+
+// spawnBindingLookupBackoff is the pause between remote binding lookups.
+const spawnBindingLookupBackoff = 25 * time.Millisecond
+
 // verifySpawnedTenant proves that the actor a tenant-aware spawn returned is
 // bound to the tenant that spawn declared (TENANT-003 T4). It is a no-op in
 // legacy mode (requested == nil).
 //
 // GoAkt's Spawn returns an already-running actor's PID with a nil error, and
-// concurrent spawns of one name coalesce onto a single execution, so the PID
+// concurrent spawns of one name coalesce onto a single execution — on the
+// local node, and on the peer that serves a remote placement — so the PID
 // may belong to an actor another spawn created. The authority is therefore
 // the returned actor's own spawn binding, read back from pid rather than
 // from this call's intent: the EntityTenantScope dependency that actor was
 // created with, which its PreStart turned into its persistence.Scope via
-// resolveScope and which never changes for the actor's lifetime. Because
-// the check runs after Spawn on the actor that actually holds the name,
+// resolveScope and which never changes for the actor's lifetime. For a
+// local PID it is read from the actor itself; for a remote PID, goakt asks
+// the node that owns the actor (a RemoteDependencies control request). The
+// check runs after Spawn on the actor that actually holds the name, so
 // there is no window between checking and spawning: whichever spawn
 // created the actor fixed its tenant, and every other caller is compared
-// against that fixed binding. A binding that cannot be read (the actor
-// stopped meanwhile, or a remote lookup failed) fails closed.
+// against that fixed binding.
 //
 // This never calls TenantResolver.Resolve: requested was declared by the
 // caller via WithTenant or the resolver's fixed tenant (spawnTenantScope).
@@ -760,23 +778,47 @@ func verifySpawnedTenant(pid *goakt.PID, requested *extensions.EntityTenantScope
 		return nil
 	}
 
+	attempts := 1
+	if pid.IsRemote() {
+		attempts = spawnBindingLookupAttempts
+	}
+	lookup := func() *extensions.EntityTenantScope {
+		bound, _ := pid.Dependency(extensions.EntityTenantScopeID).(*extensions.EntityTenantScope)
+		return bound
+	}
+	return verifyTenantBinding(pid.Name(), requested, lookup, attempts)
+}
+
+// verifyTenantBinding compares the binding lookup reads with requested. An
+// unreadable binding is retried up to attempts times and then fails closed
+// with ErrSpawnTenantUnverified, which asserts no conflict; a readable
+// binding for a different tenant is ErrSpawnTenantMismatch.
+func verifyTenantBinding(name string, requested *extensions.EntityTenantScope, lookup func() *extensions.EntityTenantScope, attempts int) error {
 	requestedTenant, err := tenancy.NewTenantContext(tenancy.TenantID(requested.TenantID))
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrSpawnTenantMismatch, err)
 	}
 
-	bound, ok := pid.Dependency(extensions.EntityTenantScopeID).(*extensions.EntityTenantScope)
-	if !ok || bound == nil {
-		return fmt.Errorf("%w: actor %q exposes no tenant binding: %w", ErrSpawnTenantMismatch, pid.Name(), tenancy.ErrDenied)
+	var bound *extensions.EntityTenantScope
+	for attempt := range max(attempts, 1) {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * spawnBindingLookupBackoff)
+		}
+		if bound = lookup(); bound != nil {
+			break
+		}
+	}
+	if bound == nil {
+		return fmt.Errorf("%w: actor %q exposes no readable tenant binding", ErrSpawnTenantUnverified, name)
 	}
 
 	boundTenant, err := tenancy.NewTenantContext(tenancy.TenantID(bound.TenantID))
 	if err != nil {
-		return fmt.Errorf("%w: actor %q carries an invalid tenant binding: %w", ErrSpawnTenantMismatch, pid.Name(), err)
+		return fmt.Errorf("%w: actor %q carries an invalid tenant binding: %w", ErrSpawnTenantMismatch, name, err)
 	}
 
 	if err := tenancy.VerifyUnchanged(boundTenant, requestedTenant); err != nil {
-		return fmt.Errorf("%w: actor %q: %w", ErrSpawnTenantMismatch, pid.Name(), err)
+		return fmt.Errorf("%w: actor %q: %w", ErrSpawnTenantMismatch, name, err)
 	}
 	return nil
 }

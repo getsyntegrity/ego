@@ -277,7 +277,9 @@ command for that same id, from the *other* tenant, is rejected:
   Checking the actor that actually holds the name, rather than a pre-check
   before spawning, leaves no window: two concurrent spawns under different
   tenants produce exactly one winner. A spawn under the *same* tenant is an
-  idempotent success.
+  idempotent success. For a remote PID the binding is read from the owning
+  node (goakt's `RemoteDependencies`); a lookup that stays unanswered fails
+  closed with `ErrSpawnTenantUnverified`, which claims no conflict.
 - A command from the non-owning tenant against the already-running actor
   is rejected by the existing `actorTenant` cross-check in
   `processCommandAndReply` / `processAndBatch` (`EventSourcedActor`),
