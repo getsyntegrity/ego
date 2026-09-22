@@ -156,7 +156,16 @@ func newBoundSagaActor(t *testing.T, behavior SagaBehavior) *SagaActor {
 		status:       SagaRunning,
 		sagaID:       behavior.ID(),
 		tenantAware:  true,
-		logger:       DiscardLogger,
+		// scope is deliberately persistence.Unscoped() here even though
+		// tenantAware is true: this helper builds a directly-constructed
+		// SagaActor with no actor system and no PreStart/resolveScope call,
+		// used to unit-test handleStreamEvent/recover's lazy
+		// bind-on-first-event logic (SG4/SG5) in isolation from
+		// TENANT-003 T4's spawn-time scope binding, which is covered
+		// separately by the actorSystem.Spawn-based tests. boundTenant is
+		// deliberately left at its zero value for the same reason.
+		scope:  persistence.Unscoped(),
+		logger: DiscardLogger,
 	}
 }
 
@@ -486,6 +495,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -516,6 +526,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -540,6 +551,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -647,6 +659,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			status:       SagaRunning,
 			sagaID:       sagaID,
 			tenantAware:  true,
+			scope:        persistence.Unscoped(),
 			logger:       DiscardLogger,
 			actorSystem:  actorSystem,
 		}
@@ -659,6 +672,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 		require.NoError(t, second.recover(context.Background()))
@@ -703,6 +717,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			status:       SagaRunning,
 			sagaID:       behavior.ID(),
 			tenantAware:  true,
+			scope:        persistence.Unscoped(),
 			logger:       DiscardLogger,
 			// actorSystem is intentionally left nil: if dispatchActionEffects
 			// ran despite the failed persist, sendCommand would panic

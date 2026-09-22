@@ -47,10 +47,15 @@ import (
 // writer can forward the cleanup request after the snapshot is confirmed
 // persisted. This eliminates the race where retention could delete old data
 // before the new snapshot is safely written.
+// scope carries the owning EventSourcedActor's bound persistence.Scope
+// (TENANT-003 T4). snapshotsWriterActor is a separate child actor with no
+// PreStart access to the parent's dependencies, so the scope must travel on
+// this request rather than be re-derived here.
 type persistSnapshotRequest struct {
 	snapshot     *egopb.Snapshot
 	retentionReq *applyRetentionRequest
 	janitor      *goakt.PID
+	scope        persistence.Scope
 }
 
 // snapshotsWriterActor persists snapshots to the snapshot store asynchronously.
@@ -134,8 +139,7 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 	}
 
 	if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-		return a.snapshotStore.WriteSnapshot(ctx.Context(), persistence.Unscoped(), snapshot)
+		return a.snapshotStore.WriteSnapshot(ctx.Context(), req.scope, snapshot)
 	}); err != nil {
 		a.logger.ErrorContext(ctx.Context(), "failed to persist snapshot",
 			"persistence_id", snapshot.GetPersistenceId(),

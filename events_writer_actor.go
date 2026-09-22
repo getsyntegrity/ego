@@ -34,10 +34,16 @@ import (
 // persistEventsRequest is sent from the [EventSourcedActor] to the
 // [eventsWriterActor] to persist a batch of event envelopes and publish them
 // to the event stream.
+//
+// scope carries the owning EventSourcedActor's bound persistence.Scope
+// (TENANT-003 T4). eventsWriterActor is a separate child actor with no
+// PreStart access to the parent's dependencies, so the scope must travel on
+// this request rather than be re-derived here.
 type persistEventsRequest struct {
 	envelopes    []*egopb.Event
 	topic        string
 	precondition persistence.WritePrecondition
+	scope        persistence.Scope
 }
 
 // persistEventsResponse is sent from the [eventsWriterActor] back to the
@@ -104,8 +110,7 @@ func (a *eventsWriterActor) PostStop(_ *goakt.Context) error {
 // only after the write succeeds. The result including any error is returned via
 // Response so the parent receives the reply through its Ask call.
 func (a *eventsWriterActor) handlePersistEvents(ctx *goakt.ReceiveContext, req *persistEventsRequest) {
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-	if err := a.eventsStore.WriteEvents(ctx.Context(), persistence.Unscoped(), req.envelopes, req.precondition); err != nil {
+	if err := a.eventsStore.WriteEvents(ctx.Context(), req.scope, req.envelopes, req.precondition); err != nil {
 		ctx.Response(&persistEventsResponse{Err: err})
 		return
 	}

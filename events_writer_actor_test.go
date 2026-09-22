@@ -88,6 +88,7 @@ func TestEventsWriterActor(t *testing.T) {
 		}
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:        persistence.Unscoped(),
 			envelopes:    envelopes,
 			topic:        "topic.events.0",
 			precondition: persistence.Unconditional(),
@@ -162,6 +163,7 @@ func TestEventsWriterActor(t *testing.T) {
 		}
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:     persistence.Unscoped(),
 			envelopes: envelopes,
 			topic:     "topic.events.0",
 		}, 5*time.Second)
@@ -217,6 +219,7 @@ func TestEventsWriterActor(t *testing.T) {
 		pause.For(time.Second)
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:        persistence.Unscoped(),
 			envelopes:    nil,
 			topic:        "topic.events.0",
 			precondition: persistence.Unconditional(),

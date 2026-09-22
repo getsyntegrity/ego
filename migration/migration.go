@@ -107,7 +107,11 @@ func (m *Migrator) Run(ctx context.Context) error {
 	)
 
 	for {
-		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+		// Deliberately Unscoped() (TENANT-003 T4 non-goal): migration is an
+		// administrative whole-store tool that walks every persistence ID
+		// across every tenant by design, not a tenant-scoped operation. See
+		// openspec/changes/ego-tenant-003/design.md's "Known limitation"
+		// section.
 		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, persistence.Unscoped(), m.pageSize, pageToken)
 		if err != nil {
 			return fmt.Errorf("migration: failed to list persistence IDs: %w", err)
@@ -135,7 +139,9 @@ func (m *Migrator) Run(ctx context.Context) error {
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
 	// Use a safe large limit that won't overflow when cast to int.
 	const maxLimit = uint64(1<<63 - 1)
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	// Deliberately Unscoped() (TENANT-003 T4 non-goal): see Run's comment
+	// above. migrateEntity is called for a persistenceID Run already
+	// enumerated store-wide.
 	events, err := m.eventsStore.ReplayEvents(ctx, persistence.Unscoped(), persistenceID, 1, maxLimit, maxLimit)
 	if err != nil {
 		return err
@@ -161,7 +167,8 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return nil
 	}
 
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	// Deliberately Unscoped() (TENANT-003 T4 non-goal): see Run's comment
+	// above.
 	if err := m.snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), bestSnapshot); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}

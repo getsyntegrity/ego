@@ -69,6 +69,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                  persistence.Unscoped(),
 			persistenceID:          "entity-1",
 			eventsCounter:          10,
 			snapshotInterval:       5,
@@ -114,6 +115,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                  persistence.Unscoped(),
 			persistenceID:          "entity-1",
 			eventsCounter:          10,
 			snapshotInterval:       5,
@@ -159,6 +161,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                  persistence.Unscoped(),
 			persistenceID:          "entity-1",
 			eventsCounter:          2,
 			snapshotInterval:       5,
@@ -209,6 +212,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                     persistence.Unscoped(),
 			persistenceID:             "entity-1",
 			eventsCounter:             10,
 			snapshotInterval:          5,
@@ -257,6 +261,7 @@ func TestEventsJanitorActor(t *testing.T) {
 
 		// eventsCounter=5, snapshotInterval=5 => 5 > 5 is false, skip
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                     persistence.Unscoped(),
 			persistenceID:             "entity-1",
 			eventsCounter:             5,
 			snapshotInterval:          5,
@@ -301,6 +306,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                  persistence.Unscoped(),
 			persistenceID:          "entity-1",
 			eventsCounter:          10,
 			snapshotInterval:       5,
@@ -348,6 +354,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                     persistence.Unscoped(),
 			persistenceID:             "entity-1",
 			eventsCounter:             10,
 			snapshotInterval:          5,
@@ -396,6 +403,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pause.For(time.Second)
 
 		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
+			scope:                     persistence.Unscoped(),
 			persistenceID:             "entity-1",
 			eventsCounter:             10,
 			snapshotInterval:          5,

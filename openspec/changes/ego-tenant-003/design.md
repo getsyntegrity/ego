@@ -165,3 +165,60 @@ wiring possible without a package reshuffle.
 
 None of these are resolved by `persistence/scope.go` today; the type only
 supplies the vocabulary those decisions will be expressed in.
+
+## Known limitation: a shared entity id still maps to one actor, across tenants
+
+T4 binds every `EventSourcedActor`, `DurableStateActor`, and `SagaActor` to
+a `persistence.Scope` at spawn, resolved once from the caller's
+`tenancy.TenantContext` and carried through to every store read and write
+that actor makes for its whole lifetime (`resolveScope`, called from
+`PreStart` before any recovery read). That closes the isolation hole this
+ticket exists to close: a tenant-aware actor can no longer read or write a
+record belonging to a different tenant, whether through recovery, a live
+command, a snapshot, or retention cleanup.
+
+What T4 does **not** change is how an actor gets its name. A GoAkt actor's
+identity is still the caller-supplied `entityID` (for `Engine.Entity` /
+`Engine.DurableStateEntity`) or `sagaID` (for `Engine.Saga`), exactly as
+before this ticket — it is not tenant-qualified, and this ticket does not
+introduce any tenant-qualification of it. GoAkt itself has no notion of
+"the same name under two different tenants": one actor system position can
+only ever hold one live actor for a given name.
+
+**What this means for a user in practice**: if tenant A and tenant B both
+call, say, `engine.Entity(ctx, behavior)` for an entity behavior whose
+`ID()` returns the same string (e.g. both happen to use the customer's
+external order number as the entity id), only the tenant whose spawn
+attempt reaches `PreStart` first actually gets an actor. `resolveScope`
+binds that actor's `scope` (and `actorTenant`) to whichever tenant won the
+race, permanently for that actor's lifetime. Every later spawn attempt or
+command for that same id, from the *other* tenant, is rejected:
+
+- A second spawn attempt for the same id fails outright, because GoAkt
+  will not create a second actor under a name that is already taken (or,
+  if it lands on an already-running instance's mailbox as a command
+  instead, is rejected by the same cross-tenant command gate below).
+- A command from the non-owning tenant against the already-running actor
+  is rejected by the existing `actorTenant` cross-check in
+  `processCommandAndReply` / `processAndBatch` (`EventSourcedActor`),
+  `processCommand` (`DurableStateActor`), and the saga's own dispatch
+  gate — the same mechanism that already rejects a cross-tenant command
+  today, unchanged by this ticket.
+
+**This is fail-closed and leak-free, not a security hole.** At no point
+does the non-owning tenant read or write any data belonging to the actor's
+bound tenant: every rejection happens before a store is ever touched. What
+the non-owning tenant experiences instead is a plain **availability**
+problem — its own spawn or command for that entity id simply does not
+work, with no data ever crossing the boundary in either direction. This is
+a functional limitation on which ids a tenant may use, not a violation of
+tenant isolation.
+
+**Follow-up**: the real fix is tenant-qualified actor identity — deriving
+the actor's GoAkt name from `(tenant, entityID)` rather than `entityID`
+alone, so two tenants using the same logical id get two independent
+actors instead of contending for one. That is explicitly out of scope for
+TENANT-003 T4 and is left for a follow-up ticket; it likely also touches
+cluster placement/rebalancing and any external tooling that currently
+addresses an actor by bare entity id, so it deserves its own design pass
+rather than being folded into this slice.

@@ -101,15 +101,32 @@ func (r *countingTenantResolver) callCount() int64 {
 // with a fixed error. Used to prove a resolver failure blocks a command
 // before it ever reaches the actor system. It also counts its own
 // invocations so tests can assert Resolve was tried exactly once.
+//
+// succeedID is an escape hatch for TENANT-003 T4: Engine.Entity now also
+// resolves the tenant once, at spawn (engine.go's resolveSpawnTenantScope),
+// so a resolver that always errors can no longer spawn an entity at all —
+// there would be nothing left to send a command to. When succeedID is
+// non-empty, the FIRST Resolve call succeeds with that tenant id (letting
+// spawn through) and every later call returns err, exactly as before this
+// field existed. Leaving it empty preserves the original always-fail
+// behavior for callers that never spawn through Engine.Entity.
 type erroringTenantResolver struct {
-	err   error
-	calls atomic.Int64
+	err       error
+	succeedID string
+	calls     atomic.Int64
 }
 
 var _ tenancy.TenantResolver = (*erroringTenantResolver)(nil)
 
 func (r *erroringTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
-	r.calls.Add(1)
+	n := r.calls.Add(1)
+	if n == 1 && r.succeedID != "" {
+		tid, err := tenancy.NewTenantID(r.succeedID)
+		if err != nil {
+			return tenancy.TenantContext{}, err
+		}
+		return tenancy.NewTenantContext(tid)
+	}
 	return tenancy.TenantContext{}, r.err
 }
 
@@ -125,14 +142,28 @@ func (r *erroringTenantResolver) callCount() int64 {
 // Engine.SendCommand's trust boundary rejects it (design.md Decision D8)
 // before dispatch, the domain handler, or persistence, rather than treating
 // "no error" as "a valid identity was resolved".
+//
+// succeedID mirrors erroringTenantResolver's field: TENANT-003 T4 makes
+// Engine.Entity resolve at spawn too, so a resolver that always returns the
+// zero value can no longer spawn an entity to send a command to. When
+// non-empty, the first Resolve call succeeds with that tenant id and every
+// later call returns the zero value as before.
 type zeroValueTenantResolver struct {
-	calls atomic.Int64
+	succeedID string
+	calls     atomic.Int64
 }
 
 var _ tenancy.TenantResolver = (*zeroValueTenantResolver)(nil)
 
 func (r *zeroValueTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
-	r.calls.Add(1)
+	n := r.calls.Add(1)
+	if n == 1 && r.succeedID != "" {
+		tid, err := tenancy.NewTenantID(r.succeedID)
+		if err != nil {
+			return tenancy.TenantContext{}, err
+		}
+		return tenancy.NewTenantContext(tid)
+	}
 	return tenancy.TenantContext{}, nil
 }
 

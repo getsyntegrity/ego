@@ -1752,7 +1752,8 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -1774,7 +1775,9 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 
 		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
 
-		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
 
@@ -1819,7 +1822,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
+			goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 			goakt.WithLongLived(),
 			goakt.WithStashing())
 		require.NoError(t, err)
@@ -1844,7 +1847,9 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		// nothing was ever written: flushBatch's own context.Background()
 		// call (T4-B, out of scope here) must never even be reached.
 		pause.For(500 * time.Millisecond)
-		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
 
@@ -1947,7 +1952,7 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg),
+		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
 		goakt.WithStashing())
 	require.NoError(t, err)
@@ -2001,7 +2006,9 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 
 	// Exactly the first, tenant-A command's event was ever persisted: the
 	// rejected tenant-B command never reached the buffer at all.
-	latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+	scopeA, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -2054,7 +2061,7 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg),
+		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
 		goakt.WithStashing())
 	require.NoError(t, err)
@@ -2158,7 +2165,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg),
+		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
 		goakt.WithStashing())
 	require.NoError(t, err)
@@ -2225,7 +2232,9 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
 		"tenant A's batch must still succeed once its own cycle flushes, unaffected by tenant B's rejected attempt")
 
-	latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+	scopeA, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber(),
@@ -2274,7 +2283,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg),
+		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
 		goakt.WithStashing())
 	require.NoError(t, err)

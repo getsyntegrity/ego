@@ -181,7 +181,15 @@ func TestTenantWritePathE2E(t *testing.T) {
 		return entityB.invocationCount() == 1
 	}, 10*time.Second, 50*time.Millisecond, "entity B's HandleCommand must eventually run via the saga hop")
 
-	assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once, at Engine.SendCommand, never again downstream")
+	// TENANT-003 T4: Engine.Entity/Engine.Saga now also resolve the tenant
+	// once each, at spawn, to bind the spawned actor's persistence.Scope
+	// before it ever reads a store. This test spawns entity A, entity B,
+	// and the saga (3 spawn-time resolves), then sends one command via
+	// Engine.SendCommand (1 more) — 4 total. The saga's own dispatch to
+	// entity B (sendCommand) never re-resolves: it reuses the
+	// already-bound/reconstructed TenantContext on its ctx, which is what
+	// the observedTenant assertion below proves.
+	assert.EqualValues(t, 4, resolver.callCount(), "Resolve must be invoked once per spawn (entity A, entity B, the saga) plus once at Engine.SendCommand, never again downstream")
 
 	tcA, err := tenancy.NewTenantID("acme")
 	require.NoError(t, err)

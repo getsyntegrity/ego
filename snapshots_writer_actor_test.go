@@ -83,7 +83,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
@@ -141,7 +141,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
@@ -206,8 +206,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		}
 
 		err = goakt.Tell(ctx, snapshotPID, &persistSnapshotRequest{
+			scope:    persistence.Unscoped(),
 			snapshot: snapshot,
 			retentionReq: &applyRetentionRequest{
+				scope:                  persistence.Unscoped(),
 				persistenceID:          "entity-1",
 				eventsCounter:          10,
 				snapshotInterval:       5,
@@ -274,8 +276,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		}
 
 		err = goakt.Tell(ctx, snapshotPID, &persistSnapshotRequest{
+			scope:    persistence.Unscoped(),
 			snapshot: snapshot,
 			retentionReq: &applyRetentionRequest{
+				scope:                  persistence.Unscoped(),
 				persistenceID:          "entity-1",
 				eventsCounter:          10,
 				snapshotInterval:       5,
@@ -334,7 +338,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(2 * time.Second)
@@ -388,7 +392,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
@@ -440,7 +444,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)

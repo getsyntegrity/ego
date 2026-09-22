@@ -182,6 +182,69 @@ explicit parameter, never by inspecting payload content.
   `tenancy.TenantID` or via `Unscoped()`, never from message payload
   content
 
+### Requirement: An Actor Bound To A Tenant At Spawn Fails Closed, Never Open
+
+Once T4 wires `Engine.Entity`, `Engine.DurableStateEntity`, and
+`Engine.Saga` to resolve the caller's tenant at spawn and bind the
+spawned actor's `Scope` before any store read, that binding MUST be
+established exactly once, before recovery, and MUST reject rather than
+silently proceed whenever the binding cannot be trusted: tenancy active
+but no scope was injected for this spawn, a resolved administrative
+(non-tenant) `tenancy.TenantContext` at spawn, or a recovered
+`tenant_metadata` record that disagrees with the scope this actor was
+actually spawned under. In every one of these cases, the actor MUST NOT
+read or write any store record — the rejection MUST happen before the
+first store call, not after.
+
+#### Scenario: Tenancy active but no scope was injected at spawn
+
+- GIVEN an actor system where tenancy is active (a `tenancy.TenantResolver`
+  is configured) and a behavior is spawned without the per-spawn
+  `EntityTenantScope` dependency
+- WHEN the actor's `PreStart` runs
+- THEN it returns an error before any store method is called, and the
+  actor is never created
+
+#### Scenario: An administrative-scope resolution is refused at spawn
+
+- GIVEN a `tenancy.TenantResolver` that resolves the caller to an
+  administrative (non-tenant) `tenancy.TenantContext`
+- WHEN `Engine.Entity`, `Engine.DurableStateEntity`, or `Engine.Saga` is
+  called
+- THEN it returns a typed error and no actor is spawned
+
+#### Scenario: Recovered tenant metadata disagreeing with the spawn-bound tenant fails closed
+
+- GIVEN an actor spawned and bound to tenant A's scope, whose backing
+  store nonetheless holds a persisted record for that same
+  `persistence_id` whose `tenant_metadata` names tenant B
+- WHEN the actor recovers that record
+- THEN recovery fails with an error, and the actor never starts serving
+  commands under either tenant's silently-adopted identity
+
+### Requirement: A Shared Entity Id Across Tenants Is A Known, Documented Limitation
+
+`Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` MUST NOT be
+required to make two different tenants' use of the same caller-supplied
+`entityID`/`sagaID` behave as if they were independent aggregates. The
+GoAkt actor identity remains the bare id, not a tenant-qualified name, and
+a second tenant's attempt to spawn or command an id already bound to a
+different tenant MUST be rejected (never silently redirected or merged),
+rather than being resolved by disambiguating the actor's identity. This is
+an explicit non-goal of T4, deferred to a follow-up ticket (see
+`design.md`'s "Known limitation" section).
+
+#### Scenario: A second tenant's use of an already-bound entity id is rejected, not merged
+
+- GIVEN an actor already spawned and bound to tenant A for entity id
+  `"order-42"`
+- WHEN tenant B attempts to spawn or send a command for the same entity
+  id `"order-42"`
+- THEN the attempt is rejected before any store read or write happens on
+  tenant B's behalf, and tenant A's actor and data are unaffected —
+  tenant B simply cannot use that entity id, which is a functional
+  availability limitation, not a cross-tenant data exposure
+
 ## Out of Scope (cross-reference)
 
 Changing any store interface signature to accept `Scope`: T2 (not yet
@@ -194,3 +257,11 @@ redefinition of `WritePrecondition`, `ConflictError`, or CAS ownership:
 `ego-write-004` (`#65`), unchanged and un-reopened. Any change to
 `tenancy`'s own API or its stdlib-only constraint: out of scope entirely —
 this specification only adds a new consumer of `tenancy.TenantID`.
+
+**Non-goal (T4):** tenant-qualified actor identity. T4 deliberately does
+not change how an actor is named or addressed — it remains the bare
+`entityID`/`sagaID`, exactly as before this ticket. Making two tenants'
+use of the same entity id behave as two independent actors is left to a
+follow-up ticket; see `design.md`'s "Known limitation" section and the
+requirement above for the fail-closed behavior T4 does guarantee in the
+meantime.

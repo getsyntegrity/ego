@@ -79,6 +79,10 @@ const (
 	// SagaConfigID is the identifier for the saga config dependency.
 	SagaConfigID = "EgoSagaConfig"
 
+	// EntityTenantScopeID is the identifier for the per-spawn tenant scope
+	// dependency (TENANT-003 T4).
+	EntityTenantScopeID = "EgoEntityTenantScope"
+
 	// TenancyExtensionID is the identifier for the tenancy marker extension.
 	// Its presence on the actor system signals that the engine's Config
 	// registered a non-nil tenancy.TenantResolver (tenant-aware mode is
@@ -404,5 +408,44 @@ func (x *SagaConfig) MarshalBinary() ([]byte, error) {
 
 // UnmarshalBinary deserializes the saga config
 func (x *SagaConfig) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, x)
+}
+
+// EntityTenantScope is a per-spawn dependency carrying the tenant identity
+// the engine resolved for ONE entity/durable-state/saga spawn (TENANT-003
+// T4). It exists so the spawned actor's PreStart can bind a persistence.Scope
+// before its first store read, without ever holding a tenancy.TenantResolver
+// itself (see EventSourcedActor/DurableStateActor/SagaActor's scope field
+// doc comments).
+//
+// It carries a bare string rather than a tenancy.TenantID so it round-trips
+// through MarshalBinary/UnmarshalBinary (JSON) for cluster relocation
+// exactly like EntityConfig/SagaConfig; the receiving actor revalidates it
+// via tenancy.NewTenantContext/persistence.NewTenantScope rather than
+// trusting the wire value.
+type EntityTenantScope struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// enforce compliance with the extension.Dependency interface
+var _ extension.Dependency = (*EntityTenantScope)(nil)
+
+// NewEntityTenantScope creates a new per-spawn tenant scope dependency.
+func NewEntityTenantScope(tenantID string) *EntityTenantScope {
+	return &EntityTenantScope{TenantID: tenantID}
+}
+
+// ID returns the identifier for the EntityTenantScope dependency
+func (x *EntityTenantScope) ID() string {
+	return EntityTenantScopeID
+}
+
+// MarshalBinary serializes the entity tenant scope
+func (x *EntityTenantScope) MarshalBinary() ([]byte, error) {
+	return json.Marshal(x)
+}
+
+// UnmarshalBinary deserializes the entity tenant scope
+func (x *EntityTenantScope) UnmarshalBinary(data []byte) error {
 	return json.Unmarshal(data, x)
 }

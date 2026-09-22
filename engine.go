@@ -88,6 +88,23 @@ var (
 	// Config than the one passed to NewEngine, or when cfg.GoaktOptions()
 	// was not applied at construction time.
 	ErrMissingRequiredExtensions = errors.New("actor system is missing required ego extensions")
+	// ErrAdministrativeScopeEntitySpawn is returned by Entity, DurableStateEntity
+	// and Saga when the configured tenancy.TenantResolver resolves ctx to an
+	// administrative (non-tenant) tenancy.TenantContext (TENANT-003 T4).
+	// Spawning a tenant-bound actor under administrative scope is deliberately
+	// out of scope for TENANT-003: administrative access to entity actors
+	// (bypass/audit) belongs to TENANT-008. This fails closed rather than
+	// silently falling back to persistence.Unscoped(), which would defeat the
+	// isolation this ticket exists to enforce.
+	ErrAdministrativeScopeEntitySpawn = errors.New("eGo: administrative-scope entity spawn is not supported by TENANT-003; see TENANT-008")
+	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
+	// tenancy is active (extensions.TenancyExtensionID is registered) but no
+	// valid extensions.EntityTenantScope dependency was injected at spawn
+	// (TENANT-003 T4). This is a fail-closed guard: a tenant-aware actor must
+	// never start without a bound persistence.Scope, since that is exactly
+	// the condition that would let it silently read or write Unscoped()
+	// records across tenants.
+	ErrEntityTenantScopeMissing = errors.New("eGo: tenant-aware actor spawned without a bound tenant scope")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
@@ -207,7 +224,7 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	// types live in internal/extensions and cannot be registered by
 	// application code; user behavior kinds come from WithEntityKinds.
 	dependencies := append(
-		[]extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig)},
+		[]extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig), new(extensions.EntityTenantScope)},
 		config.entityKinds...,
 	)
 	if err := actorSys.Inject(dependencies...); err != nil {
@@ -617,6 +634,17 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	// Started check above already rules out.
 	_ = actorSystem.Inject(behavior)
 
+	// Tenant-aware mode: resolve the caller's tenant identity exactly once,
+	// here, at spawn time, and inject it as a per-spawn dependency the
+	// entity's PreStart binds into its persistence.Scope before it ever
+	// reads a store (TENANT-003 T4). A resolver error, or an administrative
+	// TenantContext, blocks the spawn outright: no actor is created. Legacy
+	// mode (no resolver registered) is byte-identical: nothing is injected.
+	tenantScope, tenantErr := engine.resolveSpawnTenantScope(ctx)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
 	config := newSpawnConfig(opts...)
 	sOptions := buildSpawnOptionsFromConfig(config)
 
@@ -631,10 +659,52 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	entityConfig.BatchThreshold = config.batchThreshold
 	entityConfig.BatchFlushWindow = config.batchFlushWindow
 	_ = actorSystem.Inject(entityConfig)
-	sOptions = append(sOptions, goakt.WithDependencies(behavior, entityConfig))
+
+	deps := []extension.Dependency{behavior, entityConfig}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
 	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
 	return err
+}
+
+// resolveSpawnTenantScope resolves the caller's tenant identity for a single
+// entity/durable-state/saga spawn and returns the per-spawn dependency to
+// inject (TENANT-003 T4).
+//
+// It returns (nil, nil) in legacy mode (engine.tenantResolver == nil):
+// callers must inject nothing in that case, keeping spawn dependencies
+// byte-identical to pre-TENANT-003 behavior.
+//
+// A resolved tenancy.ScopeAdministrative TenantContext is refused outright
+// (ErrAdministrativeScopeEntitySpawn): administrative entity/saga spawn is
+// explicitly out of scope for TENANT-003 (see TENANT-008). An invalid
+// (zero-value) TenantContext — the shape a malformed external
+// TenantResolver.Resolve can return without an error — falls into the same
+// fail-closed default case, since it is neither ScopeTenant nor
+// ScopeAdministrative.
+func (engine *Engine) resolveSpawnTenantScope(ctx context.Context) (*extensions.EntityTenantScope, error) {
+	if engine.tenantResolver == nil {
+		return nil, nil
+	}
+
+	tenantContext, err := engine.tenantResolver.Resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch tenantContext.Scope() {
+	case tenancy.ScopeTenant:
+		tenantID, _ := tenantContext.Tenant()
+		return extensions.NewEntityTenantScope(string(tenantID)), nil
+	case tenancy.ScopeAdministrative:
+		return nil, ErrAdministrativeScopeEntitySpawn
+	default:
+		return nil, tenancy.ErrInvalid
+	}
 }
 
 // EntityExists reports whether an entity with the given ID is currently alive in the cluster.
@@ -719,8 +789,22 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	// Started check above already rules out.
 	_ = actorSystem.Inject(behavior)
 
+	// Tenant-aware mode: resolve the caller's tenant identity at spawn time
+	// and inject it as a per-spawn dependency, mirroring Entity (TENANT-003
+	// T4). See resolveSpawnTenantScope's doc comment for the fail-closed
+	// rules (resolver error, administrative scope).
+	tenantScope, tenantErr := engine.resolveSpawnTenantScope(ctx)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
 	sOptions := buildSpawnOptions(opts...)
-	sOptions = append(sOptions, goakt.WithDependencies(behavior))
+	deps := []extension.Dependency{behavior}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
 	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
 	return err
@@ -1091,14 +1175,28 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 	// actor system is not started, which the Started check above rules out.
 	_ = actorSystem.Inject(behavior)
 
+	// Tenant-aware mode: resolve the caller's tenant identity at spawn time
+	// and inject it as a per-spawn dependency, mirroring Entity/
+	// DurableStateEntity (TENANT-003 T4).
+	tenantScope, tenantErr := engine.resolveSpawnTenantScope(ctx)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
 	sagaCfg := extensions.NewSagaConfig(timeout)
 	_ = actorSystem.Inject(sagaCfg)
 	actor := newSagaActor()
 
+	deps := []extension.Dependency{behavior, sagaCfg}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+
 	_, err := actorSystem.Spawn(ctx, behavior.ID(),
 		actor,
 		goakt.WithLongLived(),
-		goakt.WithDependencies(behavior, sagaCfg),
+		goakt.WithDependencies(deps...),
 		goakt.WithSupervisor(newSupervisor(RestartDirective)))
 	if err != nil {
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)
@@ -1184,22 +1282,50 @@ func (engine *Engine) EraseEntity(ctx context.Context, persistenceID string, ful
 	snapshotStore := engine.snapshotStore
 	engine.mutex.RUnlock()
 
+	// Tenant-aware mode: resolve the caller's tenant identity and scope the
+	// erasure to it (TENANT-003 T4). Before this fix, EraseEntity bypassed
+	// every actor and called the stores with persistence.Unscoped()
+	// unconditionally, so any caller who knew a persistenceID could erase
+	// ANY tenant's events and snapshots regardless of who they were
+	// resolved to be — the exact isolation hole this ticket closes. A
+	// resolver error, or a resolved TenantContext that carries no tenant
+	// identity (administrative scope, or an invalid/zero-value context),
+	// fails the erasure closed rather than silently falling back to
+	// Unscoped(). Legacy mode (no resolver registered) is unchanged: it
+	// still erases Unscoped() records, exactly as before.
+	scope := persistence.Unscoped()
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return fmt.Errorf("failed to resolve tenant for erasure: %w", resolveErr)
+		}
+
+		tenantID, ok := tenantContext.Tenant()
+		if !ok {
+			return fmt.Errorf("failed to erase entity: erasure requires a tenant-scoped identity, got %s: %w",
+				tenantContext.Scope(), tenancy.ErrDenied)
+		}
+
+		var scopeErr error
+		scope, scopeErr = persistence.NewTenantScope(tenantID)
+		if scopeErr != nil {
+			return fmt.Errorf("failed to build erasure scope: %w", scopeErr)
+		}
+	}
+
 	if full {
-		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
 		// Get the latest event to find the max sequence number
-		latestEvent, err := eventsStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+		latestEvent, err := eventsStore.GetLatestEvent(ctx, scope, persistenceID)
 		if err != nil {
 			return fmt.Errorf("failed to get latest event for erasure: %w", err)
 		}
 		if latestEvent != nil {
-			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-			if err := eventsStore.DeleteEvents(ctx, persistence.Unscoped(), persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			if err := eventsStore.DeleteEvents(ctx, scope, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete events for erasure: %w", err)
 			}
 		}
 		if snapshotStore != nil && latestEvent != nil {
-			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-			if err := snapshotStore.DeleteSnapshots(ctx, persistence.Unscoped(), persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			if err := snapshotStore.DeleteSnapshots(ctx, scope, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete snapshots for erasure: %w", err)
 			}
 		}

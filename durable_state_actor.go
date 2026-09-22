@@ -30,6 +30,7 @@ import (
 	"time"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -89,6 +90,31 @@ type DurableStateActor struct {
 	// event_sourced_actor.go:96, same package) until seeded or committed.
 	// No-op in legacy mode.
 	actorTenant tenancy.TenantContext
+
+	// scope is the persistence.Scope this actor's store reads and writes
+	// are bound to (TENANT-003 T4), mirroring EventSourcedActor.scope
+	// position-for-position. Bound once in PreStart via resolveScope, right
+	// after tenantAware is set and BEFORE any store read (including
+	// recoverFromStore()): persistence.Unscoped() when tenantAware is
+	// false, or the tenant scope carried by the per-spawn
+	// extensions.EntityTenantScope dependency Engine.DurableStateEntity
+	// injects when tenantAware is true.
+	//
+	// # Known limitation: shared actor name across tenants
+	//
+	// Identical to EventSourcedActor.scope's doc comment: a GoAkt actor's
+	// name is the caller-supplied entityID and is NOT tenant-qualified, so
+	// two tenants using the same entityID still map to the SAME actor
+	// instance. Whichever tenant's spawn reaches PreStart first binds scope
+	// (and actorTenant); a later spawn attempt for the same entityID under a
+	// different tenant fails PreStart, and a later command from a different
+	// tenant against an already-running instance is denied by the existing
+	// actorTenant cross-check in processCommand. Fail-closed and leak-free,
+	// but the second tenant cannot use that entity id at all — a functional
+	// limitation, not a security hole. Follow-up: tenant-qualified actor
+	// identity (see openspec/changes/ego-tenant-003/design.md's "Known
+	// limitation" section); not implemented here.
+	scope persistence.Scope
 }
 
 // implements the goakt.Actor interface
@@ -117,6 +143,11 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 	// resolver (internal/extensions.TenancyMarker), so the actor can never
 	// reach a TenantResolver through it.
 	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
+
+	if err := entity.resolveScope(ctx.Dependencies()); err != nil {
+		return err
+	}
+
 	// Computed here rather than in PostStart's Receive: PreStart runs on the
 	// actor's spawning goroutine before it is registered as running, so it
 	// happens-before any concurrent PostStop triggered by an early Shutdown/
@@ -215,8 +246,7 @@ func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 // recoverFromStore reset the persistent actor to the latest state in case there is one
 // this is vital when the entity actor is restarting.
 func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-	durableState, err := entity.stateStore.GetLatestState(ctx, persistence.Unscoped(), entity.persistenceID)
+	durableState, err := entity.stateStore.GetLatestState(ctx, entity.scope, entity.persistenceID)
 	if err != nil {
 		return fmt.Errorf("failed to get the latest state: %w", err)
 	}
@@ -245,22 +275,30 @@ func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
 		return nil
 	}
 
-	// Seed this actor's lifetime tenant identity from the recovered record's
-	// carried metadata (DS2, EGO-TENANT-002 PR2), before its state payload is
-	// touched. recoverFromStore is this actor's only recovery path — no
-	// snapshot, no replay — so there is a single seed source and no
-	// cross-check to perform: unlike EventSourcedActor's seedActorTenant,
-	// this assigns directly. Absent or malformed metadata on a committed
-	// (version > 0) tenant-aware record is not tolerated: it means this
-	// record predates tenancy or was corrupted, and the actor must refuse to
-	// start rather than silently run without an identity (fail-closed,
-	// UnmarshalMetadata's own ErrInvalid is the rejection).
+	// Cross-check this actor's lifetime tenant identity against the
+	// recovered record's carried metadata (DS2, EGO-TENANT-002 PR2;
+	// strengthened by TENANT-003 T4). entity.actorTenant is already
+	// pre-seeded from the spawn-bound tenant by resolveScope, before
+	// recoverFromStore ever runs, so recovered tenant_metadata is no longer
+	// the SOURCE of actorTenant — it is verified against the spawn-bound
+	// value via tenancy.VerifyUnchanged, and a mismatch fails closed. Absent
+	// or malformed metadata on a committed (version > 0) tenant-aware record
+	// is not tolerated: it means this record predates tenancy or was
+	// corrupted, and the actor must refuse to start rather than silently run
+	// without an identity (fail-closed, UnmarshalMetadata's own ErrInvalid
+	// is the rejection).
 	if entity.tenantAware {
 		tc, err := tenancy.UnmarshalMetadata(tenancy.Metadata(durableState.GetTenantMetadata()))
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal durable state tenant metadata: %w", err)
 		}
-		entity.actorTenant = tc
+		if entity.actorTenant != noTenantContext {
+			if verifyErr := tenancy.VerifyUnchanged(entity.actorTenant, tc); verifyErr != nil {
+				return fmt.Errorf("recovered tenant metadata does not match the spawn-bound tenant: %w", verifyErr)
+			}
+		} else {
+			entity.actorTenant = tc
+		}
 	}
 
 	currentState := entity.behavior.InitialState()
@@ -552,6 +590,53 @@ func (entity *DurableStateActor) durableStateRequired() error {
 	return nil
 }
 
+// resolveScope binds entity.scope (and, in tenant-aware mode,
+// entity.actorTenant) from deps before any store read (TENANT-003 T4),
+// mirroring EventSourcedActor.resolveScope.
+//
+// tenantAware == false binds persistence.Unscoped() and leaves actorTenant
+// untouched (noTenantContext) — legacy mode is byte-identical to before
+// this field existed.
+//
+// tenantAware == true looks for the per-spawn extensions.EntityTenantScope
+// dependency Engine.DurableStateEntity injects and fails closed with
+// ErrEntityTenantScopeMissing when it is absent or carries an invalid
+// tenant id. On success it also pre-seeds entity.actorTenant with the
+// corresponding tenancy.TenantContext, BEFORE recoverFromStore() runs. This
+// turns recoverFromStore's tenant handling from a first-seed (direct
+// assignment) into a cross-check against the spawn-bound tenant (DS2/D6):
+// recovered tenant_metadata that disagrees with the tenant this actor was
+// actually spawned for now fails closed via tenancy.VerifyUnchanged.
+func (entity *DurableStateActor) resolveScope(deps []extension.Dependency) error {
+	if !entity.tenantAware {
+		entity.scope = persistence.Unscoped()
+		return nil
+	}
+
+	for _, dependency := range deps {
+		dep, ok := dependency.(*extensions.EntityTenantScope)
+		if !ok || dep == nil {
+			continue
+		}
+
+		scope, err := persistence.NewTenantScope(tenancy.TenantID(dep.TenantID))
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		tenantContext, err := tenancy.NewTenantContext(scope.TenantID())
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		entity.scope = scope
+		entity.actorTenant = tenantContext
+		return nil
+	}
+
+	return ErrEntityTenantScopeMissing
+}
+
 // verifyTenantForPersist re-confirms, from ctx alone, that a valid tenant
 // identity is present before this command's state is committed (T4-B,
 // design.md D4). It is a no-op in legacy mode (tenantAware == false) and,
@@ -610,8 +695,7 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 		durableState.TenantMetadata = tenancy.MarshalMetadata(candidateTenant)
 	}
 
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-	if err := entity.stateStore.WriteState(ctx, persistence.Unscoped(), durableState, precondition); err != nil {
+	if err := entity.stateStore.WriteState(ctx, entity.scope, durableState, precondition); err != nil {
 		return err
 	}
 
@@ -650,8 +734,7 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		durableState.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
 	}
 
-	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-	if err := entity.stateStore.WriteState(ctx, persistence.Unscoped(), durableState, persistence.Unconditional()); err != nil {
+	if err := entity.stateStore.WriteState(ctx, entity.scope, durableState, persistence.Unconditional()); err != nil {
 		return err
 	}
 

@@ -738,7 +738,8 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newDurableStateActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -759,7 +760,9 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 
 		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
 
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no state may be persisted when the gate blocks the command")
 
@@ -849,7 +852,8 @@ func TestDurableStateActorTenancyWritePath(t *testing.T) {
 	pause.For(time.Second)
 
 	actor := newDurableStateActor()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -873,7 +877,9 @@ func TestDurableStateActorTenancyWritePath(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, tenant, observed, "HandleCommand must observe the exact TenantContext attached at the trust boundary")
 
-	latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+	scopeA, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest, "the state must be persisted once the tenant is confirmed present")
 

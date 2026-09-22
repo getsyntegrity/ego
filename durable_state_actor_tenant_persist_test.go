@@ -156,6 +156,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recoverFromStore(ctx))
@@ -171,6 +172,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recoverFromStore(ctx))
@@ -187,6 +189,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recoverFromStore(ctx)
@@ -204,6 +207,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recoverFromStore(ctx)
@@ -220,6 +224,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 			persistenceID: persistenceID,
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recoverFromStore(ctx))
@@ -256,7 +261,8 @@ func TestDurableStateActorProcessCommandRejectsCrossTenant(t *testing.T) {
 	pause.For(time.Second)
 
 	actor := newDurableStateActor()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -304,7 +310,7 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 	ctx := context.TODO()
 	persistenceID := "acct-1"
 
-	newEntity := func(tenantAware bool, tc tenancy.TenantContext, store *testkit.DurableStore, stream eventstream.Stream) *DurableStateActor {
+	newEntity := func(tenantAware bool, tc tenancy.TenantContext, scope persistence.Scope, store *testkit.DurableStore, stream eventstream.Stream) *DurableStateActor {
 		state := &testpb.Account{AccountId: persistenceID, AccountBalance: 100}
 		cachedAny, err := anypb.New(state)
 		require.NoError(t, err)
@@ -318,6 +324,7 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 			eventsStream:    stream,
 			tenantAware:     tenantAware,
 			actorTenant:     tc,
+			scope:           scope,
 		}
 	}
 
@@ -326,7 +333,7 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 		require.NoError(t, durableStore.Connect(ctx))
 		eventStream := eventstream.New()
 
-		entity := newEntity(false, noTenantContext, durableStore, eventStream)
+		entity := newEntity(false, noTenantContext, persistence.Unscoped(), durableStore, eventStream)
 		require.NoError(t, entity.persistStateAndPublish(ctx))
 
 		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
@@ -341,15 +348,17 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 	t.Run("tenant-aware mode writes the actor's established tenant", func(t *testing.T) {
 		tenantA, err := tenancy.NewTenantContext("acme")
 		require.NoError(t, err)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
 
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
 		eventStream := eventstream.New()
 
-		entity := newEntity(true, tenantA, durableStore, eventStream)
+		entity := newEntity(true, tenantA, scopeA, durableStore, eventStream)
 		require.NoError(t, entity.persistStateAndPublish(ctx))
 
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		require.NotEmpty(t, latest.GetTenantMetadata())
@@ -381,10 +390,12 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 	t.Run("tenant-aware and never-seeded: PostStop does not persist", func(t *testing.T) {
 		persistenceID := uuid.NewString()
 		behavior := NewAccountDurableStateBehavior(persistenceID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
 
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(nil, nil)
+		durableStore.EXPECT().GetLatestState(mock.Anything, scopeA, behavior.ID()).Return(nil, nil)
 
 		eventStream := eventstream.New()
 
@@ -401,7 +412,8 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newDurableStateActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -422,6 +434,8 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 
 	t.Run("tenant-aware and seeded: PostStop writes with the established tenant", func(t *testing.T) {
 		tenantA, err := tenancy.NewTenantContext("acme")
+		require.NoError(t, err)
+		scopeA, err := persistence.NewTenantScope("acme")
 		require.NoError(t, err)
 
 		durableStore := testkit.NewDurableStore()
@@ -444,7 +458,8 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newDurableStateActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -460,7 +475,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 		pause.For(time.Second)
 
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		require.NotEmpty(t, latest.GetTenantMetadata())
@@ -524,9 +539,12 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 			// tenant-aware actor must be refused, not silently recovered.
 		}
 
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(latestState, nil)
+		durableStore.EXPECT().GetLatestState(mock.Anything, scopeA, behavior.ID()).Return(latestState, nil)
 
 		eventStream := eventstream.New()
 
@@ -543,7 +561,8 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		pause.For(time.Second)
 
 		actor := newDurableStateActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 		require.Error(t, err, "PreStart must fail closed on invalid persisted tenant metadata")
 		require.Nil(t, pid)
 		pause.For(time.Second)
@@ -587,7 +606,8 @@ func TestDurableStateActorGetStateCommandTenancyGate(t *testing.T) {
 	pause.For(time.Second)
 
 	actor := newDurableStateActor()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -645,16 +665,25 @@ func TestDurableStateActorGetStateCommandTenancyGate(t *testing.T) {
 }
 
 // TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor covers PR2
-// review round 2's P1 #1: establishActorTenant used to run before
-// HandleCommand ever executed or validated a command, so a tenant whose
-// first command failed HandleCommand (or produced an invalid state/version)
-// would appropriate the actor without ever committing a mutation, wrongly
-// locking out every other tenant afterward. Under the commitState fix,
-// ownership only lands together with a successfully committed state and
-// version, so a failed first command must leave the actor completely
-// unclaimed and PostStop must not persist that failed attempt — a later
-// tenant's valid command must still be free to claim it, and once it does,
-// the original tenant must be rejected as foreign.
+// review round 2's P1 #1, updated for TENANT-003 T4's spawn-time binding:
+// establishActorTenant used to run before HandleCommand ever executed or
+// validated a command, so a tenant whose first command failed HandleCommand
+// (or produced an invalid state/version) would appropriate the actor
+// without ever committing a mutation. Under the commitState fix, ownership
+// only lands together with a successfully committed state and version.
+//
+// TENANT-003 T4 changes WHERE ownership comes from: an actor is now bound
+// to its tenant at SPAWN (via the injected extensions.EntityTenantScope
+// dependency, pre-seeding entity.actorTenant before any command runs), not
+// lazily on first successful commit. So a DIFFERENT tenant can no longer
+// "claim" this actor after the spawn-bound tenant's first command fails —
+// that tenant was never eligible to begin with, regardless of how the
+// spawn-bound tenant's commands turn out. This test now proves: the
+// spawn-bound tenant's failed first command does not corrupt in-memory
+// state or write a durable record, the SAME spawn-bound tenant's retry
+// still succeeds afterward, and a foreign tenant is rejected throughout —
+// before AND after the spawn-bound tenant's successful commit, and again
+// after a restart.
 func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T) {
 	ctx := context.TODO()
 
@@ -678,7 +707,8 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 	pause.For(time.Second)
 
 	actor := newDurableStateActor()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
 	pause.For(time.Second)
@@ -698,54 +728,70 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 	require.True(t, ok, "tenant A's first command must fail HandleCommand")
 	require.EqualValues(t, 1, behavior.callCount())
 
-	latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+	scopeA, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 	require.NoError(t, err)
 	assert.Nil(t, latest, "a failed first command must never write a durable record")
 
+	// Tenant B was never the spawn-bound tenant, so it is rejected here too
+	// — this actor was already bound to tenant A at spawn, independent of
+	// whether tenant A's own commands succeed.
 	ctxB, err := tenancy.Attach(ctx, tenantB)
 	require.NoError(t, err)
 	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 700}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant B must be free to claim the actor after tenant A's first command failed")
-	require.EqualValues(t, 2, behavior.callCount())
-
-	// Tenant A must now be rejected as foreign: the actor was appropriated
-	// by tenant B's successful commit, not by tenant A's failed attempt.
-	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 900}, 5*time.Second)
 	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
 	commandReply, ok = reply.(*egopb.CommandReply)
 	require.True(t, ok)
 	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant A must be rejected once tenant B owns the actor")
-	require.EqualValues(t, 2, behavior.callCount(), "a rejected cross-tenant command must never reach HandleCommand")
+	require.True(t, ok, "tenant B must be rejected: it was never the spawn-bound tenant")
+	require.EqualValues(t, 1, behavior.callCount(), "a rejected cross-tenant command must never reach HandleCommand")
 
-	// Restart: PostStop must persist tenant B's ownership (currentVersion >
-	// 0, established together with the committed state), and recovery must
-	// seed actorTenant back to tenant B rather than leaving it unclaimed.
-	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-	pause.For(time.Second)
-
-	latest, err = durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest, "tenant B's committed state must survive PostStop")
-	assert.EqualValues(t, 1, latest.GetVersionNumber())
-	assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantB)), latest.GetTenantMetadata())
-
-	restarted := newDurableStateActor()
-	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted, goakt.WithDependencies(behavior), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
+	// The spawn-bound tenant (A) retries and succeeds.
 	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 900}, 5*time.Second)
 	require.NoError(t, err)
 	commandReply, ok = reply.(*egopb.CommandReply)
 	require.True(t, ok)
+	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
+		"the spawn-bound tenant must still be able to claim the actor after its own earlier failed command")
+	require.EqualValues(t, 2, behavior.callCount())
+
+	// Tenant B remains rejected after tenant A's successful commit too.
+	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 1100}, 5*time.Second)
+	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
+	commandReply, ok = reply.(*egopb.CommandReply)
+	require.True(t, ok)
 	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant A must still be rejected after restart: recovery seeded tenant B as the owner")
+	require.True(t, ok, "tenant B must still be rejected once tenant A owns the actor")
+	require.EqualValues(t, 2, behavior.callCount(), "a rejected cross-tenant command must never reach HandleCommand")
+
+	// Restart: PostStop must persist tenant A's ownership (currentVersion >
+	// 0, established together with the committed state), and recovery must
+	// cross-check the recovered metadata against the restarted instance's
+	// own spawn-bound tenant (also A here).
+	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
+	pause.For(time.Second)
+
+	latest, err = durableStore.GetLatestState(ctx, scopeA, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest, "tenant A's committed state must survive PostStop")
+	assert.EqualValues(t, 1, latest.GetVersionNumber())
+	assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantA)), latest.GetTenantMetadata())
+
+	restarted := newDurableStateActor()
+	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
+	require.NoError(t, err)
+	require.NotNil(t, pid)
+	pause.For(time.Second)
+
+	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 1300}, 5*time.Second)
+	require.NoError(t, err)
+	commandReply, ok = reply.(*egopb.CommandReply)
+	require.True(t, ok)
+	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
+	require.True(t, ok, "tenant B must still be rejected after restart: recovery cross-checked tenant A as the owner")
 
 	require.NoError(t, durableStore.Disconnect(ctx))
 	eventStream.Close()
@@ -795,6 +841,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recoverFromStore(ctx))
@@ -814,6 +861,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 			behavior:      NewAccountDurableStateBehavior(persistenceID),
 			stateStore:    durableStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recoverFromStore(ctx)
@@ -842,7 +890,8 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 		pause.For(time.Second)
 
 		actor := newDurableStateActor()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
+			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
 		require.NoError(t, err, "recovering a legacy version-0 record must not block Spawn/PreStart in tenant-aware mode")
 		require.NotNil(t, pid)
 		pause.For(time.Second)
@@ -861,7 +910,10 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 		pause.For(time.Second)
 
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+
+		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 1, latest.GetVersionNumber())

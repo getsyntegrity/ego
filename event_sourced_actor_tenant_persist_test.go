@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/pablogore/ego/v4/egopb"
@@ -181,6 +182,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recover(ctx))
@@ -200,6 +202,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recover(ctx))
@@ -220,6 +223,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recover(ctx))
@@ -240,6 +244,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recover(ctx)
@@ -257,6 +262,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recover(ctx)
@@ -277,6 +283,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recover(ctx)
@@ -293,6 +300,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			persistenceID: persistenceID,
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recover(ctx))
@@ -308,6 +316,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		require.NoError(t, entity.recover(ctx))
@@ -336,6 +345,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recover(ctx)
@@ -357,12 +367,75 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			behavior:      NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
+			scope:         persistence.Unscoped(),
 		}
 
 		err := entity.recover(ctx)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
 	})
+}
+
+// TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant covers
+// TENANT-003 T4's D6 strengthening: before this ticket, recover()'s call to
+// seedActorTenant was always a FIRST seed, because entity.actorTenant
+// started at its zero value (noTenantContext) until a persisted record set
+// it. Now, resolveScope (called from PreStart before recover ever runs)
+// pre-seeds entity.actorTenant from the per-spawn
+// extensions.EntityTenantScope dependency the engine injects at spawn. So
+// when recover() later reaches a persisted event whose TenantMetadata names
+// a DIFFERENT tenant than the one this actor was spawned for, seedActorTenant
+// no longer accepts it as the seed — it is a VerifyUnchanged cross-check
+// against the spawn-bound tenant, and a mismatch must fail closed.
+//
+// This is deliberately exercised through the real entity.resolveScope
+// method (not by hand-setting entity.scope/actorTenant on the struct
+// literal, as the sibling tests above do), so the test also proves
+// resolveScope's own pre-seeding wiring, not just recover()'s cross-check.
+func TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant(t *testing.T) {
+	ctx := context.Background()
+	persistenceID := uuid.NewString()
+
+	tenantB, err := tenancy.NewTenantContext("globex")
+	require.NoError(t, err)
+
+	scopeA, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	eventStore := testkit.NewEventsStore()
+	require.NoError(t, eventStore.Connect(ctx))
+
+	// A record physically stored under scope A (as if this actor's own
+	// prior spawn wrote it) but whose carried TenantMetadata names tenant
+	// B — the corrupted/mismatched shape D6's cross-check exists to catch,
+	// since scope-keyed storage alone cannot rule out a metadata field that
+	// disagrees with its own storage key.
+	eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+	require.NoError(t, err)
+	mismatched := &egopb.Event{
+		PersistenceId:  persistenceID,
+		SequenceNumber: 1,
+		Event:          eventAny,
+		Timestamp:      time.Now().UnixNano(),
+		TenantMetadata: tenancy.MarshalMetadata(tenantB),
+	}
+	require.NoError(t, eventStore.WriteEvents(ctx, scopeA, []*egopb.Event{mismatched}, persistence.Unconditional()))
+
+	entity := &EventSourcedActor{
+		persistenceID: persistenceID,
+		behavior:      NewAccountEventSourcedBehavior(persistenceID),
+		eventsStore:   eventStore,
+		tenantAware:   true,
+	}
+
+	// resolveScope pre-seeds entity.actorTenant to tenant A (acme) and
+	// binds entity.scope to scopeA, exactly as PreStart does at spawn.
+	require.NoError(t, entity.resolveScope([]extension.Dependency{extensions.NewEntityTenantScope("acme")}))
+
+	err = entity.recover(ctx)
+	require.Error(t, err, "recover must fail closed when the recovered event's tenant metadata disagrees with the spawn-bound tenant")
+	assert.True(t, errors.Is(err, tenancy.ErrDenied),
+		"the rejection must be VerifyUnchanged's ErrDenied, not a silent adoption of the recovered tenant")
 }
 
 // TestEventSourcedActorSeedActorTenant covers the seedActorTenant helper
@@ -434,7 +507,7 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
@@ -507,7 +580,7 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
@@ -577,7 +650,7 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
@@ -644,7 +717,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	// then is stopped so no in-memory state survives.
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)
@@ -666,7 +739,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	// actor accepts any command.
 	restarted := newEventSourcedActor()
 	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
-		goakt.WithDependencies(behavior),
+		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.NoError(t, err)
 	require.NotNil(t, pid)

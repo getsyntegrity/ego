@@ -33,6 +33,11 @@ import (
 // applyRetentionRequest is sent from the [snapshotsWriterActor] to the
 // [eventsJanitorActor] to delete old events and snapshots according to the
 // configured retention policy.
+//
+// scope carries the owning EventSourcedActor's bound persistence.Scope
+// (TENANT-003 T4). eventsJanitorActor is a separate child actor with no
+// PreStart access to the parent's dependencies, so the scope must travel on
+// this request rather than be re-derived here.
 type applyRetentionRequest struct {
 	persistenceID             string
 	eventsCounter             uint64
@@ -40,6 +45,7 @@ type applyRetentionRequest struct {
 	deleteEventsOnSnapshot    bool
 	deleteSnapshotsOnSnapshot bool
 	eventsRetentionCount      uint64
+	scope                     persistence.Scope
 }
 
 // eventsJanitorActor handles cleanup of old events and snapshots after a successful
@@ -107,8 +113,7 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 
 		if deleteUpTo > 0 {
 			if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-				// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-				return a.eventsStore.DeleteEvents(ctx.Context(), persistence.Unscoped(), req.persistenceID, deleteUpTo)
+				return a.eventsStore.DeleteEvents(ctx.Context(), req.scope, req.persistenceID, deleteUpTo)
 			}); err != nil {
 				a.logger.ErrorContext(ctx.Context(), "failed to delete events for retention policy",
 					"persistence_id", req.persistenceID,
@@ -121,8 +126,7 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 	if req.deleteSnapshotsOnSnapshot && a.snapshotStore != nil && req.eventsCounter > req.snapshotInterval {
 		previousSnapshotSeqNr := req.eventsCounter - req.snapshotInterval
 		if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
-			return a.snapshotStore.DeleteSnapshots(ctx.Context(), persistence.Unscoped(), req.persistenceID, previousSnapshotSeqNr)
+			return a.snapshotStore.DeleteSnapshots(ctx.Context(), req.scope, req.persistenceID, previousSnapshotSeqNr)
 		}); err != nil {
 			a.logger.ErrorContext(ctx.Context(), "failed to delete old snapshots for retention policy",
 				"persistence_id", req.persistenceID,
