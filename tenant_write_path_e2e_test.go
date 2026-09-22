@@ -149,10 +149,10 @@ func TestTenantWritePathE2E(t *testing.T) {
 	entityBID := uuid.NewString()
 
 	entityA := NewAccountEventSourcedBehavior(entityAID)
-	require.NoError(t, engine.Entity(ctx, entityA))
+	require.NoError(t, engine.Entity(ctx, entityA, WithTenant(tenancy.TenantID("acme"))))
 
 	entityB := newTenancyProbeCreditEventSourcedBehavior(entityBID)
-	require.NoError(t, engine.Entity(ctx, entityB))
+	require.NoError(t, engine.Entity(ctx, entityB, WithTenant(tenancy.TenantID("acme"))))
 
 	sagaID := "saga-" + uuid.NewString()
 	saga := &callbackSagaBehavior{
@@ -172,7 +172,7 @@ func TestTenantWritePathE2E(t *testing.T) {
 			return &SagaAction{Complete: true}, nil
 		},
 	}
-	require.NoError(t, engine.Saga(ctx, saga, 0))
+	require.NoError(t, engine.Saga(ctx, saga, 0, WithTenant(tenancy.TenantID("acme"))))
 
 	_, _, err := engine.SendCommand(ctx, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 	require.NoError(t, err)
@@ -181,15 +181,14 @@ func TestTenantWritePathE2E(t *testing.T) {
 		return entityB.invocationCount() == 1
 	}, 10*time.Second, 50*time.Millisecond, "entity B's HandleCommand must eventually run via the saga hop")
 
-	// TENANT-003 T4: Engine.Entity/Engine.Saga now also resolve the tenant
-	// once each, at spawn, to bind the spawned actor's persistence.Scope
-	// before it ever reads a store. This test spawns entity A, entity B,
-	// and the saga (3 spawn-time resolves), then sends one command via
-	// Engine.SendCommand (1 more) — 4 total. The saga's own dispatch to
-	// entity B (sendCommand) never re-resolves: it reuses the
-	// already-bound/reconstructed TenantContext on its ctx, which is what
-	// the observedTenant assertion below proves.
-	assert.EqualValues(t, 4, resolver.callCount(), "Resolve must be invoked once per spawn (entity A, entity B, the saga) plus once at Engine.SendCommand, never again downstream")
+	// TENANT-003 T4 (corrected): Engine.Entity/Engine.Saga never call
+	// Resolve at spawn — entity A, entity B, and the saga each declare their
+	// tenant via ego.WithTenant instead. Only Engine.SendCommand's own
+	// resolve, at the command trust boundary, counts here. The saga's own
+	// dispatch to entity B (sendCommand) never re-resolves either: it
+	// reuses the already-bound/reconstructed TenantContext on its ctx,
+	// which is what the observedTenant assertion below proves.
+	assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once, at Engine.SendCommand, never at any spawn or downstream")
 
 	tcA, err := tenancy.NewTenantID("acme")
 	require.NoError(t, err)
@@ -221,7 +220,7 @@ func TestEngineSagaStatusTenantIsolation(t *testing.T) {
 
 	entityAID := uuid.NewString()
 	entityA := NewAccountEventSourcedBehavior(entityAID)
-	require.NoError(t, engine.Entity(ctx, entityA))
+	require.NoError(t, engine.Entity(ctx, entityA, WithTenant(tenancy.TenantID("acme"))))
 
 	sagaID := "saga-" + uuid.NewString()
 	saga := &callbackSagaBehavior{
@@ -234,7 +233,7 @@ func TestEngineSagaStatusTenantIsolation(t *testing.T) {
 			return &SagaAction{Complete: true}, nil
 		},
 	}
-	require.NoError(t, engine.Saga(ctx, saga, 0))
+	require.NoError(t, engine.Saga(ctx, saga, 0, WithTenant(tenancy.TenantID("acme"))))
 
 	_, _, err := engine.SendCommand(ctx, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 	require.NoError(t, err)

@@ -102,31 +102,20 @@ func (r *countingTenantResolver) callCount() int64 {
 // before it ever reaches the actor system. It also counts its own
 // invocations so tests can assert Resolve was tried exactly once.
 //
-// succeedID is an escape hatch for TENANT-003 T4: Engine.Entity now also
-// resolves the tenant once, at spawn (engine.go's resolveSpawnTenantScope),
-// so a resolver that always errors can no longer spawn an entity at all —
-// there would be nothing left to send a command to. When succeedID is
-// non-empty, the FIRST Resolve call succeeds with that tenant id (letting
-// spawn through) and every later call returns err, exactly as before this
-// field existed. Leaving it empty preserves the original always-fail
-// behavior for callers that never spawn through Engine.Entity.
+// TENANT-003 T4 (corrected): Engine.Entity/DurableStateEntity/Saga no
+// longer call Resolve at spawn at all (Resolve-Once, Propagate-After
+// reserves Resolve for the command trust boundary alone) — a spawn under
+// this resolver instead declares its tenant explicitly via ego.WithTenant,
+// so this resolver can stay a simple always-fail stub with no escape hatch.
 type erroringTenantResolver struct {
-	err       error
-	succeedID string
-	calls     atomic.Int64
+	err   error
+	calls atomic.Int64
 }
 
 var _ tenancy.TenantResolver = (*erroringTenantResolver)(nil)
 
 func (r *erroringTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
-	n := r.calls.Add(1)
-	if n == 1 && r.succeedID != "" {
-		tid, err := tenancy.NewTenantID(r.succeedID)
-		if err != nil {
-			return tenancy.TenantContext{}, err
-		}
-		return tenancy.NewTenantContext(tid)
-	}
+	r.calls.Add(1)
 	return tenancy.TenantContext{}, r.err
 }
 
@@ -143,27 +132,17 @@ func (r *erroringTenantResolver) callCount() int64 {
 // before dispatch, the domain handler, or persistence, rather than treating
 // "no error" as "a valid identity was resolved".
 //
-// succeedID mirrors erroringTenantResolver's field: TENANT-003 T4 makes
-// Engine.Entity resolve at spawn too, so a resolver that always returns the
-// zero value can no longer spawn an entity to send a command to. When
-// non-empty, the first Resolve call succeeds with that tenant id and every
-// later call returns the zero value as before.
+// TENANT-003 T4 (corrected): as with erroringTenantResolver above, spawn no
+// longer calls Resolve, so a spawn under this resolver declares its tenant
+// via ego.WithTenant and this stub needs no escape hatch either.
 type zeroValueTenantResolver struct {
-	succeedID string
-	calls     atomic.Int64
+	calls atomic.Int64
 }
 
 var _ tenancy.TenantResolver = (*zeroValueTenantResolver)(nil)
 
 func (r *zeroValueTenantResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
-	n := r.calls.Add(1)
-	if n == 1 && r.succeedID != "" {
-		tid, err := tenancy.NewTenantID(r.succeedID)
-		if err != nil {
-			return tenancy.TenantContext{}, err
-		}
-		return tenancy.NewTenantContext(tid)
-	}
+	r.calls.Add(1)
 	return tenancy.TenantContext{}, nil
 }
 

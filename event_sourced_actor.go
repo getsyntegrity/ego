@@ -433,7 +433,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 // this field existed.
 //
 // tenantAware == true looks for the per-spawn extensions.EntityTenantScope
-// dependency Engine.Entity injects (engine.go's resolveSpawnTenantScope) and
+// dependency Engine.Entity injects (engine.go's spawnTenantScope) and
 // fails closed with ErrEntityTenantScopeMissing when it is absent or
 // carries an invalid tenant id: a tenant-aware actor must never start
 // without a bound scope. On success it also pre-seeds entity.actorTenant

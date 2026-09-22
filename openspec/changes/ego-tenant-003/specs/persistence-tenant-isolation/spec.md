@@ -184,15 +184,24 @@ explicit parameter, never by inspecting payload content.
 
 ### Requirement: An Actor Bound To A Tenant At Spawn Fails Closed, Never Open
 
-Once T4 wires `Engine.Entity`, `Engine.DurableStateEntity`, and
-`Engine.Saga` to resolve the caller's tenant at spawn and bind the
-spawned actor's `Scope` before any store read, that binding MUST be
-established exactly once, before recovery, and MUST reject rather than
-silently proceed whenever the binding cannot be trusted: tenancy active
-but no scope was injected for this spawn, a resolved administrative
-(non-tenant) `tenancy.TenantContext` at spawn, or a recovered
-`tenant_metadata` record that disagrees with the scope this actor was
-actually spawned under. In every one of these cases, the actor MUST NOT
+T4 wires `Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` to
+bind the spawned actor's `Scope` before any store read. That binding MUST
+be established exactly once, before recovery, from a source that never
+invokes `tenancy.TenantResolver.Resolve` at spawn — Resolve is reserved for
+the command trust boundary alone (`openspec/specs/tenancy-core/spec.md`'s
+Resolve-Once, Propagate-After requirement; CI caught an earlier design of
+this slice calling `Resolve` at spawn, see `tasks.md`'s T4 CI-correction
+entry). The two non-resolving sources the engine consults, in order, are:
+the caller's explicit `ego.WithTenant(id)` spawn option, and — when
+`WithTenant` was not passed — the registered resolver's fixed tenant, read
+via the `tenancy.FixedTenantResolver` capability interface (implemented by
+`tenancy.WithSingleTenant`'s resolver) without ever calling `Resolve`.
+
+The binding MUST reject rather than silently proceed whenever it cannot be
+trusted: tenancy active but no scope was injected for this spawn (neither
+`WithTenant` nor a resolver-exposed fixed tenant was available), or a
+recovered `tenant_metadata` record that disagrees with the scope this actor
+was actually spawned under. In every one of these cases, the actor MUST NOT
 read or write any store record — the rejection MUST happen before the
 first store call, not after.
 
@@ -205,13 +214,23 @@ first store call, not after.
 - THEN it returns an error before any store method is called, and the
   actor is never created
 
-#### Scenario: An administrative-scope resolution is refused at spawn
+#### Scenario: A spawn with no explicit tenant and no resolver-exposed fixed tenant fails closed
 
-- GIVEN a `tenancy.TenantResolver` that resolves the caller to an
-  administrative (non-tenant) `tenancy.TenantContext`
+- GIVEN a `tenancy.TenantResolver` that does not implement
+  `tenancy.FixedTenantResolver` (or implements it and reports no fixed
+  tenant), and a caller that does not pass `ego.WithTenant`
 - WHEN `Engine.Entity`, `Engine.DurableStateEntity`, or `Engine.Saga` is
   called
-- THEN it returns a typed error and no actor is spawned
+- THEN it returns the typed `ErrSpawnTenantUndetermined` before any store
+  method is called, and no actor is spawned
+
+#### Scenario: A single-tenant resolver needs no explicit tenant at spawn
+
+- GIVEN a `tenancy.TenantResolver` built via `tenancy.WithSingleTenant`
+- WHEN `Engine.Entity`, `Engine.DurableStateEntity`, or `Engine.Saga` is
+  called without `ego.WithTenant`
+- THEN the spawn succeeds, bound to that resolver's fixed tenant, with no
+  tenant plumbing invented by the application (acceptance criterion 6)
 
 #### Scenario: Recovered tenant metadata disagreeing with the spawn-bound tenant fails closed
 

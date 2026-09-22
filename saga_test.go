@@ -2003,9 +2003,18 @@ func TestSagaFailsClosed(t *testing.T) {
 		// The saga's real target: a genuine tenant-aware EventSourcedActor,
 		// not a stub. If the gate ever regressed and let a saga-dispatched
 		// command through, this probe would record it.
+		//
+		// This test spawns directly through actorSystem.Spawn, bypassing
+		// Engine.Entity entirely, so it must supply the per-spawn
+		// extensions.EntityTenantScope dependency itself — exactly what
+		// Engine.Entity injects when given ego.WithTenant (TENANT-003 T4,
+		// corrected). Without it, tenancy being active
+		// (extensions.NewTenancyMarker() above) makes the target's own
+		// PreStart fail closed with ErrEntityTenantScopeMissing before this
+		// test ever reaches the saga-dispatch gate it means to prove.
 		targetProbe := newTenancyProbeEventSourcedBehavior(targetID)
 		_, err = actorSystem.Spawn(ctx, targetID, newEventSourcedActor(),
-			goakt.WithDependencies(targetProbe), goakt.WithLongLived(), goakt.WithStashing())
+			goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		pause.For(500 * time.Millisecond)
 
@@ -2033,7 +2042,10 @@ func TestSagaFailsClosed(t *testing.T) {
 
 		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
 			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
+			// Same reasoning as the target's spawn above: this saga is also
+			// spawned directly through actorSystem.Spawn, so it needs its own
+			// EntityTenantScope dependency to get past tenancy-active PreStart.
+			goakt.WithDependencies(behavior, sagaCfg, extensions.NewEntityTenantScope("acme")))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 		pause.For(time.Second)

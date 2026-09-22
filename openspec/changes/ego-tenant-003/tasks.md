@@ -190,16 +190,20 @@ describes.
 
 ## T4 — Engine/actor wiring
 
-- [x] 4.1 Resolved the caller's real `tenancy.TenantContext` at spawn time
-      in `Engine.Entity`/`Engine.DurableStateEntity`/`Engine.Saga`
+- [x] 4.1 **Superseded by 4.8 below — kept for history, do not re-implement
+      this shape.** The first cut resolved the caller's real
+      `tenancy.TenantContext` at spawn time in
+      `Engine.Entity`/`Engine.DurableStateEntity`/`Engine.Saga`
       (`engine.go`'s `resolveSpawnTenantScope`), and injected it as a new
       per-spawn dependency, `internal/extensions.EntityTenantScope`, rather
       than resolving inside the actor itself. A resolved
-      `tenancy.ScopeAdministrative` context is refused outright with the
-      new `ErrAdministrativeScopeEntitySpawn` sentinel (administrative
-      entity/saga spawn is out of scope for TENANT-003; see TENANT-008);
-      legacy mode (no resolver configured) injects nothing and is
-      byte-identical to before.
+      `tenancy.ScopeAdministrative` context was refused outright with a
+      (now-removed) `ErrAdministrativeScopeEntitySpawn` sentinel; legacy
+      mode (no resolver configured) injected nothing and was
+      byte-identical to before. **This called `TenantResolver.Resolve` at
+      spawn, which CI caught as a violation of
+      `openspec/specs/tenancy-core/spec.md`'s Resolve-Once,
+      Propagate-After requirement — see 4.8.**
 - [x] 4.2 Each of `EventSourcedActor`, `DurableStateActor`, and `SagaActor`
       gained a `scope persistence.Scope` field, bound once in `PreStart`
       via a new `resolveScope` method — called before `loadOptionalExtensions`/
@@ -265,10 +269,13 @@ describes.
         (recover silently adopted the foreign tenant). GREEN after
         restoring.
       - `TestEngineEntitySpawnRejectsAdministrativeScope`
-        (`engine_tenant_spawn_test.go`) — an administrative-scope resolver
-        blocks both `Engine.Entity` and `Engine.DurableStateEntity` with
-        `ErrAdministrativeScopeEntitySpawn`, and no actor is ever spawned
-        (`EntityExists` stays `false`). RED: making the administrative
+        (`engine_tenant_spawn_test.go`) — **superseded by 4.8's
+        `TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant`,
+        which replaced this test file's contents once spawn stopped
+        resolving anything.** Originally: an administrative-scope resolver
+        blocked both `Engine.Entity` and `Engine.DurableStateEntity` with
+        `ErrAdministrativeScopeEntitySpawn`, and no actor was ever spawned
+        (`EntityExists` stayed `false`). RED: making the administrative
         branch of `resolveSpawnTenantScope` return `(nil, nil)` (i.e. fall
         through as legacy) surfaced a different failure
         (`ErrEntityTenantScopeMissing` from the actor's own fail-closed
@@ -294,7 +301,105 @@ describes.
       `DurableStateActor.scope`, and `SagaActor.scope` already carried this
       note.
 
-**Evidence**: `engine.go`, `event_sourced_actor.go`, `durable_state_actor.go`,
+- [x] 4.8 **CI correction (EGO-TENANT-003, issue #92 / PR #98 review):** CI
+      caught that 4.1's spawn-time design called
+      `engine.tenantResolver.Resolve(ctx)` at spawn, violating
+      `openspec/specs/tenancy-core/spec.md`'s Resolve-Once,
+      Propagate-After requirement — `TenantResolver` MUST be invoked
+      exactly once, at the trust boundary, never at spawn. Two tests
+      proved it: `TestSendCommandResolverSwapIdenticalSequence`'s
+      multi-tenant subtest (`engine_test.go`) asserted the resolver is
+      invoked exactly once across one `engine.Entity` call plus one
+      `SendCommand` call and observed two; `TestSagaFailsClosed`
+      (`saga_test.go`) — spawning its target and saga directly through
+      `actorSystem.Spawn`, bypassing the engine — started failing at spawn
+      with `ErrEntityTenantScopeMissing` because it had never supplied the
+      per-spawn `EntityTenantScope` dependency itself, a gap the earlier
+      design's spawn-time `Resolve` call had been masking.
+
+      **This is not a quiet rewrite of 4.1's history — it is a genuine
+      design correction, recorded honestly:** `engine.go`'s
+      `resolveSpawnTenantScope` is replaced by `spawnTenantScope(config
+      *spawnConfig)`, which never calls `Resolve` and instead determines
+      the spawn's tenant from `config.tenantID` (set by the new
+      `ego.WithTenant(id tenancy.TenantID)` `SpawnOption`,
+      `spawn_config.go`) or, absent that, the registered resolver's fixed
+      tenant via the new `tenancy.FixedTenantResolver` capability
+      interface (`FixedTenant() (TenantID, bool)`, implemented by
+      `tenancy.WithSingleTenant`'s resolver so single-tenant mode still
+      needs no `WithTenant` — acceptance criterion 6). Neither source
+      yielding a tenant fails the spawn closed with the new
+      `ErrSpawnTenantUndetermined`, replacing the removed
+      `ErrAdministrativeScopeEntitySpawn` (which existed only to name the
+      outcome of resolving an administrative context at spawn — moot once
+      spawn resolves nothing). `Engine.Saga` gained a trailing `opts
+      ...SpawnOption` parameter (additive, non-breaking) purely as
+      `WithTenant`'s carrier. `Dispatch`, `SagaStatus`, and `EraseEntity`
+      — the actual trust boundaries — and the actor-side `resolveScope`/
+      `PreStart`/`EntityTenantScope` machinery are unchanged; see
+      `design.md`'s "CI correction" section for the full account.
+
+      Fixed, with reasons: `TestSendCommandResolverSwapIdenticalSequence`
+      now spawns its multi-tenant subtest's entity with
+      `WithTenant("acme")` (the single-tenant subtest still needs nothing,
+      proving criterion 6), and its resolver-count assertion moved from 2
+      to 1. `TestSagaFailsClosed` now supplies
+      `extensions.NewEntityTenantScope("acme")` on both of its direct
+      `actorSystem.Spawn` calls (target and saga), matching what
+      `Engine.Entity`/`Engine.Saga` would inject given `WithTenant`; its
+      original assertions (no `HandleEvent`, no `HandleCommand`, no
+      persisted event) are unchanged — where it fails closed moved
+      earlier (spawn) only incidentally, because it had never carried the
+      dependency the corrected design also requires. `option_test.go`'s
+      `erroringTenantResolver`/`zeroValueTenantResolver` lost their
+      `succeedID` escape hatch (spawn no longer calls `Resolve`, so
+      nothing needs to be let through); every call site across
+      `engine_test.go` and `tenant_write_path_e2e_test.go` that spawned an
+      entity/saga under a non-fixed resolver gained an explicit
+      `WithTenant(...)`, and every resolver-call-count assertion that
+      counted "one spawn-time resolve plus N command resolves" was
+      corrected to count N alone. `engine_tenant_spawn_test.go` was
+      rewritten from testing administrative-scope rejection at spawn (now
+      structurally impossible, since spawn never resolves) to testing the
+      corrected contract directly.
+
+      New tests (strict TDD; RED observed by temporarily reintroducing the
+      old behavior, then reverting and observing GREEN):
+      - `TestEngineEntitySpawnWithExplicitTenantResolvesOnce`
+        (`engine_tenant_spawn_test.go`) — the dedicated regression guard:
+        a multi-tenant resolver plus `WithTenant`, spawn then one command,
+        resolver called exactly once. RED: temporarily reintroducing a
+        `tenantResolver.Resolve(ctx)` call inside `Engine.Entity`
+        reproduced the exact CI failure (count 1 expected, 2 observed;
+        `TestSendCommandResolverSwapIdenticalSequence`'s multi-tenant
+        subtest failed identically under the same temporary change).
+        GREEN after reverting.
+      - `TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant`
+        (same file) — tenancy active, no fixed tenant, no `WithTenant`:
+        `Engine.Entity`/`DurableStateEntity` fail closed with
+        `ErrSpawnTenantUndetermined` before any store method runs (a
+        `mocks/persistence` store with zero expectations set, so any call
+        at all fails the test). RED: temporarily making
+        `spawnTenantScope` return `(nil, nil)` unconditionally (i.e.
+        silently fall back to legacy/`Unscoped()`) let the spawn succeed,
+        failing the "no actor spawned" assertions. GREEN after reverting.
+      - `TestEngineWithSingleTenantSpawnNeedsNoWithTenant` (same file) —
+        `tenancy.WithSingleTenant`, no `WithTenant` at spawn, entity still
+        spawns and is bound to (and writes under) that resolver's fixed
+        tenant scope — criterion 6, checked directly at the spawn
+        boundary rather than only through `SendCommand`.
+      - `TestEngineEntitySpawnWithoutResolverStaysUnscoped` (same file) —
+        no resolver registered at all: spawn needs no `WithTenant`, and
+        the store still receives `persistence.Unscoped()`, unchanged from
+        legacy behavior.
+      - `TestEngineCommandRejectsTenantMismatchWithSpawnDeclaredTenant`
+        (same file) — an entity spawned with `WithTenant("acme")` rejects
+        a command whose resolver-attached tenant is `"globex"`, via the
+        actor's existing `tenancy.VerifyUnchanged` cross-check; proves the
+        spawn-declared tenant is enforced, not merely advisory.
+
+**Evidence**: `engine.go`, `spawn_config.go`, `tenancy/resolver.go`,
+`event_sourced_actor.go`, `durable_state_actor.go`,
 `saga_actor.go`, `events_writer_actor.go`, `snapshots_writer_actor.go`,
 `events_janitor_actor.go`, `migration/migration.go`,
 `internal/extensions/extensions.go` (production); new test files
@@ -304,11 +409,12 @@ describes.
 `engine_test.go`, `option_test.go`, `durable_state_actor_test.go`,
 `durable_state_actor_tenant_persist_test.go`, `event_sourced_actor_test.go`,
 `event_sourced_actor_tenant_persist_test.go`, `saga_actor_tenant_test.go`,
-`events_janitor_actor_test.go`, `events_writer_actor_test.go`,
+`saga_test.go`, `events_janitor_actor_test.go`, `events_writer_actor_test.go`,
 `snapshots_writer_actor_test.go`, and `tenant_write_path_e2e_test.go`
-adapted for the new spawn-time resolve and the `scope` field. All 6 new
-tests observed RED (for the reason named above) and GREEN. Full
-verification command results are recorded in this change's commit.
+adapted for the corrected (4.8) spawn-time tenant declaration and the
+`scope` field. All new tests (6 from 4.6, 5 from 4.8) observed RED (for
+the reasons named above) and GREEN. Full verification command results are
+recorded in this change's commit(s).
 
 ## T5 — Migration and compatibility documentation
 
@@ -644,7 +750,14 @@ partial with what remains.
    `resolveScope` binds the same `persistence.Scope` machinery for this
    resolver as for any multi-tenant resolver (`TestSendCommandResolverSwapIdenticalSequence`,
    same file) — there is no special-cased single-tenant code path to
-   diverge from the isolation guarantees above.
+   diverge from the isolation guarantees above. At spawn (4.8's
+   correction), this resolver additionally implements
+   `tenancy.FixedTenantResolver`, so `Engine.Entity`/`DurableStateEntity`/
+   `Saga` need no `ego.WithTenant` either —
+   `TestEngineWithSingleTenantSpawnNeedsNoWithTenant`
+   (`engine_tenant_spawn_test.go`) checks this directly at the spawn
+   boundary, and `TestSendCommandResolverSwapIdenticalSequence`'s
+   single-tenant subtest confirms it end to end through a real command.
 
 7. **Cross-tenant direct-store/conformance tests exist, independent of
    the actor mailbox.** MET. `persistence/conformance` (T3, `5b1d16f`) is

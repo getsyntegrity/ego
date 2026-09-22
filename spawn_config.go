@@ -22,7 +22,11 @@
 
 package ego
 
-import "time"
+import (
+	"time"
+
+	"github.com/pablogore/ego/v4/tenancy"
+)
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine
 // where an entity should be spawned in a clustered environment.
@@ -82,6 +86,13 @@ type spawnConfig struct {
 	// batch. When the window expires, pending events are flushed regardless of
 	// how many events have been accumulated.
 	batchFlushWindow time.Duration
+	// tenantID is the tenant this entity/durable-state entity/saga belongs
+	// to, set via WithTenant. It is only consulted in tenant-aware mode
+	// (engine.tenantResolver != nil); the empty value means "not declared",
+	// in which case the engine falls back to the registered resolver's
+	// tenancy.FixedTenantResolver capability, and fails closed if neither
+	// source yields a tenant (TENANT-003 T4).
+	tenantID tenancy.TenantID
 }
 
 // newSpawnConfig creates an instance of spawnConfig
@@ -226,5 +237,33 @@ func WithBatchThreshold(threshold int) SpawnOption {
 func WithBatchFlushWindow(window time.Duration) SpawnOption {
 	return spawnOption(func(config *spawnConfig) {
 		config.batchFlushWindow = window
+	})
+}
+
+// WithTenant declares the tenant identity that an entity, durable-state
+// entity, or saga belongs to, for the single spawn call it is passed to
+// (TENANT-003 T4).
+//
+// This is the application's side of the Resolve-Once, Propagate-After
+// discipline (openspec/specs/tenancy-core/spec.md): a tenancy.TenantResolver
+// MUST be invoked exactly once, at the command trust boundary, never at
+// spawn — so the engine cannot ask the resolver "which tenant is this
+// entity for" the way an earlier, CI-caught design mistakenly did. The
+// application is the one that knows which tenant a given entity/durable
+// state/saga belongs to (e.g. it just read the tenant off an authenticated
+// request that is now creating that entity), so it states it explicitly
+// with WithTenant instead.
+//
+// WithTenant is only consulted when tenancy is active (a
+// tenancy.TenantResolver is registered via ego.WithTenantResolver); it is
+// silently ignored in legacy mode. In tenant-aware mode, a spawn fails
+// closed with ErrSpawnTenantUndetermined when WithTenant was not passed AND
+// the registered resolver does not expose a fixed tenant via
+// tenancy.FixedTenantResolver — see WithSingleTenant's doc comment for the
+// one built-in resolver that does, which is what lets single-tenant
+// deployments omit WithTenant entirely.
+func WithTenant(id tenancy.TenantID) SpawnOption {
+	return spawnOption(func(config *spawnConfig) {
+		config.tenantID = id
 	})
 }

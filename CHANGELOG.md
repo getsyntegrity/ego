@@ -116,6 +116,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   **Known limitation:** a GoAkt actor's name is still the caller-supplied `entityID`/`sagaID`, not tenant-qualified, so two tenants that happen to use the same entity id contend for one actor. This is fail-closed and leak-free — the actor binds to whichever tenant's spawn wins the race, and every command from the other tenant is rejected before any store is ever touched — but the losing tenant simply cannot use that entity id until a follow-up gives actors tenant-qualified identity.
 
+  **`Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` bind a spawned actor to a tenant via a new `ego.WithTenant(id tenancy.TenantID)` spawn option, not by resolving one.** A `tenancy.TenantResolver` MUST be invoked exactly once, at the command trust boundary (`Engine.Dispatch`/`SendCommand`, `Engine.SagaStatus`, `Engine.EraseEntity`) — never at spawn. An earlier draft of this change called `Resolve` at spawn too, which CI caught as a violation of that rule (`TestSendCommandResolverSwapIdenticalSequence` observed the resolver invoked twice for one spawn-plus-command sequence). The application now declares which tenant an entity/durable-state entity/saga belongs to explicitly, with `ego.WithTenant`, at the same call that spawns it:
+
+  ```go
+  err := engine.Entity(ctx, behavior, ego.WithTenant(tenancy.TenantID("acme")))
+  ```
+
+  `tenancy.WithSingleTenant`'s resolver additionally implements a small new capability interface, `tenancy.FixedTenantResolver` (`FixedTenant() (TenantID, bool)`), so a single-tenant deployment still needs no `WithTenant` at all — the engine reads the resolver's one fixed tenant instead, with no `Resolve` call. When tenancy is active, the registered resolver exposes no fixed tenant, and the caller passed no `WithTenant`, the spawn fails closed with the new `ErrSpawnTenantUndetermined` rather than silently falling back to `persistence.Unscoped()`. `Engine.Saga` gained a trailing `opts ...SpawnOption` parameter (additive, not breaking) solely to carry `WithTenant`; every other spawn option has no effect on a saga. Legacy mode (no resolver registered at all) is unchanged: no `WithTenant` is required and every store call still carries `persistence.Unscoped()`.
+
 ### 🐛 Bug Fixes
 
 - **`migration.WithLogger(nil)` no longer panics.** The migrator stored whatever the option supplied, so a nil — or a typed-nil such as `(*myLogger)(nil)` — replaced the default and the first log call inside `Run` dereferenced it. `migration.New` now resolves the logger after applying every option, so a nil or typed-nil logger falls back to `ego.DefaultLogger()`, the same semantics the engine already applied to `ego.WithLogger`. The `ego.ResolveLogger` helper exposes that single rule to packages outside the root instead of each one re-implementing typed-nil detection.

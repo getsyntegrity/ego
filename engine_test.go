@@ -230,11 +230,12 @@ func TestEngineEventSourced(t *testing.T) {
 // resolver) is exercised separately by TestEngineEventSourced and
 // TestEngineDurableState, which remain unmodified and passing.
 //
-// TENANT-003 T4 note: Engine.Entity/DurableStateEntity/Saga now also
-// resolve the tenant once, at spawn, to bind the actor's persistence.Scope
-// before it ever reads a store. Every resolver.callCount() assertion below
-// therefore counts one spawn-time Resolve plus one Resolve per subsequent
-// SendCommand call, not SendCommand calls alone.
+// TENANT-003 T4 note (corrected): Engine.Entity/DurableStateEntity/Saga
+// never call Resolve at spawn (Resolve-Once, Propagate-After reserves
+// Resolve for the command trust boundary alone) — each entity below is
+// spawned with ego.WithTenant declaring its tenant explicitly, so every
+// resolver.callCount() assertion below counts SendCommand's own Resolve
+// calls only.
 func TestSendCommandTenantResolution(t *testing.T) {
 	t.Run("resolves exactly once and attaches the TenantContext before the handler runs", func(t *testing.T) {
 		ctx := context.Background()
@@ -248,16 +249,17 @@ func TestSendCommandTenantResolution(t *testing.T) {
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
 
-		// TENANT-003 T4: Engine.Entity now also resolves the tenant once, at
-		// spawn, to bind the entity's persistence.Scope before it ever reads
-		// a store — so one Entity call plus one SendCommand call means
-		// exactly two Resolve invocations, not one.
-		assert.EqualValues(t, 2, resolver.callCount(), "Resolve must be invoked exactly once at spawn and exactly once per command")
+		// TENANT-003 T4 (corrected): Entity's spawn declares its tenant via
+		// ego.WithTenant and never calls Resolve, so one SendCommand call
+		// means exactly one Resolve invocation — this is the regression
+		// guard for the defect CI caught (a prior design resolved at spawn
+		// too, doubling this count).
+		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command, never at spawn")
 		assert.EqualValues(t, 1, probe.invocationCount())
 
 		tc, ok := probe.observedTenant()
@@ -276,22 +278,22 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 		wantErr := errors.New("identity provider unavailable")
-		// succeedID lets the FIRST Resolve call (Engine.Entity's spawn-time
-		// resolution, TENANT-003 T4) succeed, so the entity actually spawns;
-		// every later call (SendCommand's) returns wantErr, which is what
-		// this subtest exercises.
-		resolver := &erroringTenantResolver{err: wantErr, succeedID: "acme"}
+		// The entity spawns under an explicit ego.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so an
+		// always-erroring resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises wantErr below.
+		resolver := &erroringTenantResolver{err: wantErr}
 		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 		require.NoError(t, engine.Start(ctx))
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.ErrorIs(t, err, wantErr, "SendCommand must surface the resolver error, not silently transform it")
 
-		assert.EqualValues(t, 2, resolver.callCount(), "one spawn-time resolve plus one SendCommand resolve")
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
 
 		scopeA, err := persistence.NewTenantScope("acme")
@@ -319,23 +321,23 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		require.NoError(t, store.Connect(ctx))
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-		// succeedID lets the FIRST Resolve call (Engine.Entity's spawn-time
-		// resolution, TENANT-003 T4) succeed, so the entity actually spawns;
-		// every later call (SendCommand's) returns the zero-value
-		// TenantContext, which is what this subtest exercises.
-		resolver := &zeroValueTenantResolver{succeedID: "acme"}
+		// The entity spawns under an explicit ego.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so this
+		// always-zero-value resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises the zero-value case below.
+		resolver := &zeroValueTenantResolver{}
 		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 		require.NoError(t, engine.Start(ctx))
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.Error(t, err, "SendCommand must reject a resolver returning the zero-value TenantContext")
 		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
 
-		assert.EqualValues(t, 2, resolver.callCount(), "one spawn-time resolve plus one SendCommand resolve")
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
 
 		scopeA, err := persistence.NewTenantScope("acme")
@@ -362,16 +364,17 @@ func TestSendCommandTenantResolution(t *testing.T) {
 				require.NoError(t, store.Connect(ctx))
 				t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-				// succeedID lets spawn (Engine.Entity's own resolve,
-				// TENANT-003 T4) through so SendCommand's own resolve is
-				// what hits tt.wantErr.
-				resolver := &erroringTenantResolver{err: tt.wantErr, succeedID: "acme"}
+				// The entity spawns under an explicit ego.WithTenant
+				// declaration (TENANT-003 T4, corrected): spawn never calls
+				// Resolve, so SendCommand's own resolve is what hits
+				// tt.wantErr.
+				resolver := &erroringTenantResolver{err: tt.wantErr}
 				engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 				require.NoError(t, engine.Start(ctx))
 
 				entityID := uuid.NewString()
 				probe := newTenancyProbeEventSourcedBehavior(entityID)
-				require.NoError(t, engine.Entity(ctx, probe))
+				require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 				require.ErrorIs(t, err, tt.wantErr)
@@ -411,12 +414,11 @@ func TestSendCommandTenantResolution(t *testing.T) {
 			tenantIDs[i] = tenancy.TenantID(fmt.Sprintf("tenant-%d", i))
 
 			probes[i] = newTenancyProbeEventSourcedBehavior(entityIDs[i])
-			// TENANT-003 T4: Engine.Entity now resolves and binds the
-			// tenant at spawn too, so each entity is spawned under its own
-			// owning tenant's ctx here — the same tenant every SendCommand
-			// call below targets it with.
-			spawnCtx := context.WithValue(ctx, perCallerTenantKey{}, string(tenantIDs[i]))
-			require.NoError(t, engine.Entity(spawnCtx, probes[i]))
+			// TENANT-003 T4 (corrected): Engine.Entity never calls Resolve
+			// at spawn, so each entity declares its owning tenant explicitly
+			// via ego.WithTenant — the same tenant every SendCommand call
+			// below targets it with.
+			require.NoError(t, engine.Entity(ctx, probes[i], WithTenant(tenantIDs[i])))
 		}
 
 		var wg sync.WaitGroup
@@ -491,7 +493,7 @@ func TestSendCommandSingleTenantZeroPlumbing(t *testing.T) {
 // SendCommand call with the exact same plain ctx; only the registered
 // resolver differs.
 func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
-	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
+	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver, spawnOpts ...SpawnOption) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
 		t.Helper()
 		ctx := context.Background()
 		store := testkit.NewEventsStore()
@@ -503,7 +505,7 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, spawnOpts...))
 
 		return engine, entityID, probe
 	}
@@ -513,6 +515,10 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		singleTenant, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
 		require.NoError(t, err)
 
+		// No ego.WithTenant here: acceptance criterion 6 requires
+		// single-tenant mode to need no tenant plumbing invented by the
+		// application. tenancy.WithSingleTenant's FixedTenantResolver
+		// capability is what lets spawn determine the tenant without one.
 		engine, entityID, probe := newEngineWithResolver(t, singleTenant)
 		_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
@@ -531,11 +537,17 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		ctx := context.Background()
 		multiTenant := &countingTenantResolver{id: "acme"}
 
-		engine, entityID, probe := newEngineWithResolver(t, multiTenant)
+		// An ordinary multi-tenant resolver has no fixed tenant, so the
+		// application must declare it explicitly via ego.WithTenant.
+		engine, entityID, probe := newEngineWithResolver(t, multiTenant, WithTenant(tenancy.TenantID("acme")))
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
 
-		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step")
+		// This is the regression guard for the defect CI caught: an earlier
+		// design called Resolve at spawn too, so this resolver was invoked
+		// twice (spawn + SendCommand) for this exact sequence instead of
+		// once.
+		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step, exactly once")
 		assert.EqualValues(t, 1, probe.invocationCount())
 		tc, ok := probe.observedTenant()
 		require.True(t, ok)

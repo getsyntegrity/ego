@@ -166,6 +166,79 @@ wiring possible without a package reshuffle.
 None of these are resolved by `persistence/scope.go` today; the type only
 supplies the vocabulary those decisions will be expressed in.
 
+## CI correction: the tenant is declared at spawn, never resolved there
+
+**What shipped first, and what was wrong with it.** The first cut of T4
+made `Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` call
+`engine.tenantResolver.Resolve(ctx)` at spawn time (`resolveSpawnTenantScope`),
+so the spawned actor's `persistence.Scope` could be bound before recovery.
+That directly violates this repository's own normative
+`openspec/specs/tenancy-core/spec.md` requirement, **Resolve-Once,
+Propagate-After**: `TenantResolver` MUST be invoked exactly once, at the
+trust boundary, never at spawn. CI caught it, not a manual review:
+`TestSendCommandResolverSwapIdenticalSequence`'s multi-tenant subtest
+asserted the resolver is invoked exactly once across one `engine.Entity`
+call plus one `SendCommand` call, and observed two. A second real failure,
+`TestSagaFailsClosed`, surfaced a related but independent gap in that same
+test: it spawned its target entity and saga directly through
+`actorSystem.Spawn`, bypassing `Engine.Entity`/`Engine.Saga` entirely, and
+never supplied the per-spawn `extensions.EntityTenantScope` dependency —
+so once tenancy is active, PreStart's own fail-closed guard
+(`ErrEntityTenantScopeMissing`) now blocks the spawn before the test ever
+reaches the saga-dispatch gate it was written to prove.
+
+**The fix.** `Engine.Entity`/`DurableStateEntity`/`Saga` no longer call
+`Resolve` at spawn at all. Instead:
+
+- The application declares an entity's tenant at spawn with a new
+  functional `SpawnOption`, `ego.WithTenant(id tenancy.TenantID)`
+  (`spawn_config.go`). This is the correct owner of that decision: the
+  application already knows which tenant a given entity/durable-state
+  entity/saga belongs to (e.g. it just read the tenant off an
+  authenticated request that is now creating that entity) — the engine
+  has no business inferring it by calling the resolver a second time.
+- `tenancy.WithSingleTenant`'s returned resolver additionally implements a
+  small new capability interface, `tenancy.FixedTenantResolver`
+  (`FixedTenant() (TenantID, bool)`), so a single-tenant deployment can
+  still spawn without ever passing `WithTenant` — reading a statically
+  known tenant off a resolver is not the same operation as invoking
+  `Resolve`, and doing so costs nothing. This preserves issue #92's
+  acceptance criterion 6 ("single-tenant mode keeps working without
+  tenant plumbing invented by the application"), which the earlier design
+  never put at risk in the first place, but which the interface is what
+  makes possible without ever calling `Resolve` at spawn.
+- `engine.go`'s `spawnTenantScope(config *spawnConfig)` (renamed from
+  `resolveSpawnTenantScope`, and no longer takes a `ctx`) determines the
+  spawn's tenant purely from these two non-resolving sources, in order:
+  `config.tenantID` (set by `WithTenant`), then the registered resolver's
+  `FixedTenant()` when it implements `tenancy.FixedTenantResolver` and
+  reports one. If neither yields a tenant, the spawn fails closed with the
+  new `ErrSpawnTenantUndetermined` — never a silent fall-through to
+  `persistence.Unscoped()`, which would defeat the isolation this ticket
+  exists to enforce.
+- `ErrAdministrativeScopeEntitySpawn` is removed: it existed only to name
+  the outcome of resolving an administrative `tenancy.TenantContext` at
+  spawn, and spawn no longer resolves anything. An administrative-only
+  resolver (one with no fixed tenant) now simply falls into the same
+  `ErrSpawnTenantUndetermined` fail-closed path as any other resolver with
+  no fixed tenant and no `WithTenant` — a coarser but still fail-closed
+  outcome; TENANT-008 remains the ticket that would give administrative
+  entity/saga access its own, dedicated shape.
+- `Engine.Saga` gained a trailing `opts ...SpawnOption` parameter — an
+  additive, non-breaking signature change — purely as `WithTenant`'s
+  carrier; a saga still hardcodes its own supervision/placement/relocation
+  behavior, so no other `SpawnOption` has any effect on it.
+
+**What did not change.** `Dispatch`, `SagaStatus`, and `EraseEntity` are
+untouched: they are the actual command/query/administrative trust
+boundaries, and each already called `Resolve` exactly once, there, before
+this correction and after it. The actor side —
+`EventSourcedActor`/`DurableStateActor`/`SagaActor`'s `resolveScope`,
+`PreStart`'s ordering, and the `EntityTenantScope` dependency type itself
+— is also untouched: it never called `Resolve`, and it still just reads
+the same per-spawn dependency, now populated from `WithTenant`/
+`FixedTenant()` instead of from a spawn-time `Resolve` call.
+
 ## Known limitation: a shared entity id still maps to one actor, across tenants
 
 T4 binds every `EventSourcedActor`, `DurableStateActor`, and `SagaActor` to
