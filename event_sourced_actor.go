@@ -456,7 +456,8 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 		}
 	}
 
-	latestEvent, err := entity.eventsStore.GetLatestEvent(ctx, entity.persistenceID)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	latestEvent, err := entity.eventsStore.GetLatestEvent(ctx, persistence.Unscoped(), entity.persistenceID)
 	if err != nil {
 		return fmt.Errorf("failed to get latest event: %w", err)
 	}
@@ -505,7 +506,8 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 // together with the sequence number to replay from. When no snapshot exists the
 // initial state and a replayFrom of 1 are returned unchanged.
 func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initial State) (State, uint64, error) {
-	snapshot, err := entity.snapshotStore.GetLatestSnapshot(ctx, entity.persistenceID)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	snapshot, err := entity.snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), entity.persistenceID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to load snapshot: %w", err)
 	}
@@ -548,7 +550,8 @@ func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initia
 // replayEvents applies persisted events to the given state in sequence order
 // and returns the resulting state.
 func (entity *EventSourcedActor) replayEvents(ctx context.Context, state State, from, to uint64) (State, error) {
-	events, err := entity.eventsStore.ReplayEvents(ctx, entity.persistenceID, from, to, to-from+1)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	events, err := entity.eventsStore.ReplayEvents(ctx, persistence.Unscoped(), entity.persistenceID, from, to, to-from+1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to replay events: %w", err)
 	}

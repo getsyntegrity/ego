@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // ErrConcurrencyConflict is the sentinel a ConflictError matches via
@@ -45,7 +47,7 @@ var ErrPreconditionScope = errors.New("persistence: conditional write spans mult
 
 // conflictGrammarPrefix is the fixed, parseable prefix of ConflictError's
 // canonical wire message. ParseConflictError is its exact inverse.
-const conflictGrammarPrefix = "ego: concurrency conflict: persistence_id="
+const conflictGrammarPrefix = "ego: concurrency conflict: scope="
 
 // ConflictOption configures a ConflictError at construction time.
 type ConflictOption func(*ConflictError)
@@ -63,24 +65,35 @@ func WithActualRevision(revision uint64) ConflictOption {
 
 // ConflictError reports that a conditional write's WritePrecondition did not
 // hold against the persisted revision. It is identifiable both via
-// errors.As (to recover persistence identity and the declared precondition)
-// and via errors.Is(err, ErrConcurrencyConflict).
+// errors.As (to recover persistence identity, scope, and the declared
+// precondition) and via errors.Is(err, ErrConcurrencyConflict).
 type ConflictError struct {
+	scope          Scope
 	persistenceID  string
 	expected       WritePrecondition
 	actualRevision uint64
 	hasActual      bool
 }
 
-// NewConflictError builds a ConflictError for persistenceID, recording the
-// precondition that failed to hold. Apply WithActualRevision only when the
-// actual StorageRevision was cheaply observed at the failed compare.
-func NewConflictError(persistenceID string, expected WritePrecondition, opts ...ConflictOption) *ConflictError {
-	e := &ConflictError{persistenceID: persistenceID, expected: expected}
+// NewConflictError builds a ConflictError for (scope, persistenceID),
+// recording the precondition that failed to hold. scope is a required
+// parameter — following persistence.Scope's own philosophy (see its doc
+// comment) of forcing every caller to state it explicitly rather than
+// silently falling through to a meaningful default — so that a conflict is
+// always attributable to the tenant boundary the failed write targeted.
+// Apply WithActualRevision only when the actual StorageRevision was cheaply
+// observed at the failed compare.
+func NewConflictError(scope Scope, persistenceID string, expected WritePrecondition, opts ...ConflictOption) *ConflictError {
+	e := &ConflictError{scope: scope, persistenceID: persistenceID, expected: expected}
 	for _, opt := range opts {
 		opt(e)
 	}
 	return e
+}
+
+// Scope returns the tenant boundary the failed conditional write targeted.
+func (e *ConflictError) Scope() Scope {
+	return e.scope
 }
 
 // PersistenceID returns the identity of the aggregate the conditional write
@@ -109,15 +122,18 @@ func (e *ConflictError) Is(target error) bool {
 
 // Error renders e using the canonical conflict grammar:
 //
-//	ego: concurrency conflict: persistence_id=<id>, expected=<unconditional|genesis|N>, actual=<M|unknown>
+//	ego: concurrency conflict: scope=<unscoped|tenant:<id>>, persistence_id=<id>, expected=<unconditional|genesis|N>, actual=<M|unknown>
 //
-// ParseConflictError is its exact inverse.
+// scope is rendered via Scope.String(), which is documented as a
+// diagnostic-only rendering (see persistence.Scope). That is exactly what
+// this use is: a human/log-readable error message, never a storage or cache
+// key. ParseConflictError is its exact inverse.
 func (e *ConflictError) Error() string {
 	actual := "unknown"
 	if e.hasActual {
 		actual = strconv.FormatUint(e.actualRevision, 10)
 	}
-	return fmt.Sprintf("%s%s, expected=%s, actual=%s", conflictGrammarPrefix, e.persistenceID, e.expected.String(), actual)
+	return fmt.Sprintf("%s%s, persistence_id=%s, expected=%s, actual=%s", conflictGrammarPrefix, e.scope.String(), e.persistenceID, e.expected.String(), actual)
 }
 
 // ParseConflictError parses message produced by (*ConflictError).Error(),
@@ -125,8 +141,26 @@ func (e *ConflictError) Error() string {
 // inverse of Error(): for any *ConflictError e, ParseConflictError(e.Error())
 // reconstructs an equivalent error. It returns false for any message that
 // does not match the canonical grammar.
+//
+// Reconstructing scope from its rendered text mirrors this function's
+// existing handling of the expected precondition token (parsePreconditionToken):
+// it is a best-effort textual replay confined to wire-message diagnostics
+// (e.g. recovering a *ConflictError cause from an egopb.CommandReply's error
+// message), never used to build a storage or cache key. It is not a
+// violation of persistence.Scope's "never key on String()" rule, which
+// governs store record identity, not error-message reconstruction.
 func ParseConflictError(message string) (*ConflictError, bool) {
 	rest, ok := strings.CutPrefix(message, conflictGrammarPrefix)
+	if !ok {
+		return nil, false
+	}
+
+	scopePart, rest, ok := strings.Cut(rest, ", persistence_id=")
+	if !ok {
+		return nil, false
+	}
+
+	scope, ok := parseScopeToken(scopePart)
 	if !ok {
 		return nil, false
 	}
@@ -155,7 +189,26 @@ func ParseConflictError(message string) (*ConflictError, bool) {
 		opts = append(opts, WithActualRevision(actual))
 	}
 
-	return NewConflictError(idPart, expected, opts...), true
+	return NewConflictError(scope, idPart, expected, opts...), true
+}
+
+// parseScopeToken is the exact inverse of Scope.String() for the tokens
+// that grammar can produce ("unscoped", "tenant:<id>"). It never produces
+// the invalid zero value of Scope; a token it cannot map to a valid Scope
+// (including "unspecified", Scope's zero-value rendering, and a "tenant:"
+// token whose id fails tenancy validation) is rejected.
+func parseScopeToken(token string) (Scope, bool) {
+	if token == Unscoped().String() {
+		return Unscoped(), true
+	}
+	if tenantID, ok := strings.CutPrefix(token, "tenant:"); ok {
+		scope, err := NewTenantScope(tenancy.TenantID(tenantID))
+		if err != nil {
+			return Scope{}, false
+		}
+		return scope, true
+	}
+	return Scope{}, false
 }
 
 // parsePreconditionToken is the exact inverse of WritePrecondition.String()

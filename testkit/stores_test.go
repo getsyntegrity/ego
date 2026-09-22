@@ -103,22 +103,22 @@ func TestEventStore_WriteAndReplayEvents(t *testing.T) {
 		{PersistenceId: "entity-1", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
 
-	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
 	t.Run("replay all events", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, "entity-1", 1, 3, 10)
+		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "entity-1", 1, 3, 10)
 		require.NoError(t, err)
 		assert.Len(t, replayed, 3)
 	})
 
 	t.Run("replay with limit", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, "entity-1", 1, 3, 2)
+		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "entity-1", 1, 3, 2)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, len(replayed), 2)
 	})
 
 	t.Run("replay non-existent entity", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, "non-existent", 1, 10, 100)
+		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "non-existent", 1, 10, 100)
 		require.NoError(t, err)
 		assert.Empty(t, replayed)
 	})
@@ -132,7 +132,7 @@ func TestEventStore_GetLatestEvent(t *testing.T) {
 	require.NoError(t, store.Connect(ctx))
 
 	t.Run("no events returns nil", func(t *testing.T) {
-		event, err := store.GetLatestEvent(ctx, "non-existent")
+		event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "non-existent")
 		require.NoError(t, err)
 		assert.Nil(t, event)
 	})
@@ -144,9 +144,9 @@ func TestEventStore_GetLatestEvent(t *testing.T) {
 			{PersistenceId: "latest-test", SequenceNumber: 5, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 			{PersistenceId: "latest-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
-		latest, err := store.GetLatestEvent(ctx, "latest-test")
+		latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "latest-test")
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 5, latest.GetSequenceNumber())
@@ -166,12 +166,12 @@ func TestEventStore_DeleteEvents(t *testing.T) {
 		{PersistenceId: "del-test", SequenceNumber: 2, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		{PersistenceId: "del-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
-	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
-	err := store.DeleteEvents(ctx, "del-test", 2)
+	err := store.DeleteEvents(ctx, persistence.Unscoped(), "del-test", 2)
 	require.NoError(t, err)
 
-	replayed, err := store.ReplayEvents(ctx, "del-test", 1, 3, 10)
+	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "del-test", 1, 3, 10)
 	require.NoError(t, err)
 	assert.Len(t, replayed, 1)
 	assert.EqualValues(t, 3, replayed[0].GetSequenceNumber())
@@ -185,7 +185,7 @@ func TestEventStore_PersistenceIDs(t *testing.T) {
 	require.NoError(t, store.Connect(ctx))
 
 	t.Run("empty store", func(t *testing.T) {
-		ids, nextToken, err := store.PersistenceIDs(ctx, 10, "")
+		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, "")
 		require.NoError(t, err)
 		assert.Empty(t, ids)
 		assert.Empty(t, nextToken)
@@ -198,14 +198,14 @@ func TestEventStore_PersistenceIDs(t *testing.T) {
 			{PersistenceId: "pid-b", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 			{PersistenceId: "pid-c", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
-		ids, nextToken, err := store.PersistenceIDs(ctx, 2, "")
+		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 2, "")
 		require.NoError(t, err)
 		assert.Len(t, ids, 2)
 		assert.NotEmpty(t, nextToken)
 
-		ids2, _, err := store.PersistenceIDs(ctx, 10, nextToken)
+		ids2, _, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, nextToken)
 		require.NoError(t, err)
 		assert.NotEmpty(t, ids2)
 	})
@@ -233,7 +233,7 @@ func TestEventStore_GetShardEvents(t *testing.T) {
 			{PersistenceId: "shard-test-2", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 1, Shard: 5},
 			{PersistenceId: "shard-test-3", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 2, Shard: 6},
 		}
-		require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
 		result, nextOffset, err := store.GetShardEvents(ctx, 5, 0, 10)
 		require.NoError(t, err)
@@ -255,7 +255,7 @@ func TestEventStore_ShardOffsets(t *testing.T) {
 		{PersistenceId: "sn-2", SequenceNumber: 1, Event: anyEvent, Timestamp: 300, Shard: 2},
 		{PersistenceId: "sn-3", SequenceNumber: 1, Event: anyEvent, Timestamp: 200, Shard: 1},
 	}
-	require.NoError(t, store.WriteEvents(ctx, events, persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
 
 	offsets, err := store.ShardOffsets(ctx)
 	require.NoError(t, err)
@@ -328,8 +328,8 @@ func TestDurableStore_WriteAndGetState(t *testing.T) {
 	}
 
 	t.Run("write and read state", func(t *testing.T) {
-		require.NoError(t, store.WriteState(ctx, state, persistence.Unconditional()))
-		got, err := store.GetLatestState(ctx, "ds-entity-1")
+		require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), state, persistence.Unconditional()))
+		got, err := store.GetLatestState(ctx, persistence.Unscoped(), "ds-entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Equal(t, state.GetPersistenceId(), got.GetPersistenceId())
@@ -337,7 +337,7 @@ func TestDurableStore_WriteAndGetState(t *testing.T) {
 	})
 
 	t.Run("get non-existent state", func(t *testing.T) {
-		got, err := store.GetLatestState(ctx, "non-existent")
+		got, err := store.GetLatestState(ctx, persistence.Unscoped(), "non-existent")
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -350,7 +350,7 @@ func TestDurableStore_WriteState_NotConnected(t *testing.T) {
 	store := NewDurableStore()
 	anyState, _ := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 100})
 	state := &egopb.DurableState{PersistenceId: "entity-1", ResultingState: anyState, VersionNumber: 1}
-	err := store.WriteState(ctx, state, persistence.Unconditional())
+	err := store.WriteState(ctx, persistence.Unscoped(), state, persistence.Unconditional())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
@@ -358,7 +358,7 @@ func TestDurableStore_WriteState_NotConnected(t *testing.T) {
 func TestDurableStore_GetLatestState_NotConnected(t *testing.T) {
 	ctx := context.TODO()
 	store := NewDurableStore()
-	got, err := store.GetLatestState(ctx, "entity-1")
+	got, err := store.GetLatestState(ctx, persistence.Unscoped(), "entity-1")
 	require.Error(t, err)
 	assert.Nil(t, got)
 }
@@ -508,18 +508,18 @@ func TestSnapshotStore_WriteAndGetSnapshot(t *testing.T) {
 	}
 
 	for _, snap := range snapshots {
-		require.NoError(t, store.WriteSnapshot(ctx, snap))
+		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snap))
 	}
 
 	t.Run("returns latest snapshot", func(t *testing.T) {
-		got, err := store.GetLatestSnapshot(ctx, "snap-entity-1")
+		got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "snap-entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.EqualValues(t, 5, got.GetSequenceNumber())
 	})
 
 	t.Run("no snapshot returns nil", func(t *testing.T) {
-		got, err := store.GetLatestSnapshot(ctx, "non-existent")
+		got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "non-existent")
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -539,12 +539,12 @@ func TestSnapshotStore_DeleteSnapshots(t *testing.T) {
 		{PersistenceId: "del-snap", SequenceNumber: 3, State: anyState},
 	}
 	for _, snap := range snapshots {
-		require.NoError(t, store.WriteSnapshot(ctx, snap))
+		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snap))
 	}
 
-	require.NoError(t, store.DeleteSnapshots(ctx, "del-snap", 2))
+	require.NoError(t, store.DeleteSnapshots(ctx, persistence.Unscoped(), "del-snap", 2))
 
-	got, err := store.GetLatestSnapshot(ctx, "del-snap")
+	got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "del-snap")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.EqualValues(t, 3, got.GetSequenceNumber())

@@ -280,7 +280,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		assert.EqualValues(t, 1, resolver.callCount())
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
 
-		latest, err := store.GetLatestEvent(ctx, entityID)
+		latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when Resolve fails")
 
@@ -318,7 +318,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		assert.EqualValues(t, 1, resolver.callCount())
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
 
-		latest, err := store.GetLatestEvent(ctx, entityID)
+		latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the resolved TenantContext is invalid")
 
@@ -352,7 +352,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Zero(t, probe.invocationCount())
 
-				latest, err := store.GetLatestEvent(ctx, entityID)
+				latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 				require.NoError(t, err)
 				assert.Nil(t, latest)
 
@@ -821,7 +821,7 @@ func TestEngineProjectionsOwnHandlers(t *testing.T) {
 
 	event, err := anypb.New(&testpb.AccountCredited{})
 	require.NoError(t, err)
-	require.NoError(t, store.WriteEvents(ctx, []*egopb.Event{{
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{{
 		PersistenceId:  uuid.NewString(),
 		SequenceNumber: 1,
 		Event:          event,

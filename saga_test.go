@@ -43,6 +43,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
@@ -72,7 +73,7 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(nil, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -135,7 +136,7 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(nil, assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -174,8 +175,8 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, sagaID, uint64(1), uint64(3), uint64(3)).Return(nil, assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(3), uint64(3)).Return(nil, assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -217,8 +218,8 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{badEvent}, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{badEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -261,8 +262,8 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{replayedEvent}, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{replayedEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -310,8 +311,8 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, sagaID, uint64(1), uint64(2), uint64(2)).Return([]*egopb.Event{replayedEvent}, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(2), uint64(2)).Return([]*egopb.Event{replayedEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -998,7 +999,7 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(nil, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -1064,8 +1065,8 @@ func TestSagaActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, sagaID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -2050,7 +2051,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		assert.Zero(t, targetProbe.invocationCount(),
 			"HandleCommand must never run for a command the saga could not have formed for a rejected event")
 
-		latest, err := eventStore.GetLatestEvent(ctx, targetID)
+		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), targetID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the saga's command")
 

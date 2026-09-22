@@ -77,19 +77,19 @@ func TestShouldStayAliveAfterConflict(t *testing.T) {
 
 	t.Run("actual revision matches in-memory counter: provably in sync, stays alive", func(t *testing.T) {
 		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
 		assert.True(t, entity.shouldStayAliveAfterConflict(conflictErr))
 	})
 
 	t.Run("actual revision diverges from in-memory counter: not provably in sync, shuts down", func(t *testing.T) {
 		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
 		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
 	})
 
 	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
 		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
 		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
 	})
 }
@@ -297,11 +297,11 @@ type preconditionSpyEventsStore struct {
 	preconditions []persistence.WritePrecondition
 }
 
-func (s *preconditionSpyEventsStore) WriteEvents(ctx context.Context, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+func (s *preconditionSpyEventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
 	s.mu.Lock()
 	s.preconditions = append(s.preconditions, precondition)
 	s.mu.Unlock()
-	return s.EventStore.WriteEvents(ctx, events, precondition)
+	return s.EventStore.WriteEvents(ctx, scope, events, precondition)
 }
 
 // ES-propagation: proves the D4 ExpectedRevision -> WritePrecondition mapping

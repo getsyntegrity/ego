@@ -215,7 +215,8 @@ func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 // recoverFromStore reset the persistent actor to the latest state in case there is one
 // this is vital when the entity actor is restarting.
 func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
-	durableState, err := entity.stateStore.GetLatestState(ctx, entity.persistenceID)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	durableState, err := entity.stateStore.GetLatestState(ctx, persistence.Unscoped(), entity.persistenceID)
 	if err != nil {
 		return fmt.Errorf("failed to get the latest state: %w", err)
 	}
@@ -609,7 +610,8 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 		durableState.TenantMetadata = tenancy.MarshalMetadata(candidateTenant)
 	}
 
-	if err := entity.stateStore.WriteState(ctx, durableState, precondition); err != nil {
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	if err := entity.stateStore.WriteState(ctx, persistence.Unscoped(), durableState, precondition); err != nil {
 		return err
 	}
 
@@ -648,7 +650,8 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		durableState.TenantMetadata = tenancy.MarshalMetadata(entity.actorTenant)
 	}
 
-	if err := entity.stateStore.WriteState(ctx, durableState, persistence.Unconditional()); err != nil {
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	if err := entity.stateStore.WriteState(ctx, persistence.Unscoped(), durableState, persistence.Unconditional()); err != nil {
 		return err
 	}
 

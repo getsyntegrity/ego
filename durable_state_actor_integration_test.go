@@ -66,7 +66,7 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 	require.Equal(t, command.OutcomeSuccess, created.Outcome())
 	require.EqualValues(t, 1, created.Revision())
 
-	durable, err := store.GetLatestState(ctx, entityID)
+	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	require.EqualValues(t, 1, durable.GetVersionNumber())
@@ -89,7 +89,7 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 	assert.EqualValues(t, 1, actual)
 
 	// The store must be unchanged by the rejected write.
-	durable, err = store.GetLatestState(ctx, entityID)
+	durable, err = store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	assert.EqualValues(t, 1, durable.GetVersionNumber())
@@ -107,7 +107,7 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 750, acct.GetAccountBalance())
 
-	durable, err = store.GetLatestState(ctx, entityID)
+	durable, err = store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	assert.EqualValues(t, 2, durable.GetVersionNumber())

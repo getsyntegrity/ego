@@ -107,7 +107,8 @@ func (m *Migrator) Run(ctx context.Context) error {
 	)
 
 	for {
-		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, m.pageSize, pageToken)
+		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, persistence.Unscoped(), m.pageSize, pageToken)
 		if err != nil {
 			return fmt.Errorf("migration: failed to list persistence IDs: %w", err)
 		}
@@ -134,7 +135,8 @@ func (m *Migrator) Run(ctx context.Context) error {
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
 	// Use a safe large limit that won't overflow when cast to int.
 	const maxLimit = uint64(1<<63 - 1)
-	events, err := m.eventsStore.ReplayEvents(ctx, persistenceID, 1, maxLimit, maxLimit)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	events, err := m.eventsStore.ReplayEvents(ctx, persistence.Unscoped(), persistenceID, 1, maxLimit, maxLimit)
 	if err != nil {
 		return err
 	}
@@ -159,7 +161,8 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return nil
 	}
 
-	if err := m.snapshotStore.WriteSnapshot(ctx, bestSnapshot); err != nil {
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	if err := m.snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), bestSnapshot); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 

@@ -224,7 +224,8 @@ func (s *SagaActor) recover(ctx context.Context) error {
 	s.currentState = s.behavior.InitialState()
 	s.status = SagaRunning
 
-	latestEvent, err := s.eventsStore.GetLatestEvent(ctx, s.sagaID)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	latestEvent, err := s.eventsStore.GetLatestEvent(ctx, persistence.Unscoped(), s.sagaID)
 	if err != nil {
 		return fmt.Errorf("failed to get latest saga event: %w", err)
 	}
@@ -234,7 +235,8 @@ func (s *SagaActor) recover(ctx context.Context) error {
 	}
 
 	latestSeqNr := latestEvent.GetSequenceNumber()
-	events, err := s.eventsStore.ReplayEvents(ctx, s.sagaID, 1, latestSeqNr, latestSeqNr)
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	events, err := s.eventsStore.ReplayEvents(ctx, persistence.Unscoped(), s.sagaID, 1, latestSeqNr, latestSeqNr)
 	if err != nil {
 		return fmt.Errorf("failed to replay saga events: %w", err)
 	}
@@ -579,7 +581,8 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 		nextState = newState
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, envelopes, persistence.Unconditional()); err != nil {
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	if err := s.eventsStore.WriteEvents(ctx, persistence.Unscoped(), envelopes, persistence.Unconditional()); err != nil {
 		return err
 	}
 
@@ -616,7 +619,8 @@ func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantC
 		TenantMetadata: tenancy.MarshalMetadata(tc),
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, []*egopb.Event{envelope}, persistence.Unconditional()); err != nil {
+	// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+	if err := s.eventsStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{envelope}, persistence.Unconditional()); err != nil {
 		return err
 	}
 

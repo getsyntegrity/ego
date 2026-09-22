@@ -32,13 +32,13 @@ import (
 )
 
 func TestConflictErrorIdentifiableViaErrorsIs(t *testing.T) {
-	err := persistence.NewConflictError("agg-1", persistence.ExpectRevision(3))
+	err := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3))
 
 	assert.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
 }
 
 func TestConflictErrorIdentifiableViaErrorsAs(t *testing.T) {
-	var err error = persistence.NewConflictError("agg-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
+	var err error = persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 
 	var conflict *persistence.ConflictError
 	require.True(t, errors.As(err, &conflict))
@@ -51,7 +51,7 @@ func TestConflictErrorIdentifiableViaErrorsAs(t *testing.T) {
 }
 
 func TestConflictErrorWrappedIsStillIdentifiable(t *testing.T) {
-	err := persistence.NewConflictError("agg-1", persistence.ExpectGenesis())
+	err := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectGenesis())
 	wrapped := errors.Join(errors.New("write failed"), err)
 
 	assert.ErrorIs(t, wrapped, persistence.ErrConcurrencyConflict)
@@ -62,32 +62,51 @@ func TestConflictErrorWrappedIsStillIdentifiable(t *testing.T) {
 }
 
 func TestConflictErrorActualRevisionUnknownWhenNotSupplied(t *testing.T) {
-	err := persistence.NewConflictError("agg-1", persistence.ExpectRevision(3))
+	err := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3))
 
 	_, ok := err.ActualRevision()
 	assert.False(t, ok)
 }
 
+func TestConflictErrorScopeAccessor(t *testing.T) {
+	tenantScope, err := persistence.NewTenantScope("tenant-a")
+	require.NoError(t, err)
+
+	unscopedErr := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3))
+	assert.True(t, unscopedErr.Scope().IsUnscoped())
+
+	tenantErr := persistence.NewConflictError(tenantScope, "agg-1", persistence.ExpectRevision(3))
+	assert.True(t, tenantErr.Scope().Equal(tenantScope))
+}
+
 func TestConflictErrorErrorMessageCanonicalGrammar(t *testing.T) {
+	tenantScope, err := persistence.NewTenantScope("tenant-a")
+	require.NoError(t, err)
+
 	tests := []struct {
 		name     string
 		err      *persistence.ConflictError
 		expected string
 	}{
 		{
-			name:     "unconditional with unknown actual",
-			err:      persistence.NewConflictError("agg-1", persistence.Unconditional()),
-			expected: "ego: concurrency conflict: persistence_id=agg-1, expected=unconditional, actual=unknown",
+			name:     "unscoped, unconditional with unknown actual",
+			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.Unconditional()),
+			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=unknown",
 		},
 		{
-			name:     "genesis with known actual",
-			err:      persistence.NewConflictError("agg-2", persistence.ExpectGenesis(), persistence.WithActualRevision(1)),
-			expected: "ego: concurrency conflict: persistence_id=agg-2, expected=genesis, actual=1",
+			name:     "unscoped, genesis with known actual",
+			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-2", persistence.ExpectGenesis(), persistence.WithActualRevision(1)),
+			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-2, expected=genesis, actual=1",
 		},
 		{
-			name:     "exact revision with known actual",
-			err:      persistence.NewConflictError("agg-3", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
-			expected: "ego: concurrency conflict: persistence_id=agg-3, expected=4, actual=9",
+			name:     "unscoped, exact revision with known actual",
+			err:      persistence.NewConflictError(persistence.Unscoped(), "agg-3", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
+			expected: "ego: concurrency conflict: scope=unscoped, persistence_id=agg-3, expected=4, actual=9",
+		},
+		{
+			name:     "tenant scope, exact revision with known actual",
+			err:      persistence.NewConflictError(tenantScope, "agg-4", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
+			expected: "ego: concurrency conflict: scope=tenant:tenant-a, persistence_id=agg-4, expected=4, actual=9",
 		},
 	}
 
@@ -99,18 +118,23 @@ func TestConflictErrorErrorMessageCanonicalGrammar(t *testing.T) {
 }
 
 func TestParseConflictErrorIsExactInverseOfError(t *testing.T) {
+	tenantScope, err := persistence.NewTenantScope("tenant-a")
+	require.NoError(t, err)
+
 	tests := []*persistence.ConflictError{
-		persistence.NewConflictError("agg-1", persistence.Unconditional()),
-		persistence.NewConflictError("agg-2", persistence.ExpectGenesis()),
-		persistence.NewConflictError("agg-3", persistence.ExpectGenesis(), persistence.WithActualRevision(0)),
-		persistence.NewConflictError("agg-4", persistence.ExpectRevision(4)),
-		persistence.NewConflictError("agg-5", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
+		persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.Unconditional()),
+		persistence.NewConflictError(persistence.Unscoped(), "agg-2", persistence.ExpectGenesis()),
+		persistence.NewConflictError(persistence.Unscoped(), "agg-3", persistence.ExpectGenesis(), persistence.WithActualRevision(0)),
+		persistence.NewConflictError(persistence.Unscoped(), "agg-4", persistence.ExpectRevision(4)),
+		persistence.NewConflictError(persistence.Unscoped(), "agg-5", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
+		persistence.NewConflictError(tenantScope, "agg-6", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
 	}
 
 	for _, original := range tests {
 		t.Run(original.Error(), func(t *testing.T) {
 			parsed, ok := persistence.ParseConflictError(original.Error())
 			require.True(t, ok)
+			assert.True(t, original.Scope().Equal(parsed.Scope()))
 			assert.Equal(t, original.PersistenceID(), parsed.PersistenceID())
 			assert.Equal(t, original.Expected(), parsed.Expected())
 
@@ -129,9 +153,13 @@ func TestParseConflictErrorRejectsMalformedMessages(t *testing.T) {
 		"",
 		"not a conflict message",
 		"ego: concurrency conflict: persistence_id=agg-1",
-		"ego: concurrency conflict: persistence_id=agg-1, expected=unconditional",
-		"ego: concurrency conflict: persistence_id=agg-1, expected=bogus, actual=unknown",
-		"ego: concurrency conflict: persistence_id=agg-1, expected=unconditional, actual=not-a-number",
+		"ego: concurrency conflict: scope=unscoped",
+		"ego: concurrency conflict: scope=unspecified, persistence_id=agg-1, expected=unconditional, actual=unknown",
+		"ego: concurrency conflict: scope=tenant:, persistence_id=agg-1, expected=unconditional, actual=unknown",
+		"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1",
+		"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional",
+		"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=bogus, actual=unknown",
+		"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=not-a-number",
 	}
 
 	for _, msg := range tests {
@@ -143,7 +171,7 @@ func TestParseConflictErrorRejectsMalformedMessages(t *testing.T) {
 }
 
 func TestConflictErrorDoesNotMatchUnrelatedSentinel(t *testing.T) {
-	err := persistence.NewConflictError("agg-1", persistence.ExpectRevision(3))
+	err := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3))
 
 	assert.NotErrorIs(t, err, persistence.ErrInvalidPrecondition)
 	assert.NotErrorIs(t, err, persistence.ErrPreconditionScope)

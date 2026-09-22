@@ -44,6 +44,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
@@ -385,7 +386,7 @@ func TestDurableStateBehavior(t *testing.T) {
 
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, behavior.ID()).Return(nil, assert.AnError)
+		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(nil, assert.AnError)
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
@@ -434,7 +435,7 @@ func TestDurableStateBehavior(t *testing.T) {
 		}
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, behavior.ID()).Return(latestState, nil)
+		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(latestState, nil)
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
@@ -758,7 +759,7 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 
 		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no state may be persisted when the gate blocks the command")
 
@@ -872,7 +873,7 @@ func TestDurableStateActorTenancyWritePath(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, tenant, observed, "HandleCommand must observe the exact TenantContext attached at the trust boundary")
 
-	latest, err := durableStore.GetLatestState(ctx, persistenceID)
+	latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest, "the state must be persisted once the tenant is confirmed present")
 

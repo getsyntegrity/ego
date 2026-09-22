@@ -537,7 +537,7 @@ func TestRunner(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, eventsStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, eventsStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 		require.True(t, runner.running.Load())
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
@@ -606,7 +606,7 @@ func TestRunner(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 		require.True(t, runner.running.Load())
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
@@ -670,7 +670,7 @@ func TestRunner(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 		require.True(t, runner.running.Load())
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
@@ -735,7 +735,7 @@ func TestRunner(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 		require.True(t, runner.running.Load())
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
@@ -808,7 +808,7 @@ func TestRunner(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 		require.True(t, runner.running.Load())
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
@@ -1286,7 +1286,7 @@ func TestRunner(t *testing.T) {
 				EncryptionKeyId: keyID,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1337,7 +1337,7 @@ func TestRunner(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1390,7 +1390,7 @@ func TestRunner(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1441,7 +1441,7 @@ func TestRunner(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1495,7 +1495,7 @@ func TestRunner(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1539,7 +1539,7 @@ func TestRunner(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		startOffset := time.Now().Add(-time.Hour)
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
@@ -1657,7 +1657,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1714,7 +1714,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 				Shard:          shardNumber,
 			},
 		}
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
 			withPullInterval(time.Millisecond),
@@ -1902,7 +1902,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 				Shard:          shardNumber,
 			}
 		}
-		require.NoError(t, eventsStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, eventsStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		// mimic what entity actors do after persisting events on this node
 		stream.Publish(eventsTopic, journals[count-1])

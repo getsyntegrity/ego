@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pablogore/ego/v4/command"
+	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
@@ -77,7 +78,7 @@ func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.
 	require.Equal(t, command.OutcomeSuccess, created.Outcome())
 	require.EqualValues(t, 1, created.Revision())
 
-	latest, err := store.GetLatestEvent(ctx, entityID)
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	require.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -88,7 +89,7 @@ func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.
 	require.Equal(t, command.OutcomeSuccess, result.Outcome())
 	assert.EqualValues(t, 2, result.Revision())
 
-	latest, err = store.GetLatestEvent(ctx, entityID)
+	latest, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 2, latest.GetSequenceNumber())
@@ -120,7 +121,7 @@ func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T
 	require.Equal(t, command.OutcomeSuccess, created.Outcome())
 	require.EqualValues(t, 1, created.Revision())
 
-	latest, err := store.GetLatestEvent(ctx, entityID)
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	require.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -136,7 +137,7 @@ func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T
 	assert.Equal(t, command.CodeConcurrencyConflict, code)
 
 	// The store must be unchanged by the rejected write.
-	latest, err = store.GetLatestEvent(ctx, entityID)
+	latest, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -201,7 +202,7 @@ func TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit(t *testi
 	assert.Equal(t, 1, successes)
 	assert.Equal(t, 1, conflicts)
 
-	latest, err := store.GetLatestEvent(ctx, entityID)
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())

@@ -149,7 +149,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("seeds actorTenant from valid persisted metadata", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -180,7 +180,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("fails closed when tenant-aware and persisted metadata is absent", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(nil), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(nil), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -197,7 +197,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("fails closed when tenant-aware and persisted metadata is malformed", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"}), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"}), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -214,7 +214,7 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 	t.Run("legacy mode never seeds actorTenant, even when metadata is present", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -329,7 +329,7 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 		entity := newEntity(false, noTenantContext, durableStore, eventStream)
 		require.NoError(t, entity.persistStateAndPublish(ctx))
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.Empty(t, latest.GetTenantMetadata())
@@ -349,7 +349,7 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 		entity := newEntity(true, tenantA, durableStore, eventStream)
 		require.NoError(t, entity.persistStateAndPublish(ctx))
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		require.NotEmpty(t, latest.GetTenantMetadata())
@@ -384,7 +384,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, behavior.ID()).Return(nil, nil)
+		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(nil, nil)
 
 		eventStream := eventstream.New()
 
@@ -460,7 +460,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 		pause.For(time.Second)
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		require.NotEmpty(t, latest.GetTenantMetadata())
@@ -499,7 +499,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 		pause.For(time.Second)
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest, "legacy mode must flush on PostStop even without ever handling a command")
 		assert.Empty(t, latest.GetTenantMetadata())
@@ -526,7 +526,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 
 		durableStore := new(mocks.StateStore)
 		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, behavior.ID()).Return(latestState, nil)
+		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(latestState, nil)
 
 		eventStream := eventstream.New()
 
@@ -698,7 +698,7 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 	require.True(t, ok, "tenant A's first command must fail HandleCommand")
 	require.EqualValues(t, 1, behavior.callCount())
 
-	latest, err := durableStore.GetLatestState(ctx, persistenceID)
+	latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	assert.Nil(t, latest, "a failed first command must never write a durable record")
 
@@ -728,7 +728,7 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 	pause.For(time.Second)
 
-	latest, err = durableStore.GetLatestState(ctx, persistenceID)
+	latest, err = durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest, "tenant B's committed state must survive PostStop")
 	assert.EqualValues(t, 1, latest.GetVersionNumber())
@@ -788,7 +788,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 	t.Run("recoverFromStore treats it as genesis, not a fail-closed rejection", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(0), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -807,7 +807,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 	t.Run("a committed (version > 0) record still fails closed on missing metadata", func(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(1), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(1), persistence.Unconditional()))
 
 		entity := &DurableStateActor{
 			persistenceID: persistenceID,
@@ -825,7 +825,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 		durableStore := testkit.NewDurableStore()
 		behavior := newTenancyProbeDurableStateBehavior(persistenceID)
 		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, newLegacyRecord(0), persistence.Unconditional()))
+		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(0), persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -861,7 +861,7 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
 		pause.For(time.Second)
 
-		latest, err := durableStore.GetLatestState(ctx, persistenceID)
+		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 1, latest.GetVersionNumber())

@@ -88,7 +88,7 @@ func TestClassifyErrorReplyDeadlineExceeded(t *testing.T) {
 
 func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 	md := newTestMetadata(t)
-	conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
+	conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 	message := conflictErr.Error()
 
 	result, err := classifyErrorReply(md, message)
@@ -140,7 +140,7 @@ func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 // to OutcomeRejected/concurrency_conflict.
 func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 	md := newTestMetadata(t)
-	conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
+	conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 
 	t.Run("unwrapped conflict classifies as concurrency_conflict", func(t *testing.T) {
 		result, err := classifyErrorReply(md, conflictErr.Error())

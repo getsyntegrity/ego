@@ -37,6 +37,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 )
 
 func TestEventsJanitorActor(t *testing.T) {
@@ -47,7 +48,7 @@ func TestEventsJanitorActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(10)).Return(nil)
+		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -92,7 +93,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		// eventsCounter=10, retentionCount=3 => deleteUpTo = 10-3 = 7
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(7)).Return(nil)
+		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(7)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -186,7 +187,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		// eventsCounter=10, snapshotInterval=5 => previousSnapshotSeqNr = 10-5 = 5
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, "entity-1", uint64(5)).Return(nil)
+		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -279,7 +280,7 @@ func TestEventsJanitorActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(10)).Return(assert.AnError)
+		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -325,7 +326,7 @@ func TestEventsJanitorActor(t *testing.T) {
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, "entity-1", uint64(5)).Return(assert.AnError)
+		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -369,11 +370,11 @@ func TestEventsJanitorActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(10)).Return(nil)
+		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, "entity-1", uint64(5)).Return(nil)
+		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),

@@ -58,19 +58,19 @@ func TestProvablyInSyncAfterConflict(t *testing.T) {
 
 	t.Run("actual revision matches in-memory version: provably in sync", func(t *testing.T) {
 		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
 		assert.True(t, entity.provablyInSyncAfterConflict(conflictErr))
 	})
 
 	t.Run("actual revision diverges from in-memory version: not provably in sync", func(t *testing.T) {
 		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
 		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
 	})
 
 	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
 		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError("entity-1", persistence.ExpectRevision(5))
+		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
 		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
 	})
 }
@@ -203,7 +203,7 @@ func TestDurableStateExpectedRevisionExactMatchCommits(t *testing.T) {
 	require.Equal(t, command.OutcomeSuccess, result.Outcome())
 	assert.EqualValues(t, 2, result.Revision())
 
-	durable, err := store.GetLatestState(ctx, entityID)
+	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	assert.EqualValues(t, 2, durable.GetVersionNumber())
@@ -315,7 +315,7 @@ func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T)
 	assert.Equal(t, 1, successes)
 	assert.Equal(t, 1, conflicts)
 
-	durable, err := store.GetLatestState(ctx, entityID)
+	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	assert.EqualValues(t, 1, durable.GetVersionNumber())
@@ -408,7 +408,7 @@ func TestDurableStateNoPartialCommitOnConflict(t *testing.T) {
 	// The rejected write's 999-credit must never have been applied, and the
 	// stored revision must still read 1 — proving both the in-memory state
 	// and the durable record are untouched by the conflicting attempt.
-	durable, err := store.GetLatestState(ctx, entityID)
+	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, durable)
 	assert.EqualValues(t, 1, durable.GetVersionNumber())
@@ -507,7 +507,7 @@ func writeDirectDurableState(ctx context.Context, store *testkit.DurableStore, p
 	if err != nil {
 		return err
 	}
-	return store.WriteState(ctx, &egopb.DurableState{
+	return store.WriteState(ctx, persistence.Unscoped(), &egopb.DurableState{
 		PersistenceId:  persistenceID,
 		VersionNumber:  version,
 		ResultingState: stateAny,

@@ -105,7 +105,7 @@ func writeLegacyEvent(t *testing.T, store *testkit.EventStore, persistenceID str
 	evt := new(egopb.Event)
 	require.NoError(t, proto.Unmarshal(raw, evt))
 
-	require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{evt}, persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{evt}, persistence.Unconditional()))
 }
 
 func TestMigratorRun(t *testing.T) {
@@ -139,7 +139,7 @@ func TestMigratorRun(t *testing.T) {
 		require.NoError(t, migrator.Run(ctx))
 
 		// Verify snapshot was written for entity-1 at sequence 3 (the latest)
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, "entity-1")
+		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, snapshot)
 		assert.Equal(t, "entity-1", snapshot.GetPersistenceId())
@@ -179,7 +179,7 @@ func TestMigratorRun(t *testing.T) {
 		require.NoError(t, migrator.Run(ctx))
 
 		// No snapshot should exist
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, "entity-new")
+		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-new")
 		require.NoError(t, err)
 		assert.Nil(t, snapshot)
 
@@ -210,12 +210,12 @@ func TestMigratorRun(t *testing.T) {
 		)
 		require.NoError(t, migrator.Run(ctx))
 
-		snap1, err := snapshotStore.GetLatestSnapshot(ctx, "e1")
+		snap1, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "e1")
 		require.NoError(t, err)
 		require.NotNil(t, snap1)
 		assert.EqualValues(t, 2, snap1.GetSequenceNumber())
 
-		snap2, err := snapshotStore.GetLatestSnapshot(ctx, "e2")
+		snap2, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "e2")
 		require.NoError(t, err)
 		require.NotNil(t, snap2)
 		assert.EqualValues(t, 1, snap2.GetSequenceNumber())
@@ -247,7 +247,7 @@ func TestMigratorRun(t *testing.T) {
 		require.NoError(t, migrator.Run(ctx))
 		require.NoError(t, migrator.Run(ctx))
 
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, "idem-1")
+		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "idem-1")
 		require.NoError(t, err)
 		require.NotNil(t, snapshot)
 		assert.EqualValues(t, 1, snapshot.GetSequenceNumber())

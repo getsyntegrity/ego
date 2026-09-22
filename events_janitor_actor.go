@@ -107,7 +107,8 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 
 		if deleteUpTo > 0 {
 			if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-				return a.eventsStore.DeleteEvents(ctx.Context(), req.persistenceID, deleteUpTo)
+				// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+				return a.eventsStore.DeleteEvents(ctx.Context(), persistence.Unscoped(), req.persistenceID, deleteUpTo)
 			}); err != nil {
 				a.logger.ErrorContext(ctx.Context(), "failed to delete events for retention policy",
 					"persistence_id", req.persistenceID,
@@ -120,7 +121,8 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 	if req.deleteSnapshotsOnSnapshot && a.snapshotStore != nil && req.eventsCounter > req.snapshotInterval {
 		previousSnapshotSeqNr := req.eventsCounter - req.snapshotInterval
 		if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-			return a.snapshotStore.DeleteSnapshots(ctx.Context(), req.persistenceID, previousSnapshotSeqNr)
+			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+			return a.snapshotStore.DeleteSnapshots(ctx.Context(), persistence.Unscoped(), req.persistenceID, previousSnapshotSeqNr)
 		}); err != nil {
 			a.logger.ErrorContext(ctx.Context(), "failed to delete old snapshots for retention policy",
 				"persistence_id", req.persistenceID,

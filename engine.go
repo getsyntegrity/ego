@@ -1185,18 +1185,21 @@ func (engine *Engine) EraseEntity(ctx context.Context, persistenceID string, ful
 	engine.mutex.RUnlock()
 
 	if full {
+		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
 		// Get the latest event to find the max sequence number
-		latestEvent, err := eventsStore.GetLatestEvent(ctx, persistenceID)
+		latestEvent, err := eventsStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 		if err != nil {
 			return fmt.Errorf("failed to get latest event for erasure: %w", err)
 		}
 		if latestEvent != nil {
-			if err := eventsStore.DeleteEvents(ctx, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+			if err := eventsStore.DeleteEvents(ctx, persistence.Unscoped(), persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete events for erasure: %w", err)
 			}
 		}
 		if snapshotStore != nil && latestEvent != nil {
-			if err := snapshotStore.DeleteSnapshots(ctx, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+			if err := snapshotStore.DeleteSnapshots(ctx, persistence.Unscoped(), persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete snapshots for erasure: %w", err)
 			}
 		}

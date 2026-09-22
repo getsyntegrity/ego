@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/pablogore/ego/v4/command"
+	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
@@ -254,7 +255,7 @@ func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on invalid metadata")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on invalid metadata")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.Nil(t, event, "the store must never be invoked for a command rejected on invalid metadata")
 
@@ -296,7 +297,7 @@ func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a zero-value envelope")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a zero-value envelope")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.Nil(t, event, "the store must never be invoked for a zero-value envelope")
 
@@ -337,7 +338,7 @@ func TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler(t *testing.T
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on an already-expired deadline")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on an already-expired deadline")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.Nil(t, event, "the store must never be invoked for a command rejected on an already-expired deadline")
 
@@ -378,7 +379,7 @@ func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
 	assert.ErrorIs(t, result.Err(), command.ErrTimedOut)
 	assert.Less(t, elapsed, 400*time.Millisecond, "Dispatch must not wait anywhere near the 10s caller timeout when the deadline is 100ms out")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.Nil(t, event, "the actor's post-handler gate must discard the handler's output once the deadline has passed, even though the handler ignored ctx and ran to completion")
 
@@ -811,7 +812,7 @@ func TestEventSourcedActorDirectPathDiscardsHandlerOutputAfterDeadlineExpiry(t *
 	require.True(t, ok)
 	assert.EqualValues(t, 50, acct.GetAccountBalance(), "state must come only from the follow-up command, not the discarded one")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, event)
 	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the follow-up command's event may ever have been written")
@@ -876,7 +877,7 @@ func TestDurableStateActorDiscardsHandlerOutputAfterDeadlineExpiry(t *testing.T)
 	require.True(t, ok)
 	assert.EqualValues(t, 50, acct.GetAccountBalance())
 
-	stored, err := stateStore.GetLatestState(ctx, entityID)
+	stored, err := stateStore.GetLatestState(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.EqualValues(t, 1, stored.GetVersionNumber(), "only the follow-up command's write may ever have reached the store")
@@ -941,7 +942,7 @@ func TestEventSourcedActorBatchPathDoesNotContaminateBatchStateAfterDeadlineExpi
 	require.True(t, ok)
 	assert.EqualValues(t, 50, acct.GetAccountBalance())
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.NotNil(t, event)
 	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the follow-up command's event may ever have reached the batch writer")
@@ -1051,7 +1052,7 @@ func TestEngineDispatchEffectiveDeadlinePrecedence(t *testing.T) {
 		assert.Equal(t, command.OutcomeTimedOut, outcome.result.Outcome())
 
 		close(blocking.release)
-		event, err := store.GetLatestEvent(context.Background(), entityID)
+		event, err := store.GetLatestEvent(context.Background(), persistence.Unscoped(), entityID)
 		require.NoError(t, err)
 		assert.Nil(t, event, "the handler's output must be discarded once released, since the caller timeout already expired")
 	})

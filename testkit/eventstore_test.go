@@ -58,11 +58,11 @@ func TestEventStore_WriteEvents_InvalidPreconditionIsRejected(t *testing.T) {
 	require.NoError(t, store.Connect(ctx))
 
 	var zero persistence.WritePrecondition
-	err := store.WriteEvents(ctx, newAccountEvent(t, "invalid-precondition", 1), zero)
+	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "invalid-precondition", 1), zero)
 
 	require.ErrorIs(t, err, persistence.ErrInvalidPrecondition)
 
-	latest, getErr := store.GetLatestEvent(ctx, "invalid-precondition")
+	latest, getErr := store.GetLatestEvent(ctx, persistence.Unscoped(), "invalid-precondition")
 	require.NoError(t, getErr)
 	assert.Nil(t, latest, "a rejected precondition must not persist anything")
 }
@@ -72,10 +72,10 @@ func TestEventStore_WriteEvents_UnconditionalIsLegacyBehavior(t *testing.T) {
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "legacy", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "legacy", 2), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "legacy", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "legacy", 2), persistence.Unconditional()))
 
-	replayed, err := store.ReplayEvents(ctx, "legacy", 1, 2, 10)
+	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "legacy", 1, 2, 10)
 	require.NoError(t, err)
 	assert.Len(t, replayed, 2)
 }
@@ -85,11 +85,11 @@ func TestEventStore_WriteEvents_ExactRevisionSucceedsWhenCurrent(t *testing.T) {
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "exact-ok", 1), persistence.ExpectGenesis()))
-	err := store.WriteEvents(ctx, newAccountEvent(t, "exact-ok", 2), persistence.ExpectRevision(1))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "exact-ok", 1), persistence.ExpectGenesis()))
+	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "exact-ok", 2), persistence.ExpectRevision(1))
 	require.NoError(t, err)
 
-	latest, err := store.GetLatestEvent(ctx, "exact-ok")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "exact-ok")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 2, latest.GetSequenceNumber())
@@ -100,9 +100,9 @@ func TestEventStore_WriteEvents_StaleRevisionIsConflict(t *testing.T) {
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "stale", 1), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "stale", 1), persistence.ExpectGenesis()))
 
-	err := store.WriteEvents(ctx, newAccountEvent(t, "stale", 2), persistence.ExpectRevision(99))
+	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "stale", 2), persistence.ExpectRevision(99))
 
 	var conflict *persistence.ConflictError
 	require.True(t, errors.As(err, &conflict))
@@ -114,7 +114,7 @@ func TestEventStore_WriteEvents_StaleRevisionIsConflict(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 1, actual)
 
-	latest, err := store.GetLatestEvent(ctx, "stale")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "stale")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber(), "a rejected conditional write must not modify the persisted log")
@@ -125,10 +125,10 @@ func TestEventStore_WriteEvents_GenesisSucceedsOnEmpty(t *testing.T) {
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	err := store.WriteEvents(ctx, newAccountEvent(t, "genesis-ok", 1), persistence.ExpectGenesis())
+	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-ok", 1), persistence.ExpectGenesis())
 	require.NoError(t, err)
 
-	latest, err := store.GetLatestEvent(ctx, "genesis-ok")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "genesis-ok")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -139,9 +139,9 @@ func TestEventStore_WriteEvents_GenesisConflictsOnExisting(t *testing.T) {
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "genesis-taken", 1), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-taken", 1), persistence.ExpectGenesis()))
 
-	err := store.WriteEvents(ctx, newAccountEvent(t, "genesis-taken", 2), persistence.ExpectGenesis())
+	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-taken", 2), persistence.ExpectGenesis())
 
 	var conflict *persistence.ConflictError
 	require.True(t, errors.As(err, &conflict))
@@ -149,7 +149,7 @@ func TestEventStore_WriteEvents_GenesisConflictsOnExisting(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 1, actual)
 
-	latest, err := store.GetLatestEvent(ctx, "genesis-taken")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "genesis-taken")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -172,14 +172,14 @@ func TestEventStore_WriteEvents_DuplicateSequenceNumberOverwritesNotAccumulates(
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
 
-	replayed, err := store.ReplayEvents(ctx, "dup-sn", 1, 10, 100)
+	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn", 1, 10, 100)
 	require.NoError(t, err)
 	assert.Len(t, replayed, 1, "rewriting SequenceNumber 1 must not produce two visible events")
 
-	latest, err := store.GetLatestEvent(ctx, "dup-sn")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "dup-sn")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -190,14 +190,14 @@ func TestEventStore_WriteEvents_DuplicateSequenceNumberWithinConditionalWriteOve
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectGenesis()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectRevision(1)))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectRevision(1)))
 
-	replayed, err := store.ReplayEvents(ctx, "dup-sn-conditional", 1, 10, 100)
+	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn-conditional", 1, 10, 100)
 	require.NoError(t, err)
 	assert.Len(t, replayed, 1, "a conditional rewrite of SequenceNumber 1 must not produce two visible events")
 
-	latest, err := store.GetLatestEvent(ctx, "dup-sn-conditional")
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "dup-sn-conditional")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -208,8 +208,8 @@ func TestEventStore_WriteEvents_DuplicateSequenceNumberDoesNotDuplicateShardEven
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
 
 	shardEvents, _, err := store.GetShardEvents(ctx, 1, 0, 100)
 	require.NoError(t, err)
@@ -226,13 +226,13 @@ func TestEventStore_WriteEvents_DuplicateSequenceNumberThenDeleteEventsLeavesNoR
 	store := NewEventsStore()
 	require.NoError(t, store.Connect(ctx))
 
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, newAccountEvent(t, "dup-sn-delete", 2), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 2), persistence.Unconditional()))
 
-	require.NoError(t, store.DeleteEvents(ctx, "dup-sn-delete", 1))
+	require.NoError(t, store.DeleteEvents(ctx, persistence.Unscoped(), "dup-sn-delete", 1))
 
-	replayed, err := store.ReplayEvents(ctx, "dup-sn-delete", 1, 10, 100)
+	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn-delete", 1, 10, 100)
 	require.NoError(t, err)
 	require.Len(t, replayed, 1, "deleting up to SequenceNumber 1 must leave exactly the surviving event, not a residual duplicate")
 	assert.EqualValues(t, 2, replayed[0].GetSequenceNumber())
@@ -245,9 +245,9 @@ func TestEventStore_WriteEvents_ConditionalBatchMustShareOnePersistenceID(t *tes
 
 	mixed := append(newAccountEvent(t, "batch-a", 1), newAccountEvent(t, "batch-b", 1)...)
 
-	err := store.WriteEvents(ctx, mixed, persistence.ExpectGenesis())
+	err := store.WriteEvents(ctx, persistence.Unscoped(), mixed, persistence.ExpectGenesis())
 	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
 
-	err = store.WriteEvents(ctx, nil, persistence.ExpectGenesis())
+	err = store.WriteEvents(ctx, persistence.Unscoped(), nil, persistence.ExpectGenesis())
 	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
 }

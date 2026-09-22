@@ -747,7 +747,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, assert.AnError)
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
@@ -797,8 +797,8 @@ func TestEventSourcedActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistenceID, uint64(1), uint64(1), mock.AnythingOfType("uint64")).
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(latestEvent, nil)
+		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), persistenceID, uint64(1), uint64(1), mock.AnythingOfType("uint64")).
 			Return(nil, assert.AnError)
 
 		// create an actor system
@@ -858,7 +858,7 @@ func TestEventSourcedActor(t *testing.T) {
 			State:          stateAny,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, snapshot))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
 
 		// pre-write an event after the snapshot
 		eventAny, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
@@ -870,7 +870,7 @@ func TestEventSourcedActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 			Shard:          0,
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1179,7 +1179,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// verify snapshot was written
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, snap)
 		assert.EqualValues(t, 1, snap.GetSequenceNumber())
@@ -1269,13 +1269,13 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// verify snapshot was written
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, snap)
 		assert.EqualValues(t, 2, snap.GetSequenceNumber())
 
 		// verify events were deleted (deleteUpTo = eventsCounter = 2 since EventsRetentionCount is 0)
-		latestEvent, err := eventStore.GetLatestEvent(ctx, persistenceID)
+		latestEvent, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latestEvent)
 
@@ -1314,7 +1314,7 @@ func TestEventSourcedActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 			Shard:          0,
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1699,7 +1699,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// verify latest snapshot exists at seq 4
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, snap)
 		assert.EqualValues(t, 4, snap.GetSequenceNumber())
@@ -1774,7 +1774,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 
 		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
 
-		latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
 
@@ -1844,7 +1844,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		// nothing was ever written: flushBatch's own context.Background()
 		// call (T4-B, out of scope here) must never even be reached.
 		pause.For(500 * time.Millisecond)
-		latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
 
@@ -2001,7 +2001,7 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 
 	// Exactly the first, tenant-A command's event was ever persisted: the
 	// rejected tenant-B command never reached the buffer at all.
-	latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+	latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -2225,7 +2225,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
 		"tenant A's batch must still succeed once its own cycle flushes, unaffected by tenant B's rejected attempt")
 
-	latest, err := eventStore.GetLatestEvent(ctx, persistenceID)
+	latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber(),
@@ -2325,7 +2325,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -2361,7 +2361,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
-		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistenceID).Return(nil, assert.AnError)
+		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -2409,7 +2409,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, snapshot))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
 
 		eventStream := eventstream.New()
 
@@ -2464,7 +2464,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, snapshot))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
 
 		eventStream := eventstream.New()
 
@@ -2518,7 +2518,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			State:          wrongState,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, snapshot))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
 
 		eventStream := eventstream.New()
 
@@ -2568,7 +2568,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2619,7 +2619,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			IsEncrypted:     true,
 			EncryptionKeyId: "key-1",
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2668,7 +2668,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          eventAny,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2715,7 +2715,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          &anypb.Any{TypeUrl: "type.googleapis.com/unknown.TypeThatDoesNotExist", Value: []byte{}},
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		eventStream := eventstream.New()
 
@@ -2760,7 +2760,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			Event:          eventAny,
 			Timestamp:      time.Now().Unix(),
 		}
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		// use a behavior that returns an error from HandleEvent
 		behavior := NewFailingHandleEventBehavior(persistenceID)
@@ -2893,7 +2893,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		pause.For(time.Second)
 
 		// verify no snapshot was written since encryption failed
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		assert.Nil(t, snap)
 
@@ -2912,14 +2912,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistenceID, uint64(2)).Return(assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil)
+		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), persistenceID, uint64(2)).Return(assert.AnError)
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
-		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistenceID).Return(nil, nil)
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(nil)
+		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -2976,14 +2976,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Times(4)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Times(4)
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
-		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistenceID).Return(nil, nil)
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(nil).Times(2)
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistenceID, uint64(2)).Return(assert.AnError)
+		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(nil).Times(2)
+		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), persistenceID, uint64(2)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -3098,8 +3098,8 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -3205,10 +3205,10 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
@@ -3311,15 +3311,15 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
 			Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -3408,10 +3408,10 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ []*egopb.Event, _ persistence.WritePrecondition) {
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
+			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
 				close(started)
 				<-release
 			}).
@@ -3821,7 +3821,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		pause.For(time.Second)
 
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, snap)
 		assert.EqualValues(t, 2, snap.GetSequenceNumber())
@@ -3923,8 +3923,8 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 
@@ -3973,8 +3973,8 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 
@@ -4562,7 +4562,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		pause.For(time.Second)
 
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistenceID)
+		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
 		require.NoError(t, err)
 		require.NotNil(t, snap)
 		assert.EqualValues(t, 2, snap.GetSequenceNumber())

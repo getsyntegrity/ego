@@ -134,7 +134,8 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 	}
 
 	if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
-		return a.snapshotStore.WriteSnapshot(ctx.Context(), snapshot)
+		// TENANT-003 T4: carries the resolved tenant scope once entity actors bind one at spawn.
+		return a.snapshotStore.WriteSnapshot(ctx.Context(), persistence.Unscoped(), snapshot)
 	}); err != nil {
 		a.logger.ErrorContext(ctx.Context(), "failed to persist snapshot",
 			"persistence_id", snapshot.GetPersistenceId(),

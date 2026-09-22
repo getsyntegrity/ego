@@ -60,11 +60,11 @@ func newSlowEventsStore(delegate persistence.EventsStore, writeDelay time.Durati
 	return &slowEventsStore{EventsStore: delegate, writeDelay: writeDelay}
 }
 
-func (s *slowEventsStore) WriteEvents(ctx context.Context, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+func (s *slowEventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
 	if s.writeDelay > 0 {
 		time.Sleep(s.writeDelay)
 	}
-	return s.EventsStore.WriteEvents(ctx, events, precondition)
+	return s.EventsStore.WriteEvents(ctx, scope, events, precondition)
 }
 
 // ---------------------------------------------------------------------------
@@ -855,11 +855,11 @@ func newSlowStateStore(delegate persistence.StateStore, writeDelay time.Duration
 	return &slowStateStore{StateStore: delegate, writeDelay: writeDelay}
 }
 
-func (s *slowStateStore) WriteState(ctx context.Context, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
+func (s *slowStateStore) WriteState(ctx context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
 	if s.writeDelay > 0 {
 		time.Sleep(s.writeDelay)
 	}
-	return s.StateStore.WriteState(ctx, state, precondition)
+	return s.StateStore.WriteState(ctx, scope, state, precondition)
 }
 
 // ---------------------------------------------------------------------------

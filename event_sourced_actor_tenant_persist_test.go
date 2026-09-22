@@ -174,7 +174,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("3.1/3.2: seeds actorTenant from the latest event's metadata", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -192,7 +192,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		snapshotStore := testkit.NewSnapshotStore()
 		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, newSnapshot(5, tenantA)))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -209,10 +209,10 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("3.3/3.4: snapshot and latest event agreeing on tenant both succeed and match", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{newEvent(6, tenantA)}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(6, tenantA)}, persistence.Unconditional()))
 		snapshotStore := testkit.NewSnapshotStore()
 		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, newSnapshot(5, tenantA)))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -229,10 +229,10 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("3.3/3.4: snapshot and latest event disagreeing on tenant fails closed with ErrDenied", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{newEvent(6, tenantB)}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(6, tenantB)}, persistence.Unconditional()))
 		snapshotStore := testkit.NewSnapshotStore()
 		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, newSnapshot(5, tenantA)))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -250,7 +250,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("3.5/3.6: fails closed when tenant-aware and the latest event carries no tenant metadata", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{newEvent(1, noTenantContext)}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, noTenantContext)}, persistence.Unconditional()))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -269,7 +269,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		snapshotStore := testkit.NewSnapshotStore()
 		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, newSnapshot(5, noTenantContext)))
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, noTenantContext)))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -287,7 +287,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("legacy mode never seeds actorTenant, even when metadata is present", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
 
 		entity := &EventSourcedActor{
 			persistenceID: persistenceID,
@@ -325,7 +325,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("an intermediate event belonging to a different tenant fails closed with ErrDenied", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{
 			newEvent(1, tenantA),
 			newEvent(2, tenantB),
 			newEvent(3, tenantA),
@@ -346,7 +346,7 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 	t.Run("an intermediate event with no tenant metadata fails closed with ErrInvalid", func(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, []*egopb.Event{
+		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{
 			newEvent(1, tenantA),
 			newEvent(2, noTenantContext),
 			newEvent(3, tenantA),
