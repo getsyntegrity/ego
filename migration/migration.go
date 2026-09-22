@@ -74,6 +74,14 @@
 // corrupted payload, a dropped tenant_metadata, or a missing encryption
 // envelope.
 //
+// A target tenant scope that already holds a record is never trusted merely
+// because it exists. It is already_present only when every target record is
+// owned by the assigned tenant and, while the source still exists, contains
+// the source record exactly; otherwise that record kind fails closed and
+// nothing is written or deleted. This keeps a re-run after
+// WithSourceDeletion — whose source is now gone — a no-op, and it reports a
+// genuine collision with pre-existing tenant data as a failure.
+//
 // Durable-state enumeration limitation: persistence.EventsStore has
 // PersistenceIDs to enumerate a scope, but neither persistence.SnapshotStore
 // nor persistence.StateStore does. When no events store is configured (a

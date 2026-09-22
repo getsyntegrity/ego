@@ -40,8 +40,8 @@ import (
 	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -616,16 +616,26 @@ func TestTenantAdopterAlreadyPresentInTargetIsNeverOverwritten(t *testing.T) {
 	report, err := adopter.Run(ctx)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, report.AlreadyPresent)
+	// The target already holds a record under this id, but it is NOT the
+	// record this adoption would write (timestamp 999, not the source's
+	// 100): that is a collision, not a completed migration, so it fails
+	// closed rather than being reported as already_present (#98 review).
+	assert.Zero(t, report.AlreadyPresent, "a non-equivalent target must never be reported as already migrated")
 	assert.Zero(t, report.Copied)
-	assert.Zero(t, report.Failed)
+	assert.Equal(t, 1, report.Failed)
+	require.Len(t, report.Failures, 1)
+	assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
 
 	// The pre-existing target record must be untouched (still timestamp 999,
-	// not overwritten by the legacy copy's timestamp 100).
+	// not overwritten by the legacy copy's timestamp 100), and the source is
+	// kept.
 	evt, err := eventsStore.GetLatestEvent(ctx, target, id)
 	require.NoError(t, err)
 	require.NotNil(t, evt)
 	assert.EqualValues(t, 999, evt.GetTimestamp())
+	sourceEvt, err := eventsStore.GetLatestEvent(ctx, source, id)
+	require.NoError(t, err)
+	assert.NotNil(t, sourceEvt, "a failed classification must never delete the source")
 }
 
 func TestTenantAdopterSourceDeletionOnlyAfterVerification(t *testing.T) {
@@ -948,4 +958,270 @@ func TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, evt, "persistence id %q must have been adopted, not skipped at a page boundary", id)
 	}
+}
+
+// duplicatingEventsStore wraps a persistence.EventsStore and, for reads of
+// duplicateScope only, prepends a corrupted duplicate of the first returned
+// event. The distinct-sequence-number count and every sequence number still
+// match what was written; only the raw row count reveals the extra row. It
+// proves verifyEventsMatchBySequence rejects a read-back that carries more
+// than one row for a sequence number.
+type duplicatingEventsStore struct {
+	persistence.EventsStore
+	duplicateScope persistence.Scope
+}
+
+func (d *duplicatingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, fromSequenceNumber, toSequenceNumber, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := d.EventsStore.ReplayEvents(ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, maxNumber)
+	if err != nil || len(events) == 0 || !scope.Equal(d.duplicateScope) {
+		return events, err
+	}
+	dup, ok := proto.Clone(events[0]).(*egopb.Event)
+	if !ok {
+		return nil, errors.New("duplicatingEventsStore: clone failed")
+	}
+	dup.Event = nil
+	return append([]*egopb.Event{dup}, events...), nil
+}
+
+func TestTenantAdopterEventsVerificationRejectsDuplicateSequenceRows(t *testing.T) {
+	ctx := context.Background()
+	base := testkit.NewEventsStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "duplicate-rows-1"
+	source := persistence.Unscoped()
+	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100),
+		newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(&duplicatingEventsStore{EventsStore: base, duplicateScope: target}),
+		WithWriteEnabled(),
+		WithSourceDeletion(),
+	)
+	require.NoError(t, err)
+
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Failed, "a read-back with a duplicated sequence row must not verify")
+	assert.Zero(t, report.SourceDeleted)
+
+	sourceEvents, err := base.ReplayEvents(ctx, source, id, 1, 2, 10)
+	require.NoError(t, err)
+	assert.Len(t, sourceEvents, 2, "the source must remain intact after a failed verification")
+}
+
+// TestTenantAdopterSourceDeletingReRunIsIdempotent covers the #98 review
+// finding that a second identical run after WithSourceDeletion reported
+// every migrated aggregate as failed ("no source record") instead of as a
+// no-op. testkit.EventStore keeps the persistence id's log entry after
+// DeleteEvents, so the id is still enumerated with an empty source.
+func TestTenantAdopterSourceDeletingReRunIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+
+	const id = "delete-rerun-1"
+	source := persistence.Unscoped()
+	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100),
+		newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 2, 200)))
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(eventsStore),
+		WithSnapshotStore(snapshotStore),
+		WithWriteEnabled(),
+		WithSourceDeletion(),
+	)
+	require.NoError(t, err)
+
+	first, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Copied)
+	require.Equal(t, 1, first.SourceDeleted)
+	require.Zero(t, first.Failed)
+
+	ids, _, err := eventsStore.PersistenceIDs(ctx, source, 10, "")
+	require.NoError(t, err)
+	require.Contains(t, ids, id, "precondition: this store keeps enumerating the emptied source id")
+
+	second, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.Scanned)
+	assert.Equal(t, 1, second.AlreadyPresent, "an equivalent target with a deleted source is already migrated")
+	assert.Zero(t, second.Failed)
+	assert.Empty(t, second.Failures)
+	assert.Zero(t, second.Copied)
+	assert.Zero(t, second.Verified)
+	assert.Zero(t, second.SourceDeleted)
+	require.Len(t, second.Aggregates, 1)
+	assert.Equal(t, StatusAlreadyPresent, second.Aggregates[0].Events.Status)
+	assert.Equal(t, StatusAlreadyPresent, second.Aggregates[0].Snapshot.Status)
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	events, err := eventsStore.ReplayEvents(ctx, target, id, 1, 10, 10)
+	require.NoError(t, err)
+	assert.Len(t, events, 2, "the second run must not write anything")
+}
+
+func TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+
+	const id = "snapshot-rerun-1"
+	source := persistence.Unscoped()
+	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 3, 300)))
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithSnapshotStore(snapshotStore),
+		WithPersistenceIDs(id),
+		WithWriteEnabled(),
+		WithSourceDeletion(),
+	)
+	require.NoError(t, err)
+
+	first, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SourceDeleted)
+
+	second, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.AlreadyPresent)
+	assert.Zero(t, second.Failed)
+	assert.Empty(t, second.Failures)
+}
+
+// TestTenantAdopterMissingSourceClassification pins how an assigned
+// aggregate whose source is absent is classified: an equivalent target is
+// a no-op, a non-equivalent target fails closed, and neither side holding
+// anything is the genuine missing-source failure.
+func TestTenantAdopterMissingSourceClassification(t *testing.T) {
+	ctx := context.Background()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	globex, err := tenancy.NewTenantContext("globex")
+	require.NoError(t, err)
+
+	run := func(t *testing.T, eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, id string) *AdoptionReport {
+		t.Helper()
+		opts := []AdoptionOption{WithWriteEnabled(), WithSourceDeletion(), WithPersistenceIDs(id)}
+		if eventsStore != nil {
+			opts = append(opts, WithEventsStore(eventsStore))
+		}
+		if snapshotStore != nil {
+			opts = append(opts, WithSnapshotStore(snapshotStore))
+		}
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}), opts...)
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		return report
+	}
+
+	t.Run("target events owned by another tenant fail closed", func(t *testing.T) {
+		eventsStore := testkit.NewEventsStore()
+		require.NoError(t, eventsStore.Connect(ctx))
+		const id = "foreign-target-events"
+		evt := newLegacyEvent(t, id, 1, 100)
+		evt.TenantMetadata = tenancy.MarshalMetadata(globex)
+		require.NoError(t, eventsStore.WriteEvents(ctx, target, []*egopb.Event{evt}, persistence.Unconditional()))
+
+		report := run(t, eventsStore, nil, id)
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.AlreadyPresent)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+
+	t.Run("target snapshot without tenant metadata fails closed", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "untagged-target-snapshot"
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, newLegacySnapshot(t, id, 1, 100)))
+
+		report := run(t, nil, snapshotStore, id)
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.AlreadyPresent)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+
+	t.Run("target owned by the assigned tenant is already present", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "owned-target-snapshot"
+		snap := newLegacySnapshot(t, id, 1, 100)
+		snap.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, snap))
+
+		report := run(t, nil, snapshotStore, id)
+		assert.Equal(t, 1, report.AlreadyPresent)
+		assert.Zero(t, report.Failed)
+	})
+
+	t.Run("neither source nor target is a missing-source failure", func(t *testing.T) {
+		eventsStore := testkit.NewEventsStore()
+		require.NoError(t, eventsStore.Connect(ctx))
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+
+		report := run(t, eventsStore, snapshotStore, "nowhere")
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.AlreadyPresent)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errNoSourceRecords)
+	})
+}
+
+// TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent covers a
+// re-run after the tenant-bound actor has already appended to the adopted
+// stream: the target still contains the source records exactly and every
+// target event carries the assigned tenant, so it is already migrated.
+func TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent(t *testing.T) {
+	ctx := context.Background()
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+
+	const id = "extended-1"
+	source := persistence.Unscoped()
+	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, 100)}, persistence.Unconditional()))
+
+	adopter, err := NewTenantAdopter(
+		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(eventsStore),
+		WithWriteEnabled(),
+	)
+	require.NoError(t, err)
+	first, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Copied)
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	live := newLegacyEvent(t, id, 2, 200)
+	live.TenantMetadata = tenancy.MarshalMetadata(acme)
+	require.NoError(t, eventsStore.WriteEvents(ctx, target, []*egopb.Event{live}, persistence.Unconditional()))
+
+	second, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.AlreadyPresent)
+	assert.Zero(t, second.Failed)
 }

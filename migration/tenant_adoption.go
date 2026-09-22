@@ -59,6 +59,13 @@ var ErrNoStoresConfigured = errors.New("migration: at least one of WithEventsSto
 // WithPersistenceIDs).
 var errNoSourceRecords = errors.New("migration: no source record found in any configured store for this persistence id")
 
+// errTargetNotEquivalent is the per-kind failure recorded when the target
+// tenant scope already holds a record for the persistence id that is not
+// equivalent to what this adoption would write: a record not owned by the
+// assigned tenant, or one that does not contain the source record exactly.
+// A target that merely exists is never treated as a completed migration.
+var errTargetNotEquivalent = errors.New("migration: target tenant scope holds a record for this persistence id that is not equivalent to this adoption")
+
 // TenantAssignment decides which tenant an existing aggregate belongs to.
 // The framework cannot make this decision itself: persistence_id is an
 // opaque, caller-assigned string (persistence.Scope's own doc comment), and
@@ -96,9 +103,15 @@ const (
 	// StatusCopied means a source record of this kind was written to the
 	// target tenant scope (or, in dry-run, would have been).
 	StatusCopied RecordStatus = "copied"
-	// StatusAlreadyPresent means the target tenant scope already held a
-	// record for this (kind, persistence ID); nothing was written, and
-	// nothing was overwritten.
+	// StatusAlreadyPresent means the target tenant scope already held an
+	// equivalent record for this (kind, persistence ID): every target record
+	// is owned by the assigned tenant, and the target contains the source
+	// record exactly whenever the source still exists (it may extend beyond
+	// it with records the tenant-bound actor wrote after adoption). This is
+	// also how a re-run after WithSourceDeletion classifies an aggregate
+	// whose source is gone. Nothing was written, overwritten, or deleted. A
+	// target that holds a non-equivalent record fails with StatusFailed
+	// instead; existence alone is never success.
 	StatusAlreadyPresent RecordStatus = "already_present"
 	// StatusSourceDeleted means the record was copied, the copy was read
 	// back and matched the source record byte-for-byte (proto.Equal against
@@ -471,23 +484,24 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 	}
 	metadata := tenancy.MarshalMetadata(tenantContext)
 
+	intent := adoptionIntent{target: target, tenant: tenantContext, metadata: metadata}
 	outcome := AggregateOutcome{PersistenceID: id, Tenant: tenantID}
 	found, copied, aggFailure := false, false, error(nil)
 
 	if a.eventsStore != nil {
-		outcome.Events, aggFailure = a.applyKind(ctx, KindEvents, id, target, metadata, report, a.adoptEvents)
+		outcome.Events, aggFailure = a.applyKind(ctx, KindEvents, id, intent, report, a.adoptEvents)
 		found = found || outcome.Events.Status != StatusNone
 		copied = copied || outcome.Events.Status == StatusCopied || outcome.Events.Status == StatusSourceDeleted
 	}
 
 	if aggFailure == nil && a.snapshotStore != nil {
-		outcome.Snapshot, aggFailure = a.applyKind(ctx, KindSnapshot, id, target, metadata, report, a.adoptSnapshot)
+		outcome.Snapshot, aggFailure = a.applyKind(ctx, KindSnapshot, id, intent, report, a.adoptSnapshot)
 		found = found || outcome.Snapshot.Status != StatusNone
 		copied = copied || outcome.Snapshot.Status == StatusCopied || outcome.Snapshot.Status == StatusSourceDeleted
 	}
 
 	if aggFailure == nil && a.stateStore != nil {
-		outcome.DurableState, aggFailure = a.applyKind(ctx, KindDurableState, id, target, metadata, report, a.adoptState)
+		outcome.DurableState, aggFailure = a.applyKind(ctx, KindDurableState, id, intent, report, a.adoptState)
 		found = found || outcome.DurableState.Status != StatusNone
 		copied = copied || outcome.DurableState.Status == StatusCopied || outcome.DurableState.Status == StatusSourceDeleted
 	}
@@ -529,14 +543,23 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 	}
 }
 
+// adoptionIntent is what one aggregate's adoption writes: the target tenant
+// scope, the tenant it belongs to, and the tenant_metadata stamped on every
+// copied record.
+type adoptionIntent struct {
+	target   persistence.Scope
+	tenant   tenancy.TenantContext
+	metadata map[string]string
+}
+
 // kindAdopter is the shape shared by adoptEvents, adoptSnapshot, and
 // adoptState.
-type kindAdopter func(ctx context.Context, id string, target persistence.Scope, metadata map[string]string) RecordOutcome
+type kindAdopter func(ctx context.Context, id string, intent adoptionIntent) RecordOutcome
 
 // applyKind runs adopt for one record kind and, on RecordStatus StatusFailed,
 // records an AdoptionFailure against report.
-func (a *TenantAdopter) applyKind(ctx context.Context, kind RecordKind, id string, target persistence.Scope, metadata map[string]string, report *AdoptionReport, adopt kindAdopter) (RecordOutcome, error) {
-	outcome := adopt(ctx, id, target, metadata)
+func (a *TenantAdopter) applyKind(ctx context.Context, kind RecordKind, id string, intent adoptionIntent, report *AdoptionReport, adopt kindAdopter) (RecordOutcome, error) {
+	outcome := adopt(ctx, id, intent)
 	if outcome.Status == StatusFailed {
 		f := AdoptionFailure{PersistenceID: id, Kind: kind, Err: outcome.Err}
 		report.Failures = append(report.Failures, f)
@@ -547,54 +570,65 @@ func (a *TenantAdopter) applyKind(ctx context.Context, kind RecordKind, id strin
 }
 
 // adoptEvents copies persistence ID id's events from the source scope into
-// target. See the package doc comment for the overall algorithm.
-func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, target persistence.Scope, metadata map[string]string) RecordOutcome {
+// the target. See the package doc comment for the overall algorithm. The
+// target is read first: when it already holds events they are classified by
+// verifyEventsEquivalent (already present or fail closed) and nothing is
+// written — this is what keeps a re-run after WithSourceDeletion, whose
+// source is now empty, a no-op.
+func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
 	sourceEvents, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source events: %w", err)}
 	}
-	if len(sourceEvents) == 0 {
-		return RecordOutcome{Status: StatusNone}
-	}
 
-	if !a.write {
-		existing, err := a.eventsStore.GetLatestEvent(ctx, target, id)
-		if err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
-		}
-		if existing != nil {
-			return RecordOutcome{Status: StatusAlreadyPresent}
-		}
-		return RecordOutcome{Status: StatusCopied}
-	}
-
-	cloned := make([]*egopb.Event, len(sourceEvents))
+	expected := make([]*egopb.Event, len(sourceEvents))
 	var maxSeq uint64
 	for i, evt := range sourceEvents {
 		clone, ok := proto.Clone(evt).(*egopb.Event)
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("clone event at sequence %d: unexpected cloned type", evt.GetSequenceNumber())}
 		}
-		clone.TenantMetadata = metadata
-		cloned[i] = clone
+		clone.TenantMetadata = intent.metadata
+		expected[i] = clone
 		if seq := clone.GetSequenceNumber(); seq > maxSeq {
 			maxSeq = seq
 		}
 	}
 
-	if err := a.eventsStore.WriteEvents(ctx, target, cloned, persistence.ExpectGenesis()); err != nil {
-		var conflict *persistence.ConflictError
-		if errors.As(err, &conflict) {
-			return RecordOutcome{Status: StatusAlreadyPresent}
-		}
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target events: %w", err)}
+	existing, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
+	}
+	if len(existing) > 0 {
+		return classifyExisting(verifyEventsEquivalent(id, expected, existing, intent.tenant))
 	}
 
-	written, err := a.eventsStore.ReplayEvents(ctx, target, id, 1, maxReplayLimit, maxReplayLimit)
+	if len(sourceEvents) == 0 {
+		return RecordOutcome{Status: StatusNone}
+	}
+	if !a.write {
+		return RecordOutcome{Status: StatusCopied}
+	}
+
+	if err := a.eventsStore.WriteEvents(ctx, intent.target, expected, persistence.ExpectGenesis()); err != nil {
+		var conflict *persistence.ConflictError
+		if !errors.As(err, &conflict) {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target events: %w", err)}
+		}
+		// Another writer created the target between the check above and
+		// this write: classify what it wrote instead of trusting it.
+		raced, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
+		if err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
+		}
+		return classifyExisting(verifyEventsEquivalent(id, expected, raced, intent.tenant))
+	}
+
+	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target events: %w", err)}
 	}
-	if err := verifyEventsMatchBySequence(id, cloned, written); err != nil {
+	if err := verifyEventsMatchBySequence(id, expected, written); err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: err}
 	}
 
@@ -618,38 +652,46 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, target persi
 // already there. This has an unavoidable (read, then write) window — the
 // best the current SPI allows — rather than the atomic ExpectGenesis
 // guarantee events and durable state get.
-func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, target persistence.Scope, metadata map[string]string) RecordOutcome {
+func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
 	snapshot, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source snapshot: %w", err)}
 	}
-	if snapshot == nil {
-		return RecordOutcome{Status: StatusNone}
+
+	var clone *egopb.Snapshot
+	if snapshot != nil {
+		var ok bool
+		clone, ok = proto.Clone(snapshot).(*egopb.Snapshot)
+		if !ok {
+			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone snapshot: unexpected cloned type")}
+		}
+		clone.TenantMetadata = intent.metadata
 	}
 
-	existing, err := a.snapshotStore.GetLatestSnapshot(ctx, target, id)
+	existing, err := a.snapshotStore.GetLatestSnapshot(ctx, intent.target, id)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target snapshot: %w", err)}
 	}
 	if existing != nil {
-		return RecordOutcome{Status: StatusAlreadyPresent}
+		var expected proto.Message
+		if clone != nil {
+			expected = clone
+		}
+		return classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant))
 	}
 
+	if snapshot == nil {
+		return RecordOutcome{Status: StatusNone}
+	}
 	if !a.write {
 		return RecordOutcome{Status: StatusCopied}
 	}
 
-	clone, ok := proto.Clone(snapshot).(*egopb.Snapshot)
-	if !ok {
-		return RecordOutcome{Status: StatusFailed, Err: errors.New("clone snapshot: unexpected cloned type")}
-	}
-	clone.TenantMetadata = metadata
-
-	if err := a.snapshotStore.WriteSnapshot(ctx, target, clone); err != nil {
+	if err := a.snapshotStore.WriteSnapshot(ctx, intent.target, clone); err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target snapshot: %w", err)}
 	}
 
-	written, err := a.snapshotStore.GetLatestSnapshot(ctx, target, id)
+	written, err := a.snapshotStore.GetLatestSnapshot(ctx, intent.target, id)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot: %w", err)}
 	}
@@ -680,41 +722,61 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, target per
 // WithSourceDeletion: persistence.StateStore has no delete method at all
 // (see state_store.go) — there is nothing this tool could call. See the
 // package doc comment.
-func (a *TenantAdopter) adoptState(ctx context.Context, id string, target persistence.Scope, metadata map[string]string) RecordOutcome {
+func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
 	state, err := a.stateStore.GetLatestState(ctx, a.sourceScope, id)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source state: %w", err)}
 	}
-	if state == nil {
-		return RecordOutcome{Status: StatusNone}
+
+	var clone *egopb.DurableState
+	if state != nil {
+		var ok bool
+		clone, ok = proto.Clone(state).(*egopb.DurableState)
+		if !ok {
+			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone durable state: unexpected cloned type")}
+		}
+		clone.TenantMetadata = intent.metadata
 	}
 
-	if !a.write {
-		existing, err := a.stateStore.GetLatestState(ctx, target, id)
+	classifyTarget := func() RecordOutcome {
+		existing, err := a.stateStore.GetLatestState(ctx, intent.target, id)
 		if err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target state: %w", err)}
 		}
-		if existing != nil {
-			return RecordOutcome{Status: StatusAlreadyPresent}
+		if existing == nil {
+			return RecordOutcome{Status: StatusNone}
 		}
+		var expected proto.Message
+		if clone != nil {
+			expected = clone
+		}
+		return classifyExisting(verifyRecordEquivalent(id, KindDurableState, expected, clone.GetVersionNumber(), existing, existing.GetVersionNumber(), existing.GetTenantMetadata(), intent.tenant))
+	}
+
+	if outcome := classifyTarget(); outcome.Status != StatusNone {
+		return outcome
+	}
+	if state == nil {
+		return RecordOutcome{Status: StatusNone}
+	}
+	if !a.write {
 		return RecordOutcome{Status: StatusCopied}
 	}
 
-	clone, ok := proto.Clone(state).(*egopb.DurableState)
-	if !ok {
-		return RecordOutcome{Status: StatusFailed, Err: errors.New("clone durable state: unexpected cloned type")}
-	}
-	clone.TenantMetadata = metadata
-
-	if err := a.stateStore.WriteState(ctx, target, clone, persistence.ExpectGenesis()); err != nil {
+	if err := a.stateStore.WriteState(ctx, intent.target, clone, persistence.ExpectGenesis()); err != nil {
 		var conflict *persistence.ConflictError
-		if errors.As(err, &conflict) {
-			return RecordOutcome{Status: StatusAlreadyPresent}
+		if !errors.As(err, &conflict) {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target state: %w", err)}
+		}
+		// Another writer created the target between the check above and
+		// this write: classify what it wrote instead of trusting it.
+		if outcome := classifyTarget(); outcome.Status != StatusNone {
+			return outcome
 		}
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target state: %w", err)}
 	}
 
-	written, err := a.stateStore.GetLatestState(ctx, target, id)
+	written, err := a.stateStore.GetLatestState(ctx, intent.target, id)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state: %w", err)}
 	}
@@ -754,6 +816,9 @@ func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) er
 		writtenBySeq[e.GetSequenceNumber()] = e
 	}
 
+	if len(writtenBySeq) != len(written) {
+		return fmt.Errorf("verify target events for persistence_id %q: read-back carries more than one row for a sequence number", id)
+	}
 	if len(writtenBySeq) != len(expectedBySeq) {
 		return fmt.Errorf("verify target events for persistence_id %q: wrote %d distinct sequence numbers, read back %d", id, len(expectedBySeq), len(writtenBySeq))
 	}
@@ -765,6 +830,69 @@ func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) er
 		if !proto.Equal(want, got) {
 			return fmt.Errorf("verify target events for persistence_id %q: sequence %d does not match what was written", id, seq)
 		}
+	}
+	return nil
+}
+
+// classifyExisting turns the equivalence verdict on a pre-existing target
+// into a RecordOutcome: equivalent is StatusAlreadyPresent, anything else
+// fails closed.
+func classifyExisting(err error) RecordOutcome {
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: err}
+	}
+	return RecordOutcome{Status: StatusAlreadyPresent}
+}
+
+// ownedByTenant reports whether metadata decodes to exactly tenant.
+func ownedByTenant(metadata map[string]string, tenant tenancy.TenantContext) bool {
+	decoded, err := tenancy.UnmarshalMetadata(tenancy.Metadata(metadata))
+	return err == nil && tenancy.VerifyUnchanged(tenant, decoded) == nil
+}
+
+// verifyEventsEquivalent decides whether the events a target scope already
+// holds are an adoption of expected (the source events with the target's
+// tenant_metadata; empty when the source is gone). Every target event must
+// be owned by tenant, carry a distinct sequence number, and every expected
+// event must be present under its sequence number and proto.Equal it. The
+// target may hold later sequence numbers: the tenant-bound actor appends to
+// the adopted stream after migration.
+func verifyEventsEquivalent(id string, expected, existing []*egopb.Event, tenant tenancy.TenantContext) error {
+	existingBySeq := make(map[uint64]*egopb.Event, len(existing))
+	for _, e := range existing {
+		seq := e.GetSequenceNumber()
+		if _, dup := existingBySeq[seq]; dup {
+			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d appears more than once", errTargetNotEquivalent, id, KindEvents, seq)
+		}
+		if !ownedByTenant(e.GetTenantMetadata(), tenant) {
+			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d is not owned by the assigned tenant", errTargetNotEquivalent, id, KindEvents, seq)
+		}
+		existingBySeq[seq] = e
+	}
+	for _, want := range expected {
+		got, ok := existingBySeq[want.GetSequenceNumber()]
+		if !ok || !proto.Equal(want, got) {
+			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d differs from the source", errTargetNotEquivalent, id, KindEvents, want.GetSequenceNumber())
+		}
+	}
+	return nil
+}
+
+// verifyRecordEquivalent is verifyEventsEquivalent for the single latest
+// record a snapshot or durable-state target holds. existing must be owned by
+// tenant. When the source still exists (expected != nil), existing must
+// either proto.Equal expected at the same position, or be a later position
+// (the tenant-bound actor snapshotted or committed after adoption); an
+// earlier position cannot contain the source and fails closed.
+func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, expectedPos uint64, existing proto.Message, existingPos uint64, existingMetadata map[string]string, tenant tenancy.TenantContext) error {
+	if !ownedByTenant(existingMetadata, tenant) {
+		return fmt.Errorf("%w: persistence_id %q kind %s: target record is not owned by the assigned tenant", errTargetNotEquivalent, id, kind)
+	}
+	if expected == nil || existingPos > expectedPos {
+		return nil
+	}
+	if existingPos < expectedPos || !proto.Equal(expected, existing) {
+		return fmt.Errorf("%w: persistence_id %q kind %s: target record at %d differs from the source at %d", errTargetNotEquivalent, id, kind, existingPos, expectedPos)
 	}
 	return nil
 }
