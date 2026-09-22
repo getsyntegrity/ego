@@ -396,7 +396,13 @@ func TestTenantAdopterStampsTargetTenantMetadata(t *testing.T) {
 	gotEventTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(evt.GetTenantMetadata()))
 	require.NoError(t, err)
 	assert.Equal(t, wantContext, gotEventTenant, "the copied event must carry tenant_metadata stamped exactly like the actors stamp it")
-	assert.Equal(t, map[string]string(wantMetadata), evt.GetTenantMetadata())
+	// The copy carries exactly the actor-style tenant stamp plus one
+	// adoption receipt key, nothing else.
+	for key, value := range wantMetadata {
+		assert.Equal(t, value, evt.GetTenantMetadata()[key])
+	}
+	assert.Len(t, evt.GetTenantMetadata(), len(wantMetadata)+1)
+	assert.NotEmpty(t, evt.GetTenantMetadata()[adoptionReceiptKey], "every adopted record carries an adoption receipt")
 
 	snap, err := snapshotStore.GetLatestSnapshot(ctx, target, id)
 	require.NoError(t, err)
@@ -1162,7 +1168,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
 	})
 
-	t.Run("target owned by the assigned tenant is already present", func(t *testing.T) {
+	t.Run("unrelated target owned by the assigned tenant is not proof of adoption", func(t *testing.T) {
 		snapshotStore := testkit.NewSnapshotStore()
 		require.NoError(t, snapshotStore.Connect(ctx))
 		const id = "owned-target-snapshot"
@@ -1171,8 +1177,25 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, snap))
 
 		report := run(t, nil, snapshotStore, id)
-		assert.Equal(t, 1, report.AlreadyPresent)
-		assert.Zero(t, report.Failed)
+		assert.Zero(t, report.AlreadyPresent, "same-tenant data with no adoption receipt must never count as adopted")
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+
+	t.Run("owned target events without a receipt are not proof of adoption", func(t *testing.T) {
+		eventsStore := testkit.NewEventsStore()
+		require.NoError(t, eventsStore.Connect(ctx))
+		const id = "owned-target-events"
+		evt := newLegacyEvent(t, id, 1, 100)
+		evt.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, eventsStore.WriteEvents(ctx, target, []*egopb.Event{evt}, persistence.Unconditional()))
+
+		report := run(t, eventsStore, nil, id)
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
 	})
 
 	t.Run("neither source nor target is a missing-source failure", func(t *testing.T) {
@@ -1224,4 +1247,220 @@ func TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, second.AlreadyPresent)
 	assert.Zero(t, second.Failed)
+}
+
+// TestTenantAdopterLaterSameTenantTargetIsNotEquivalent pins that a single
+// latest snapshot or durable-state record cannot prove it descends from the
+// source: a same-tenant target at a later position with an unrelated
+// payload must fail closed, never count as already migrated.
+func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
+	ctx := context.Background()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	source := persistence.Unscoped()
+
+	t.Run("snapshot", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "later-snapshot"
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 500)))
+		unrelated := newLegacySnapshot(t, id, 6, 999)
+		unrelated.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, unrelated))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+
+		kept, err := snapshotStore.GetLatestSnapshot(ctx, source, id)
+		require.NoError(t, err)
+		assert.NotNil(t, kept, "the source must never be deleted on a failed classification")
+	})
+
+	t.Run("durable state", func(t *testing.T) {
+		stateStore := testkit.NewDurableStore()
+		require.NoError(t, stateStore.Connect(ctx))
+		const id = "later-state"
+		require.NoError(t, stateStore.WriteState(ctx, source, newLegacyDurableState(t, id, 5, 500), persistence.Unconditional()))
+		unrelated := newLegacyDurableState(t, id, 6, 999)
+		unrelated.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, stateStore.WriteState(ctx, target, unrelated, persistence.Unconditional()))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+}
+
+// TestTenantAdopterSamePositionTargetClassification pins that a target at
+// the source's exact position is already migrated only when it is the exact
+// record this adoption writes, and fails closed when anything differs.
+func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
+	ctx := context.Background()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	source := persistence.Unscoped()
+
+	t.Run("snapshot with a different payload at the same position fails", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "same-seq-snapshot"
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 500)))
+		different := newLegacySnapshot(t, id, 5, 999)
+		different.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, different))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled())
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.AlreadyPresent)
+	})
+
+	t.Run("durable state with a different payload at the same version fails", func(t *testing.T) {
+		stateStore := testkit.NewDurableStore()
+		require.NoError(t, stateStore.Connect(ctx))
+		const id = "same-version-state"
+		require.NoError(t, stateStore.WriteState(ctx, source, newLegacyDurableState(t, id, 5, 500), persistence.Unconditional()))
+		different := newLegacyDurableState(t, id, 5, 999)
+		different.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, stateStore.WriteState(ctx, target, different, persistence.Unconditional()))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.AlreadyPresent)
+	})
+
+	t.Run("exact snapshot and durable state records are already present", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		stateStore := testkit.NewDurableStore()
+		require.NoError(t, stateStore.Connect(ctx))
+		const id = "exact-records"
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 500)))
+		require.NoError(t, stateStore.WriteState(ctx, source, newLegacyDurableState(t, id, 5, 500), persistence.Unconditional()))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+		require.NoError(t, err)
+		first, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, first.Copied)
+
+		second, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, second.AlreadyPresent)
+		assert.Zero(t, second.Failed)
+	})
+}
+
+// TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion pins the
+// contract for a re-run whose source is gone: the target is already
+// migrated only when it still carries a valid adoption receipt, which
+// binds its exact content and the source scope it was adopted from. A
+// receipt whose record was altered afterwards, or one written for a
+// different source scope, is not proof.
+func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
+	ctx := context.Background()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	source := persistence.Unscoped()
+
+	adoptAndDelete := func(t *testing.T, snapshotStore *testkit.SnapshotStore, id string) {
+		t.Helper()
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 500)))
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+		require.NoError(t, err)
+		first, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, first.SourceDeleted)
+	}
+
+	t.Run("a record altered after adoption no longer matches its receipt", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "tampered-receipt"
+		adoptAndDelete(t, snapshotStore, id)
+
+		adopted, err := snapshotStore.GetLatestSnapshot(ctx, target, id)
+		require.NoError(t, err)
+		tampered, ok := proto.Clone(adopted).(*egopb.Snapshot)
+		require.True(t, ok)
+		tampered.Timestamp = 999
+		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, tampered))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+	})
+
+	t.Run("a receipt for a different source scope is not proof", func(t *testing.T) {
+		snapshotStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapshotStore.Connect(ctx))
+		const id = "other-source-scope"
+		adoptAndDelete(t, snapshotStore, id)
+
+		otherSource, err := persistence.NewTenantScope("legacy-partition")
+		require.NoError(t, err)
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceScope(otherSource))
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+	})
+
+	t.Run("adopted events followed by live writes are still proven", func(t *testing.T) {
+		eventsStore := testkit.NewEventsStore()
+		require.NoError(t, eventsStore.Connect(ctx))
+		const id = "events-then-live"
+		require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{
+			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+		}, persistence.Unconditional()))
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithEventsStore(eventsStore), WithWriteEnabled(), WithSourceDeletion())
+		require.NoError(t, err)
+		first, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, first.SourceDeleted)
+
+		acme, err := tenancy.NewTenantContext("acme")
+		require.NoError(t, err)
+		live := newLegacyEvent(t, id, 3, 300)
+		live.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, eventsStore.WriteEvents(ctx, target, []*egopb.Event{live}, persistence.Unconditional()))
+
+		second, err := adopter.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, second.AlreadyPresent)
+		assert.Zero(t, second.Failed)
+	})
 }

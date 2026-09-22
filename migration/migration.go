@@ -68,19 +68,27 @@
 // never deletes source data unless WithSourceDeletion is also set, and then
 // only after a copy has been read back and matched, via proto.Equal, against
 // the exact record this tool intended to write (the source record with
-// tenant_metadata replaced by the target tenant's; events matched by
-// SequenceNumber rather than slice position or count) — not merely a
+// tenant_metadata replaced by the target tenant's plus its adoption
+// receipt; events matched by SequenceNumber rather than slice position or
+// count) — not merely a
 // count, sequence number, or version number, none of which can detect a
 // corrupted payload, a dropped tenant_metadata, or a missing encryption
 // envelope.
 //
 // A target tenant scope that already holds a record is never trusted merely
-// because it exists. It is already_present only when every target record is
-// owned by the assigned tenant and, while the source still exists, contains
-// the source record exactly; otherwise that record kind fails closed and
-// nothing is written or deleted. This keeps a re-run after
-// WithSourceDeletion — whose source is now gone — a no-op, and it reports a
-// genuine collision with pre-existing tenant data as a failure.
+// because it exists or belongs to the assigned tenant. It is already_present
+// only when it is proven to be this adoption: while the source exists, by
+// exact comparison (an events target contains every source event and may
+// append later ones; a snapshot or durable-state target is the identical
+// record at the same position — a later one proves nothing, since a single
+// latest record keeps no lineage); once WithSourceDeletion removed the
+// source, by the adoption receipt stamped into every adopted record's
+// tenant_metadata, which binds the record's exact content to the source
+// scope it came from. Otherwise that record kind fails closed and nothing is
+// written or deleted. A re-run right after a deleting run is therefore a
+// no-op, while a re-run after the tenant-bound actor has rewritten a
+// snapshot or durable state fails closed: that record no longer carries a
+// receipt, and nothing else can prove it descends from the deleted source.
 //
 // Durable-state enumeration limitation: persistence.EventsStore has
 // PersistenceIDs to enumerate a scope, but neither persistence.SnapshotStore

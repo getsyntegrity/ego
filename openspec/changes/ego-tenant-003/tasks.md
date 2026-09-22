@@ -677,14 +677,19 @@ Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
 `PreStart` still orders `requireExtension` → `tenantAware` →
 `resolveScope` → recovery/store access.
 
-- [x] 8.1 Adoption re-runs after `WithSourceDeletion` are a no-op: an
-      existing target is `already_present` only when equivalent (every
-      record owned by the assigned tenant, and containing the source
-      exactly while it exists); otherwise `errTargetNotEquivalent`. Read-back
-      with a duplicate sequence row no longer verifies. Evidence:
+- [x] 8.1 An existing target is `already_present` only when proven to be
+      this adoption, otherwise `errTargetNotEquivalent`: exact comparison
+      while the source exists (a later snapshot/state proves no lineage and
+      fails), and a per-record adoption receipt (`ego.adoption.receipt`,
+      SHA-256 of source scope plus deterministic encoding) once
+      `WithSourceDeletion` removed it. Tenant ownership alone never counts.
+      Read-back with a duplicate sequence row no longer verifies. Evidence:
       `TestTenantAdopterSourceDeletingReRunIsIdempotent`,
       `...SnapshotOnlyReRunAfterDeletionIsIdempotent`,
       `...MissingSourceClassification`,
+      `...LaterSameTenantTargetIsNotEquivalent`,
+      `...SamePositionTargetClassification`,
+      `...ReceiptProvesAdoptionAfterSourceDeletion`,
       `...EventsVerificationRejectsDuplicateSequenceRows`.
 - [x] 8.2 `ConflictError` wire grammar is `grammar=v1` with quoted
       identifiers (see 2.3).

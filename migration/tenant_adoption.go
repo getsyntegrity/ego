@@ -24,8 +24,12 @@ package migration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
@@ -66,6 +70,20 @@ var errNoSourceRecords = errors.New("migration: no source record found in any co
 // A target that merely exists is never treated as a completed migration.
 var errTargetNotEquivalent = errors.New("migration: target tenant scope holds a record for this persistence id that is not equivalent to this adoption")
 
+// adoptionReceiptKey is the tenant_metadata key under which every record
+// TenantAdopter writes carries its adoption receipt: "v1:" followed by the
+// hex SHA-256 of the source scope and the record's deterministic protobuf
+// encoding, taken with this key absent (see adoptionReceipt). Tenant-bound
+// actors never write this key, so a record carrying a receipt that still
+// matches its own content was written by an adoption from that source
+// scope. It is what lets a re-run prove a target is already migrated after
+// WithSourceDeletion removed the source it could otherwise compare with.
+const adoptionReceiptKey = "ego.adoption.receipt"
+
+// adoptionReceiptVersion prefixes every receipt value, so a future change
+// to what a receipt covers is detectable rather than silently mismatched.
+const adoptionReceiptVersion = "v1:"
+
 // TenantAssignment decides which tenant an existing aggregate belongs to.
 // The framework cannot make this decision itself: persistence_id is an
 // opaque, caller-assigned string (persistence.Scope's own doc comment), and
@@ -103,21 +121,24 @@ const (
 	// StatusCopied means a source record of this kind was written to the
 	// target tenant scope (or, in dry-run, would have been).
 	StatusCopied RecordStatus = "copied"
-	// StatusAlreadyPresent means the target tenant scope already held an
-	// equivalent record for this (kind, persistence ID): every target record
-	// is owned by the assigned tenant, and the target contains the source
-	// record exactly whenever the source still exists (it may extend beyond
-	// it with records the tenant-bound actor wrote after adoption). This is
-	// also how a re-run after WithSourceDeletion classifies an aggregate
-	// whose source is gone. Nothing was written, overwritten, or deleted. A
-	// target that holds a non-equivalent record fails with StatusFailed
-	// instead; existence alone is never success.
+	// StatusAlreadyPresent means the target tenant scope already held a
+	// record for this (kind, persistence ID) that is PROVEN to be this
+	// adoption; nothing was written, overwritten, or deleted. While the
+	// source exists, proof is an exact comparison: the events target holds
+	// every source event proto.Equal (it may append later events), and a
+	// snapshot or durable-state target is the identical record at the same
+	// position. Once WithSourceDeletion removed the source, proof is the
+	// adoption receipt every adopted record carries (adoptionReceiptKey).
+	// Anything that cannot be proven — including same-tenant data at a later
+	// position, or a record the actor rewrote after adoption — fails with
+	// StatusFailed; tenant ownership or existence alone is never success.
 	StatusAlreadyPresent RecordStatus = "already_present"
 	// StatusSourceDeleted means the record was copied, the copy was read
 	// back and matched the source record byte-for-byte (proto.Equal against
 	// the exact record this tool intended to write — the source record with
-	// tenant_metadata replaced by the target tenant's), and the source-scope
-	// copy was then removed (WithSourceDeletion only).
+	// tenant_metadata replaced by the target tenant's plus its adoption
+	// receipt), and the source-scope copy was then removed
+	// (WithSourceDeletion only).
 	StatusSourceDeleted RecordStatus = "source_deleted"
 	// StatusFailed means an unexpected error occurred while adopting this
 	// record kind. See RecordOutcome.Err for detail.
@@ -198,8 +219,9 @@ type AdoptionReport struct {
 	// Verified is the number of copied aggregates whose target-scope copy
 	// was read back and matched the source: a full proto.Equal match of the
 	// exact record this tool intended to write (the source record with
-	// tenant_metadata replaced by the target tenant's) — not a proxy check
-	// against a count, sequence number, or version number alone, none of
+	// tenant_metadata replaced by the target tenant's plus its adoption
+	// receipt) — not a proxy check against a count, sequence number, or
+	// version number alone, none of
 	// which can detect a corrupted payload, a dropped tenant_metadata, or a
 	// missing encryption envelope. Always 0 in dry-run.
 	Verified int
@@ -300,8 +322,9 @@ func WithWriteEnabled() AdoptionOption {
 // once (and only once) its target-scope copy has been read back and
 // verified against the FULL record this tool intended to write — a
 // proto.Equal match of the source record with tenant_metadata replaced by
-// the target tenant's, events matched by SequenceNumber rather than slice
-// position or count — not merely a count, sequence number, or version
+// the target tenant's plus its adoption receipt, events matched by
+// SequenceNumber rather than slice position or count — not merely a count,
+// sequence number, or version
 // number. A count/sequence/version-only check cannot detect a truncated
 // write, a dropped payload or tenant_metadata, or a missing encryption
 // envelope; a full-record match can, and does. Without this option the
@@ -588,7 +611,9 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("clone event at sequence %d: unexpected cloned type", evt.GetSequenceNumber())}
 		}
-		clone.TenantMetadata = intent.metadata
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
 		expected[i] = clone
 		if seq := clone.GetSequenceNumber(); seq > maxSeq {
 			maxSeq = seq
@@ -600,7 +625,7 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 	}
 	if len(existing) > 0 {
-		return classifyExisting(verifyEventsEquivalent(id, expected, existing, intent.tenant))
+		return classifyExisting(verifyEventsEquivalent(id, expected, existing, intent.tenant, a.sourceScope))
 	}
 
 	if len(sourceEvents) == 0 {
@@ -621,7 +646,7 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		if err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 		}
-		return classifyExisting(verifyEventsEquivalent(id, expected, raced, intent.tenant))
+		return classifyExisting(verifyEventsEquivalent(id, expected, raced, intent.tenant, a.sourceScope))
 	}
 
 	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
@@ -665,7 +690,9 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone snapshot: unexpected cloned type")}
 		}
-		clone.TenantMetadata = intent.metadata
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
 	}
 
 	existing, err := a.snapshotStore.GetLatestSnapshot(ctx, intent.target, id)
@@ -677,7 +704,7 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 		if clone != nil {
 			expected = clone
 		}
-		return classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant))
+		return classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
 	}
 
 	if snapshot == nil {
@@ -697,8 +724,9 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 	}
 	// Full-record match, not a sequence-number proxy: clone is exactly the
 	// record this tool intended to write (the source snapshot with
-	// tenant_metadata replaced by target's), so anything proto.Equal
-	// disagrees on — payload, tenant_metadata, timestamps, encryption
+	// tenant_metadata replaced by target's plus its adoption receipt), so
+	// anything proto.Equal disagrees on — payload, tenant_metadata,
+	// timestamps, encryption
 	// envelope — means the store did not durably persist what was written,
 	// and the source must not be deleted.
 	if written == nil || !proto.Equal(clone, written) {
@@ -735,7 +763,9 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone durable state: unexpected cloned type")}
 		}
-		clone.TenantMetadata = intent.metadata
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
 	}
 
 	classifyTarget := func() RecordOutcome {
@@ -750,7 +780,7 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 		if clone != nil {
 			expected = clone
 		}
-		return classifyExisting(verifyRecordEquivalent(id, KindDurableState, expected, clone.GetVersionNumber(), existing, existing.GetVersionNumber(), existing.GetTenantMetadata(), intent.tenant))
+		return classifyExisting(verifyRecordEquivalent(id, KindDurableState, expected, clone.GetVersionNumber(), existing, existing.GetVersionNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
 	}
 
 	if outcome := classifyTarget(); outcome.Status != StatusNone {
@@ -851,50 +881,208 @@ func ownedByTenant(metadata map[string]string, tenant tenancy.TenantContext) boo
 }
 
 // verifyEventsEquivalent decides whether the events a target scope already
-// holds are an adoption of expected (the source events with the target's
-// tenant_metadata; empty when the source is gone). Every target event must
-// be owned by tenant, carry a distinct sequence number, and every expected
-// event must be present under its sequence number and proto.Equal it. The
-// target may hold later sequence numbers: the tenant-bound actor appends to
-// the adopted stream after migration.
-func verifyEventsEquivalent(id string, expected, existing []*egopb.Event, tenant tenancy.TenantContext) error {
+// holds are an adoption of expected (the stamped copies of the source
+// events; empty when the source is gone). Every target event must be owned
+// by tenant and carry a distinct sequence number.
+//
+// While the source exists, every expected event must be present under its
+// sequence number and proto.Equal it, and any other target event must come
+// after all of them: the tenant-bound actor appends to the adopted stream,
+// it never rewrites its past. An event stream can prove containment of the
+// source this way; a single latest snapshot or state record cannot (see
+// verifyRecordEquivalent).
+//
+// Once the source is gone there is nothing left to compare with, so the
+// proof is the adoption receipt: the target's lowest sequence numbers must be
+// an unbroken run of events whose receipts are valid for sourceScope, and
+// only later events may lack one. Same-tenant events that no adoption wrote
+// never carry a valid receipt, so they are never mistaken for an adoption.
+func verifyEventsEquivalent(id string, expected, existing []*egopb.Event, tenant tenancy.TenantContext, sourceScope persistence.Scope) error {
+	notEquivalent := func(format string, args ...any) error {
+		return fmt.Errorf("%w: persistence_id %q kind %s: %s", errTargetNotEquivalent, id, KindEvents, fmt.Sprintf(format, args...))
+	}
+
 	existingBySeq := make(map[uint64]*egopb.Event, len(existing))
+	seqs := make([]uint64, 0, len(existing))
 	for _, e := range existing {
 		seq := e.GetSequenceNumber()
 		if _, dup := existingBySeq[seq]; dup {
-			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d appears more than once", errTargetNotEquivalent, id, KindEvents, seq)
+			return notEquivalent("sequence %d appears more than once", seq)
 		}
 		if !ownedByTenant(e.GetTenantMetadata(), tenant) {
-			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d is not owned by the assigned tenant", errTargetNotEquivalent, id, KindEvents, seq)
+			return notEquivalent("sequence %d is not owned by the assigned tenant", seq)
 		}
 		existingBySeq[seq] = e
+		seqs = append(seqs, seq)
 	}
-	for _, want := range expected {
-		got, ok := existingBySeq[want.GetSequenceNumber()]
-		if !ok || !proto.Equal(want, got) {
-			return fmt.Errorf("%w: persistence_id %q kind %s: sequence %d differs from the source", errTargetNotEquivalent, id, KindEvents, want.GetSequenceNumber())
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+
+	if len(expected) > 0 {
+		var maxExpected uint64
+		expectedSeqs := make(map[uint64]struct{}, len(expected))
+		for _, want := range expected {
+			seq := want.GetSequenceNumber()
+			got, ok := existingBySeq[seq]
+			if !ok || !proto.Equal(want, got) {
+				return notEquivalent("sequence %d differs from the source", seq)
+			}
+			expectedSeqs[seq] = struct{}{}
+			if seq > maxExpected {
+				maxExpected = seq
+			}
+		}
+		for _, seq := range seqs {
+			if _, adopted := expectedSeqs[seq]; !adopted && seq < maxExpected {
+				return notEquivalent("sequence %d is not part of the source stream", seq)
+			}
+		}
+		return nil
+	}
+
+	adopted := 0
+	for i, seq := range seqs {
+		if _, hasReceipt := existingBySeq[seq].GetTenantMetadata()[adoptionReceiptKey]; !hasReceipt {
+			break
+		}
+		if i > 0 && seq != seqs[i-1]+1 {
+			return notEquivalent("adopted sequence %d does not follow %d", seq, seqs[i-1])
+		}
+		if !hasValidAdoptionReceipt(existingBySeq[seq], sourceScope) {
+			return notEquivalent("sequence %d does not match its adoption receipt", seq)
+		}
+		adopted++
+	}
+	if adopted == 0 {
+		return notEquivalent("the source is gone and no target event carries an adoption receipt, so an adoption cannot be proven")
+	}
+	for _, seq := range seqs[adopted:] {
+		if _, hasReceipt := existingBySeq[seq].GetTenantMetadata()[adoptionReceiptKey]; hasReceipt {
+			return notEquivalent("adopted sequence %d follows events written after adoption", seq)
 		}
 	}
 	return nil
 }
 
-// verifyRecordEquivalent is verifyEventsEquivalent for the single latest
-// record a snapshot or durable-state target holds. existing must be owned by
-// tenant. When the source still exists (expected != nil), existing must
-// either proto.Equal expected at the same position, or be a later position
-// (the tenant-bound actor snapshotted or committed after adoption); an
-// earlier position cannot contain the source and fails closed.
-func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, expectedPos uint64, existing proto.Message, existingPos uint64, existingMetadata map[string]string, tenant tenancy.TenantContext) error {
+// verifyRecordEquivalent decides whether the single latest snapshot or
+// durable-state record a target holds is an adoption of expected (the
+// stamped copy of the source record; nil when the source is gone).
+//
+// A latest record keeps no history, so it can only prove equivalence by
+// being the exact record this adoption writes. While the source exists that
+// means the same position and proto.Equal; an earlier position, a different
+// record at the same position, and a LATER position all fail closed — a
+// later record owned by the same tenant may be unrelated data, and nothing
+// in it proves it descends from this source. Once the source is gone, the
+// record must still carry a valid adoption receipt for sourceScope; a record
+// the tenant-bound actor rewrote after adoption carries none, so the re-run
+// fails closed rather than presuming the adoption happened.
+func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, expectedPos uint64, existing proto.Message, existingPos uint64, existingMetadata map[string]string, tenant tenancy.TenantContext, sourceScope persistence.Scope) error {
 	if !ownedByTenant(existingMetadata, tenant) {
 		return fmt.Errorf("%w: persistence_id %q kind %s: target record is not owned by the assigned tenant", errTargetNotEquivalent, id, kind)
 	}
-	if expected == nil || existingPos > expectedPos {
+	if expected == nil {
+		if !hasValidAdoptionReceipt(existing, sourceScope) {
+			return fmt.Errorf("%w: persistence_id %q kind %s: the source is gone and the target record at %d carries no valid adoption receipt, so an adoption cannot be proven", errTargetNotEquivalent, id, kind, existingPos)
+		}
 		return nil
 	}
-	if existingPos < expectedPos || !proto.Equal(expected, existing) {
-		return fmt.Errorf("%w: persistence_id %q kind %s: target record at %d differs from the source at %d", errTargetNotEquivalent, id, kind, existingPos, expectedPos)
+	if existingPos != expectedPos || !proto.Equal(expected, existing) {
+		return fmt.Errorf("%w: persistence_id %q kind %s: target record at %d is not the exact adoption of the source at %d", errTargetNotEquivalent, id, kind, existingPos, expectedPos)
 	}
 	return nil
+}
+
+// stampAdoptionReceipt sets record's tenant_metadata to a fresh copy of
+// metadata plus the adoption receipt computed over that stamped record. A
+// fresh copy per record keeps one record's receipt out of another's map.
+func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, metadata map[string]string) error {
+	stamped := make(map[string]string, len(metadata)+1)
+	for key, value := range metadata {
+		stamped[key] = value
+	}
+	if !setTenantMetadata(record, stamped) {
+		return fmt.Errorf("stamp adoption receipt: unsupported record type %T", record)
+	}
+	receipt, err := adoptionReceipt(record, sourceScope)
+	if err != nil {
+		return err
+	}
+	stamped[adoptionReceiptKey] = receipt
+	return nil
+}
+
+// hasValidAdoptionReceipt reports whether record carries a receipt that
+// matches its own content and sourceScope.
+func hasValidAdoptionReceipt(record proto.Message, sourceScope persistence.Scope) bool {
+	stripped := proto.Clone(record)
+	metadata := tenantMetadataOf(stripped)
+	receipt, ok := metadata[adoptionReceiptKey]
+	if !ok {
+		return false
+	}
+	withoutReceipt := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if key != adoptionReceiptKey {
+			withoutReceipt[key] = value
+		}
+	}
+	if !setTenantMetadata(stripped, withoutReceipt) {
+		return false
+	}
+	want, err := adoptionReceipt(stripped, sourceScope)
+	return err == nil && want == receipt
+}
+
+// adoptionReceipt is the receipt value for record (which must not carry a
+// receipt itself) adopted from sourceScope. It hashes the scope's kind and
+// tenant id, not Scope.String(), followed by the record's deterministic
+// protobuf encoding. If that encoding ever changed between the run that
+// wrote a receipt and the run that checks it, the check fails closed.
+func adoptionReceipt(record proto.Message, sourceScope persistence.Scope) (string, error) {
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
+	if err != nil {
+		return "", fmt.Errorf("compute adoption receipt: %w", err)
+	}
+	scopeToken := "unscoped"
+	if !sourceScope.IsUnscoped() {
+		scopeToken = "tenant:" + strconv.Quote(string(sourceScope.TenantID()))
+	}
+	sum := sha256.New()
+	sum.Write([]byte(scopeToken))
+	sum.Write([]byte{0})
+	sum.Write(encoded)
+	return adoptionReceiptVersion + hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// tenantMetadataOf returns record's tenant_metadata for the three record
+// kinds TenantAdopter copies.
+func tenantMetadataOf(record proto.Message) map[string]string {
+	switch r := record.(type) {
+	case *egopb.Event:
+		return r.GetTenantMetadata()
+	case *egopb.Snapshot:
+		return r.GetTenantMetadata()
+	case *egopb.DurableState:
+		return r.GetTenantMetadata()
+	default:
+		return nil
+	}
+}
+
+// setTenantMetadata replaces record's tenant_metadata and reports whether
+// record is one of the three kinds TenantAdopter copies.
+func setTenantMetadata(record proto.Message, metadata map[string]string) bool {
+	switch r := record.(type) {
+	case *egopb.Event:
+		r.TenantMetadata = metadata
+	case *egopb.Snapshot:
+		r.TenantMetadata = metadata
+	case *egopb.DurableState:
+		r.TenantMetadata = metadata
+	default:
+		return false
+	}
+	return true
 }
 
 // pingStores preflights every configured store, exactly like Migrator.Run.
