@@ -102,6 +102,15 @@ var (
 	// ego.WithTenant(id) at spawn, or register a resolver whose FixedTenant()
 	// reports one (as tenancy.WithSingleTenant's does).
 	ErrSpawnTenantUndetermined = errors.New("eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver")
+	// ErrSpawnTenantMismatch is returned by Entity, DurableStateEntity, and
+	// Saga in tenant-aware mode when the actor that holds the requested id is
+	// bound to a different tenant than the one this spawn declared (TENANT-003
+	// T4). Actor names are not tenant-qualified, so a second tenant cannot
+	// use an id that is already live for another tenant; the spawn fails
+	// visibly instead of returning the other tenant's actor as a success. The
+	// error also matches tenancy.ErrDenied and carries a *tenancy.Error.
+	// Re-spawning a live id under the SAME tenant stays an idempotent success.
+	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
 	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
 	// tenancy is active (extensions.TenancyExtensionID is registered) but no
 	// valid extensions.EntityTenantScope dependency was injected at spawn
@@ -674,8 +683,11 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	}
 	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
-	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
-	return err
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
+	if err != nil {
+		return err
+	}
+	return verifySpawnedTenant(pid, tenantScope)
 }
 
 // spawnTenantScope determines the per-spawn tenant dependency to inject for
@@ -722,6 +734,51 @@ func (engine *Engine) spawnTenantScope(config *spawnConfig) (*extensions.EntityT
 	}
 
 	return nil, ErrSpawnTenantUndetermined
+}
+
+// verifySpawnedTenant proves that the actor a tenant-aware spawn returned is
+// bound to the tenant that spawn declared (TENANT-003 T4). It is a no-op in
+// legacy mode (requested == nil).
+//
+// GoAkt's Spawn returns an already-running actor's PID with a nil error, and
+// concurrent spawns of one name coalesce onto a single execution, so the PID
+// may belong to an actor another spawn created. The authority is therefore
+// the returned actor's own spawn binding, read back from pid rather than
+// from this call's intent: the EntityTenantScope dependency that actor was
+// created with, which its PreStart turned into its persistence.Scope via
+// resolveScope and which never changes for the actor's lifetime. Because
+// the check runs after Spawn on the actor that actually holds the name,
+// there is no window between checking and spawning: whichever spawn
+// created the actor fixed its tenant, and every other caller is compared
+// against that fixed binding. A binding that cannot be read (the actor
+// stopped meanwhile, or a remote lookup failed) fails closed.
+//
+// This never calls TenantResolver.Resolve: requested was declared by the
+// caller via WithTenant or the resolver's fixed tenant (spawnTenantScope).
+func verifySpawnedTenant(pid *goakt.PID, requested *extensions.EntityTenantScope) error {
+	if requested == nil {
+		return nil
+	}
+
+	requestedTenant, err := tenancy.NewTenantContext(tenancy.TenantID(requested.TenantID))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSpawnTenantMismatch, err)
+	}
+
+	bound, ok := pid.Dependency(extensions.EntityTenantScopeID).(*extensions.EntityTenantScope)
+	if !ok || bound == nil {
+		return fmt.Errorf("%w: actor %q exposes no tenant binding: %w", ErrSpawnTenantMismatch, pid.Name(), tenancy.ErrDenied)
+	}
+
+	boundTenant, err := tenancy.NewTenantContext(tenancy.TenantID(bound.TenantID))
+	if err != nil {
+		return fmt.Errorf("%w: actor %q carries an invalid tenant binding: %w", ErrSpawnTenantMismatch, pid.Name(), err)
+	}
+
+	if err := tenancy.VerifyUnchanged(boundTenant, requestedTenant); err != nil {
+		return fmt.Errorf("%w: actor %q: %w", ErrSpawnTenantMismatch, pid.Name(), err)
+	}
+	return nil
 }
 
 // EntityExists reports whether an entity with the given ID is currently alive in the cluster.
@@ -825,8 +882,11 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	}
 	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
-	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
-	return err
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
+	if err != nil {
+		return err
+	}
+	return verifySpawnedTenant(pid, tenantScope)
 }
 
 // Dispatch sends env's payload to the entity identified by entityID and
@@ -1218,7 +1278,7 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 		deps = append(deps, tenantScope)
 	}
 
-	_, err := actorSystem.Spawn(ctx, behavior.ID(),
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(),
 		actor,
 		goakt.WithLongLived(),
 		goakt.WithDependencies(deps...),
@@ -1227,7 +1287,7 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)
 	}
 
-	return nil
+	return verifySpawnedTenant(pid, tenantScope)
 }
 
 // SagaStatus returns the current status and state of the named saga.
