@@ -1,6 +1,6 @@
 # Tasks — EventStore tenant isolation (EGO-TENANT-003)
 
-Tracker `#92`, epic `#23`. All five slices this change was cut into (T1–T5)
+Tracker `#92`, epic `#23`. All six slices this change was cut into (T1–T6)
 are complete, each committed on `feat/ego-tenant-003-eventstore-isolation`.
 The remaining isolation work — read-side/projection isolation, an
 administrative bypass path, and tenant-qualified actor identity — does not
@@ -13,7 +13,8 @@ later, separately-authorized SDD changes.
 | T2 | Extend the tenant-aware SPI (`EventsStore`/`StateStore`/`SnapshotStore` take `Scope`) | `787550a` |
 | T3 | Cross-tenant store conformance suite | `5b1d16f` |
 | T4 | Engine/actor wiring | `99eccad` |
-| T5 | Migration and compatibility documentation | this commit |
+| T5 | Migration and compatibility documentation | `c3a4ece` |
+| T6 | Tenant adoption tool for existing `Unscoped()` data | this commit |
 
 ## T1 — Introduce `persistence.Scope`
 
@@ -333,8 +334,120 @@ verification command results are recorded in this change's commit.
       touches only `CHANGELOG.md`, `readme.md`, and this file.
 
 **Evidence**: `CHANGELOG.md`, `readme.md`, this file
-(`openspec/changes/ego-tenant-003/tasks.md`). Commit: this commit (see
-`git log -1` on `feat/ego-tenant-003-eventstore-isolation` for its SHA).
+(`openspec/changes/ego-tenant-003/tasks.md`). Commit `c3a4ece`.
+
+## T6 — Tenant adoption tool for existing `Unscoped()` data
+
+T5 documented the compatibility contract and the zero-migration guarantee
+for a deployment that never activates tenancy, but shipped no tool for the
+harder case T5's own acceptance-criteria note named as unmet: a deployment
+that already has data written under `Unscoped()` and now wants to adopt
+tenancy. This slice closes exactly that gap.
+
+- [x] 6.1 Read `migration/migration.go`, `migration/option.go`, and
+      `migration/migration_test.go` first, to follow the existing
+      `Migrator`'s conventions: a `New(stores, opts...)` constructor,
+      functional options, a kit-logger `Logger` resolved through
+      `ego.ResolveLogger`, a `Ping` preflight on each store, paged
+      `PersistenceIDs` enumeration, and a package doc comment with a usage
+      example.
+- [x] 6.2 Verified the CRITICAL correctness claim in the brief against
+      T4's real code before relying on it: `event_sourced_actor.go`'s
+      `recover`/`recoverFromSnapshot`/`applyPersistedEvent` each call
+      `entity.seedActorTenant`/`tenancy.VerifyUnchanged` against
+      `entity.actorTenant`, which `resolveScope` (line 438) pre-seeds from
+      the spawn-bound `extensions.EntityTenantScope` dependency *before*
+      recovery ever runs (see `resolveScope`'s own doc comment: "turns
+      seedActorTenant's later calls ... from a first-seed into a
+      cross-check"). The claim held: a copied record with empty or stale
+      `tenant_metadata` fails recovery under a tenant-bound actor via
+      `tenancy.ErrDenied` (mismatch) or `UnmarshalMetadata`'s `ErrInvalid`
+      (missing/malformed) — this is a real, confirmed data-stranding risk
+      the tool must avoid, not a hypothetical one.
+- [x] 6.3 Wrote `migration/tenant_adoption_test.go` first (strict TDD),
+      then ran it and observed RED: `go vet -mod=vendor ./migration/...`
+      →` undefined: TenantAssignment` (the type did not exist yet).
+- [x] 6.4 Implemented `migration/tenant_adoption.go`: `TenantAdopter`,
+      built via `NewTenantAdopter(assign TenantAssignment, opts
+      ...AdoptionOption)` where `assign` is a required constructor
+      argument (not an option, since the framework cannot decide which
+      tenant an existing aggregate belongs to). Options:
+      `WithEventsStore`/`WithSnapshotStore`/`WithStateStore` (each
+      optional — a nil store skips that record kind, never panics),
+      `WithSourceScope` (default `Unscoped()`), `WithScanPageSize`,
+      `WithWriteEnabled` (required opt-in; default is dry-run — plans and
+      reports, writes nothing), `WithSourceDeletion` (opt-in; deletes a
+      source-scope copy only after it was written to the target and read
+      back and verified), `WithFailFast`, `WithPersistenceIDs` (explicit
+      id list), and `WithAdoptionLogger`. Every write into the target
+      scope uses `persistence.ExpectGenesis()` for events and durable
+      state (an existing target aggregate can never be silently
+      clobbered; the resulting `*persistence.ConflictError` is reported as
+      `already_present`, not a crash); `persistence.SnapshotStore.WriteSnapshot`
+      has no precondition parameter at all in the SPI, so snapshot
+      adoption instead reads the target first and skips the write if
+      anything is already there — a documented, unavoidable read-then-write
+      window, not an oversight. Every copied record's `TenantMetadata` is
+      stamped via `tenancy.MarshalMetadata` of a `tenancy.NewTenantContext`
+      built for the target tenant, exactly like the actors stamp it.
+      `AdoptionReport` carries per-outcome counts (scanned, assigned,
+      skipped-by-assignment, copied, already-present, verified,
+      source-deleted, failed) and a `Failures` list, and implements
+      `String()` for logging.
+- [x] 6.5 Ran `migration/tenant_adoption_test.go` again and observed GREEN:
+      `go test -mod=vendor -count=1 -v ./migration/...` → every
+      `TestTenantAdopter*` subtest `PASS`, including
+      `TestTenantAdopterEndToEndRecoveryThroughRealActor`, which spawns a
+      REAL tenant-bound `ego.EventSourcedActor` (via a real `ego.Engine`
+      built from `ego.NewConfig`/`goakt.NewActorSystem`/`ego.NewEngine`,
+      exactly as production code assembles one) over a legacy event
+      adopted into tenant `"acme"`, and proves the recovered balance (100,
+      from the migrated event) plus a new credit (50) sums to 150 — the
+      actor could only have recovered that starting balance from the
+      migrated data, which it could only do if the migrated
+      `tenant_metadata` passed T4's cross-check.
+- [x] 6.6 Documented the durable-state (and, found while implementing,
+      snapshot-store) enumeration gap honestly rather than inventing an
+      API: `persistence.StateStore` and `persistence.SnapshotStore` have
+      no `PersistenceIDs`-style method, so when no events store is
+      configured, `WithPersistenceIDs` is the *only* source of ids —
+      stated in both the package doc comment (`migration/migration.go`)
+      and `WithPersistenceIDs`'s own doc comment.
+      `TestTenantAdopterExplicitPersistenceIDsForDurableStateOnly` proves
+      the durable-state-only path works with an explicit id and no events
+      store at all.
+- [x] 6.7 Also discovered, and documented rather than working around,
+      that `persistence.StateStore` has no delete method in the SPI at
+      all (unlike `EventsStore.DeleteEvents` and
+      `SnapshotStore.DeleteSnapshots`): `WithSourceDeletion` therefore
+      never deletes a durable-state source copy, regardless of the
+      option, and `adoptState`'s doc comment says so plainly.
+- [x] 6.8 Extended `migration/migration.go`'s package doc comment with a
+      "Adopting tenancy for existing data" section (usage example, the
+      required-`TenantAssignment` rationale, and the enumeration
+      limitation) rather than adding a second package doc comment, to
+      avoid two competing `// Package migration` blocks in one package.
+- [x] 6.9 Ran the full verification suite: `go build -mod=vendor ./...`,
+      `go vet -mod=vendor ./...`, `go test -mod=vendor -count=1
+      ./migration/... ./persistence/... ./testkit/...` three times, and
+      `go test -mod=vendor -count=1 -run
+      TestTenantAdopterEndToEndRecoveryThroughRealActor -v ./migration/...`
+      twice — all clean, no flake signature encountered. `git diff --stat`
+      confirmed only `migration/tenant_adoption.go`,
+      `migration/tenant_adoption_test.go`, `migration/migration.go`,
+      `CHANGELOG.md`, `readme.md`, and this file were touched.
+
+**Evidence**: `migration/tenant_adoption.go` (new),
+`migration/tenant_adoption_test.go` (new, 20 test functions/subtests
+covering dry-run-writes-nothing, real-run copies events/snapshot/state and
+keeps the source, `tenant_metadata` stamping, the end-to-end real-actor
+recovery proof, two-tenant isolation, `ok=false` leaves an aggregate
+untouched, idempotent re-run, never-overwrite-an-existing-target,
+opt-in source deletion only after verification, per-aggregate failure
+does not abort the run, and explicit ids for a durable-state-only
+deployment), `migration/migration.go` (package doc extended),
+`CHANGELOG.md`, `readme.md`, this file. Commit: this commit (see `git log
+-1` on `feat/ego-tenant-003-eventstore-isolation` for its SHA).
 
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)
@@ -431,17 +544,34 @@ partial with what remains.
    tautology — it genuinely fails against a store that ignores `Scope`.
 
 8. **Compatibility and migration of existing implementations are
-   explicit.** PARTIALLY MET. The compatibility contract itself is fully
-   explicit: the `CHANGELOG.md` `[Unreleased]` entry and the doc comments
-   on `EventsStore`/`StateStore`/`SnapshotStore` state the old/new
+   explicit.** MET. The compatibility contract itself is fully explicit
+   (T5): the `CHANGELOG.md` `[Unreleased]` entry and the doc comments on
+   `EventsStore`/`StateStore`/`SnapshotStore` state the old/new
    signatures, the structural-key upgrade recipe, and the zero-migration
    guarantee for a deployment that never activates tenancy (every call
-   already carries `Unscoped()`, unchanged). What remains unmet: this
-   change ships no migration *tool* for a deployment that adopts tenancy
-   on already-existing data. Existing rows have no tenant of their own —
-   they were written under `Unscoped()`, a real and distinct scope, not a
-   wildcard — and this change is explicit that assigning them to a
-   tenant is a deliberate, deployment-specific operator decision this
-   repository does not automate. A reader adopting tenancy on a live,
-   already-populated store needs to plan that migration themselves; nothing
-   here does it for them.
+   already carries `Unscoped()`, unchanged). T6 closes what T5 left
+   unmet: `migration.TenantAdopter`
+   (`migration/tenant_adoption.go`) is the migration tool for a
+   deployment that adopts tenancy on already-existing data. The business
+   decision of which tenant an existing aggregate belongs to remains the
+   operator's — the framework cannot and does not infer it — but it is
+   now expressed through one required, explicit `TenantAssignment`
+   function rather than left as an unstarted, unautomated task. The tool
+   defaults to dry-run, never deletes source data without an explicit
+   opt-in *and* a verified copy, never clobbers an existing target
+   (`persistence.ExpectGenesis()`/pre-read for snapshots), stamps
+   `tenant_metadata` the same way the actors do (proven end to end
+   through a real tenant-bound `EventSourcedActor` in
+   `TestTenantAdopterEndToEndRecoveryThroughRealActor`), and is
+   idempotent on re-run. What is honestly still a gap, stated rather than
+   hidden: `persistence.SnapshotStore`/`persistence.StateStore` have no
+   `PersistenceIDs`-style enumeration method in the SPI, so a
+   durable-state-only or snapshot-only deployment cannot be discovered
+   automatically — the operator must supply those ids via
+   `WithPersistenceIDs` (`migration/tenant_adoption.go`'s and
+   `migration/migration.go`'s doc comments say so plainly); and
+   `persistence.StateStore` has no delete method at all, so
+   `WithSourceDeletion` can never remove a durable-state source copy.
+   Both are gaps in today's persistence SPI, not something this tool
+   could paper over without inventing an API this change did not
+   authorize.

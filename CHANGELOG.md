@@ -79,7 +79,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   **Upgrade recipe for an external store adapter:** accept the new `scope persistence.Scope` parameter on every method listed above, and fold it into the record key STRUCTURALLY — for a SQL-backed store that means a real tenant column that participates in the primary key and in every `WHERE` clause, not a string concatenated onto the existing `persistence_id` column. `persistence.Scope.String()` (`"unscoped"`, `"tenant:<id>"`) is a diagnostic rendering only and must never become a storage key: nothing at the string level stops a tenant literally named `"unscoped"` from rendering as `"tenant:unscoped"`, so a store that reduces `Scope` to its string before keying loses the structural guarantee `Scope.Equal` provides. Key on the `Scope` value itself (or its kind and `TenantID()`), never on `String()`.
 
-  **Zero-migration guarantee:** an adapter that maps `persistence.Unscoped()` onto its existing key layout unchanged needs no data migration and no backfill for a deployment that never activates tenancy (no `tenancy.TenantResolver` configured) — every call already carries `Unscoped()` today, before and after the adapter is upgraded. A deployment that *adopts* tenancy on existing data does need a migration: every row written before this change was written under `Unscoped()`, which is a real, distinct `Scope` value, not a wildcard that matches every tenant. Adopting tenancy does not retroactively assign those rows to a tenant — an operator must deliberately decide, per existing `persistence_id`, which tenant (if any) it now belongs to, and either keep serving it under `Unscoped()` or re-key it under a chosen tenant `Scope`. This change does not ship that migration tool; it is deployment-specific and stays outside EGO-TENANT-003's scope.
+  **Zero-migration guarantee:** an adapter that maps `persistence.Unscoped()` onto its existing key layout unchanged needs no data migration and no backfill for a deployment that never activates tenancy (no `tenancy.TenantResolver` configured) — every call already carries `Unscoped()` today, before and after the adapter is upgraded. A deployment that *adopts* tenancy on existing data does need a migration: every row written before this change was written under `Unscoped()`, which is a real, distinct `Scope` value, not a wildcard that matches every tenant. Adopting tenancy does not retroactively assign those rows to a tenant — an operator must deliberately decide, per existing `persistence_id`, which tenant (if any) it now belongs to, and either keep serving it under `Unscoped()` or re-key it under a chosen tenant `Scope`.
+
+  **`migration.TenantAdopter` is that migration tool.** It copies an aggregate's events, snapshot, and durable state from a source scope (normally `Unscoped()`) into a per-aggregate target tenant scope:
+
+  ```go
+  adopter, err := migration.NewTenantAdopter(
+      func(ctx context.Context, persistenceID string) (tenancy.TenantID, bool, error) {
+          // Business decision only the operator holds — the framework
+          // cannot infer which tenant an existing aggregate belongs to.
+          return lookupTenantFor(persistenceID)
+      },
+      migration.WithEventsStore(eventsStore),
+      migration.WithSnapshotStore(snapshotStore),
+      migration.WithStateStore(stateStore),
+      migration.WithWriteEnabled(), // required opt-in; the default is dry-run
+  )
+  report, err := adopter.Run(ctx)
+  ```
+
+  The `TenantAssignment` function is a required constructor argument, never an option, and never defaulted: assigning an existing aggregate to a tenant is a business decision the framework has no way to make on its own. `TenantAdopter` defaults to **dry-run** — it plans and reports but writes nothing until `WithWriteEnabled` is passed — and it **never deletes source data** unless `WithSourceDeletion` is also set, and even then only after that aggregate's copy has been written to the target scope, read back, and verified; a failed verification never deletes. Every write into the target scope uses `persistence.ExpectGenesis()` (events, durable state) or a target pre-read (snapshots, which have no write precondition in the SPI), so an aggregate already present in the target tenant is reported as `already_present`, never silently overwritten; re-running the tool over already-migrated data is a no-op. Every copied record's `tenant_metadata` is stamped via `tenancy.MarshalMetadata` of a `tenancy.TenantContext` built for the target tenant — the same way `EventSourcedActor`/`DurableStateActor` stamp it — which matters because T4 (above) turned recovered `tenant_metadata` into a cross-check against the actor's spawn-bound tenant: a copy with missing or stale `tenant_metadata` would otherwise recover successfully into the wrong scope and then fail every subsequent tenant-bound recovery.
+
+  **Durable-state enumeration limitation:** `persistence.EventsStore.PersistenceIDs` can enumerate a scope's ids, but neither `persistence.SnapshotStore` nor `persistence.StateStore` has an equivalent method. A durable-state-only or snapshot-only deployment (no events store configured) cannot be discovered automatically — the operator must supply the ids explicitly via `migration.WithPersistenceIDs`. Separately, `persistence.StateStore` has no delete method at all in the SPI, so `WithSourceDeletion` can never remove a durable-state source copy, regardless of the option. Both are gaps in today's persistence SPI, documented rather than papered over with an invented API.
 
   **`persistence/conformance` is the acceptance test.** An adapter author wires it into their own test package:
 

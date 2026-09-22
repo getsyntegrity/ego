@@ -42,6 +42,39 @@
 // and writes a snapshot to the snapshot store seeded from that state. This is a
 // one-time, idempotent operation — running it again will overwrite existing snapshots
 // with the same data.
+//
+// # Adopting tenancy for existing data
+//
+// A separate tool, TenantAdopter, addresses a different migration: a
+// deployment that already has data written under persistence.Unscoped()
+// and now wants to adopt tenancy (TENANT-003). See TenantAdopter's own doc
+// comment for the full usage; in short:
+//
+//	adopter, err := migration.NewTenantAdopter(assignTenant,
+//	    migration.WithEventsStore(eventsStore),
+//	    migration.WithSnapshotStore(snapshotStore),
+//	    migration.WithStateStore(stateStore),
+//	    migration.WithWriteEnabled(), // required opt-in; the default is dry-run
+//	)
+//	report, err := adopter.Run(ctx)
+//
+// TenantAssignment (assignTenant above) is a required constructor
+// argument, not an option: the framework has no way to know which tenant an
+// existing aggregate belongs to, since persistence_id is an opaque,
+// caller-assigned string. That is a business decision only the operator
+// holds.
+//
+// TenantAdopter defaults to dry-run (plans and reports, writes nothing) and
+// never deletes source data unless WithSourceDeletion is also set, and then
+// only after a copy has been read back and verified.
+//
+// Durable-state enumeration limitation: persistence.EventsStore has
+// PersistenceIDs to enumerate a scope, but neither persistence.SnapshotStore
+// nor persistence.StateStore does. When no events store is configured (a
+// durable-state-only, or snapshot-only, deployment), TenantAdopter has no
+// way to discover which persistence IDs exist on its own — the operator
+// must supply them explicitly via WithPersistenceIDs. This is a real gap in
+// today's persistence SPI, not an oversight in this tool.
 package migration
 
 import (
