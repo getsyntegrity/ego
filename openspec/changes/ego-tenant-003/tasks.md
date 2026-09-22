@@ -713,6 +713,13 @@ Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
       `TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites`);
       `WithScanPageSize(0)` is rejected
       (`TestNewTenantAdopterRejectsZeroScanPageSize`).
+- [x] 8.5 Codex review of `ef94bbc`: a deleting run also removes the source
+      of a target an earlier run already adopted exactly
+      (`TestTenantAdopterDeletesSourceOfVerifiedExistingTarget`), and the
+      pre-delete re-read compares the full source records, so a record
+      rewritten at the same sequence number blocks deletion
+      (`TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot`,
+      `TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent`).
 
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)

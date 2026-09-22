@@ -1599,3 +1599,151 @@ func TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites(t *tes
 	require.NotNil(t, latest, "the snapshot written during the run must survive")
 	assert.EqualValues(t, 3, latest.GetSequenceNumber())
 }
+
+// TestTenantAdopterDeletesSourceOfVerifiedExistingTarget covers a run that
+// enables WithSourceDeletion after an earlier run copied without it: the
+// target is proven to be the exact adoption, so the source is deleted under
+// the same guard as a fresh copy, and nothing is reported as copied.
+func TestTenantAdopterDeletesSourceOfVerifiedExistingTarget(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+
+	const id = "copy-then-delete"
+	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 2, 200)))
+
+	assignment := fixedAssignment(map[string]tenancy.TenantID{id: "acme"})
+	keep, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled())
+	require.NoError(t, err)
+	first, err := keep.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Copied)
+	require.Zero(t, first.SourceDeleted)
+
+	deleting, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled(), WithSourceDeletion())
+	require.NoError(t, err)
+	second, err := deleting.Run(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, second.Failed)
+	assert.Equal(t, 1, second.AlreadyPresent, "nothing was copied: the target was already the exact adoption")
+	assert.Zero(t, second.Copied)
+	assert.Zero(t, second.Verified)
+	assert.Equal(t, 1, second.SourceDeleted, "the verified source must now be deleted")
+	require.Len(t, second.Aggregates, 1)
+	assert.Equal(t, StatusSourceDeleted, second.Aggregates[0].Events.Status)
+	assert.Equal(t, StatusSourceDeleted, second.Aggregates[0].Snapshot.Status)
+
+	events, err := eventsStore.ReplayEvents(ctx, source, id, 1, 10, 10)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	snap, err := snapshotStore.GetLatestSnapshot(ctx, source, id)
+	require.NoError(t, err)
+	assert.Nil(t, snap)
+}
+
+// replacingSnapshotStore overwrites the source snapshot at the SAME sequence
+// number while the adopter reads back the target, the way a concurrent
+// writer can with a store that keys snapshots by (scope, id, sequence).
+type replacingSnapshotStore struct {
+	persistence.SnapshotStore
+	source, target persistence.Scope
+	replacement    *egopb.Snapshot
+	targetReads    int
+}
+
+func (r *replacingSnapshotStore) GetLatestSnapshot(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error) {
+	snapshot, err := r.SnapshotStore.GetLatestSnapshot(ctx, scope, persistenceID)
+	if err == nil && scope.Equal(r.target) && snapshot != nil {
+		r.targetReads++
+		if r.targetReads == 1 {
+			if writeErr := r.SnapshotStore.WriteSnapshot(ctx, r.source, r.replacement); writeErr != nil {
+				return nil, writeErr
+			}
+		}
+	}
+	return snapshot, err
+}
+
+func TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	base := testkit.NewSnapshotStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "replaced-snapshot"
+	require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 4, 400)))
+	replacement := newLegacySnapshot(t, id, 4, 444)
+
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithSnapshotStore(&replacingSnapshotStore{SnapshotStore: base, source: source, target: target, replacement: replacement}),
+		WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, report.SourceDeleted)
+	assert.Equal(t, 1, report.Failed)
+	require.Len(t, report.Failures, 1)
+	assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+
+	kept, err := base.GetLatestSnapshot(ctx, source, id)
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.True(t, proto.Equal(replacement, kept), "the replacement snapshot must survive")
+}
+
+// replacingEventsStore rewrites an existing source event in place (same
+// sequence number) while the adopter reads back the target.
+type replacingEventsStore struct {
+	persistence.EventsStore
+	source, target persistence.Scope
+	replacement    *egopb.Event
+	fired          bool
+}
+
+func (r *replacingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := r.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
+	if err == nil && !r.fired && scope.Equal(r.target) && len(events) > 0 {
+		r.fired = true
+		if writeErr := r.EventsStore.WriteEvents(ctx, r.source, []*egopb.Event{r.replacement}, persistence.Unconditional()); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+	return events, err
+}
+
+func TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	base := testkit.NewEventsStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "rewritten-event"
+	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(&replacingEventsStore{EventsStore: base, source: source, target: target, replacement: newLegacyEvent(t, id, 2, 222)}),
+		WithWriteEnabled(), WithSourceDeletion())
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, report.SourceDeleted)
+	assert.Equal(t, 1, report.Failed)
+	require.Len(t, report.Failures, 1)
+	assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+
+	remaining, err := base.ReplayEvents(ctx, source, id, 1, 10, 10)
+	require.NoError(t, err)
+	assert.Len(t, remaining, 2, "a source that was rewritten must not be deleted")
+}

@@ -145,12 +145,14 @@ const (
 	// position, or a record the actor rewrote after adoption — fails with
 	// StatusFailed; tenant ownership or existence alone is never success.
 	StatusAlreadyPresent RecordStatus = "already_present"
-	// StatusSourceDeleted means the record was copied, the copy was read
-	// back and matched the source record byte-for-byte (proto.Equal against
-	// the exact record this tool intended to write — the source record with
-	// tenant_metadata replaced by the target tenant's plus its adoption
-	// receipt), and the source-scope copy was then removed
-	// (WithSourceDeletion only).
+	// StatusSourceDeleted means the target was proven to hold this exact
+	// adoption — either copied by this run and read back proto.Equal to the
+	// record it intended to write (the source record with tenant_metadata
+	// replaced by the target tenant's plus its adoption receipt), or already
+	// present from an earlier run and compared exactly against the source —
+	// and the verified source-scope copy was then removed under the guarded
+	// deletion (WithSourceDeletion only). An aggregate deleted this way
+	// without a fresh copy counts toward AlreadyPresent, not Copied.
 	StatusSourceDeleted RecordStatus = "source_deleted"
 	// StatusFailed means an unexpected error occurred while adopting this
 	// record kind. See RecordOutcome.Err for detail.
@@ -161,6 +163,11 @@ const (
 type RecordOutcome struct {
 	Status RecordStatus
 	Err    error
+
+	// wroteTarget is true when this run wrote the target record: always for
+	// StatusCopied, and for StatusSourceDeleted only when the deletion
+	// followed a fresh copy rather than an already-present target.
+	wroteTarget bool
 }
 
 // AggregateOutcome is the per-aggregate detail behind an AdoptionReport.
@@ -238,7 +245,8 @@ type AdoptionReport struct {
 	// missing encryption envelope. Always 0 in dry-run.
 	Verified int
 	// SourceDeleted is the number of aggregates for which at least one
-	// record kind's source-scope copy was removed after a verified copy
+	// record kind's source-scope copy was removed after its target was
+	// verified — by a fresh copy, or as an exact already-present adoption
 	// (WithSourceDeletion only). Always 0 in dry-run.
 	SourceDeleted int
 	// Failed is the number of persistence IDs (assignment failures and
@@ -537,19 +545,19 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 	if a.eventsStore != nil {
 		outcome.Events, aggFailure = a.applyKind(ctx, KindEvents, id, intent, report, a.adoptEvents)
 		found = found || outcome.Events.Status != StatusNone
-		copied = copied || outcome.Events.Status == StatusCopied || outcome.Events.Status == StatusSourceDeleted
+		copied = copied || outcome.Events.wroteTarget
 	}
 
 	if aggFailure == nil && a.snapshotStore != nil {
 		outcome.Snapshot, aggFailure = a.applyKind(ctx, KindSnapshot, id, intent, report, a.adoptSnapshot)
 		found = found || outcome.Snapshot.Status != StatusNone
-		copied = copied || outcome.Snapshot.Status == StatusCopied || outcome.Snapshot.Status == StatusSourceDeleted
+		copied = copied || outcome.Snapshot.wroteTarget
 	}
 
 	if aggFailure == nil && a.stateStore != nil {
 		outcome.DurableState, aggFailure = a.applyKind(ctx, KindDurableState, id, intent, report, a.adoptState)
 		found = found || outcome.DurableState.Status != StatusNone
-		copied = copied || outcome.DurableState.Status == StatusCopied || outcome.DurableState.Status == StatusSourceDeleted
+		copied = copied || outcome.DurableState.wroteTarget
 	}
 
 	// A record kind only ever reaches StatusCopied or StatusSourceDeleted
@@ -585,6 +593,11 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 		return false, nil
 	default:
 		report.AlreadyPresent++
+		if deleted {
+			// The target was already the exact adoption, and this
+			// WithSourceDeletion run removed the verified source.
+			report.SourceDeleted++
+		}
 		return false, nil
 	}
 }
@@ -648,14 +661,14 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 	}
 	if len(existing) > 0 {
-		return classifyExisting(verifyEventsEquivalent(id, expected, existing, intent.tenant, a.sourceScope))
+		return a.afterVerifiedEvents(ctx, id, sourceEvents, maxSeq, verifyEventsEquivalent(id, expected, existing, intent.tenant, a.sourceScope))
 	}
 
 	if len(sourceEvents) == 0 {
 		return RecordOutcome{Status: StatusNone}
 	}
 	if !a.write {
-		return RecordOutcome{Status: StatusCopied}
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 	}
 
 	if err := a.eventsStore.WriteEvents(ctx, intent.target, expected, persistence.ExpectGenesis()); err != nil {
@@ -669,7 +682,7 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		if err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 		}
-		return classifyExisting(verifyEventsEquivalent(id, expected, raced, intent.tenant, a.sourceScope))
+		return a.afterVerifiedEvents(ctx, id, sourceEvents, maxSeq, verifyEventsEquivalent(id, expected, raced, intent.tenant, a.sourceScope))
 	}
 
 	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
@@ -681,25 +694,10 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 	}
 
 	if a.deleteSource {
-		// Nothing makes read-verify-delete atomic in the SPI, so the source
-		// is re-read on both sides of the deletion: a source that grew since
-		// it was read is never deleted, and one that grew during the delete
-		// is never reported as deleted. Either way the newer events stay in
-		// the source. A write landing after the second check is outside what
-		// this tool can observe; WithSourceDeletion requires a quiesced source.
-		if err := a.checkSourceEventsNotBeyond(ctx, id, maxSeq, "nothing was deleted"); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: err}
-		}
-		if err := a.eventsStore.DeleteEvents(ctx, a.sourceScope, id, maxSeq); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source events: %w", err)}
-		}
-		if err := a.checkSourceEventsNotBeyond(ctx, id, maxSeq, "the verified events were deleted, but the newer ones remain only in the source"); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: err}
-		}
-		return RecordOutcome{Status: StatusSourceDeleted}
+		return a.deleteVerifiedSourceEvents(ctx, id, sourceEvents, maxSeq, true)
 	}
 
-	return RecordOutcome{Status: StatusCopied}
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 }
 
 // adoptSnapshot copies persistence ID id's latest snapshot from the source
@@ -739,14 +737,18 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 		if clone != nil {
 			expected = clone
 		}
-		return classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
+		outcome := classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
+		if outcome.Status == StatusAlreadyPresent && snapshot != nil && a.write && a.deleteSource {
+			return a.deleteVerifiedSourceSnapshot(ctx, id, snapshot, false)
+		}
+		return outcome
 	}
 
 	if snapshot == nil {
 		return RecordOutcome{Status: StatusNone}
 	}
 	if !a.write {
-		return RecordOutcome{Status: StatusCopied}
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 	}
 
 	if err := a.snapshotStore.WriteSnapshot(ctx, intent.target, clone); err != nil {
@@ -769,21 +771,10 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 	}
 
 	if a.deleteSource {
-		// Same two-sided re-read as adoptEvents: never delete a source that
-		// gained a newer snapshot, and never report a deletion that raced one.
-		if err := a.checkSourceSnapshotNotBeyond(ctx, id, snapshot.GetSequenceNumber(), "nothing was deleted"); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: err}
-		}
-		if err := a.snapshotStore.DeleteSnapshots(ctx, a.sourceScope, id, snapshot.GetSequenceNumber()); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source snapshot: %w", err)}
-		}
-		if err := a.checkSourceSnapshotNotBeyond(ctx, id, snapshot.GetSequenceNumber(), "the verified snapshot was deleted, but the newer one remains only in the source"); err != nil {
-			return RecordOutcome{Status: StatusFailed, Err: err}
-		}
-		return RecordOutcome{Status: StatusSourceDeleted}
+		return a.deleteVerifiedSourceSnapshot(ctx, id, snapshot, true)
 	}
 
-	return RecordOutcome{Status: StatusCopied}
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 }
 
 // adoptState copies persistence ID id's latest durable state from the
@@ -833,7 +824,7 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 		return RecordOutcome{Status: StatusNone}
 	}
 	if !a.write {
-		return RecordOutcome{Status: StatusCopied}
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 	}
 
 	if err := a.stateStore.WriteState(ctx, intent.target, clone, persistence.ExpectGenesis()); err != nil {
@@ -862,7 +853,7 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state for persistence_id %q: read-back does not match what was written (expected version %d)", id, state.GetVersionNumber())}
 	}
 
-	return RecordOutcome{Status: StatusCopied}
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
 }
 
 // verifyEventsMatchBySequence proves that written — the target scope's
@@ -907,30 +898,81 @@ func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) er
 	return nil
 }
 
-// checkSourceEventsNotBeyond fails with errSourceChangedDuringAdoption when
-// the source now holds an event after verified, the highest sequence number
-// this run copied and verified. outcome says what that means for the source.
-func (a *TenantAdopter) checkSourceEventsNotBeyond(ctx context.Context, id string, verified uint64, outcome string) error {
-	latest, err := a.eventsStore.GetLatestEvent(ctx, a.sourceScope, id)
-	if err != nil {
-		return fmt.Errorf("re-read source events: %w", err)
+// afterVerifiedEvents turns the verdict on an events target that already
+// existed into an outcome. A target proven to contain the source exactly is
+// already present, and a write-enabled WithSourceDeletion run then deletes
+// that verified source under the same guard as a fresh copy.
+func (a *TenantAdopter) afterVerifiedEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, verdict error) RecordOutcome {
+	outcome := classifyExisting(verdict)
+	if outcome.Status == StatusAlreadyPresent && len(sourceEvents) > 0 && a.write && a.deleteSource {
+		return a.deleteVerifiedSourceEvents(ctx, id, sourceEvents, maxSeq, false)
 	}
-	if latest != nil && latest.GetSequenceNumber() > verified {
-		return fmt.Errorf("%w: persistence_id %q kind %s: source holds sequence %d beyond the verified %d; %s", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), verified, outcome)
-	}
-	return nil
+	return outcome
 }
 
-// checkSourceSnapshotNotBeyond is checkSourceEventsNotBeyond for snapshots.
-func (a *TenantAdopter) checkSourceSnapshotNotBeyond(ctx context.Context, id string, verified uint64, outcome string) error {
+// deleteVerifiedSourceEvents deletes the source events this run verified
+// (sourceEvents, through maxSeq). Nothing makes read-verify-delete atomic in
+// the SPI, so the source is re-read on both sides of the deletion: before
+// it, the source must still be exactly sourceEvents — no newer event, and no
+// event rewritten at the same sequence number — or nothing is deleted;
+// after it, a source that gained an event during the delete is reported as
+// failed, never as source_deleted. The newer or rewritten events always stay
+// in the source. A write landing after the final re-read is outside what
+// this tool can observe; WithSourceDeletion requires a quiesced source.
+func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, wroteTarget bool) RecordOutcome {
+	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
+	}
+	if len(current) != len(sourceEvents) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source holds %d events, %d were verified; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, len(current), len(sourceEvents))}
+	}
+	for i := range current {
+		if !proto.Equal(current[i], sourceEvents[i]) {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source sequence %d changed after it was verified; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, current[i].GetSequenceNumber())}
+		}
+	}
+
+	if err := a.eventsStore.DeleteEvents(ctx, a.sourceScope, id, maxSeq); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source events: %w", err)}
+	}
+
+	latest, err := a.eventsStore.GetLatestEvent(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
+	}
+	if latest != nil && latest.GetSequenceNumber() > maxSeq {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained sequence %d during the deletion; the verified events through %d were deleted, but the newer ones remain only in the source", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
+	}
+	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
+}
+
+// deleteVerifiedSourceSnapshot is deleteVerifiedSourceEvents for the source
+// snapshot this run verified: before deleting, the source's latest snapshot
+// must still be exactly verified (a snapshot rewritten at the same sequence
+// number fails, not just a newer one); after, a newer snapshot written
+// during the delete is reported as failed.
+func (a *TenantAdopter) deleteVerifiedSourceSnapshot(ctx context.Context, id string, verified *egopb.Snapshot, wroteTarget bool) RecordOutcome {
+	current, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source snapshot: %w", err)}
+	}
+	if !proto.Equal(current, verified) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: the source snapshot changed after it was verified (verified sequence %d); nothing was deleted", errSourceChangedDuringAdoption, id, KindSnapshot, verified.GetSequenceNumber())}
+	}
+
+	if err := a.snapshotStore.DeleteSnapshots(ctx, a.sourceScope, id, verified.GetSequenceNumber()); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source snapshot: %w", err)}
+	}
+
 	latest, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
 	if err != nil {
-		return fmt.Errorf("re-read source snapshot: %w", err)
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source snapshot: %w", err)}
 	}
-	if latest != nil && latest.GetSequenceNumber() > verified {
-		return fmt.Errorf("%w: persistence_id %q kind %s: source holds a snapshot at %d beyond the verified %d; %s", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified, outcome)
+	if latest != nil && latest.GetSequenceNumber() > verified.GetSequenceNumber() {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained a snapshot at %d during the deletion; the verified snapshot at %d was deleted, but the newer one remains only in the source", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
 	}
-	return nil
+	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
 }
 
 // classifyExisting turns the equivalence verdict on a pre-existing target
