@@ -106,8 +106,16 @@ func newSagaActor() *SagaActor {
 
 // PreStart initializes the saga actor: loads stores, recovers state, subscribes to events.
 func (s *SagaActor) PreStart(ctx *goakt.Context) error {
-	s.eventsStore = ctx.Extension(extensions.EventsStoreExtensionID).(*extensions.EventsStore).Underlying()
-	s.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
+	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	if err != nil {
+		return err
+	}
+	s.eventsStore = eventsStoreExt.Underlying()
+	s.eventsStream = eventsStreamExt.Underlying()
 	s.sagaID = ctx.ActorName()
 	// Presence-only signal, set before recover() so replay validation (SG5)
 	// gates on the same tenantAware value the live path uses (SG4).

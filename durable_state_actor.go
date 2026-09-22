@@ -101,8 +101,16 @@ func newDurableStateActor() *DurableStateActor {
 
 // PreStart pre-starts the actor
 func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
-	entity.stateStore = ctx.Extension(extensions.DurableStateStoreExtensionID).(*extensions.DurableStateStore).Underlying()
-	entity.eventsStream = ctx.Extension(extensions.EventsStreamExtensionID).(*extensions.EventsStream).Underlying()
+	stateStoreExt, err := requireExtension[*extensions.DurableStateStore](ctx, extensions.DurableStateStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	if err != nil {
+		return err
+	}
+	entity.stateStore = stateStoreExt.Underlying()
+	entity.eventsStream = eventsStreamExt.Underlying()
 	entity.persistenceID = ctx.ActorName()
 	// Presence-only signal: tenant-aware mode is active when the engine
 	// registered the tenancy marker extension. The marker carries no

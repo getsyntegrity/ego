@@ -73,12 +73,20 @@ func NewProjectionActor() *ProjectionActor {
 
 // PreStart prepares the projection
 func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
-	offsetStore := ctx.Extension(extensions.OffsetStoreExtensionID).(*extensions.OffsetStore).Underlying()
-	eventsStore := ctx.Extension(extensions.EventsStoreExtensionID).(*extensions.EventsStore).Underlying()
-	registry, ok := ctx.Extension(extensions.ProjectionExtensionID).(*extensions.ProjectionExtension)
-	if !ok {
-		return fmt.Errorf("projection registry extension is not available on this node")
+	offsetStoreExt, err := requireExtension[*extensions.OffsetStore](ctx, extensions.OffsetStoreExtensionID)
+	if err != nil {
+		return err
 	}
+	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	registry, err := requireExtension[*extensions.ProjectionExtension](ctx, extensions.ProjectionExtensionID)
+	if err != nil {
+		return err
+	}
+	offsetStore := offsetStoreExt.Underlying()
+	eventsStore := eventsStoreExt.Underlying()
 
 	// The actor name is the projection name: resolve this projection's own
 	// handler and options from the registry built by WithProjection.
