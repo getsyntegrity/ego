@@ -22,14 +22,6 @@ jobs:
           check-latest: false
           cache-dependency-path: "**/*.sum"
       - run: go version
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
       - name: Vendoring and Tidy
         run: go mod tidy && go mod vendor
       - name: Install dependencies
