@@ -2021,7 +2021,6 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2122,7 +2121,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2243,7 +2241,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2387,7 +2384,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an "encrypted" snapshot with dummy ciphertext
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
@@ -2443,7 +2439,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
