@@ -55,8 +55,8 @@ via the Actions "Run workflow" button (`workflow_dispatch`). It runs
 `go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` — always
 the full suite, no change detection — appends the summary to the job
 summary the same way, then `scripts/ci/go-test.sh` with the race detector
-on, and always uploads to Codecov. This is the mandatory gate and the only
-source Codecov's project coverage is uploaded from.
+on, and uploads to Codecov. This is the mandatory gate and the source of
+truth for Codecov's project coverage.
 
 ### `scripts/ci/go-test.sh`
 
@@ -164,10 +164,24 @@ included package set, in every mode, so a PR's `affected`-mode coverage
 number and `main`'s `full`-mode coverage number are directly comparable —
 only the numerator (which packages actually ran) differs.
 
-Only `build.yml`'s full-suite run uploads to Codecov. `pull_request.yml`
-uploads only when its own selection happened to be `full`; an `affected`
-or `none` PR run never uploads, so Codecov's project coverage always
-reflects a complete run.
+Only complete runs upload to Codecov: every `build.yml` run, and a
+`pull_request.yml` run whose own selection happened to be `full`. An
+`affected` or `none` PR run never uploads, so Codecov's project coverage
+always reflects a complete run.
+
+Uploads need the `CODECOV_TOKEN` repository secret (Codecov rejects
+tokenless uploads for this repository). A `Check Codecov token` step runs
+first: when the secret is missing it emits a `::warning::` and a job-summary
+line and skips the upload; when it is present the upload runs with
+`fail_ci_if_error: true`, so a rejected upload fails the job instead of
+being swallowed. Before #108 the upload used `fail_ci_if_error: false` and
+every run on `main` was silently rejected with "Token required - not valid
+tokenless upload".
+
+The Go module and build caches come from `actions/setup-go`'s built-in cache
+(keyed on `go.sum`). A separate `actions/cache` step over the same paths was
+removed: it re-extracted ~700 MB on top of setup-go's restore and failed with
+tar "Cannot open: File exists" on every run.
 
 ## Race policy
 

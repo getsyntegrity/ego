@@ -47,9 +47,23 @@ jobs:
           GO_TEST_RACE: "1"
         run: |
           scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
+      - name: Check Codecov token
+        id: codecov
+        shell: bash
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          if [ -n "$CODECOV_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CODECOV_TOKEN is not configured for this repository; coverage was not uploaded to Codecov."
+            echo "Coverage not uploaded to Codecov: the CODECOV_TOKEN secret is not configured for this repository." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: codecov/codecov-action@v7
+        if: steps.codecov.outputs.enabled == 'true'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.out # optional
-          fail_ci_if_error: false # optional (default = false)
-          verbose: false # optional (default = false)
+          files: ./coverage.out
+          fail_ci_if_error: true
+          verbose: false
