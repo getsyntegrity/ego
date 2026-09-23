@@ -1386,8 +1386,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create an instance of events stream
 		eventStream := eventstream.New()
 
@@ -1620,8 +1618,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create an instance of events stream
 		eventStream := eventstream.New()
 
@@ -1725,7 +1721,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -1785,7 +1780,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -1914,7 +1908,6 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
