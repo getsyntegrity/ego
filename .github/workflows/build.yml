@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '**/readme.md'
       - '**/renovate.json'
+  workflow_dispatch: {}
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,13 +41,20 @@ jobs:
         with:
           version: v2.13.1
           args: --timeout 10m --config .golangci.yml
-      - name: Install go-acc
+      - name: Select packages (full suite)
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
         run: |
-          go install github.com/ory/go-acc@latest
+          go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"
+          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Run tests
         shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+          GO_TEST_RACE: "1"
         run: |
-          go-acc ./... -o coverage.out --ignore egopb,test,example,mocks,benchmark -- -mod=vendor -p 1 -timeout 0 -race -v
+          scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
       - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
