@@ -826,7 +826,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		callCount := 0
 		secondHandled := make(chan struct{}, 1)
@@ -891,7 +890,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -948,7 +946,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -998,7 +995,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		// the saga processes events on its own goroutine, so the counter must
@@ -1065,7 +1061,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
