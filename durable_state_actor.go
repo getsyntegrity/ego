@@ -201,6 +201,8 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 		entity.actorSystem = ctx.ActorSystem()
 	case *egopb.GetStateCommand:
 		entity.getStateAndReply(ctx)
+	case *egopb.TenantBindingQuery:
+		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, message))
 	default:
 		msg := message.(Command)
 		entity.processCommand(ctx, msg)

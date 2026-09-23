@@ -33,7 +33,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -190,44 +192,54 @@ func TestEngineRespawnInLegacyModeIsUnchanged(t *testing.T) {
 	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme"))))
 }
 
-// TestVerifyTenantBindingDistinguishesMismatchFromUnverifiable pins how the
-// post-Spawn check classifies what it can read of the returned actor's
-// binding. A remote PID's binding is read through a remote call that
-// reports failure as "no dependencies", so it is retried, and a binding
-// that still cannot be read is ErrSpawnTenantUnverified — fail closed, but
-// never presented as a proven cross-tenant conflict.
-func TestVerifyTenantBindingDistinguishesMismatchFromUnverifiable(t *testing.T) {
+// TestClassifyTenantBinding pins how the engine maps the owning actor's
+// TenantBindingReply to the spawn outcome: a match is success, a different
+// binding is ErrSpawnTenantMismatch, and an actor holding no binding is
+// ErrSpawnTenantUnverified, which asserts no conflict.
+func TestClassifyTenantBinding(t *testing.T) {
 	requested := extensions.NewEntityTenantScope("acme")
-	lookupReturning := func(results ...*extensions.EntityTenantScope) (func() *extensions.EntityTenantScope, *int) {
-		calls := 0
-		return func() *extensions.EntityTenantScope {
-			result := results[min(calls, len(results)-1)]
-			calls++
-			return result
-		}, &calls
-	}
 
-	t.Run("same tenant", func(t *testing.T) {
-		lookup, _ := lookupReturning(extensions.NewEntityTenantScope("acme"))
-		require.NoError(t, verifyTenantBinding("order-1", requested, lookup, 1))
-	})
+	require.NoError(t, classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true, Matches: true}))
+	requireSpawnTenantMismatch(t, classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true}))
 
-	t.Run("different tenant is a mismatch", func(t *testing.T) {
-		lookup, _ := lookupReturning(extensions.NewEntityTenantScope("globex"))
-		requireSpawnTenantMismatch(t, verifyTenantBinding("order-1", requested, lookup, 3))
-	})
+	err := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{})
+	require.ErrorIs(t, err, ErrSpawnTenantUnverified)
+	assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
+}
 
-	t.Run("a transiently unreadable remote binding is retried", func(t *testing.T) {
-		lookup, calls := lookupReturning(nil, nil, extensions.NewEntityTenantScope("acme"))
-		require.NoError(t, verifyTenantBinding("order-1", requested, lookup, 3))
-		assert.Equal(t, 3, *calls)
-	})
+// TestAnswerTenantBinding pins the actors' shared query handler: it answers
+// from the bound scope only, never discloses the bound tenant, and reports
+// no binding in legacy mode or for an administrative-looking query.
+func TestAnswerTenantBinding(t *testing.T) {
+	acme, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
 
-	t.Run("a binding that stays unreadable is unverified, not a mismatch", func(t *testing.T) {
-		lookup, calls := lookupReturning(nil)
-		err := verifyTenantBinding("order-1", requested, lookup, 3)
-		require.ErrorIs(t, err, ErrSpawnTenantUnverified)
-		assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
-		assert.Equal(t, 3, *calls)
-	})
+	match := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "acme"})
+	assert.True(t, match.GetTenantAware())
+	assert.True(t, match.GetMatches())
+
+	other := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "globex"})
+	assert.True(t, other.GetTenantAware())
+	assert.False(t, other.GetMatches())
+
+	invalid := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: ""})
+	assert.False(t, invalid.GetMatches(), "an invalid queried tenant never matches")
+
+	legacy := answerTenantBinding(false, persistence.Unscoped(), &egopb.TenantBindingQuery{TenantId: "acme"})
+	assert.False(t, legacy.GetTenantAware())
+	assert.False(t, legacy.GetMatches())
+}
+
+// TestDispatchRejectsTenantBindingQuery pins that the control message can
+// never be sent as a command, so a caller cannot probe which tenant owns an
+// entity id.
+func TestDispatchRejectsTenantBindingQuery(t *testing.T) {
+	ctx := context.Background()
+	engine := newRespawnTestEngine(t)
+	id := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme"))))
+
+	globexCtx := context.WithValue(ctx, perCallerTenantKey{}, "globex")
+	_, _, err := engine.SendCommand(globexCtx, id, &egopb.TenantBindingQuery{TenantId: "acme"}, time.Minute)
+	require.ErrorIs(t, err, ErrNotACommand)
 }

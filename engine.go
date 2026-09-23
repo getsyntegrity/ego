@@ -112,12 +112,18 @@ var (
 	// Re-spawning a live id under the SAME tenant stays an idempotent success.
 	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
 	// ErrSpawnTenantUnverified is returned by Entity, DurableStateEntity, and
-	// Saga in tenant-aware mode when the tenant binding of the actor a spawn
-	// returned could not be read — for a remote PID, the owning node did not
-	// answer the dependency lookup. The spawn fails closed, but unlike
-	// ErrSpawnTenantMismatch it asserts no cross-tenant conflict; retrying the
-	// spawn is safe, since a same-tenant re-spawn is idempotent.
+	// Saga in tenant-aware mode when the actor a spawn returned did not
+	// answer the engine's TenantBindingQuery — for a remote PID, the node that
+	// owns it did not reply in time — or answered that it holds no tenant
+	// binding. The spawn fails closed, but unlike ErrSpawnTenantMismatch it
+	// asserts no cross-tenant conflict; retrying the spawn is safe, since a
+	// same-tenant re-spawn is idempotent.
 	ErrSpawnTenantUnverified = errors.New("eGo: the spawned actor's tenant binding could not be verified")
+	// ErrNotACommand is returned by Dispatch and SendCommand when the payload
+	// is an engine-internal control message (egopb.TenantBindingQuery) rather
+	// than a command. Rejecting it keeps a caller from asking an actor
+	// whether it belongs to an arbitrary tenant.
+	ErrNotACommand = errors.New("eGo: payload is an engine-internal control message, not a command")
 	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
 	// tenancy is active (extensions.TenancyExtensionID is registered) but no
 	// valid extensions.EntityTenantScope dependency was injected at spawn
@@ -692,9 +698,9 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 
 	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
 	if err != nil {
-		return err
+		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}
-	return verifySpawnedTenant(pid, tenantScope)
+	return verifySpawnedTenant(ctx, pid, tenantScope)
 }
 
 // spawnTenantScope determines the per-spawn tenant dependency to inject for
@@ -743,14 +749,9 @@ func (engine *Engine) spawnTenantScope(config *spawnConfig) (*extensions.EntityT
 	return nil, ErrSpawnTenantUndetermined
 }
 
-// spawnBindingLookupAttempts bounds how many times verifySpawnedTenant reads
-// a REMOTE actor's binding. goakt's PID.Dependencies reports a failed
-// remote lookup as "no dependencies" rather than as an error, so a single
-// empty answer cannot tell "unbound" from "the owning node did not answer".
-const spawnBindingLookupAttempts = 3
-
-// spawnBindingLookupBackoff is the pause between remote binding lookups.
-const spawnBindingLookupBackoff = 25 * time.Millisecond
+// spawnBindingQueryTimeout bounds how long verifySpawnedTenant waits for the
+// returned actor to answer its TenantBindingQuery.
+const spawnBindingQueryTimeout = 5 * time.Second
 
 // verifySpawnedTenant proves that the actor a tenant-aware spawn returned is
 // bound to the tenant that spawn declared (TENANT-003 T4). It is a no-op in
@@ -759,68 +760,72 @@ const spawnBindingLookupBackoff = 25 * time.Millisecond
 // GoAkt's Spawn returns an already-running actor's PID with a nil error, and
 // concurrent spawns of one name coalesce onto a single execution — on the
 // local node, and on the peer that serves a remote placement — so the PID
-// may belong to an actor another spawn created. The authority is therefore
-// the returned actor's own spawn binding, read back from pid rather than
-// from this call's intent: the EntityTenantScope dependency that actor was
-// created with, which its PreStart turned into its persistence.Scope via
-// resolveScope and which never changes for the actor's lifetime. For a
-// local PID it is read from the actor itself; for a remote PID, goakt asks
-// the node that owns the actor (a RemoteDependencies control request). The
-// check runs after Spawn on the actor that actually holds the name, so
-// there is no window between checking and spawning: whichever spawn
-// created the actor fixed its tenant, and every other caller is compared
-// against that fixed binding.
+// may belong to an actor another spawn created, possibly on another node.
+// The authority is therefore the returned actor itself: the engine asks it,
+// with the engine-internal egopb.TenantBindingQuery, whether the binding
+// its PreStart established (resolveScope) is the declared tenant. goakt
+// delivers that request/reply to the node that owns the actor, so a local
+// and a remote PID are verified the same way, and nothing about the answer
+// is taken from the caller's own intent or from PID metadata. Whichever
+// spawn created the actor fixed its tenant, so every other caller is
+// compared against that fixed binding and there is no window between
+// checking and spawning.
 //
 // This never calls TenantResolver.Resolve: requested was declared by the
 // caller via WithTenant or the resolver's fixed tenant (spawnTenantScope).
-func verifySpawnedTenant(pid *goakt.PID, requested *extensions.EntityTenantScope) error {
+func verifySpawnedTenant(ctx context.Context, pid *goakt.PID, requested *extensions.EntityTenantScope) error {
 	if requested == nil {
 		return nil
 	}
-
-	attempts := 1
-	if pid.IsRemote() {
-		attempts = spawnBindingLookupAttempts
+	reply, err := goakt.Ask(ctx, pid, &egopb.TenantBindingQuery{TenantId: requested.TenantID}, spawnBindingQueryTimeout)
+	if err != nil {
+		return fmt.Errorf("%w: actor %q did not answer its tenant binding query: %w", ErrSpawnTenantUnverified, pid.Name(), err)
 	}
-	lookup := func() *extensions.EntityTenantScope {
-		bound, _ := pid.Dependency(extensions.EntityTenantScopeID).(*extensions.EntityTenantScope)
-		return bound
+	answer, ok := reply.(*egopb.TenantBindingReply)
+	if !ok {
+		return fmt.Errorf("%w: actor %q answered its tenant binding query with %T", ErrSpawnTenantUnverified, pid.Name(), reply)
 	}
-	return verifyTenantBinding(pid.Name(), requested, lookup, attempts)
+	return classifyTenantBinding(pid.Name(), requested, answer)
 }
 
-// verifyTenantBinding compares the binding lookup reads with requested. An
-// unreadable binding is retried up to attempts times and then fails closed
-// with ErrSpawnTenantUnverified, which asserts no conflict; a readable
-// binding for a different tenant is ErrSpawnTenantMismatch.
-func verifyTenantBinding(name string, requested *extensions.EntityTenantScope, lookup func() *extensions.EntityTenantScope, attempts int) error {
+// classifyTenantBinding maps an actor's TenantBindingReply to the spawn
+// outcome: a matching binding is an idempotent success, a different one is
+// ErrSpawnTenantMismatch (also tenancy.ErrDenied), and an actor that holds
+// no tenant binding at all is ErrSpawnTenantUnverified.
+func classifyTenantBinding(name string, requested *extensions.EntityTenantScope, answer *egopb.TenantBindingReply) error {
 	requestedTenant, err := tenancy.NewTenantContext(tenancy.TenantID(requested.TenantID))
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrSpawnTenantMismatch, err)
 	}
-
-	var bound *extensions.EntityTenantScope
-	for attempt := range max(attempts, 1) {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * spawnBindingLookupBackoff)
-		}
-		if bound = lookup(); bound != nil {
-			break
-		}
+	if !answer.GetTenantAware() {
+		return fmt.Errorf("%w: actor %q holds no tenant binding", ErrSpawnTenantUnverified, name)
 	}
-	if bound == nil {
-		return fmt.Errorf("%w: actor %q exposes no readable tenant binding", ErrSpawnTenantUnverified, name)
-	}
-
-	boundTenant, err := tenancy.NewTenantContext(tenancy.TenantID(bound.TenantID))
-	if err != nil {
-		return fmt.Errorf("%w: actor %q carries an invalid tenant binding: %w", ErrSpawnTenantMismatch, name, err)
-	}
-
-	if err := tenancy.VerifyUnchanged(boundTenant, requestedTenant); err != nil {
-		return fmt.Errorf("%w: actor %q: %w", ErrSpawnTenantMismatch, name, err)
+	if !answer.GetMatches() {
+		// The reply deliberately does not say which tenant the actor is bound
+		// to; VerifyUnchanged against the zero TenantContext yields the
+		// tenancy package's own typed denial for "a different identity".
+		return fmt.Errorf("%w: actor %q is bound to another tenant: %w", ErrSpawnTenantMismatch, name,
+			tenancy.VerifyUnchanged(requestedTenant, tenancy.TenantContext{}))
 	}
 	return nil
+}
+
+// resolveExistingSpawn handles a spawn that goakt refused because the name
+// already exists. In cluster mode goakt rejects every spawn of a live name
+// with ErrActorAlreadyExists, even under the same tenant; in tenant-aware
+// mode the engine instead looks the actor up and verifies its binding, so
+// a same-tenant re-spawn is idempotent and a different tenant is
+// ErrSpawnTenantMismatch everywhere. Legacy mode, and every other error,
+// is returned unchanged.
+func resolveExistingSpawn(ctx context.Context, actorSystem goakt.ActorSystem, name string, requested *extensions.EntityTenantScope, spawnErr error) error {
+	if requested == nil || !errors.Is(spawnErr, goakterrors.ErrActorAlreadyExists) {
+		return spawnErr
+	}
+	pid, err := actorSystem.ActorOf(ctx, name)
+	if err != nil {
+		return errors.Join(spawnErr, err)
+	}
+	return verifySpawnedTenant(ctx, pid, requested)
 }
 
 // EntityExists reports whether an entity with the given ID is currently alive in the cluster.
@@ -926,9 +931,9 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 
 	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
 	if err != nil {
-		return err
+		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}
-	return verifySpawnedTenant(pid, tenantScope)
+	return verifySpawnedTenant(ctx, pid, tenantScope)
 }
 
 // Dispatch sends env's payload to the entity identified by entityID and
@@ -969,6 +974,10 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 	// entityID is not defined
 	if entityID == "" {
 		return command.Result{}, ErrUndefinedEntityID
+	}
+
+	if _, internal := env.Payload().(*egopb.TenantBindingQuery); internal {
+		return command.Result{}, ErrNotACommand
 	}
 
 	// env may be a caller-constructed zero-value command.Envelope{} (Envelope's
@@ -1326,10 +1335,13 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 		goakt.WithDependencies(deps...),
 		goakt.WithSupervisor(newSupervisor(RestartDirective)))
 	if err != nil {
+		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err {
+			return resolved
+		}
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)
 	}
 
-	return verifySpawnedTenant(pid, tenantScope)
+	return verifySpawnedTenant(ctx, pid, tenantScope)
 }
 
 // SagaStatus returns the current status and state of the named saga.

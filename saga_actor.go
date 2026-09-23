@@ -240,6 +240,8 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 		}
 	case *egopb.GetStateCommand:
 		s.getStateAndReply(ctx)
+	case *egopb.TenantBindingQuery:
+		ctx.Response(answerTenantBinding(s.tenantAware, s.scope, message))
 	default:
 		ctx.Unhandled()
 	}

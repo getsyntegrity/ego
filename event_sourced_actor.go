@@ -333,6 +333,8 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 		entity.spawnChildren(ctx)
 	case *egopb.GetStateCommand:
 		entity.handleGetStateCommand(ctx)
+	case *egopb.TenantBindingQuery:
+		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, msg))
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
 	case *persistEventsResponse:

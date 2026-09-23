@@ -72,6 +72,27 @@ message NoReply {}
 // to reply with its latest state
 message GetStateCommand {}
 
+// TenantBindingQuery is an engine-internal control message, never a
+// command: Engine.Entity, DurableStateEntity, and Saga send it to the actor
+// a tenant-aware spawn returned (local or on another node) to learn whether
+// that actor is bound to tenant_id. The actor answers from its own spawn
+// binding without running business behavior, resolving a tenant, or
+// touching a store. Engine.Dispatch rejects it as a payload.
+message TenantBindingQuery {
+  // tenant_id is the tenant the spawn declared.
+  string tenant_id = 1;
+}
+
+// TenantBindingReply answers a TenantBindingQuery. It never discloses which
+// tenant the actor is bound to, only whether it is the queried one.
+message TenantBindingReply {
+  // tenant_aware is true when the actor runs in tenant-aware mode and holds
+  // a tenant binding.
+  bool tenant_aware = 1;
+  // matches is true when that binding is exactly the queried tenant.
+  bool matches = 2;
+}
+
 // Offset defines the projection offset
 message Offset {
   // Specifies the shard number
