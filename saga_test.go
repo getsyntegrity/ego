@@ -272,7 +272,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -322,7 +321,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -373,7 +371,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -420,7 +417,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		compensated := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -472,7 +468,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		compensateCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
