@@ -2891,7 +2891,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		entityCfg := &extensions.EntityConfig{
 			SnapshotInterval:       2,
@@ -2955,7 +2954,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		entityCfg := &extensions.EntityConfig{
 			SnapshotInterval:          2,
@@ -3019,7 +3017,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3069,7 +3066,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3182,7 +3178,6 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
