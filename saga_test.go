@@ -536,7 +536,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -579,7 +578,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleEventCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -633,7 +631,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleEventCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -693,7 +690,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// the saga processes events on its own goroutine, so the counter must
 		// be atomic for the test goroutine to read it safely
@@ -759,7 +755,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		secondEventHandled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
