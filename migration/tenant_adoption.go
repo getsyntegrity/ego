@@ -1026,9 +1026,11 @@ func (a *TenantAdopter) afterVerifiedEvents(ctx context.Context, id string, sour
 // read-verify-delete, but no writer that honors the fence can change the
 // source between this re-read and the delete. Before deleting, the source
 // must still be exactly sourceEvents — no newer event, and no event rewritten
-// at the same sequence number — or nothing is deleted. After deleting, a
-// source that nonetheless gained an event (a writer that ignores the fence)
-// is reported as failed, never as source_deleted. The newer or rewritten
+// at the same sequence number — or nothing is deleted. After deleting, the
+// source must hold no event at all for id: a newer event, or one that was
+// not removed or was recreated at or below maxSeq (a writer that ignores the
+// fence, or a store that did not delete), is reported as failed, never as
+// source_deleted. The newer or rewritten
 // events always stay in the source.
 func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, wroteTarget bool) RecordOutcome {
 	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
@@ -1052,8 +1054,13 @@ func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id strin
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
 	}
-	if latest != nil && latest.GetSequenceNumber() > maxSeq {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained sequence %d during the deletion; the verified events through %d were deleted, but the newer ones remain only in the source", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
+	// DeleteEvents removes everything through maxSeq, which is every
+	// verified event, so the only read-back that proves the deletion is nil.
+	if latest != nil {
+		if latest.GetSequenceNumber() > maxSeq {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained sequence %d during the deletion; the verified events through %d were deleted, but the newer ones remain only in the source", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
+		}
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source still holds sequence %d after deleting through %d; it was not removed or was recreated", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
 	}
 	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
 }
@@ -1062,7 +1069,8 @@ func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id strin
 // snapshot this run verified, under the same fence: before deleting, the
 // source's latest snapshot must still be exactly verified (a snapshot
 // rewritten at the same sequence number fails, not just a newer one); after,
-// a newer snapshot that appeared anyway is reported as failed.
+// any snapshot still present — newer, not removed, or recreated — is
+// reported as failed.
 func (a *TenantAdopter) deleteVerifiedSourceSnapshot(ctx context.Context, id string, verified *egopb.Snapshot, wroteTarget bool) RecordOutcome {
 	current, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
 	if err != nil {
@@ -1080,8 +1088,13 @@ func (a *TenantAdopter) deleteVerifiedSourceSnapshot(ctx context.Context, id str
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source snapshot: %w", err)}
 	}
-	if latest != nil && latest.GetSequenceNumber() > verified.GetSequenceNumber() {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained a snapshot at %d during the deletion; the verified snapshot at %d was deleted, but the newer one remains only in the source", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
+	// DeleteSnapshots removes everything through the verified sequence, so
+	// the only read-back that proves the deletion is nil.
+	if latest != nil {
+		if latest.GetSequenceNumber() > verified.GetSequenceNumber() {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained a snapshot at %d during the deletion; the verified snapshot at %d was deleted, but the newer one remains only in the source", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
+		}
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source still holds a snapshot at %d after deleting through %d; it was not removed or was recreated", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
 	}
 	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
 }

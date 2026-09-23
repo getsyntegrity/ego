@@ -2276,3 +2276,92 @@ func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
 		})
 	}
 }
+
+// recreatingEventsStore writes a deleted source event straight back right
+// after the delete, the way a writer that ignores the adoption fence (or a
+// store that did not really delete) leaves the source still holding a
+// record at the verified position.
+type recreatingEventsStore struct {
+	persistence.EventsStore
+	source   persistence.Scope
+	recreate *egopb.Event
+}
+
+func (r *recreatingEventsStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	if err := r.EventsStore.DeleteEvents(ctx, scope, persistenceID, toSequenceNumber); err != nil {
+		return err
+	}
+	if scope.Equal(r.source) {
+		return r.EventsStore.WriteEvents(ctx, scope, []*egopb.Event{r.recreate}, persistence.Unconditional())
+	}
+	return nil
+}
+
+// recreatingSnapshotStore is recreatingEventsStore for snapshots.
+type recreatingSnapshotStore struct {
+	persistence.SnapshotStore
+	source   persistence.Scope
+	recreate *egopb.Snapshot
+}
+
+func (r *recreatingSnapshotStore) DeleteSnapshots(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	if err := r.SnapshotStore.DeleteSnapshots(ctx, scope, persistenceID, toSequenceNumber); err != nil {
+		return err
+	}
+	if scope.Equal(r.source) {
+		return r.SnapshotStore.WriteSnapshot(ctx, scope, r.recreate)
+	}
+	return nil
+}
+
+// TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists pins that a
+// record found in the source after the delete — even at the verified
+// sequence, not only a newer one — is a failure, never source_deleted.
+func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+
+	t.Run("events recreated at the same sequence", func(t *testing.T) {
+		base := testkit.NewEventsStore()
+		require.NoError(t, base.Connect(ctx))
+		const id = "recreated-event"
+		require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+		}, persistence.Unconditional()))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithEventsStore(&recreatingEventsStore{EventsStore: base, source: source, recreate: newLegacyEvent(t, id, 2, 200)}),
+			WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+
+		assert.Zero(t, report.SourceDeleted, "a source that still holds a record must never be reported as deleted")
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+		require.Len(t, report.Aggregates, 1)
+		assert.NotEqual(t, StatusSourceDeleted, report.Aggregates[0].Events.Status)
+	})
+
+	t.Run("snapshot recreated at the same sequence", func(t *testing.T) {
+		base := testkit.NewSnapshotStore()
+		require.NoError(t, base.Connect(ctx))
+		const id = "recreated-snapshot"
+		require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 3, 300)))
+
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithSnapshotStore(&recreatingSnapshotStore{SnapshotStore: base, source: source, recreate: newLegacySnapshot(t, id, 3, 300)}),
+			WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+		require.NoError(t, err)
+		report, err := adopter.Run(ctx)
+		require.NoError(t, err)
+
+		assert.Zero(t, report.SourceDeleted, "a source that still holds a snapshot must never be reported as deleted")
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
+		require.Len(t, report.Aggregates, 1)
+		assert.NotEqual(t, StatusSourceDeleted, report.Aggregates[0].Snapshot.Status)
+	})
+}
