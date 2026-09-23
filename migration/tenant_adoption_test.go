@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2424,4 +2425,117 @@ func TestTenantAdopterReplaysSequencesBeyondTheLimitValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, adopted, 2, "the event above math.MaxInt must be adopted too")
 	assert.Equal(t, high, adopted[1].GetSequenceNumber())
+}
+
+// hidingEventsStore drops one sequence number from target reads, the way a
+// target that lost an adopted event would look.
+type hidingEventsStore struct {
+	persistence.EventsStore
+	target persistence.Scope
+	hide   uint64
+}
+
+func (h *hidingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := h.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
+	if err != nil || !scope.Equal(h.target) {
+		return events, err
+	}
+	kept := events[:0:0]
+	for _, e := range events {
+		if e.GetSequenceNumber() != h.hide {
+			kept = append(kept, e)
+		}
+	}
+	return kept, nil
+}
+
+// TestTenantAdopterChainedEventReceipts pins how a re-run proves an events
+// adoption once WithSourceDeletion removed the source: each adopted event's
+// receipt records the previous adopted sequence (0 for the first), so the
+// chain proves the adopted run is complete even when the sequence numbers
+// are legitimately sparse, and any missing or tampered link fails closed.
+func TestTenantAdopterChainedEventReceipts(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+
+	adoptSparse := func(t *testing.T, id string) *testkit.EventStore {
+		t.Helper()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{
+			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 5, 500), newLegacyEvent(t, id, 9, 900),
+		}, persistence.Unconditional()))
+		first := rerun(t, store, id)
+		require.Equal(t, 1, first.SourceDeleted, "the sparse stream must be adopted and its source deleted")
+		return store
+	}
+
+	t.Run("a sparse stream re-run after source deletion is already present", func(t *testing.T) {
+		store := adoptSparse(t, "sparse")
+		report := rerun(t, store, "sparse")
+		assert.Equal(t, 1, report.AlreadyPresent)
+		assert.Zero(t, report.Failed)
+	})
+
+	t.Run("live events after the adopted chain are not mistaken for part of it", func(t *testing.T) {
+		store := adoptSparse(t, "sparse-live")
+		live := newLegacyEvent(t, "sparse-live", 12, 1200)
+		live.TenantMetadata = tenancy.MarshalMetadata(acme)
+		require.NoError(t, store.WriteEvents(ctx, target, []*egopb.Event{live}, persistence.Unconditional()))
+
+		report := rerun(t, store, "sparse-live")
+		assert.Equal(t, 1, report.AlreadyPresent)
+		assert.Zero(t, report.Failed)
+	})
+
+	t.Run("a missing first adopted event fails", func(t *testing.T) {
+		store := adoptSparse(t, "sparse-first")
+		report := rerun(t, &hidingEventsStore{EventsStore: store, target: target, hide: 1}, "sparse-first")
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+
+	t.Run("a missing middle adopted event fails", func(t *testing.T) {
+		store := adoptSparse(t, "sparse-middle")
+		report := rerun(t, &hidingEventsStore{EventsStore: store, target: target, hide: 5}, "sparse-middle")
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
+	})
+
+	t.Run("a receipt whose recorded predecessor was altered fails", func(t *testing.T) {
+		store := adoptSparse(t, "sparse-tampered")
+		adopted, err := store.ReplayEvents(ctx, target, "sparse-tampered", 1, math.MaxUint64, 10)
+		require.NoError(t, err)
+		require.Len(t, adopted, 3)
+		tampered, ok := proto.Clone(adopted[2]).(*egopb.Event)
+		require.True(t, ok)
+		receipt := tampered.GetTenantMetadata()[adoptionReceiptKey]
+		parts := strings.SplitN(receipt, ":", 3)
+		require.Len(t, parts, 3, "an event receipt records its predecessor: v1:<previous>:<digest>")
+		tampered.TenantMetadata[adoptionReceiptKey] = parts[0] + ":1:" + parts[2]
+		require.NoError(t, store.WriteEvents(ctx, target, []*egopb.Event{tampered}, persistence.Unconditional()))
+
+		report := rerun(t, store, "sparse-tampered")
+		assert.Zero(t, report.AlreadyPresent)
+		assert.Equal(t, 1, report.Failed)
+	})
+}
+
+// rerun runs a write-enabled, source-deleting adoption of id to "acme".
+func rerun(t *testing.T, store persistence.EventsStore, id string) *AdoptionReport {
+	t.Helper()
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(store), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+	require.NoError(t, err)
+	report, err := adopter.Run(context.Background())
+	require.NoError(t, err)
+	return report
 }

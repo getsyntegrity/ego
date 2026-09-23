@@ -31,6 +31,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
@@ -106,9 +107,11 @@ var errNoSourceRecords = errors.New("migration: no source record found in any co
 var errTargetNotEquivalent = errors.New("migration: target tenant scope holds a record for this persistence id that is not equivalent to this adoption")
 
 // adoptionReceiptKey is the tenant_metadata key under which every record
-// TenantAdopter writes carries its adoption receipt: "v1:" followed by the
-// hex SHA-256 of the source scope and the record's deterministic protobuf
-// encoding, taken with this key absent (see adoptionReceipt). Tenant-bound
+// TenantAdopter writes carries its adoption receipt: a SHA-256 over the
+// source scope and the record's deterministic protobuf encoding, taken with
+// this key absent, and — for an event — the sequence of the adopted event
+// before it, which chains the adopted events together (see
+// adoptionReceipt). Tenant-bound
 // actors never write this key, so a record carrying a receipt that still
 // matches its own content was written by an adoption from that source
 // scope. It is what lets a re-run prove a target is already migrated after
@@ -732,6 +735,11 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source events: %w", err)}
 	}
 
+	// Each adopted event's receipt records the sequence of the adopted event
+	// before it (0 for the first), in sequence order, so a re-run after the
+	// source is gone can prove the adopted run is complete (see
+	// verifyEventsEquivalent) without assuming consecutive sequence numbers.
+	predecessors := adoptedPredecessors(sourceEvents)
 	expected := make([]*egopb.Event, len(sourceEvents))
 	var maxSeq uint64
 	for i, evt := range sourceEvents {
@@ -739,7 +747,8 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("clone event at sequence %d: unexpected cloned type", evt.GetSequenceNumber())}
 		}
-		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+		predecessor := predecessors[evt.GetSequenceNumber()]
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, &predecessor); err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: err}
 		}
 		expected[i] = clone
@@ -815,7 +824,7 @@ func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent ado
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone snapshot: unexpected cloned type")}
 		}
-		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, nil); err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: err}
 		}
 	}
@@ -889,7 +898,7 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 		if !ok {
 			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone durable state: unexpected cloned type")}
 		}
-		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata); err != nil {
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, nil); err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: err}
 		}
 	}
@@ -1194,17 +1203,26 @@ func verifyEventsEquivalent(id string, expected, existing []*egopb.Event, tenant
 		return nil
 	}
 
+	// Walk the receipt-bearing prefix as a chain: every receipt records the
+	// sequence of the adopted event before it, and the first adopted event
+	// records 0. A missing first event leaves the chain starting at a
+	// non-zero predecessor, a missing middle event leaves a link pointing
+	// at a sequence that is not the previous one here, and a tampered link
+	// no longer matches its own receipt digest.
 	adopted := 0
-	for i, seq := range seqs {
+	var previous uint64
+	for _, seq := range seqs {
 		if _, hasReceipt := existingBySeq[seq].GetTenantMetadata()[adoptionReceiptKey]; !hasReceipt {
 			break
 		}
-		if i > 0 && seq != seqs[i-1]+1 {
-			return notEquivalent("adopted sequence %d does not follow %d", seq, seqs[i-1])
-		}
-		if !hasValidAdoptionReceipt(existingBySeq[seq], sourceScope) {
+		predecessor, ok := verifyAdoptionReceipt(existingBySeq[seq], sourceScope)
+		if !ok || predecessor == nil {
 			return notEquivalent("sequence %d does not match its adoption receipt", seq)
 		}
+		if *predecessor != previous {
+			return notEquivalent("adopted sequence %d follows adopted sequence %d, but its receipt records %d: the adopted chain is broken", seq, previous, *predecessor)
+		}
+		previous = seq
 		adopted++
 	}
 	if adopted == 0 {
@@ -1236,7 +1254,7 @@ func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, 
 		return fmt.Errorf("%w: persistence_id %q kind %s: target record is not owned by the assigned tenant", errTargetNotEquivalent, id, kind)
 	}
 	if expected == nil {
-		if !hasValidAdoptionReceipt(existing, sourceScope) {
+		if predecessor, ok := verifyAdoptionReceipt(existing, sourceScope); !ok || predecessor != nil {
 			return fmt.Errorf("%w: persistence_id %q kind %s: the source is gone and the target record at %d carries no valid adoption receipt, so an adoption cannot be proven", errTargetNotEquivalent, id, kind, existingPos)
 		}
 		return nil
@@ -1250,7 +1268,9 @@ func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, 
 // stampAdoptionReceipt sets record's tenant_metadata to a fresh copy of
 // metadata plus the adoption receipt computed over that stamped record. A
 // fresh copy per record keeps one record's receipt out of another's map.
-func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, metadata map[string]string) error {
+// predecessor is the previous adopted event's sequence (0 for the first)
+// for an event, and nil for a snapshot or durable state.
+func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, metadata map[string]string, predecessor *uint64) error {
 	stamped := make(map[string]string, len(metadata)+1)
 	for key, value := range metadata {
 		stamped[key] = value
@@ -1258,7 +1278,7 @@ func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, m
 	if !setTenantMetadata(record, stamped) {
 		return fmt.Errorf("stamp adoption receipt: unsupported record type %T", record)
 	}
-	receipt, err := adoptionReceipt(record, sourceScope)
+	receipt, err := adoptionReceipt(record, sourceScope, predecessor)
 	if err != nil {
 		return err
 	}
@@ -1266,14 +1286,28 @@ func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, m
 	return nil
 }
 
-// hasValidAdoptionReceipt reports whether record carries a receipt that
-// matches its own content and sourceScope.
-func hasValidAdoptionReceipt(record proto.Message, sourceScope persistence.Scope) bool {
+// verifyAdoptionReceipt reports whether record carries a receipt that
+// matches its own content and sourceScope, and returns the predecessor that
+// receipt records: non-nil for an event receipt, nil for a single-record
+// (snapshot or durable-state) receipt.
+func verifyAdoptionReceipt(record proto.Message, sourceScope persistence.Scope) (*uint64, bool) {
 	stripped := proto.Clone(record)
 	metadata := tenantMetadataOf(stripped)
 	receipt, ok := metadata[adoptionReceiptKey]
 	if !ok {
-		return false
+		return nil, false
+	}
+	var predecessor *uint64
+	body, ok := strings.CutPrefix(receipt, adoptionReceiptVersion)
+	if !ok {
+		return nil, false
+	}
+	if recorded, _, chained := strings.Cut(body, ":"); chained {
+		value, err := strconv.ParseUint(recorded, 10, 64)
+		if err != nil || strconv.FormatUint(value, 10) != recorded {
+			return nil, false
+		}
+		predecessor = &value
 	}
 	withoutReceipt := make(map[string]string, len(metadata))
 	for key, value := range metadata {
@@ -1282,18 +1316,27 @@ func hasValidAdoptionReceipt(record proto.Message, sourceScope persistence.Scope
 		}
 	}
 	if !setTenantMetadata(stripped, withoutReceipt) {
-		return false
+		return nil, false
 	}
-	want, err := adoptionReceipt(stripped, sourceScope)
-	return err == nil && want == receipt
+	want, err := adoptionReceipt(stripped, sourceScope, predecessor)
+	if err != nil || want != receipt {
+		return nil, false
+	}
+	return predecessor, true
 }
 
 // adoptionReceipt is the receipt value for record (which must not carry a
 // receipt itself) adopted from sourceScope. It hashes the scope's kind and
-// tenant id, not Scope.String(), followed by the record's deterministic
-// protobuf encoding. If that encoding ever changed between the run that
-// wrote a receipt and the run that checks it, the check fails closed.
-func adoptionReceipt(record proto.Message, sourceScope persistence.Scope) (string, error) {
+// tenant id, not Scope.String(), then — for an event — the recorded
+// predecessor sequence, then the record's deterministic protobuf encoding:
+//
+//	event:            v1:<predecessor>:<hex sha256(scope, 0, predecessor, 0, encoding)>
+//	snapshot, state:  v1:<hex sha256(scope, 0, encoding)>
+//
+// The predecessor is covered by the digest, so it cannot be altered without
+// invalidating the receipt. If the encoding ever changed between the run
+// that wrote a receipt and the run that checks it, the check fails closed.
+func adoptionReceipt(record proto.Message, sourceScope persistence.Scope, predecessor *uint64) (string, error) {
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
 	if err != nil {
 		return "", fmt.Errorf("compute adoption receipt: %w", err)
@@ -1305,8 +1348,32 @@ func adoptionReceipt(record proto.Message, sourceScope persistence.Scope) (strin
 	sum := sha256.New()
 	sum.Write([]byte(scopeToken))
 	sum.Write([]byte{0})
+	prefix := adoptionReceiptVersion
+	if predecessor != nil {
+		recorded := strconv.FormatUint(*predecessor, 10)
+		sum.Write([]byte(recorded))
+		sum.Write([]byte{0})
+		prefix += recorded + ":"
+	}
 	sum.Write(encoded)
-	return adoptionReceiptVersion + hex.EncodeToString(sum.Sum(nil)), nil
+	return prefix + hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// adoptedPredecessors maps each event's sequence number to the sequence of
+// the event before it in sequence order, and the lowest to 0.
+func adoptedPredecessors(events []*egopb.Event) map[uint64]uint64 {
+	seqs := make([]uint64, 0, len(events))
+	for _, e := range events {
+		seqs = append(seqs, e.GetSequenceNumber())
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	predecessors := make(map[uint64]uint64, len(seqs))
+	var previous uint64
+	for _, seq := range seqs {
+		predecessors[seq] = previous
+		previous = seq
+	}
+	return predecessors
 }
 
 // tenantMetadataOf returns record's tenant_metadata for the three record
