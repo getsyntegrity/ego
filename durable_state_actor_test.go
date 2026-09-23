@@ -249,8 +249,6 @@ func TestDurableStateBehavior(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		persistenceID := uuid.NewString()
 		behavior := NewAccountDurableStateBehavior(persistenceID)
 
