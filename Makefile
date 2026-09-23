@@ -82,16 +82,16 @@ docker-lint: docker-image
 	$(DOCKER_RUN) golangci-lint run --timeout 10m
 
 # Run the test suite with race detection and coverage inside the CI image.
-# The PKGS list mirrors the Earthfile's `local-test` target: it excludes
-# generated, example, and mock packages from coverage reporting.
+# Package selection and exclusions come from internal/cmd/ciselect (-all:
+# the same full-suite selection build.yml runs on push to main), matched
+# by whole path segment rather than the substring list this target used to
+# grep with -- that old list silently dropped ./testkit ("test" matched as
+# a substring). Coverage is native `go test`, not go-acc.
 docker-test: docker-image
 	@echo "Running tests with race detector..."
 	$(DOCKER_RUN) sh -c '\
-		PKGS=$$(go list -mod=vendor ./... | grep -v -E "(egopb|test|example|mocks)") && \
-		go test -mod=vendor -p 1 -timeout 0 -race -v \
-			-coverprofile=coverage.out -covermode=atomic \
-			-coverpkg=$$(echo $$PKGS | tr " " ",") \
-			$$PKGS'
+		go run ./internal/cmd/ciselect -all -out-dir /tmp/ci && \
+		GOFLAGS=-mod=vendor GO_TEST_RACE=1 scripts/ci/go-test.sh /tmp/ci coverage.out'
 
 # Regenerate mocks via mockery inside the CI image. Output is written to ./mocks.
 docker-mock: docker-image

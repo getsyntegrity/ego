@@ -39,16 +39,55 @@ jobs:
         with:
           version: v2.13.1
           args: --timeout 10m --config .golangci.yml
-      - name: Install go-acc
+      - name: Determine changed files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          go install github.com/ory/go-acc@latest
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+      - name: Select packages
+        id: select
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -out-dir "$RUNNER_TEMP/ci"; then
+            :
+          else
+            echo "::warning::ciselect failed; falling back to the full suite"
+            go run ./internal/cmd/ciselect -all -reason "selector failed; full-suite fallback" -out-dir "$RUNNER_TEMP/ci"
+          fi
+          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
       - name: Run tests
         shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+          GO_TEST_RACE: "1"
         run: |
-          go-acc ./... -o coverage.out --ignore egopb,test,example,benchmark,mocks -- -mod=vendor -p 1 -timeout 0 -race -v
-      - uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.out # optional
-          fail_ci_if_error: false # optional (default = false)
-          verbose: false # optional (default = false)
+          scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
+      - name: Coverage summary
+        if: always() && hashFiles('coverage.out') != ''
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          {
+            echo "### Coverage"
+            echo
+            echo "Selection mode: \`${{ steps.select.outputs.mode }}\`"
+            echo
+            if [ "${{ steps.select.outputs.mode }}" = "affected" ]; then
+              echo "In \`affected\` mode the total only reflects the packages that ran; the denominator is still every included package."
+              echo
+            fi
+            echo '```'
+            go tool cover -func=coverage.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage summary (no coverage)
+        if: always() && hashFiles('coverage.out') == ''
+        shell: bash
+        run: |
+          echo "Coverage: no coverage.out was produced (selection mode: \`${{ steps.select.outputs.mode }}\`)." >> "$GITHUB_STEP_SUMMARY"

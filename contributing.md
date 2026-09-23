@@ -36,6 +36,10 @@ Each target also works on its own:
 | `docker-protogen` | Regenerate protobuf code via `buf` and refresh `example/examplepb`.  |
 | `docker-ci`       | Composite of `docker-lint` + `docker-test`.                          |
 
+See [`docs/ci.md`](docs/ci.md) for how the GitHub Actions workflows decide
+which packages a pull request tests, the coverage and race-detector policy,
+and the baseline measurements behind those decisions.
+
 The Docker targets mount the working tree at `/workspace` inside the container
 and run as your local UID/GID, so any generated files (mocks, protobufs,
 `coverage.out`) appear in the repo with normal ownership. Go build and module
