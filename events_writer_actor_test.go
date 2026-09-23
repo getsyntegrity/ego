@@ -278,8 +278,6 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)

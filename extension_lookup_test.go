@@ -25,7 +25,6 @@ package ego
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -34,7 +33,6 @@ import (
 
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
 	"github.com/pablogore/ego/v4/persistence"
 )
@@ -73,7 +71,6 @@ func TestRequireExtension(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		probe := &requireExtensionProbeActor{
 			lookup: func(ctx *goakt.Context) error {
@@ -102,7 +99,6 @@ func TestRequireExtension(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		probe := &requireExtensionProbeActor{
 			lookup: func(ctx *goakt.Context) error {
@@ -136,7 +132,6 @@ func TestRequireExtension(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		var got persistence.EventsStore
 		probe := &requireExtensionProbeActor{

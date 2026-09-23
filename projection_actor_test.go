@@ -528,8 +528,6 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		actor := NewProjectionActor()
 		_, err = actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
 		require.Error(t, err)
