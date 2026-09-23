@@ -2494,7 +2494,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write snapshot with incompatible state type (AccountCredited instead of Account)
 		wrongState, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
@@ -2541,7 +2540,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an "encrypted" event with dummy ciphertext
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
@@ -2593,7 +2591,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -2645,7 +2642,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -2693,7 +2689,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an event with an unknown TypeUrl so UnmarshalNew fails
 		event := &egopb.Event{
