@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,7 +312,7 @@ func TestTenantAdopterRealRunCopiesAndKeepsSource(t *testing.T) {
 		WithEventsStore(eventsStore),
 		WithSnapshotStore(snapshotStore),
 		WithStateStore(stateStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 
@@ -375,7 +376,7 @@ func TestTenantAdopterStampsTargetTenantMetadata(t *testing.T) {
 		WithEventsStore(eventsStore),
 		WithSnapshotStore(snapshotStore),
 		WithStateStore(stateStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	_, err = adopter.Run(ctx)
@@ -452,7 +453,7 @@ func TestTenantAdopterEndToEndRecoveryThroughRealActor(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{entityID: "acme"}),
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
@@ -503,7 +504,7 @@ func TestTenantAdopterTwoTenantsAreIsolated(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{idA: "acme", idB: "globex"}),
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
@@ -543,7 +544,7 @@ func TestTenantAdopterAssignmentOkFalseLeavesUntouched(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(nil), // ok=false for everything
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
@@ -572,7 +573,7 @@ func TestTenantAdopterReRunIsANoOp(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 
@@ -616,7 +617,7 @@ func TestTenantAdopterAlreadyPresentInTargetIsNeverOverwritten(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
@@ -657,7 +658,7 @@ func TestTenantAdopterSourceDeletionOnlyAfterVerification(t *testing.T) {
 		adopter, err := NewTenantAdopter(
 			fixedAssignment(map[string]tenancy.TenantID{id: "keepme"}),
 			WithEventsStore(eventsStore),
-			WithWriteEnabled(),
+			WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		)
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
@@ -673,7 +674,7 @@ func TestTenantAdopterSourceDeletionOnlyAfterVerification(t *testing.T) {
 		adopter, err := NewTenantAdopter(
 			fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 			WithEventsStore(eventsStore),
-			WithWriteEnabled(),
+			WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 			WithSourceDeletion(),
 		)
 		require.NoError(t, err)
@@ -714,7 +715,7 @@ func TestTenantAdopterPerAggregateFailureDoesNotAbortRun(t *testing.T) {
 		return "acme", true, nil
 	}
 
-	adopter, err := NewTenantAdopter(assign, WithEventsStore(eventsStore), WithWriteEnabled())
+	adopter, err := NewTenantAdopter(assign, WithEventsStore(eventsStore), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 	require.NoError(t, err)
 
 	report, err := adopter.Run(ctx)
@@ -749,7 +750,7 @@ func TestTenantAdopterExplicitPersistenceIDsForDurableStateOnly(t *testing.T) {
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithStateStore(stateStore),
 		WithPersistenceIDs(id),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
@@ -802,7 +803,7 @@ func TestTenantAdopterEventsVerificationCatchesCorruptedWrite(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(corrupting),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		WithSourceDeletion(),
 	)
 	require.NoError(t, err)
@@ -852,7 +853,7 @@ func TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite(t *testing.T) {
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithSnapshotStore(corrupting),
 		WithPersistenceIDs(id), // no events store: SnapshotStore has no enumeration method
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		WithSourceDeletion(),
 	)
 	require.NoError(t, err)
@@ -905,7 +906,7 @@ func TestTenantAdopterStateVerificationCatchesCorruptedWrite(t *testing.T) {
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithStateStore(corrupting),
 		WithPersistenceIDs(id), // no events store: StateStore has no enumeration method
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 
@@ -946,7 +947,7 @@ func TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages(t *testing.T) {
 		fixedAssignment(assignments),
 		WithEventsStore(eventsStore),
 		WithScanPageSize(pageSize),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 
@@ -1008,7 +1009,7 @@ func TestTenantAdopterEventsVerificationRejectsDuplicateSequenceRows(t *testing.
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(&duplicatingEventsStore{EventsStore: base, duplicateScope: target}),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		WithSourceDeletion(),
 	)
 	require.NoError(t, err)
@@ -1047,7 +1048,7 @@ func TestTenantAdopterSourceDeletingReRunIsIdempotent(t *testing.T) {
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(eventsStore),
 		WithSnapshotStore(snapshotStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		WithSourceDeletion(),
 	)
 	require.NoError(t, err)
@@ -1095,7 +1096,7 @@ func TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent(t *testing.T) {
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithSnapshotStore(snapshotStore),
 		WithPersistenceIDs(id),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 		WithSourceDeletion(),
 	)
 	require.NoError(t, err)
@@ -1126,7 +1127,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 
 	run := func(t *testing.T, eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, id string) *AdoptionReport {
 		t.Helper()
-		opts := []AdoptionOption{WithWriteEnabled(), WithSourceDeletion(), WithPersistenceIDs(id)}
+		opts := []AdoptionOption{WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion(), WithPersistenceIDs(id)}
 		if eventsStore != nil {
 			opts = append(opts, WithEventsStore(eventsStore))
 		}
@@ -1228,7 +1229,7 @@ func TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent(t *testing.T) {
 	adopter, err := NewTenantAdopter(
 		fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(eventsStore),
-		WithWriteEnabled(),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
 	)
 	require.NoError(t, err)
 	first, err := adopter.Run(ctx)
@@ -1271,7 +1272,7 @@ func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, unrelated))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1295,7 +1296,7 @@ func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
 		require.NoError(t, stateStore.WriteState(ctx, target, unrelated, persistence.Unconditional()))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1327,7 +1328,7 @@ func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, different))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled())
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1345,7 +1346,7 @@ func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
 		require.NoError(t, stateStore.WriteState(ctx, target, different, persistence.Unconditional()))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+			WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1363,7 +1364,7 @@ func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
 		require.NoError(t, stateStore.WriteState(ctx, source, newLegacyDurableState(t, id, 5, 500), persistence.Unconditional()))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled())
+			WithSnapshotStore(snapshotStore), WithStateStore(stateStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 		require.NoError(t, err)
 		first, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1392,7 +1393,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		t.Helper()
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 5, 500)))
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 		require.NoError(t, err)
 		first, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1413,7 +1414,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, target, tampered))
 
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1430,7 +1431,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		otherSource, err := persistence.NewTenantScope("legacy-partition")
 		require.NoError(t, err)
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceScope(otherSource))
+			WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceScope(otherSource))
 		require.NoError(t, err)
 		report, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1446,7 +1447,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
 		}, persistence.Unconditional()))
 		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithEventsStore(eventsStore), WithWriteEnabled(), WithSourceDeletion())
+			WithEventsStore(eventsStore), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 		require.NoError(t, err)
 		first, err := adopter.Run(ctx)
 		require.NoError(t, err)
@@ -1538,7 +1539,7 @@ func TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites(t *testi
 			store := &racingEventsStore{EventsStore: base, source: source, target: target,
 				late: newLegacyEvent(t, id, 3, 300), onTargetRead: tc.onTargetRead}
 			adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-				WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion())
+				WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 			require.NoError(t, err)
 
 			report, err := adopter.Run(ctx)
@@ -1584,7 +1585,7 @@ func TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites(t *tes
 
 	store := &racingSnapshotStore{SnapshotStore: base, source: source, late: newLegacySnapshot(t, id, 3, 300)}
 	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithSnapshotStore(store), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+		WithSnapshotStore(store), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 	require.NoError(t, err)
 
 	report, err := adopter.Run(ctx)
@@ -1619,14 +1620,14 @@ func TestTenantAdopterDeletesSourceOfVerifiedExistingTarget(t *testing.T) {
 	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 2, 200)))
 
 	assignment := fixedAssignment(map[string]tenancy.TenantID{id: "acme"})
-	keep, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled())
+	keep, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
 	require.NoError(t, err)
 	first, err := keep.Run(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Copied)
 	require.Zero(t, first.SourceDeleted)
 
-	deleting, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled(), WithSourceDeletion())
+	deleting, err := NewTenantAdopter(assignment, WithEventsStore(eventsStore), WithSnapshotStore(snapshotStore), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 	require.NoError(t, err)
 	second, err := deleting.Run(ctx)
 	require.NoError(t, err)
@@ -1684,7 +1685,7 @@ func TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot(t *testing.T
 
 	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithSnapshotStore(&replacingSnapshotStore{SnapshotStore: base, source: source, target: target, replacement: replacement}),
-		WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion())
+		WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
 	require.NoError(t, err)
@@ -1734,7 +1735,7 @@ func TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent(t *testing.T) {
 
 	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(&replacingEventsStore{EventsStore: base, source: source, target: target, replacement: newLegacyEvent(t, id, 2, 222)}),
-		WithWriteEnabled(), WithSourceDeletion())
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 	require.NoError(t, err)
 	report, err := adopter.Run(ctx)
 	require.NoError(t, err)
@@ -1746,4 +1747,426 @@ func TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent(t *testing.T) {
 	remaining, err := base.ReplayEvents(ctx, source, id, 1, 10, 10)
 	require.NoError(t, err)
 	assert.Len(t, remaining, 2, "a source that was rewritten must not be deleted")
+}
+
+// testFence is an AdoptionFence for tests: one blocking lock per (scope,
+// persistence id), with counters, the order locks were taken in, and
+// optional failure injection. A writer in a test that honors the fence
+// calls Acquire exactly like the adopter does.
+type testFence struct {
+	mu       sync.Mutex
+	locks    map[string]chan struct{}
+	acquired int
+	released int
+	order    []string
+	failOn   string
+}
+
+var errTestFenceUnavailable = errors.New("test fence: unavailable")
+
+func newTestFence() *testFence {
+	return &testFence{locks: make(map[string]chan struct{})}
+}
+
+func testFenceKey(scope persistence.Scope, persistenceID string) string {
+	return scope.String() + "|" + persistenceID
+}
+
+func (f *testFence) lockFor(key string) chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.locks[key]
+	if !ok {
+		ch = make(chan struct{}, 1)
+		f.locks[key] = ch
+	}
+	return ch
+}
+
+func (f *testFence) Acquire(ctx context.Context, scope persistence.Scope, persistenceID string) (func(), error) {
+	key := testFenceKey(scope, persistenceID)
+	f.mu.Lock()
+	fail := f.failOn == key
+	f.mu.Unlock()
+	if fail {
+		return nil, errTestFenceUnavailable
+	}
+	ch := f.lockFor(key)
+	select {
+	case ch <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	f.mu.Lock()
+	f.acquired++
+	f.order = append(f.order, key)
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-ch
+			f.mu.Lock()
+			f.released++
+			f.mu.Unlock()
+		})
+	}, nil
+}
+
+func (f *testFence) isHeld(scope persistence.Scope, persistenceID string) bool {
+	return len(f.lockFor(testFenceKey(scope, persistenceID))) == 1
+}
+
+func (f *testFence) counts() (acquired, released int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acquired, f.released
+}
+
+func TestNewTenantAdopterRequiresAFenceToWrite(t *testing.T) {
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(context.Background()))
+
+	_, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled())
+	require.ErrorIs(t, err, ErrAdoptionFenceRequired, "a write-enabled adoption must hold a fence")
+
+	_, err = NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion())
+	require.ErrorIs(t, err, ErrAdoptionFenceRequired, "source deletion must never rely on an informal quiescence promise")
+
+	dryRun, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store))
+	require.NoError(t, err, "a dry run reads only and needs no fence")
+	_, err = dryRun.Run(context.Background())
+	require.NoError(t, err)
+}
+
+// fencedSnapshotWriter simulates another writer of the target snapshot that
+// honors the fence. It fires when the adopter first finds the target
+// empty: if the fence is not held for the target, it writes right there,
+// between the adopter's existence check and its write; if it is held, it
+// queues behind the fence and writes after the adopter releases it.
+type fencedSnapshotWriter struct {
+	persistence.SnapshotStore
+	fence   *testFence
+	target  persistence.Scope
+	payload *egopb.Snapshot
+	fired   bool
+	done    chan struct{}
+}
+
+func (w *fencedSnapshotWriter) GetLatestSnapshot(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error) {
+	snapshot, err := w.SnapshotStore.GetLatestSnapshot(ctx, scope, persistenceID)
+	if err != nil || w.fired || snapshot != nil || !scope.Equal(w.target) {
+		return snapshot, err
+	}
+	w.fired = true
+	write := func() {
+		defer close(w.done)
+		release, err := w.fence.Acquire(context.Background(), w.target, persistenceID)
+		if err != nil {
+			return
+		}
+		defer release()
+		_ = w.SnapshotStore.WriteSnapshot(context.Background(), w.target, w.payload)
+	}
+	if w.fence.isHeld(w.target, persistenceID) {
+		go write()
+	} else {
+		write()
+	}
+	return snapshot, err
+}
+
+// TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot covers
+// the snapshot SPI's missing write precondition: a target snapshot another
+// writer creates after the adopter found the target empty must never be
+// overwritten by the stale source snapshot.
+func TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	base := testkit.NewSnapshotStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "raced-target-snapshot"
+	require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 4, 400)))
+	live := newLegacySnapshot(t, id, 4, 999)
+	live.TenantMetadata = tenancy.MarshalMetadata(acme)
+
+	fence := newTestFence()
+	writer := &fencedSnapshotWriter{SnapshotStore: base, fence: fence, target: target, payload: live, done: make(chan struct{})}
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithSnapshotStore(writer), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(fence))
+	require.NoError(t, err)
+	_, err = adopter.Run(ctx)
+	require.NoError(t, err)
+	<-writer.done
+
+	final, err := base.GetLatestSnapshot(ctx, target, id)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	assert.True(t, proto.Equal(live, final), "the other writer's target snapshot must never be overwritten by the adopter")
+}
+
+// raceTargetStateStore creates the target durable state between the
+// adopter's existence check and its write, bypassing any fence, to show that
+// durable state does not share the snapshot race: WriteState with
+// ExpectGenesis is an atomic compare-and-swap.
+type raceTargetStateStore struct {
+	persistence.StateStore
+	target  persistence.Scope
+	payload *egopb.DurableState
+	fired   bool
+}
+
+func (r *raceTargetStateStore) GetLatestState(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error) {
+	state, err := r.StateStore.GetLatestState(ctx, scope, persistenceID)
+	if err == nil && state == nil && !r.fired && scope.Equal(r.target) {
+		r.fired = true
+		if writeErr := r.StateStore.WriteState(ctx, r.target, r.payload, persistence.ExpectGenesis()); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+	return state, err
+}
+
+func TestTenantAdopterDurableStateTargetRaceIsStoppedByItsPrecondition(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acme, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+	base := testkit.NewDurableStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "raced-target-state"
+	require.NoError(t, base.WriteState(ctx, source, newLegacyDurableState(t, id, 3, 300), persistence.Unconditional()))
+	live := newLegacyDurableState(t, id, 1, 999)
+	live.TenantMetadata = tenancy.MarshalMetadata(acme)
+
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithStateStore(&raceTargetStateStore{StateStore: base, target: target, payload: live}),
+		WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Failed, "the raced target is not this adoption")
+
+	final, err := base.GetLatestState(ctx, target, id)
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(live, final), "the racing writer's durable state must never be overwritten")
+}
+
+// fencedSourceWriter appends a source event while the adopter verifies the
+// target, honoring the fence: under the fence it can only write after the
+// adopter released, so it can never interleave with the deletion.
+type fencedSourceWriter struct {
+	persistence.EventsStore
+	fence          *testFence
+	source, target persistence.Scope
+	late           *egopb.Event
+	fired          bool
+	done           chan struct{}
+}
+
+func (w *fencedSourceWriter) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := w.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
+	if err != nil || w.fired || len(events) == 0 || !scope.Equal(w.target) {
+		return events, err
+	}
+	w.fired = true
+	write := func() {
+		defer close(w.done)
+		release, err := w.fence.Acquire(context.Background(), w.source, persistenceID)
+		if err != nil {
+			return
+		}
+		defer release()
+		_ = w.EventsStore.WriteEvents(context.Background(), w.source, []*egopb.Event{w.late}, persistence.Unconditional())
+	}
+	if w.fence.isHeld(w.source, persistenceID) {
+		go write()
+	} else {
+		write()
+	}
+	return events, err
+}
+
+func TestTenantAdopterFencedSourceWriterCannotInterleaveWithDeletion(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	base := testkit.NewEventsStore()
+	require.NoError(t, base.Connect(ctx))
+
+	const id = "fenced-source-writer"
+	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
+	}, persistence.Unconditional()))
+
+	fence := newTestFence()
+	writer := &fencedSourceWriter{EventsStore: base, fence: fence, source: source, target: target, late: newLegacyEvent(t, id, 3, 300), done: make(chan struct{})}
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(writer), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	<-writer.done
+
+	assert.Equal(t, 1, report.SourceDeleted, "the verified source is deleted while the writer is held off")
+	assert.Zero(t, report.Failed)
+	remaining, err := base.ReplayEvents(ctx, source, id, 1, 10, 10)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1, "the held-off write lands only after the deletion completed")
+	assert.EqualValues(t, 3, remaining[0].GetSequenceNumber())
+}
+
+// panickingEventsStore panics on target writes, to prove the fence is
+// released even when adoption panics.
+type panickingEventsStore struct {
+	persistence.EventsStore
+	target persistence.Scope
+}
+
+func (p *panickingEventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+	if scope.Equal(p.target) {
+		panic("panickingEventsStore: target write")
+	}
+	return p.EventsStore.WriteEvents(ctx, scope, events, precondition)
+}
+
+func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	seeded := func(t *testing.T, id string) *testkit.EventStore {
+		t.Helper()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, 100)}, persistence.Unconditional()))
+		return store
+	}
+	run := func(t *testing.T, fence *testFence, store persistence.EventsStore, id string, runCtx context.Context) *AdoptionReport {
+		t.Helper()
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+			WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
+		require.NoError(t, err)
+		report, err := adopter.Run(runCtx)
+		require.NoError(t, err)
+		return report
+	}
+	requireBalanced := func(t *testing.T, fence *testFence, wantAcquired int) {
+		t.Helper()
+		acquired, released := fence.counts()
+		assert.Equal(t, wantAcquired, acquired)
+		assert.Equal(t, acquired, released, "every acquired fence must be released")
+	}
+
+	t.Run("success", func(t *testing.T) {
+		fence := newTestFence()
+		report := run(t, fence, seeded(t, "ok"), "ok", ctx)
+		assert.Equal(t, 1, report.SourceDeleted)
+		requireBalanced(t, fence, 2)
+	})
+
+	t.Run("failed verification", func(t *testing.T) {
+		fence := newTestFence()
+		store := &corruptingEventsStore{EventsStore: seeded(t, "corrupt"), corruptScope: target, mangle: func(e *egopb.Event) { e.Event = nil }}
+		report := run(t, fence, store, "corrupt", ctx)
+		assert.Equal(t, 1, report.Failed)
+		assert.Zero(t, report.SourceDeleted)
+		requireBalanced(t, fence, 2)
+	})
+
+	t.Run("second fence unavailable", func(t *testing.T) {
+		fence := newTestFence()
+		fence.failOn = testFenceKey(target, "unavailable")
+		store := seeded(t, "unavailable")
+		report := run(t, fence, store, "unavailable", ctx)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], errTestFenceUnavailable)
+		requireBalanced(t, fence, 1)
+		written, err := store.GetLatestEvent(ctx, target, "unavailable")
+		require.NoError(t, err)
+		assert.Nil(t, written, "nothing may be written without both fences")
+	})
+
+	t.Run("cancelled while waiting for a fence", func(t *testing.T) {
+		fence := newTestFence()
+		hold, err := fence.Acquire(ctx, target, "waiting")
+		require.NoError(t, err)
+		defer hold()
+		store := seeded(t, "waiting")
+		waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		report := run(t, fence, store, "waiting", waitCtx)
+		assert.Equal(t, 1, report.Failed)
+		require.Len(t, report.Failures, 1)
+		assert.ErrorIs(t, report.Failures[0], context.DeadlineExceeded)
+		acquired, released := fence.counts()
+		assert.Equal(t, acquired-1, released, "only the test's own hold may remain")
+	})
+
+	t.Run("panic", func(t *testing.T) {
+		fence := newTestFence()
+		store := &panickingEventsStore{EventsStore: seeded(t, "panic"), target: target}
+		assert.Panics(t, func() { run(t, fence, store, "panic", ctx) })
+		requireBalanced(t, fence, 2)
+	})
+}
+
+// TestTenantAdopterAcquiresFencesInDeterministicOrder pins that the two
+// fences of an aggregate are always taken in the same global order,
+// whichever scope is the source, so two runs moving data in opposite
+// directions can never deadlock each other.
+func TestTenantAdopterAcquiresFencesInDeterministicOrder(t *testing.T) {
+	ctx := context.Background()
+	north, err := persistence.NewTenantScope("north")
+	require.NoError(t, err)
+	south, err := persistence.NewTenantScope("south")
+	require.NoError(t, err)
+
+	orderFor := func(t *testing.T, from persistence.Scope, to tenancy.TenantID) []string {
+		t.Helper()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		fence := newTestFence()
+		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{"shared": to}),
+			WithEventsStore(store), WithPersistenceIDs("shared"), WithSourceScope(from), WithWriteEnabled(), WithAdoptionFence(fence))
+		require.NoError(t, err)
+		_, err = adopter.Run(ctx)
+		require.NoError(t, err)
+		return fence.order
+	}
+
+	northToSouth := orderFor(t, north, "south")
+	southToNorth := orderFor(t, south, "north")
+	require.Len(t, northToSouth, 2)
+	assert.Equal(t, northToSouth, southToNorth, "the lock order must not depend on the direction of the move")
+}
+
+func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
+	ctx := context.Background()
+	acme, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	fence := newTestFence()
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{"self": "acme"}),
+		WithEventsStore(store), WithPersistenceIDs("self"), WithSourceScope(acme), WithWriteEnabled(), WithAdoptionFence(fence))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Failed)
+	require.Len(t, report.Failures, 1)
+	assert.ErrorIs(t, report.Failures[0], errTargetIsSource)
+	acquired, _ := fence.counts()
+	assert.Zero(t, acquired)
 }

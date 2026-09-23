@@ -55,6 +55,7 @@
 //	    migration.WithSnapshotStore(snapshotStore),
 //	    migration.WithStateStore(stateStore),
 //	    migration.WithWriteEnabled(), // required opt-in; the default is dry-run
+//	    migration.WithAdoptionFence(fence), // required whenever writes are enabled
 //	)
 //	report, err := adopter.Run(ctx)
 //

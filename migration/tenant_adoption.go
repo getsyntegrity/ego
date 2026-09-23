@@ -61,6 +61,15 @@ var ErrNoStoresConfigured = errors.New("migration: at least one of WithEventsSto
 // would scan nothing and still report success.
 var ErrInvalidScanPageSize = errors.New("migration: WithScanPageSize must be greater than zero")
 
+// ErrAdoptionFenceRequired is returned by NewTenantAdopter when
+// WithWriteEnabled is set without WithAdoptionFence.
+var ErrAdoptionFenceRequired = errors.New("migration: WithWriteEnabled requires WithAdoptionFence")
+
+// errTargetIsSource is the per-aggregate failure recorded when the assigned
+// target scope is the source scope itself: there is nothing to adopt, and
+// holding both fences would take the same lock twice.
+var errTargetIsSource = errors.New("migration: the assigned target scope is the source scope")
+
 // errSourceChangedDuringAdoption is the per-kind failure recorded when a
 // WithSourceDeletion run finds that the source gained records while this
 // aggregate was being adopted: records newer than the verified copy would be
@@ -352,12 +361,13 @@ func WithWriteEnabled() AdoptionOption {
 // source scope is never modified. A failed verification never deletes,
 // regardless of this option.
 //
-// The source must not receive writes while a WithSourceDeletion run is in
-// progress: the SPI offers no atomic read-verify-delete. The run re-reads
-// the source before and after each deletion, so a source that gained newer
-// records is either left undeleted or reported as failed — never as
-// source_deleted — and the newer records always stay in the source; a
-// write landing after that final re-read is outside what the tool can see.
+// Deletion runs under the adoption fence every write-enabled run holds
+// (WithAdoptionFence): the SPI offers no atomic read-verify-delete, so the
+// fence is what keeps writers out of the source between the final re-read
+// and the delete. Under it, the source must still be exactly the records
+// that were verified or nothing is deleted, and a source that changed
+// anyway is reported as failed — never as source_deleted — with the newer
+// records kept in the source.
 //
 // Durable state is never deleted by this option: persistence.StateStore has
 // no delete method in the SPI (see state_store.go), so a durable-state
@@ -365,6 +375,40 @@ func WithWriteEnabled() AdoptionOption {
 // comment.
 func WithSourceDeletion() AdoptionOption {
 	return adoptionOptionFunc(func(a *TenantAdopter) { a.deleteSource = true })
+}
+
+// AdoptionFence grants exclusive write access to one aggregate's records in
+// one scope. It is supplied by the application, which is the only party
+// that knows how its writers are coordinated (see WithAdoptionFence).
+type AdoptionFence interface {
+	// Acquire blocks until the caller holds exclusive write access to every
+	// record of persistenceID in scope — events, snapshots, and durable
+	// state — or ctx is done. While it is held, no other writer may create,
+	// modify, or delete any of those records. release ends the hold and must
+	// be safe to call once; Acquire returns a non-nil error, and no release,
+	// when access was not granted.
+	Acquire(ctx context.Context, scope persistence.Scope, persistenceID string) (release func(), err error)
+}
+
+// WithAdoptionFence sets the fence a write-enabled run holds for every
+// aggregate it adopts. It is required whenever WithWriteEnabled is set
+// (ErrAdoptionFenceRequired). For each aggregate the run acquires it for the
+// source scope and the target scope — in a fixed order, before its first
+// read of that aggregate — and holds both through the target check, the
+// write, the read-back, and any source deletion, releasing them on every
+// exit path, including an error or a panic.
+//
+// This is what makes adoption safe against concurrent writers: the snapshot
+// SPI has no write precondition, so without it another writer could create
+// a target snapshot between the adopter's existence check and its write and
+// have it overwritten; and nothing in the SPI makes read-verify-delete
+// atomic for WithSourceDeletion. The fence only protects against writers
+// that honor it: an application must route every writer of an aggregate
+// being adopted — its tenant-bound actor, and anything else — through the
+// same exclusion, for example by stopping the entity and holding a
+// database advisory lock keyed on (scope, persistence ID).
+func WithAdoptionFence(fence AdoptionFence) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.fence = fence })
 }
 
 // WithFailFast stops Run at the first per-aggregate failure instead of
@@ -410,6 +454,7 @@ type TenantAdopter struct {
 	write        bool
 	deleteSource bool
 	failFast     bool
+	fence        AdoptionFence
 
 	logger kitlog.Logger
 }
@@ -445,6 +490,9 @@ func NewTenantAdopter(assign TenantAssignment, opts ...AdoptionOption) (*TenantA
 	}
 	if a.pageSize == 0 {
 		return nil, ErrInvalidScanPageSize
+	}
+	if a.write && a.fence == nil {
+		return nil, ErrAdoptionFenceRequired
 	}
 
 	return a, nil
@@ -537,6 +585,30 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 		return a.failFast, f
 	}
 	metadata := tenancy.MarshalMetadata(tenantContext)
+
+	if target.Equal(a.sourceScope) {
+		f := AdoptionFailure{PersistenceID: id, Err: errTargetIsSource}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		return a.failFast, f
+	}
+
+	// A write-enabled run holds the fence for the source and the target
+	// before its first read of this aggregate, and keeps it through every
+	// record kind's target check, write, read-back, and source deletion, so
+	// no other writer can create a target record or change the source in
+	// between. The deferred release also runs on error and on panic.
+	if a.write {
+		release, err := a.acquireFences(ctx, id, target)
+		if err != nil {
+			f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("acquire adoption fence: %w", err)}
+			report.Failed++
+			report.Failures = append(report.Failures, f)
+			a.logger.ErrorContext(ctx, "tenant adoption: fence not acquired", "persistence_id", id, "error", err)
+			return a.failFast, f
+		}
+		defer release()
+	}
 
 	intent := adoptionIntent{target: target, tenant: tenantContext, metadata: metadata}
 	outcome := AggregateOutcome{PersistenceID: id, Tenant: tenantID}
@@ -898,6 +970,44 @@ func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) er
 	return nil
 }
 
+// acquireFences takes the adoption fence for id in the source scope and in
+// target, always in the same global order (Unscoped first, then tenant
+// scopes by tenant id) so two runs moving data in opposite directions cannot
+// deadlock. On a failed acquisition every fence already taken is released
+// before returning. The returned func releases all of them, in reverse.
+func (a *TenantAdopter) acquireFences(ctx context.Context, id string, target persistence.Scope) (func(), error) {
+	scopes := []persistence.Scope{a.sourceScope, target}
+	sort.Slice(scopes, func(i, j int) bool { return fenceOrderKey(scopes[i]) < fenceOrderKey(scopes[j]) })
+
+	releases := make([]func(), 0, len(scopes))
+	releaseAll := func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
+	for _, scope := range scopes {
+		release, err := a.fence.Acquire(ctx, scope, id)
+		if err != nil {
+			releaseAll()
+			return nil, err
+		}
+		if release == nil {
+			release = func() {}
+		}
+		releases = append(releases, release)
+	}
+	return releaseAll, nil
+}
+
+// fenceOrderKey orders scopes for acquireFences. It sorts on the scope's
+// kind and tenant id, never on Scope.String().
+func fenceOrderKey(scope persistence.Scope) string {
+	if scope.IsUnscoped() {
+		return "0"
+	}
+	return "1" + string(scope.TenantID())
+}
+
 // afterVerifiedEvents turns the verdict on an events target that already
 // existed into an outcome. A target proven to contain the source exactly is
 // already present, and a write-enabled WithSourceDeletion run then deletes
@@ -911,14 +1021,15 @@ func (a *TenantAdopter) afterVerifiedEvents(ctx context.Context, id string, sour
 }
 
 // deleteVerifiedSourceEvents deletes the source events this run verified
-// (sourceEvents, through maxSeq). Nothing makes read-verify-delete atomic in
-// the SPI, so the source is re-read on both sides of the deletion: before
-// it, the source must still be exactly sourceEvents — no newer event, and no
-// event rewritten at the same sequence number — or nothing is deleted;
-// after it, a source that gained an event during the delete is reported as
-// failed, never as source_deleted. The newer or rewritten events always stay
-// in the source. A write landing after the final re-read is outside what
-// this tool can observe; WithSourceDeletion requires a quiesced source.
+// (sourceEvents, through maxSeq). It runs under the adoption fence
+// (processAggregate), which is what makes it safe: the SPI has no atomic
+// read-verify-delete, but no writer that honors the fence can change the
+// source between this re-read and the delete. Before deleting, the source
+// must still be exactly sourceEvents — no newer event, and no event rewritten
+// at the same sequence number — or nothing is deleted. After deleting, a
+// source that nonetheless gained an event (a writer that ignores the fence)
+// is reported as failed, never as source_deleted. The newer or rewritten
+// events always stay in the source.
 func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, wroteTarget bool) RecordOutcome {
 	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
 	if err != nil {
@@ -948,10 +1059,10 @@ func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id strin
 }
 
 // deleteVerifiedSourceSnapshot is deleteVerifiedSourceEvents for the source
-// snapshot this run verified: before deleting, the source's latest snapshot
-// must still be exactly verified (a snapshot rewritten at the same sequence
-// number fails, not just a newer one); after, a newer snapshot written
-// during the delete is reported as failed.
+// snapshot this run verified, under the same fence: before deleting, the
+// source's latest snapshot must still be exactly verified (a snapshot
+// rewritten at the same sequence number fails, not just a newer one); after,
+// a newer snapshot that appeared anyway is reported as failed.
 func (a *TenantAdopter) deleteVerifiedSourceSnapshot(ctx context.Context, id string, verified *egopb.Snapshot, wroteTarget bool) RecordOutcome {
 	current, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
 	if err != nil {

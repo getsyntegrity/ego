@@ -720,6 +720,20 @@ Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
       rewritten at the same sequence number blocks deletion
       (`TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot`,
       `TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent`).
+- [x] 8.6 Review of `3206f52` (user contract): the spawn check asks the
+      owning actor (`egopb.TenantBindingQuery`, one shared handler), resolves
+      cluster `ErrActorAlreadyExists` in tenant-aware mode, and `Dispatch`
+      rejects the query (`TestEngineRemoteSpawnTenantBinding` on a real
+      two-node cluster, mutation-checked). A write-enabled adoption requires
+      an `AdoptionFence` held for source and target, in a fixed order, from
+      the first read through deletion and released on every path; it closes
+      the target-snapshot overwrite race and makes the pre-delete re-read a
+      proof (`TestNewTenantAdopterRequiresAFenceToWrite`,
+      `...NeverOverwritesAConcurrentlyCreatedTargetSnapshot`,
+      `...FencedSourceWriterCannotInterleaveWithDeletion`,
+      `...ReleasesItsFencesOnEveryPath`, `...AcquiresFencesInDeterministicOrder`).
+      Durable state has no such race: `WriteState(ExpectGenesis)` is atomic
+      (`...DurableStateTargetRaceIsStoppedByItsPrecondition`).
 
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)
