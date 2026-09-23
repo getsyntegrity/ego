@@ -337,8 +337,6 @@ func TestEventSourcedActor(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
@@ -847,8 +845,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// pre-write a snapshot
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -1124,8 +1120,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create an instance of events stream
 		eventStream := eventstream.New()
 
@@ -1208,8 +1202,6 @@ func TestEventSourcedActor(t *testing.T) {
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-
-		pause.For(time.Second)
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1301,8 +1293,6 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// connect the event store
 		require.NoError(t, eventStore.Connect(ctx))
-
-		pause.For(time.Second)
 
 		// pre-write an event to the store
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
