@@ -4269,7 +4269,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4325,7 +4324,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4383,7 +4381,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4466,7 +4463,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4593,7 +4589,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
