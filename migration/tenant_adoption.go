@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 
@@ -40,9 +41,12 @@ import (
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
-// maxReplayLimit is a safe "read everything" limit for ReplayEvents that
-// won't overflow when cast to int, mirroring migrateEntity's own constant.
-const maxReplayLimit = uint64(1<<63 - 1)
+// maxReplayLimit is the "read everything" limit TenantAdopter and Migrator
+// pass to ReplayEvents. It is the platform's largest int, not the largest
+// int64: a store that converts the limit to int (testkit.EventStore does)
+// would otherwise see a negative limit on a 32-bit architecture and panic
+// slicing its result.
+const maxReplayLimit = uint64(math.MaxInt)
 
 // ErrAssignmentRequired is returned by NewTenantAdopter when assign is nil.
 // The framework has no way to decide which tenant an existing aggregate
@@ -329,6 +333,9 @@ func WithStateStore(store persistence.StateStore) AdoptionOption {
 // of adopting tenancy for the first time; a non-default source scope is
 // only useful for re-partitioning an aggregate already under one tenant
 // scope into another.
+//
+// NewTenantAdopter rejects the invalid zero-value Scope with
+// persistence.ErrInvalidScope before any store is touched.
 func WithSourceScope(scope persistence.Scope) AdoptionOption {
 	return adoptionOptionFunc(func(a *TenantAdopter) { a.sourceScope = scope })
 }
@@ -490,6 +497,9 @@ func NewTenantAdopter(assign TenantAssignment, opts ...AdoptionOption) (*TenantA
 	}
 	if a.pageSize == 0 {
 		return nil, ErrInvalidScanPageSize
+	}
+	if !a.sourceScope.Valid() {
+		return nil, fmt.Errorf("migration: WithSourceScope: %w", persistence.ErrInvalidScope)
 	}
 	if a.write && a.fence == nil {
 		return nil, ErrAdoptionFenceRequired

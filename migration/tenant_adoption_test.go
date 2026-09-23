@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -2364,4 +2365,31 @@ func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T)
 		require.Len(t, report.Aggregates, 1)
 		assert.NotEqual(t, StatusSourceDeleted, report.Aggregates[0].Snapshot.Status)
 	})
+}
+
+// untouchableEventsStore, untouchableSnapshotStore, and untouchableStateStore
+// embed a nil interface, so any method call on them panics: a test using
+// them proves the code under test never touches a store.
+type untouchableEventsStore struct{ persistence.EventsStore }
+type untouchableSnapshotStore struct{ persistence.SnapshotStore }
+type untouchableStateStore struct{ persistence.StateStore }
+
+func TestNewTenantAdopterRejectsAnInvalidSourceScope(t *testing.T) {
+	adopter, err := NewTenantAdopter(fixedAssignment(nil),
+		WithEventsStore(untouchableEventsStore{}),
+		WithSnapshotStore(untouchableSnapshotStore{}),
+		WithStateStore(untouchableStateStore{}),
+		WithPersistenceIDs("order-1"),
+		WithSourceScope(persistence.Scope{}),
+		WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+	require.ErrorIs(t, err, persistence.ErrInvalidScope, "the zero-value source scope must be rejected when the adopter is built")
+	assert.Nil(t, adopter, "no adopter may be returned for an invalid configuration")
+}
+
+// TestMaxReplayLimitFitsInAnInt pins that the "read everything" replay limit
+// never overflows when a store converts it to int, as
+// testkit.EventStore.ReplayEvents does, on any architecture.
+func TestMaxReplayLimitFitsInAnInt(t *testing.T) {
+	assert.Equal(t, uint64(math.MaxInt), maxReplayLimit)
+	assert.GreaterOrEqual(t, int(maxReplayLimit), 0)
 }

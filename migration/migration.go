@@ -205,10 +205,10 @@ func (m *Migrator) Run(ctx context.Context) error {
 // migrateEntity processes a single entity: reads its events and finds
 // the latest one with a resulting_state, then writes a snapshot.
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
-	// Use a safe large limit that won't overflow when cast to int.
-	const maxLimit = uint64(1<<63 - 1)
 	// Same scope Run listed persistenceID in; see Run's comment.
-	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxLimit, maxLimit)
+	// maxReplayLimit (tenant_adoption.go) fits in an int on every
+	// architecture, so a store converting it cannot overflow.
+	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxReplayLimit, maxReplayLimit)
 	if err != nil {
 		return err
 	}
