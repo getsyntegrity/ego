@@ -316,7 +316,7 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 		"summary.md":   summary,
 	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(outDir, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(outDir, name), []byte(content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", name, err)
 		}
 	}
