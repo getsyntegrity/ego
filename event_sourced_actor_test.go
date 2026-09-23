@@ -2034,7 +2034,6 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2137,7 +2136,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2254,7 +2252,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2321,7 +2318,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// spawn with no behavior dependency
 		actor := newEventSourcedActor()
@@ -2358,7 +2354,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
