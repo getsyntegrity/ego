@@ -9,25 +9,21 @@ Phase: read-only architecture spike; no production changes
 
 The root module is `github.com/pablogore/ego/v4` (`go.mod:1`). Six nested
 modules already exist: four `publisher/{kafka,nats,pulsar,websocket}` modules,
-`benchmark`, and `example/cluster`. Each nested publisher requires root
-`v4.4.3` and replaces it with `../../` in this checkout. A fresh nested-module
-build and a published-module build therefore have distinct dependency inputs.
+`benchmark`, and `example/cluster`. All six require root `v4.4.3` through local `replace` directives. That tag has
+never been published (neither repository has tags), so none builds without its
+replace. Kafka builds after substituting the root pseudo-version
+`v4.0.0-20260923154928-a4edded48f01`; release versioning remains unresolved.
 
 The root `ego` package contains 25 production and 41 test Go files. It mixes
 behavior definitions (`behavior.go`), `Engine` (`engine.go`), GoAkt actor
 implementations, options (`option.go`), projection and saga execution, and
-telemetry. A static scan of production imports in the root module found 32
-packages and 52 internal import edges. This is a source scan, **not** the
-compiler-resolved graph; confirm it with `go list -deps -test -json` before
-making dependency or timing claims. The local environment has no Go executable,
-so build, tests, benchmarks and `go list` could not run in this spike.
-
-Reproduce the module list with `find . -name go.mod -not -path './vendor/*'`.
-In a Go-enabled checkout, enumerate each module separately with
-`(cd MODULE_DIR && go list -deps -test -json ./...)`; use its `Imports`,
-`TestImports`, `XTestImports`, `Module` and load errors to build the authoritative
-graph. Time both `go test ./...` and targeted package lists with a fresh and a
-warm Go cache. The source-scan counts above are provisional until that run.
+telemetry. A compiler-resolved `go list -e -deps -test -json ./...` run in each of the
+seven modules completed without load errors. The root has 32 packages and 52
+production edges, plus 14 edges appearing only in tests; there are no cycles.
+The six nested modules depend on 15–17 root packages each. The four publishers
+have no tests, so an initial CI gate can verify build, vet and lint but cannot
+claim publisher test coverage. These measurements used local Go 1.26.6;
+CI uses Go 1.27.0. Reproduction details and limits are recorded below.
 
 | Package/group | Current role and imports | Initial destination |
 | --- | --- | --- |
@@ -71,17 +67,22 @@ not repository-wide multi-module CI.
 `selector/select.go:129,143` permits a change consisting only of such files
 to return `ModeNone`. The root full suite (`go test` package list from root
 `go list ./...`) also cannot include nested modules. No module-specific test
-jobs appear in the two build workflows. Thus the publishers are **already
-independently buildable in layout, but not covered by these CI jobs**. This
+jobs appear in the two build workflows. A real `ciselect` run with five Kafka files returned `ModeNone`, zero of 20
+included root packages and a satellite warning. Consequently a Kafka-only PR
+passes the root lint and test job without building, vetting or linting Kafka.
+The publishers are **separate in layout, but not verified by these CI jobs**. This
 must be addressed before adding more `go.mod` files. In addition, all root
 Go files force full fallback (`selector/classify.go`), so moving neutral code
 out of root is necessary to realize a smaller affected set.
 
-The current `-coverpkg` list remains the complete included root package set
-even in affected mode (`scripts/ci/go-test.sh`). Benchmark whether this
-instruments too much before claiming the selector's test subset provides
-proportional compile savings. `go mod tidy && go mod vendor`, lint and the
-race detector may dominate wall time independently of package selection.
+The current `-coverpkg` denominator is the same 20 included root packages in
+both modes. A partial-cache measurement for `persistence` was 0.17 s with
+`-coverpkg` versus 0.12 s without; it does not explain CI latency. The root
+test binary alone ran for 592.05 s (3.4 s CPU), while its cold compilation
+was 24.60 s. The 260 top-level root tests ran serially, with no `t.Parallel`.
+The full root suite passed in 619 s locally, with 591 s in that one package.
+A hypothesis is that 528 `pause.For` calls and 182 `ActorSystem` constructions
+account for much of the waiting; this has not been profiled call by call.
 
 ## Approaches
 
@@ -117,7 +118,9 @@ those signatures. #105 owns assembly, while #106 owns general adapter SPI.
 First candidate module: **neutral core/ports**, once it demonstrably builds
 without GoAkt and without importing the root `ego` package. The GoAkt runtime
 adapter can become a second module after its imports point into that core;
-existing publisher modules stay separate. `persistence`/`egopb` placement
+existing publisher modules stay separate. Before another module split, fix
+satellite CI selection and define a release version policy; the currently
+required `v4.4.3` does not exist. `persistence`/`egopb` placement
 depends on whether protobuf is part of the supported public contract. Do not
 create a module for each small package or move code into `internal` if public
 consumers must import its contracts. Avoid root ↔ nested-module cycles; local
@@ -131,9 +134,10 @@ include tests in every existing nested module, fail closed on unknown paths
 and graph errors, and print the selection. A dynamic job matrix can supply
 one workflow; a separate YAML per module is not required. Require full tests
 for module/workspace metadata, generated schemas, selector/CI changes, and
-the final main/merge gate. Measure cold/warm builds and unit/race timing for
-root leaf, root contract, GoAkt adapter and one publisher before finalizing
-the module layout or coverage denominator.
+the final main/merge gate. Measured no-race cold/warm compilation was
+3.40/0.08 s for `internal/queue`, 6.64/0.12 s for `persistence`,
+24.60/0.29 s for root, and 16.87/0.09 s for Kafka build. Profile the
+root test waits and measure CI race timing before promising a latency target.
 
 ## Risks and open decisions
 
@@ -143,7 +147,9 @@ the module layout or coverage denominator.
 - Moving `egopb` or changing `proto.Message` changes serialization and public
   types. Decide this separately from removing GoAkt.
 - Independent release/version policy for nested modules is undefined here;
-  the checked-in `replace` directives can hide released-version failures.
+  all six currently require nonexistent `v4.4.3` and compile only through
+  checked-in local `replace` directives. Release verification must build
+  without those replacements against a published version.
 - `internal/extensions` is rooted under today's module. Go's `internal`
   visibility rules and package imports need checking when a new module owns
   the adapter.
@@ -159,7 +165,23 @@ compatibility decisions without implementing the other epics.
 
 ## Ready for proposal
 
-Not yet for a final normative topology: run the compiler-resolved graph and
-timing baseline in a Go-enabled checkout, then close protobuf and public
-compatibility questions. This exploration is sufficient to draft the options
-and the first extraction seam, with those decisions explicitly open.
+The compiler-resolved graph and local timing baseline are complete. A final
+normative topology still needs the protobuf and public compatibility decisions,
+release version policy, and a plan to close satellite CI's `ModeNone` gap.
+The local run did not measure race timing, CI timing, cold module downloads,
+or the exact source of root test waits.
+
+## Reproduction and measurement limits
+
+Baseline: `a4edded48f01b5430f4555effd99bd5e06c62702`, archived into a
+temporary directory without moving the checkout. Run `go list -e -deps -test
+-json ./...` separately in each module and inspect `Error` and `DepsErrors`.
+Run `go run ./internal/cmd/ciselect -changed kafka.txt -out-dir out-kafka`
+with the five Kafka file paths to reproduce `ModeNone`. Compile with
+`go test -c`, then time the test binary itself with `-test.count=1`; use a
+fresh `GOCACHE` for cold compilation and `go test -count=1 -timeout 30m -json
+./...` for the full root suite. Local measurements used Go 1.26.6 on
+Linux/amd64 under variable host load. No local `-race` run was performed.
+The reported max RSS is the peak of one process, not the whole process tree.
+The original raw logs lived in a temporary Claude job directory and are not
+part of this PR; retain repeatable commands and observed values here.
