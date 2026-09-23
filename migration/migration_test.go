@@ -40,6 +40,7 @@ import (
 	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -566,13 +567,21 @@ func (s *spySnapshotStore) DeleteSnapshots(ctx context.Context, scope persistenc
 	return s.SnapshotStore.DeleteSnapshots(ctx, scope, persistenceID, toSequenceNumber)
 }
 
-// writeScopedLegacyEvent is writeLegacyEvent for an explicit scope.
+// writeScopedLegacyEvent is writeLegacyEvent for an explicit scope; in a
+// tenant scope the event carries that tenant's metadata.
 func writeScopedLegacyEvent(t *testing.T, store persistence.EventsStore, scope persistence.Scope, persistenceID string, seqNr uint64, state *anypb.Any) {
 	t.Helper()
 	eventAny, err := anypb.New(timestamppb.Now())
 	require.NoError(t, err)
 	evt := new(egopb.Event)
 	require.NoError(t, proto.Unmarshal(buildLegacyEventBytes(t, persistenceID, seqNr, eventAny, state, int64(seqNr*100), 0), evt))
+	if !scope.IsUnscoped() {
+		// Events in a tenant scope carry that tenant's metadata, as the
+		// tenant-bound actor (or TenantAdopter) stamps them.
+		tenant, err := tenancy.NewTenantContext(scope.TenantID())
+		require.NoError(t, err)
+		evt.TenantMetadata = tenancy.MarshalMetadata(tenant)
+	}
 	require.NoError(t, store.WriteEvents(context.Background(), scope, []*egopb.Event{evt}, persistence.Unconditional()))
 }
 

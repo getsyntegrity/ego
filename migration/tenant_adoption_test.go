@@ -2170,3 +2170,109 @@ func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
 	acquired, _ := fence.counts()
 	assert.Zero(t, acquired)
 }
+
+// scopedLegacyAccountEvent builds a legacy event in a tenant scope: an
+// AccountCreated payload plus the pre-snapshot resulting_state (field 5),
+// carrying metadata as its tenant_metadata.
+func scopedLegacyAccountEvent(t *testing.T, id string, balance float64, metadata map[string]string) *egopb.Event {
+	t.Helper()
+	created, err := anypb.New(&testpb.AccountCreated{AccountId: id, AccountBalance: balance})
+	require.NoError(t, err)
+	state, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: balance})
+	require.NoError(t, err)
+	evt := new(egopb.Event)
+	require.NoError(t, proto.Unmarshal(buildLegacyEventBytes(t, id, 1, created, state, time.Now().Unix(), 0), evt))
+	evt.TenantMetadata = metadata
+	return evt
+}
+
+// TestScopedMigratorSnapshotRecoversThroughTenantAwareActor proves a
+// snapshot the Migrator writes in a tenant scope carries that tenant's
+// metadata: a real tenant-aware EventSourcedActor loads it first and must
+// recover from it rather than reject it.
+func TestScopedMigratorSnapshotRecoversThroughTenantAwareActor(t *testing.T) {
+	ctx := context.Background()
+	acme, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	acmeContext, err := tenancy.NewTenantContext("acme")
+	require.NoError(t, err)
+
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+
+	entityID := "acct-" + uuid.NewString()
+	require.NoError(t, eventsStore.WriteEvents(ctx, acme, []*egopb.Event{
+		scopedLegacyAccountEvent(t, entityID, 100, tenancy.MarshalMetadata(acmeContext)),
+	}, persistence.Unconditional()))
+
+	migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
+	require.NoError(t, err)
+	require.NoError(t, migrator.Run(ctx))
+
+	snapshot, err := snapshotStore.GetLatestSnapshot(ctx, acme, entityID)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	snapshotTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(snapshot.GetTenantMetadata()))
+	require.NoError(t, err, "the scoped snapshot must carry tenant metadata")
+	assert.Equal(t, acmeContext, snapshotTenant)
+
+	resolver, err := tenancy.WithSingleTenant("acme")
+	require.NoError(t, err)
+	cfg := ego.NewConfig(eventsStore, ego.WithTenantResolver(resolver), ego.WithSnapshotStore(snapshotStore))
+	sys, err := goakt.NewActorSystem("ScopedMigratorE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(context.Background()) })
+	engine, err := ego.NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
+
+	require.NoError(t, engine.Entity(ctx, &adoptionAccountBehavior{id: entityID}),
+		"a tenant-aware actor must recover from the migrated snapshot")
+	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
+	require.NoError(t, err)
+	account, ok := state.(*testpb.Account)
+	require.True(t, ok)
+	assert.EqualValues(t, 150, account.GetAccountBalance(), "150 == migrated snapshot balance (100) + credit (50)")
+}
+
+// TestScopedMigratorFailsClosedOnUnprovableTenantMetadata pins that a
+// scoped run never writes a snapshot a tenant-aware actor would reject, or
+// one stamped for another tenant: the source event must carry exactly the
+// selected scope's tenant.
+func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
+	ctx := context.Background()
+	acme, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	globex, err := tenancy.NewTenantContext("globex")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name     string
+		metadata map[string]string
+		wantErr  error
+	}{
+		{name: "missing tenant metadata", metadata: nil, wantErr: tenancy.ErrInvalid},
+		{name: "another tenant's metadata", metadata: tenancy.MarshalMetadata(globex), wantErr: tenancy.ErrDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eventsStore := testkit.NewEventsStore()
+			require.NoError(t, eventsStore.Connect(ctx))
+			snapshotStore := testkit.NewSnapshotStore()
+			require.NoError(t, snapshotStore.Connect(ctx))
+			const id = "unprovable"
+			require.NoError(t, eventsStore.WriteEvents(ctx, acme, []*egopb.Event{scopedLegacyAccountEvent(t, id, 100, tc.metadata)}, persistence.Unconditional()))
+
+			migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
+			require.NoError(t, err)
+			require.ErrorIs(t, migrator.Run(ctx), tc.wantErr)
+
+			snapshot, err := snapshotStore.GetLatestSnapshot(ctx, acme, id)
+			require.NoError(t, err)
+			assert.Nil(t, snapshot, "no snapshot may be written without proven tenant metadata")
+		})
+	}
+}

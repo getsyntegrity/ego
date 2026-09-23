@@ -115,6 +115,7 @@ import (
 	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // legacyResultingStateFieldNumber is the protobuf field number that was used
@@ -212,11 +213,15 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return err
 	}
 
-	var bestSnapshot *egopb.Snapshot
+	var (
+		bestSnapshot *egopb.Snapshot
+		bestEvent    *egopb.Event
+	)
 	for _, evt := range events {
 		state := extractLegacyResultingState(evt)
 		if state != nil {
 			if bestSnapshot == nil || evt.GetSequenceNumber() > bestSnapshot.GetSequenceNumber() {
+				bestEvent = evt
 				bestSnapshot = &egopb.Snapshot{
 					PersistenceId:  persistenceID,
 					SequenceNumber: evt.GetSequenceNumber(),
@@ -230,6 +235,10 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 	if bestSnapshot == nil {
 		m.logger.DebugContext(ctx, "migration: entity has no legacy resulting_state, skipping", "persistence_id", persistenceID)
 		return nil
+	}
+
+	if err := m.stampSnapshotTenant(bestSnapshot, bestEvent); err != nil {
+		return err
 	}
 
 	// Written in the same scope the events were read from; see Run's comment.
@@ -340,4 +349,32 @@ func consumeVarint(b []byte) (uint64, int) {
 		}
 	}
 	return 0, -1
+}
+
+// stampSnapshotTenant gives a snapshot written in a tenant scope the
+// tenant_metadata a tenant-aware EventSourcedActor requires: it loads the
+// snapshot first and refuses one without a tenant scope in its metadata.
+// The metadata comes from source, the event whose resulting_state the
+// snapshot was taken from, and must decode to exactly the Migrator's tenant
+// (tenancy.ErrInvalid when missing or malformed, tenancy.ErrDenied for
+// another tenant); the snapshot is then stamped canonically, the way the
+// actors stamp it. Nothing is written when that cannot be proven. Unscoped
+// runs are unchanged: their snapshots carry no tenant_metadata, as before.
+func (m *Migrator) stampSnapshotTenant(snapshot *egopb.Snapshot, source *egopb.Event) error {
+	if m.scope.IsUnscoped() {
+		return nil
+	}
+	want, err := tenancy.NewTenantContext(m.scope.TenantID())
+	if err != nil {
+		return fmt.Errorf("snapshot tenant for scope %s: %w", m.scope, err)
+	}
+	got, err := tenancy.UnmarshalMetadata(tenancy.Metadata(source.GetTenantMetadata()))
+	if err != nil {
+		return fmt.Errorf("source event %d carries no tenant metadata for scope %s: %w", source.GetSequenceNumber(), m.scope, err)
+	}
+	if err := tenancy.VerifyUnchanged(want, got); err != nil {
+		return fmt.Errorf("source event %d is stamped for another tenant than scope %s: %w", source.GetSequenceNumber(), m.scope, err)
+	}
+	snapshot.TenantMetadata = tenancy.MarshalMetadata(want)
+	return nil
 }
