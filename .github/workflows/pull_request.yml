@@ -47,14 +47,41 @@ jobs:
         with:
           version: v2.13.1
           args: --timeout 10m --config .golangci.yml
-      - name: Install go-acc
+      - name: Determine changed files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          go install github.com/ory/go-acc@latest
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+      - name: Select packages
+        id: select
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -out-dir "$RUNNER_TEMP/ci"; then
+            :
+          else
+            echo "::warning::ciselect failed; falling back to the full suite"
+            go run ./internal/cmd/ciselect -all -reason "selector failed; full-suite fallback" -out-dir "$RUNNER_TEMP/ci"
+          fi
+          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
       - name: Run tests
         shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+          GO_TEST_RACE: "1"
         run: |
-          go-acc ./... -o coverage.out --ignore egopb,test,example,benchmark,mocks -- -mod=vendor -p 1 -timeout 0 -race -v
+          scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
+      - name: Note skipped Codecov upload
+        if: steps.select.outputs.mode != 'full'
+        shell: bash
+        run: |
+          echo "Coverage not uploaded to Codecov: package selection was partial (mode=${{ steps.select.outputs.mode }}); a partial profile would misstate project coverage. main's full-suite run remains the Codecov source of truth." >> "$GITHUB_STEP_SUMMARY"
       - uses: codecov/codecov-action@v7
+        if: steps.select.outputs.mode == 'full'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out # optional
