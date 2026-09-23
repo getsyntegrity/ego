@@ -4851,7 +4851,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4975,7 +4974,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
