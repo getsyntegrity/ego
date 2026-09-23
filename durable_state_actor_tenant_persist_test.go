@@ -598,7 +598,6 @@ func TestDurableStateActorGetStateCommandTenancyGate(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newDurableStateActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -699,7 +698,6 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newDurableStateActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -882,7 +880,6 @@ func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T)
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newDurableStateActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
