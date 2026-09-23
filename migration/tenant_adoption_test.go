@@ -2539,3 +2539,91 @@ func rerun(t *testing.T, store persistence.EventsStore, id string) *AdoptionRepo
 	require.NoError(t, err)
 	return report
 }
+
+// TestTenantAdopterCountsSideEffectsOfAFailedAggregate pins that the report
+// never hides an irreversible side effect: when an aggregate's events were
+// copied and their source deleted, and a LATER record kind then fails, the
+// aggregate counts as Failed and still toward Copied and SourceDeleted.
+func TestTenantAdopterCountsSideEffectsOfAFailedAggregate(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+
+	eventsStore := testkit.NewEventsStore()
+	require.NoError(t, eventsStore.Connect(ctx))
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+	const id = "partial-side-effects"
+	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, 100)}, persistence.Unconditional()))
+	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 1, 100)))
+
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(eventsStore),
+		WithSnapshotStore(&corruptingSnapshotStore{SnapshotStore: snapshotStore, corruptScope: target, mangle: func(s *egopb.Snapshot) { s.State = nil }}),
+		WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.Failed, "the snapshot verification failed")
+	assert.Equal(t, 1, report.Copied, "the events were written to the target before the snapshot failed")
+	assert.Equal(t, 1, report.SourceDeleted, "the events' source was irreversibly deleted before the snapshot failed")
+	assert.Zero(t, report.Verified, "the aggregate as a whole did not verify")
+	require.Len(t, report.Aggregates, 1)
+	assert.Equal(t, StatusSourceDeleted, report.Aggregates[0].Events.Status)
+	assert.Equal(t, StatusFailed, report.Aggregates[0].Snapshot.Status)
+
+	remaining, err := eventsStore.ReplayEvents(ctx, source, id, 1, math.MaxUint64, 10)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "precondition: the side effect the report must show really happened")
+}
+
+// reorderingEventsStore returns source replays after the first one in
+// reverse order. The SPI does not promise any order for ReplayEvents.
+type reorderingEventsStore struct {
+	persistence.EventsStore
+	source        persistence.Scope
+	sourceReplays int
+}
+
+func (r *reorderingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
+	events, err := r.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
+	if err != nil || !scope.Equal(r.source) {
+		return events, err
+	}
+	r.sourceReplays++
+	if r.sourceReplays == 1 {
+		return events, nil
+	}
+	reversed := make([]*egopb.Event, len(events))
+	for i, e := range events {
+		reversed[len(events)-1-i] = e
+	}
+	return reversed, nil
+}
+
+// TestTenantAdopterPreDeleteCheckIgnoresReplayOrder pins that the pre-delete
+// re-read compares the source by sequence number, not by position: the
+// same verified events returned in another order are unchanged.
+func TestTenantAdopterPreDeleteCheckIgnoresReplayOrder(t *testing.T) {
+	ctx := context.Background()
+	source := persistence.Unscoped()
+	base := testkit.NewEventsStore()
+	require.NoError(t, base.Connect(ctx))
+	const id = "reordered"
+	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200), newLegacyEvent(t, id, 3, 300),
+	}, persistence.Unconditional()))
+
+	store := &reorderingEventsStore{EventsStore: base, source: source}
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, store.sourceReplays, 2, "precondition: the pre-delete re-read saw the reordered replay")
+	assert.Zero(t, report.Failed, "a reordered replay of the same events is not a source change")
+	assert.Equal(t, 1, report.SourceDeleted)
+}

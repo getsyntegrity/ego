@@ -235,6 +235,14 @@ func (f AdoptionFailure) Unwrap() error { return f.Err }
 // was done for it. AggregateOutcome carries the per-kind detail for a
 // caller that needs it.
 //
+// The counters are not mutually exclusive. Record kinds are processed in
+// order (events, snapshot, durable state), so an aggregate that fails on a
+// later kind counts toward Failed and also toward Copied and SourceDeleted
+// for any earlier kind that already wrote its target or deleted its source:
+// those side effects are irreversible and are never hidden. Verified is an
+// aggregate verdict and counts only aggregates that completed without a
+// failure.
+//
 // In dry-run (DryRun == true), Scanned, Assigned, SkippedByAssignment,
 // Copied, AlreadyPresent, and Failed reflect exactly what a real run would
 // do. Verified and SourceDeleted stay zero in dry-run: nothing was actually
@@ -255,7 +263,8 @@ type AdoptionReport struct {
 	// TenantAssignment returned ok=false; left untouched.
 	SkippedByAssignment int
 	// Copied is the number of aggregates for which at least one record kind
-	// was (or, in dry-run, would be) written to the target tenant scope.
+	// was (or, in dry-run, would be) written to the target tenant scope,
+	// including aggregates that then failed on a later kind.
 	Copied int
 	// AlreadyPresent is the number of assigned aggregates for which every
 	// configured record kind was already present in the target tenant
@@ -273,7 +282,8 @@ type AdoptionReport struct {
 	// SourceDeleted is the number of aggregates for which at least one
 	// record kind's source-scope copy was removed after its target was
 	// verified — by a fresh copy, or as an exact already-present adoption
-	// (WithSourceDeletion only). Always 0 in dry-run.
+	// (WithSourceDeletion only) — including aggregates that then failed on a
+	// later kind. Always 0 in dry-run.
 	SourceDeleted int
 	// Failed is the number of persistence IDs (assignment failures and
 	// aggregate failures alike) that did not complete successfully. See
@@ -668,6 +678,16 @@ func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report 
 	switch {
 	case aggFailure != nil:
 		report.Failed++
+		// A record kind processed before the failing one may already have
+		// written the target or deleted its source; those side effects are
+		// irreversible, so they still count. Verified stays an aggregate
+		// verdict: this aggregate as a whole did not verify.
+		if copied {
+			report.Copied++
+		}
+		if deleted {
+			report.SourceDeleted++
+		}
 		return a.failFast, aggFailure
 	case !found:
 		f := AdoptionFailure{PersistenceID: id, Err: errNoSourceRecords}
@@ -1066,13 +1086,8 @@ func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id strin
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
 	}
-	if len(current) != len(sourceEvents) {
-		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source holds %d events, %d were verified; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, len(current), len(sourceEvents))}
-	}
-	for i := range current {
-		if !proto.Equal(current[i], sourceEvents[i]) {
-			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source sequence %d changed after it was verified; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, current[i].GetSequenceNumber())}
-		}
+	if err := sameEventsBySequence(current, sourceEvents); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: %w; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, err)}
 	}
 
 	if err := a.eventsStore.DeleteEvents(ctx, a.sourceScope, id, maxSeq); err != nil {
@@ -1092,6 +1107,40 @@ func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id strin
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source still holds sequence %d after deleting through %d; it was not removed or was recreated", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
 	}
 	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
+}
+
+// sameEventsBySequence reports whether current holds exactly the events in
+// verified, compared by sequence number rather than position: the SPI does
+// not promise any order for ReplayEvents. Both must have the same count and
+// the same set of sequence numbers, each proto.Equal to its counterpart; a
+// sequence number appearing twice on either side is a mismatch.
+func sameEventsBySequence(current, verified []*egopb.Event) error {
+	if len(current) != len(verified) {
+		return fmt.Errorf("source holds %d events, %d were verified", len(current), len(verified))
+	}
+	verifiedBySeq := make(map[uint64]*egopb.Event, len(verified))
+	for _, e := range verified {
+		if _, dup := verifiedBySeq[e.GetSequenceNumber()]; dup {
+			return fmt.Errorf("verified events repeat sequence %d", e.GetSequenceNumber())
+		}
+		verifiedBySeq[e.GetSequenceNumber()] = e
+	}
+	seen := make(map[uint64]struct{}, len(current))
+	for _, e := range current {
+		seq := e.GetSequenceNumber()
+		if _, dup := seen[seq]; dup {
+			return fmt.Errorf("source repeats sequence %d", seq)
+		}
+		seen[seq] = struct{}{}
+		want, ok := verifiedBySeq[seq]
+		if !ok {
+			return fmt.Errorf("source sequence %d was not verified", seq)
+		}
+		if !proto.Equal(e, want) {
+			return fmt.Errorf("source sequence %d changed after it was verified", seq)
+		}
+	}
+	return nil
 }
 
 // deleteVerifiedSourceSnapshot is deleteVerifiedSourceEvents for the source
