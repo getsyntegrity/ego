@@ -1795,7 +1795,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		successReply := &egopb.CommandReply{
 			Reply: &egopb.CommandReply_StateReply{
@@ -1874,7 +1873,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1968,7 +1966,6 @@ func TestSagaFailsClosed(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// The saga's real target: a genuine tenant-aware EventSourcedActor,
 		// not a stub. If the gate ever regressed and let a saga-dispatched
