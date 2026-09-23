@@ -2731,7 +2731,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// pre-write an event that the behavior will fail to handle
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
@@ -2777,7 +2776,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -2830,7 +2828,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3029,7 +3026,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3493,7 +3489,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
