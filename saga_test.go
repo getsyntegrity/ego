@@ -1432,7 +1432,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1497,7 +1496,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target responds with a non-CommandReply message
 		_, err = actorSystem.Spawn(ctx, targetID,
@@ -1568,7 +1566,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target returns an error reply (parseCommandReply will return error)
 		errorReply := &egopb.CommandReply{
@@ -1643,7 +1640,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		errorReply := &egopb.CommandReply{
 			Reply: &egopb.CommandReply_ErrorReply{
@@ -1719,7 +1715,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target returns a successful state reply
 		successReply := &egopb.CommandReply{
