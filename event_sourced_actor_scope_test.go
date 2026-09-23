@@ -78,7 +78,6 @@ func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -143,7 +142,6 @@ func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 		goakt.WithActorInitMaxRetries(1))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	// Deliberately no extensions.NewEntityTenantScope dependency: tenancy is
@@ -198,7 +196,6 @@ func TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,

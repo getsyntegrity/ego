@@ -502,7 +502,6 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -574,7 +573,6 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
