@@ -197,8 +197,6 @@ func TestEventsJanitorActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -245,8 +243,6 @@ func TestEventsJanitorActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -290,8 +286,6 @@ func TestEventsJanitorActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-
-		pause.For(time.Second)
 
 		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
 		require.NoError(t, err)
@@ -339,8 +333,6 @@ func TestEventsJanitorActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -387,8 +379,6 @@ func TestEventsJanitorActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-
-		pause.For(time.Second)
 
 		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
 		require.NoError(t, err)
