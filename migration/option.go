@@ -22,7 +22,11 @@
 
 package migration
 
-import kitlog "github.com/pablogore/kit-logger/pkg/logger"
+import (
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
+
+	"github.com/pablogore/ego/v4/persistence"
+)
 
 // Option configures the Migrator.
 type Option interface {
@@ -46,6 +50,18 @@ func WithPageSize(size uint64) Option {
 // logging seam the engine uses. When the option is not used, or when the
 // given logger is nil or a typed-nil pointer, the migrator logs through
 // ego.DefaultLogger().
+// WithScope sets the persistence.Scope the Migrator lists, replays, and
+// writes snapshots in. The default is persistence.Unscoped(), the scope every
+// store call used before tenancy existed. A Migrator walks exactly one scope:
+// the persistence SPI offers no way to enumerate scopes, so a deployment
+// with tenant data runs one Migrator per tenant scope. New rejects the
+// invalid zero-value Scope with persistence.ErrInvalidScope.
+func WithScope(scope persistence.Scope) Option {
+	return optionFunc(func(m *Migrator) {
+		m.scope = scope
+	})
+}
+
 func WithLogger(logger kitlog.Logger) Option {
 	return optionFunc(func(m *Migrator) {
 		m.logger = logger

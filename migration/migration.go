@@ -26,10 +26,14 @@
 //
 // Usage:
 //
-//	migrator := migration.New(eventsStore, snapshotStore,
+//	migrator, err := migration.New(eventsStore, snapshotStore,
 //	    migration.WithPageSize(100),
 //	    migration.WithLogger(logger), // any kit-logger Logger
+//	    migration.WithScope(scope),   // optional; persistence.Unscoped() by default
 //	)
+//	if err != nil {
+//	    return err // e.g. an invalid scope
+//	}
 //	if err := migrator.Run(ctx); err != nil {
 //	    logger.Error("migration failed", "error", err)
 //	}
@@ -37,7 +41,7 @@
 // When no logger is supplied the migrator logs through ego.DefaultLogger(),
 // kit-logger's process-wide logger.
 //
-// The migrator reads all persistence IDs from the events store, finds the latest
+// The migrator reads every persistence ID in its scope (see WithScope), finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),
 // and writes a snapshot to the snapshot store seeded from that state. This is a
 // one-time, idempotent operation — running it again will overwrite existing snapshots
@@ -125,14 +129,16 @@ type Migrator struct {
 	snapshotStore persistence.SnapshotStore
 	pageSize      uint64
 	logger        kitlog.Logger
+	scope         persistence.Scope
 }
 
 // New creates a Migrator.
-func New(eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) *Migrator {
+func New(eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) (*Migrator, error) {
 	m := &Migrator{
 		eventsStore:   eventsStore,
 		snapshotStore: snapshotStore,
 		pageSize:      500,
+		scope:         persistence.Unscoped(),
 	}
 	for _, opt := range opts {
 		opt.apply(m)
@@ -140,12 +146,16 @@ func New(eventsStore persistence.EventsStore, snapshotStore persistence.Snapshot
 	// Options may have set a nil or typed-nil logger, which would panic on the
 	// first log call. Resolving after the loop covers every option path.
 	m.logger = ego.ResolveLogger(m.logger)
-	return m
+	if !m.scope.Valid() {
+		return nil, fmt.Errorf("migration: WithScope: %w", persistence.ErrInvalidScope)
+	}
+	return m, nil
 }
 
-// Run executes the migration. It iterates over all persistence IDs in the events
-// store and, for each entity, extracts the resulting_state from the latest event
-// that carried one, writing it as a snapshot.
+// Run executes the migration. It iterates over every persistence ID the events
+// store lists in the Migrator's scope and, for each entity, extracts the
+// resulting_state from the latest event that carried one, writing it as a
+// snapshot in that same scope.
 //
 // The operation is idempotent: running it multiple times produces the same result.
 // Events in the store are not modified.
@@ -163,12 +173,13 @@ func (m *Migrator) Run(ctx context.Context) error {
 	)
 
 	for {
-		// Deliberately Unscoped() (TENANT-003 T4 non-goal): migration is an
-		// administrative whole-store tool that walks every persistence ID
-		// across every tenant by design, not a tenant-scoped operation. See
-		// openspec/changes/ego-tenant-003/design.md's "Known limitation"
-		// section.
-		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, persistence.Unscoped(), m.pageSize, pageToken)
+		// A Migrator walks exactly one scope, m.scope (WithScope; Unscoped()
+		// by default): listing, replay, and the snapshot write below all use
+		// it, so records under the same persistence ID in any other scope are
+		// never read or written. It does not sweep every tenant — the SPI has
+		// no way to enumerate scopes — so a deployment with tenant data runs
+		// one Migrator per scope.
+		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, m.scope, m.pageSize, pageToken)
 		if err != nil {
 			return fmt.Errorf("migration: failed to list persistence IDs: %w", err)
 		}
@@ -195,10 +206,8 @@ func (m *Migrator) Run(ctx context.Context) error {
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
 	// Use a safe large limit that won't overflow when cast to int.
 	const maxLimit = uint64(1<<63 - 1)
-	// Deliberately Unscoped() (TENANT-003 T4 non-goal): see Run's comment
-	// above. migrateEntity is called for a persistenceID Run already
-	// enumerated store-wide.
-	events, err := m.eventsStore.ReplayEvents(ctx, persistence.Unscoped(), persistenceID, 1, maxLimit, maxLimit)
+	// Same scope Run listed persistenceID in; see Run's comment.
+	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxLimit, maxLimit)
 	if err != nil {
 		return err
 	}
@@ -223,9 +232,8 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return nil
 	}
 
-	// Deliberately Unscoped() (TENANT-003 T4 non-goal): see Run's comment
-	// above.
-	if err := m.snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), bestSnapshot); err != nil {
+	// Written in the same scope the events were read from; see Run's comment.
+	if err := m.snapshotStore.WriteSnapshot(ctx, m.scope, bestSnapshot); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 

@@ -734,6 +734,13 @@ Base rebased onto `main@930b097` (#100, `requireExtension[T]`); every actor
       `...ReleasesItsFencesOnEveryPath`, `...AcquiresFencesInDeterministicOrder`).
       Durable state has no such race: `WriteState(ExpectGenesis)` is atomic
       (`...DurableStateTargetRaceIsStoppedByItsPrecondition`).
+- [x] 8.7 Codex review of `aaf0d86`: the legacy `Migrator` hard-coded
+      `Unscoped()` for listing, replay, and the snapshot write while claiming
+      to walk every tenant. `migration.WithScope` now selects one scope for
+      all three (default `Unscoped()`), and `migration.New` returns
+      `(*Migrator, error)`, rejecting an invalid scope (breaking). Evidence:
+      `TestMigratorScope` (a spy over every store call; homonyms in other
+      scopes untouched) and `TestNewRejectsAnInvalidScope`.
 
 ## Follow-up chain (not part of this change; each a separate, later,
 ## explicitly-authorized SDD change)
