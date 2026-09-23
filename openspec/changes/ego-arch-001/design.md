@@ -180,6 +180,8 @@ S1 counts as implemented only when all of the following have been observed:
 3. `errors.Is(err, ego.ErrPublisherNotStarted)` holds for errors returned by the publishers, and a publisher value still satisfies `var _ ego.EventPublisher = ...` assertions.
 4. After S1b, `go list -deps` for each publisher contains no `github.com/tochemey/goakt/v4` package.
 
+Once a release exposes `port/publishing`, it is public API for the rest of v4. From then on, rolling back S1 may revert in-repository callers but MUST NOT delete the package (see the proposal's Rollback section).
+
 **S2 — dependency-rule check.**
 A check derived from `go list -deps -json` that fails CI when a rule in section 3 is violated, and prints the offending import path. It needs no module change and can land in parallel with S1a. How it is wired into CI is #111's decision.
 

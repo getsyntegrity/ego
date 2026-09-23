@@ -87,7 +87,12 @@ Later slices (#103, #11) will affect `EventSourcedBehavior`, `DurableStateBehavi
 
 This change is documentation only; rolling it back means reverting the files in `openspec/changes/ego-arch-001/`.
 
-For slice S1 when it is implemented: Go type aliases (`type EventPublisher = publishing.EventPublisher`) and a variable that references the same error value keep type identity and `errors.Is` behavior, so existing callers compile unchanged. Rollback is to move the declarations back into `publisher.go` and delete `port/publishing`; the aliases guarantee that no consumer has to change in either direction during the v4 line. S1 is not considered implemented until that compatibility is verified (see `design.md`).
+For slice S1 when it is implemented: Go type aliases (`type EventPublisher = publishing.EventPublisher`) and a variable that references the same error value keep type identity and `errors.Is` behavior, so callers that keep importing package `ego` compile unchanged. The aliases protect only that direction. A consumer that starts importing `port/publishing` directly would break if the package were deleted, so the rollback depends on whether S1 has been released:
+
+- **Before a release exposes `port/publishing`**, rollback means reverting S1: move the declarations back into `publisher.go` and delete `port/publishing`. No published consumer can depend on the new path yet.
+- **After a release exposes it**, `port/publishing` is public API and MUST be kept for the rest of the v4 line. Rollback is then limited to reverting callers inside this repository (for example, pointing the publishers back at package `ego`). The package itself stays, and removing it would require a new major version.
+
+S1 is not considered implemented until alias compatibility is verified (see `design.md`).
 
 ## Risks
 
