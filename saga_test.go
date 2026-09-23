@@ -87,7 +87,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Spawn with no behavior dependency
 		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(), goakt.WithLongLived())
@@ -116,7 +115,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -150,7 +148,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -190,7 +187,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -233,7 +229,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
