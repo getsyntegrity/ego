@@ -41,12 +41,22 @@ import (
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
-// maxReplayLimit is the "read everything" limit TenantAdopter and Migrator
-// pass to ReplayEvents. It is the platform's largest int, not the largest
-// int64: a store that converts the limit to int (testkit.EventStore does)
-// would otherwise see a negative limit on a 32-bit architecture and panic
-// slicing its result.
-const maxReplayLimit = uint64(math.MaxInt)
+// TenantAdopter and Migrator replay "everything" with two separate bounds,
+// because ReplayEvents takes two different quantities.
+//
+// maxReplaySequence is the upper bound of the sequence-number RANGE: every
+// sequence number a store can hold, so no event is ever left out of a
+// replay because of how large its sequence number is.
+//
+// maxReplayLimit caps how MANY events come back. It is the platform's
+// largest int, not the largest int64: a store that converts the limit to
+// int (testkit.EventStore does) would otherwise see a negative limit on a
+// 32-bit architecture and panic slicing its result. It must never double as
+// the range bound, or events above it would silently be skipped.
+const (
+	maxReplaySequence = uint64(math.MaxUint64)
+	maxReplayLimit    = uint64(math.MaxInt)
+)
 
 // ErrAssignmentRequired is returned by NewTenantAdopter when assign is nil.
 // The framework has no way to decide which tenant an existing aggregate
@@ -717,7 +727,7 @@ func (a *TenantAdopter) applyKind(ctx context.Context, kind RecordKind, id strin
 // written — this is what keeps a re-run after WithSourceDeletion, whose
 // source is now empty, a no-op.
 func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
-	sourceEvents, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
+	sourceEvents, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source events: %w", err)}
 	}
@@ -738,7 +748,7 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		}
 	}
 
-	existing, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
+	existing, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 	}
@@ -760,14 +770,14 @@ func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adopt
 		}
 		// Another writer created the target between the check above and
 		// this write: classify what it wrote instead of trusting it.
-		raced, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
+		raced, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
 		if err != nil {
 			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
 		}
 		return a.afterVerifiedEvents(ctx, id, sourceEvents, maxSeq, verifyEventsEquivalent(id, expected, raced, intent.tenant, a.sourceScope))
 	}
 
-	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplayLimit, maxReplayLimit)
+	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target events: %w", err)}
 	}
@@ -1043,7 +1053,7 @@ func (a *TenantAdopter) afterVerifiedEvents(ctx context.Context, id string, sour
 // source_deleted. The newer or rewritten
 // events always stay in the source.
 func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, wroteTarget bool) RecordOutcome {
-	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplayLimit, maxReplayLimit)
+	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
 	}

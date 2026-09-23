@@ -2393,3 +2393,35 @@ func TestMaxReplayLimitFitsInAnInt(t *testing.T) {
 	assert.Equal(t, uint64(math.MaxInt), maxReplayLimit)
 	assert.GreaterOrEqual(t, int(maxReplayLimit), 0)
 }
+
+// TestTenantAdopterReplaysSequencesBeyondTheLimitValue pins that the replay
+// RANGE covers every sequence number: maxReplayLimit only caps how many
+// events come back, so an event whose sequence is above math.MaxInt must
+// still be read, copied, and verified — never silently left behind while the
+// run reports a verified migration.
+func TestTenantAdopterReplaysSequencesBeyondTheLimitValue(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+
+	const id = "high-sequence"
+	high := uint64(math.MaxInt) + 1
+	source := persistence.Unscoped()
+	require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{
+		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, high, 200),
+	}, persistence.Unconditional()))
+
+	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+	require.NoError(t, err)
+	report, err := adopter.Run(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Verified)
+
+	target, err := persistence.NewTenantScope("acme")
+	require.NoError(t, err)
+	adopted, err := store.ReplayEvents(ctx, target, id, 1, math.MaxUint64, 10)
+	require.NoError(t, err)
+	require.Len(t, adopted, 2, "the event above math.MaxInt must be adopted too")
+	assert.Equal(t, high, adopted[1].GetSequenceNumber())
+}

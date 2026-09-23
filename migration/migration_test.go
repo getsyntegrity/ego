@@ -25,6 +25,7 @@ package migration
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -672,4 +673,30 @@ func TestMigratorScope(t *testing.T) {
 		_, ok = snapshotSeconds(t, snapshotStore, globex)
 		assert.False(t, ok, "another tenant's homonym must not be touched")
 	})
+}
+
+// TestMigratorReplaysSequencesBeyondTheLimitValue pins that the Migrator
+// builds its snapshot from the LATEST legacy state even when that event's
+// sequence number is above math.MaxInt, instead of a stale earlier one.
+func TestMigratorReplaysSequencesBeyondTheLimitValue(t *testing.T) {
+	ctx := context.Background()
+	eventStore := testkit.NewEventsStore()
+	require.NoError(t, eventStore.Connect(ctx))
+	snapshotStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapshotStore.Connect(ctx))
+
+	stale, err := anypb.New(&timestamppb.Timestamp{Seconds: 1})
+	require.NoError(t, err)
+	latest, err := anypb.New(&timestamppb.Timestamp{Seconds: 2})
+	require.NoError(t, err)
+	high := uint64(math.MaxInt) + 1
+	writeScopedLegacyEvent(t, eventStore, persistence.Unscoped(), "order-1", 1, stale)
+	writeScopedLegacyEvent(t, eventStore, persistence.Unscoped(), "order-1", high, latest)
+
+	require.NoError(t, mustNew(t, eventStore, snapshotStore).Run(ctx))
+
+	snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "order-1")
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.Equal(t, high, snapshot.GetSequenceNumber(), "the snapshot must come from the event above math.MaxInt")
 }

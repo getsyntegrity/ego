@@ -206,9 +206,10 @@ func (m *Migrator) Run(ctx context.Context) error {
 // the latest one with a resulting_state, then writes a snapshot.
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
 	// Same scope Run listed persistenceID in; see Run's comment.
-	// maxReplayLimit (tenant_adoption.go) fits in an int on every
-	// architecture, so a store converting it cannot overflow.
-	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxReplayLimit, maxReplayLimit)
+	// The range covers every sequence number (maxReplaySequence), while the
+	// count limit fits in an int on every architecture (maxReplayLimit); see
+	// tenant_adoption.go.
+	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return err
 	}
