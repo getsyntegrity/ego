@@ -33,7 +33,18 @@ import (
 	"github.com/pablogore/ego/v4/persistence"
 )
 
+// durableStoreKey is the structural (scope, persistenceID) pair DurableStore
+// keys its internal map by. persistence.Scope is a comparable value type
+// (see its doc comment), so this struct is directly usable as a map key; no
+// field is ever derived from Scope.String() or from concatenating scope and
+// persistenceID into one string.
+type durableStoreKey struct {
+	scope         persistence.Scope
+	persistenceID string
+}
+
 type DurableStore struct {
+	// db maps durableStoreKey{scope, persistenceID} -> *egopb.DurableState.
 	db        *sync.Map
 	connected *atomic.Bool
 }
@@ -81,28 +92,33 @@ func (d *DurableStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-// WriteState persist durable state for a given persistenceID, subject to precondition. See
-// persistence.StateStore for the full contract. The conditional path is decided by a single
+// WriteState persist durable state for a given (scope, persistenceID), subject to precondition.
+// See persistence.StateStore for the full contract. The conditional path is decided by a single
 // sync.Map CompareAndSwap (exact-revision) or LoadOrStore (genesis) attempt against the store
 // itself: a failed attempt is a terminal conflict, never retried, since retrying would silently
-// convert a declared, no-longer-valid expectation into success.
+// convert a declared, no-longer-valid expectation into success. An invalid scope is rejected with
+// ErrInvalidScope before anything else is validated or touched.
 // nolint
-func (d *DurableStore) WriteState(_ context.Context, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
+func (d *DurableStore) WriteState(_ context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
 	if !d.connected.Load() {
 		return errors.New("durable store is not connected")
+	}
+	if !scope.Valid() {
+		return persistence.ErrInvalidScope
 	}
 	if !precondition.Valid() {
 		return persistence.ErrInvalidPrecondition
 	}
 
 	persistenceID := state.GetPersistenceId()
+	key := durableStoreKey{scope: scope, persistenceID: persistenceID}
 
 	if precondition.IsUnconditional() {
-		d.db.Store(persistenceID, state)
+		d.db.Store(key, state)
 		return nil
 	}
 
-	raw, exists := d.db.Load(persistenceID)
+	raw, exists := d.db.Load(key)
 	var current *egopb.DurableState
 	if exists {
 		current = raw.(*egopb.DurableState)
@@ -110,10 +126,10 @@ func (d *DurableStore) WriteState(_ context.Context, state *egopb.DurableState, 
 
 	if precondition.IsGenesis() {
 		if exists {
-			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
+			return persistence.NewConflictError(scope, persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
 		}
-		if actual, loaded := d.db.LoadOrStore(persistenceID, state); loaded {
-			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
+		if actual, loaded := d.db.LoadOrStore(key, state); loaded {
+			return persistence.NewConflictError(scope, persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
 		}
 		return nil
 	}
@@ -121,27 +137,32 @@ func (d *DurableStore) WriteState(_ context.Context, state *egopb.DurableState, 
 	expectedRevision, _ := precondition.Revision()
 	if !exists || current.GetVersionNumber() != expectedRevision {
 		if exists {
-			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
+			return persistence.NewConflictError(scope, persistenceID, precondition, persistence.WithActualRevision(current.GetVersionNumber()))
 		}
-		return persistence.NewConflictError(persistenceID, precondition)
+		return persistence.NewConflictError(scope, persistenceID, precondition)
 	}
 
-	if !d.db.CompareAndSwap(persistenceID, current, state) {
-		if actual, ok := d.db.Load(persistenceID); ok {
-			return persistence.NewConflictError(persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
+	if !d.db.CompareAndSwap(key, current, state) {
+		if actual, ok := d.db.Load(key); ok {
+			return persistence.NewConflictError(scope, persistenceID, precondition, persistence.WithActualRevision(actual.(*egopb.DurableState).GetVersionNumber()))
 		}
-		return persistence.NewConflictError(persistenceID, precondition)
+		return persistence.NewConflictError(scope, persistenceID, precondition)
 	}
 	return nil
 }
 
-// GetLatestState fetches the latest durable state
+// GetLatestState fetches the latest durable state for (scope, persistenceID). An invalid scope is
+// rejected with ErrInvalidScope before anything is read, and this never returns a record that
+// belongs to another scope.
 // nolint
-func (d *DurableStore) GetLatestState(_ context.Context, persistenceID string) (*egopb.DurableState, error) {
+func (d *DurableStore) GetLatestState(_ context.Context, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error) {
 	if !d.connected.Load() {
 		return nil, errors.New("durable store is not connected")
 	}
-	value, ok := d.db.Load(persistenceID)
+	if !scope.Valid() {
+		return nil, persistence.ErrInvalidScope
+	}
+	value, ok := d.db.Load(durableStoreKey{scope: scope, persistenceID: persistenceID})
 	if !ok {
 		return nil, nil
 	}

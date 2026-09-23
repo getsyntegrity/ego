@@ -68,10 +68,56 @@ func (r singleTenantResolver) Resolve(context.Context) (TenantContext, error) {
 // fails if id fails NewTenantContext's validation, so an invalid
 // single-tenant configuration is rejected exactly as any other resolver's
 // invalid output would be.
+//
+// The returned TenantResolver also implements FixedTenantResolver, which is
+// what lets a single-tenant deployment spawn entities, durable-state
+// entities, and sagas without ever passing ego.WithTenant (EGO-TENANT-003
+// acceptance criterion 6: single-tenant mode needs no tenant plumbing
+// invented by the application).
 func WithSingleTenant(id TenantID) (TenantResolver, error) {
 	tc, err := NewTenantContext(id)
 	if err != nil {
 		return nil, err
 	}
 	return singleTenantResolver{tc: tc}, nil
+}
+
+// FixedTenantResolver is an optional capability a TenantResolver may
+// implement to expose a single, statically-known tenant identity without
+// ever having Resolve called.
+//
+// It exists for the engine's spawn-time tenant declaration (TENANT-003 T4,
+// corrected after CI caught a Resolve-Once, Propagate-After violation in an
+// earlier design that called Resolve at spawn): the engine MUST NOT call
+// Resolve outside the single command trust boundary, yet a single-tenant
+// deployment still needs entity/durable-state/saga spawns to bind a tenant
+// scope without the application repeating that one fixed tenant on every
+// spawn via ego.WithTenant. A resolver that has exactly one fixed tenant —
+// built-in WithSingleTenant, or a custom resolver that chooses to advertise
+// one — implements FixedTenantResolver so the engine can read that identity
+// directly, with no Resolve call and no execution-time side effect.
+//
+// An ordinary multi-tenant resolver has no such fixed identity: it either
+// does not implement this interface at all, or implements it and returns
+// (zero TenantID, false). Either way, the engine falls back to requiring an
+// explicit ego.WithTenant at spawn.
+type FixedTenantResolver interface {
+	TenantResolver
+
+	// FixedTenant returns the resolver's single, statically-known tenant
+	// identity and true when the resolver always resolves to exactly one
+	// tenant regardless of ctx. It returns the zero TenantID and false when
+	// the resolver has no such fixed identity.
+	FixedTenant() (TenantID, bool)
+}
+
+// ensures singleTenantResolver satisfies the optional FixedTenantResolver
+// capability described above.
+var _ FixedTenantResolver = singleTenantResolver{}
+
+// FixedTenant implements FixedTenantResolver. A singleTenantResolver is
+// always built from a valid, tenant-scoped TenantContext (WithSingleTenant
+// fails construction otherwise), so this always reports true.
+func (r singleTenantResolver) FixedTenant() (TenantID, bool) {
+	return r.tc.Tenant()
 }

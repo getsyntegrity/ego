@@ -1,0 +1,1523 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package migration
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
+	"google.golang.org/protobuf/proto"
+
+	ego "github.com/pablogore/ego/v4"
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
+)
+
+// TenantAdopter and Migrator replay "everything" with two separate bounds,
+// because ReplayEvents takes two different quantities.
+//
+// maxReplaySequence is the upper bound of the sequence-number RANGE: every
+// sequence number a store can hold, so no event is ever left out of a
+// replay because of how large its sequence number is.
+//
+// maxReplayLimit caps how MANY events come back. It is the platform's
+// largest int, not the largest int64: a store that converts the limit to
+// int (testkit.EventStore does) would otherwise see a negative limit on a
+// 32-bit architecture and panic slicing its result. It must never double as
+// the range bound, or events above it would silently be skipped.
+const (
+	maxReplaySequence = uint64(math.MaxUint64)
+	maxReplayLimit    = uint64(math.MaxInt)
+)
+
+// ErrAssignmentRequired is returned by NewTenantAdopter when assign is nil.
+// The framework has no way to decide which tenant an existing aggregate
+// belongs to — that is a business fact only the operator holds — so the
+// assignment function cannot be defaulted or made optional.
+var ErrAssignmentRequired = errors.New("migration: a TenantAssignment is required")
+
+// ErrNoStoresConfigured is returned by NewTenantAdopter when none of
+// WithEventsStore, WithSnapshotStore, or WithStateStore was supplied: a
+// TenantAdopter with nothing to read from or write to can never do useful
+// work.
+var ErrNoStoresConfigured = errors.New("migration: at least one of WithEventsStore, WithSnapshotStore, or WithStateStore is required")
+
+// ErrInvalidScanPageSize is returned by NewTenantAdopter when WithScanPageSize
+// was given zero: a zero page enumerates no persistence ids, so the run
+// would scan nothing and still report success.
+var ErrInvalidScanPageSize = errors.New("migration: WithScanPageSize must be greater than zero")
+
+// ErrAdoptionFenceRequired is returned by NewTenantAdopter when
+// WithWriteEnabled is set without WithAdoptionFence.
+var ErrAdoptionFenceRequired = errors.New("migration: WithWriteEnabled requires WithAdoptionFence")
+
+// errTargetIsSource is the per-aggregate failure recorded when the assigned
+// target scope is the source scope itself: there is nothing to adopt, and
+// holding both fences would take the same lock twice.
+var errTargetIsSource = errors.New("migration: the assigned target scope is the source scope")
+
+// errSourceChangedDuringAdoption is the per-kind failure recorded when a
+// WithSourceDeletion run finds that the source gained records while this
+// aggregate was being adopted: records newer than the verified copy would be
+// left only in the source, so the run refuses to delete, or to report the
+// deletion as a success.
+var errSourceChangedDuringAdoption = errors.New("migration: the source changed while it was being adopted; the source must not receive writes during a WithSourceDeletion run")
+
+// errNoSourceRecords is the per-aggregate failure recorded when an id was
+// assigned a tenant but none of the configured stores actually held any
+// record for it in the source scope — most often a caller mistake in the
+// TenantAssignment (e.g. a stale or misspelled persistence ID supplied via
+// WithPersistenceIDs).
+var errNoSourceRecords = errors.New("migration: no source record found in any configured store for this persistence id")
+
+// errTargetNotEquivalent is the per-kind failure recorded when the target
+// tenant scope already holds a record for the persistence id that is not
+// equivalent to what this adoption would write: a record not owned by the
+// assigned tenant, or one that does not contain the source record exactly.
+// A target that merely exists is never treated as a completed migration.
+var errTargetNotEquivalent = errors.New("migration: target tenant scope holds a record for this persistence id that is not equivalent to this adoption")
+
+// adoptionReceiptKey is the tenant_metadata key under which every record
+// TenantAdopter writes carries its adoption receipt: a SHA-256 over the
+// source scope and the record's deterministic protobuf encoding, taken with
+// this key absent, and — for an event — the sequence of the adopted event
+// before it, which chains the adopted events together (see
+// adoptionReceipt). Tenant-bound
+// actors never write this key, so a record carrying a receipt that still
+// matches its own content was written by an adoption from that source
+// scope. It is what lets a re-run prove a target is already migrated after
+// WithSourceDeletion removed the source it could otherwise compare with.
+const adoptionReceiptKey = "ego.adoption.receipt"
+
+// adoptionReceiptVersion prefixes every receipt value, so a future change
+// to what a receipt covers is detectable rather than silently mismatched.
+const adoptionReceiptVersion = "v1:"
+
+// TenantAssignment decides which tenant an existing aggregate belongs to.
+// The framework cannot make this decision itself: persistence_id is an
+// opaque, caller-assigned string (persistence.Scope's own doc comment), and
+// nothing about a legacy Unscoped() record says which tenant it should now
+// belong to. That is a business fact only the operator holds, so it is
+// supplied here rather than inferred, defaulted, or derived from
+// persistence_id.
+//
+// Returning ok=false leaves the aggregate completely untouched in the
+// source scope: TenantAdopter neither reads nor writes anything further for
+// that persistence ID during this Run.
+type TenantAssignment func(ctx context.Context, persistenceID string) (id tenancy.TenantID, ok bool, err error)
+
+// RecordKind names one of the three kinds of record a TenantAdopter can
+// copy for a single aggregate.
+type RecordKind string
+
+const (
+	// KindEvents identifies the events-store record kind.
+	KindEvents RecordKind = "events"
+	// KindSnapshot identifies the snapshot-store record kind.
+	KindSnapshot RecordKind = "snapshot"
+	// KindDurableState identifies the durable-state-store record kind.
+	KindDurableState RecordKind = "durable_state"
+)
+
+// RecordStatus is the outcome TenantAdopter reached for one RecordKind of
+// one aggregate.
+type RecordStatus string
+
+const (
+	// StatusNone means this record kind was not configured (no store), or
+	// the source scope held no record of this kind for the aggregate.
+	StatusNone RecordStatus = "none"
+	// StatusCopied means a source record of this kind was written to the
+	// target tenant scope (or, in dry-run, would have been).
+	StatusCopied RecordStatus = "copied"
+	// StatusAlreadyPresent means the target tenant scope already held a
+	// record for this (kind, persistence ID) that is PROVEN to be this
+	// adoption; nothing was written, overwritten, or deleted. While the
+	// source exists, proof is an exact comparison: the events target holds
+	// every source event proto.Equal (it may append later events), and a
+	// snapshot or durable-state target is the identical record at the same
+	// position. Once WithSourceDeletion removed the source, proof is the
+	// adoption receipt every adopted record carries (adoptionReceiptKey).
+	// Anything that cannot be proven — including same-tenant data at a later
+	// position, or a record the actor rewrote after adoption — fails with
+	// StatusFailed; tenant ownership or existence alone is never success.
+	StatusAlreadyPresent RecordStatus = "already_present"
+	// StatusSourceDeleted means the target was proven to hold this exact
+	// adoption — either copied by this run and read back proto.Equal to the
+	// record it intended to write (the source record with tenant_metadata
+	// replaced by the target tenant's plus its adoption receipt), or already
+	// present from an earlier run and compared exactly against the source —
+	// and the verified source-scope copy was then removed under the guarded
+	// deletion (WithSourceDeletion only). An aggregate deleted this way
+	// without a fresh copy counts toward AlreadyPresent, not Copied.
+	StatusSourceDeleted RecordStatus = "source_deleted"
+	// StatusFailed means an unexpected error occurred while adopting this
+	// record kind. See RecordOutcome.Err for detail.
+	StatusFailed RecordStatus = "failed"
+)
+
+// RecordOutcome is the per-kind detail behind one AggregateOutcome.
+type RecordOutcome struct {
+	Status RecordStatus
+	Err    error
+
+	// wroteTarget is true when this run wrote the target record: always for
+	// StatusCopied, and for StatusSourceDeleted only when the deletion
+	// followed a fresh copy rather than an already-present target.
+	wroteTarget bool
+}
+
+// AggregateOutcome is the per-aggregate detail behind an AdoptionReport.
+type AggregateOutcome struct {
+	PersistenceID string
+	Tenant        tenancy.TenantID
+	Events        RecordOutcome
+	Snapshot      RecordOutcome
+	DurableState  RecordOutcome
+}
+
+// AdoptionFailure records one aggregate-level or per-kind failure so a Run
+// can continue past it (the default) while still surfacing exactly what
+// went wrong. Kind is empty for a failure that happened before any
+// record-kind processing began (TenantAssignment itself, or an invalid
+// assigned tenant).
+type AdoptionFailure struct {
+	PersistenceID string
+	Kind          RecordKind
+	Err           error
+}
+
+// Error renders f for logs and AdoptionReport.String().
+func (f AdoptionFailure) Error() string {
+	if f.Kind == "" {
+		return fmt.Sprintf("persistence_id=%s: %v", f.PersistenceID, f.Err)
+	}
+	return fmt.Sprintf("persistence_id=%s kind=%s: %v", f.PersistenceID, f.Kind, f.Err)
+}
+
+// Unwrap allows errors.Is/errors.As to see through an AdoptionFailure to
+// its underlying cause.
+func (f AdoptionFailure) Unwrap() error { return f.Err }
+
+// AdoptionReport summarizes one TenantAdopter.Run. Every top-level counter
+// is counted per AGGREGATE (persistence ID), not per record kind: an
+// aggregate whose events were freshly copied while its snapshot was already
+// present in the target still counts once toward Copied, since real work
+// was done for it. AggregateOutcome carries the per-kind detail for a
+// caller that needs it.
+//
+// The counters are not mutually exclusive. Record kinds are processed in
+// order (events, snapshot, durable state), so an aggregate that fails on a
+// later kind counts toward Failed and also toward Copied and SourceDeleted
+// for any earlier kind that already wrote its target or deleted its source:
+// those side effects are irreversible and are never hidden. Verified is an
+// aggregate verdict and counts only aggregates that completed without a
+// failure.
+//
+// In dry-run (DryRun == true), Scanned, Assigned, SkippedByAssignment,
+// Copied, AlreadyPresent, and Failed reflect exactly what a real run would
+// do. Verified and SourceDeleted stay zero in dry-run: nothing was actually
+// written, so nothing was actually read back or deleted — reporting either
+// as non-zero would fabricate evidence of a side effect that never
+// happened.
+type AdoptionReport struct {
+	// DryRun is true when this report describes a plan (WithWriteEnabled
+	// was not set) rather than a completed run.
+	DryRun bool
+
+	// Scanned is the number of distinct persistence IDs examined.
+	Scanned int
+	// Assigned is the number of persistence IDs for which TenantAssignment
+	// returned ok=true.
+	Assigned int
+	// SkippedByAssignment is the number of persistence IDs for which
+	// TenantAssignment returned ok=false; left untouched.
+	SkippedByAssignment int
+	// Copied is the number of aggregates for which at least one record kind
+	// was (or, in dry-run, would be) written to the target tenant scope,
+	// including aggregates that then failed on a later kind.
+	Copied int
+	// AlreadyPresent is the number of assigned aggregates for which every
+	// configured record kind was already present in the target tenant
+	// scope; nothing was written.
+	AlreadyPresent int
+	// Verified is the number of copied aggregates whose target-scope copy
+	// was read back and matched the source: a full proto.Equal match of the
+	// exact record this tool intended to write (the source record with
+	// tenant_metadata replaced by the target tenant's plus its adoption
+	// receipt) — not a proxy check against a count, sequence number, or
+	// version number alone, none of
+	// which can detect a corrupted payload, a dropped tenant_metadata, or a
+	// missing encryption envelope. Always 0 in dry-run.
+	Verified int
+	// SourceDeleted is the number of aggregates for which at least one
+	// record kind's source-scope copy was removed after its target was
+	// verified — by a fresh copy, or as an exact already-present adoption
+	// (WithSourceDeletion only) — including aggregates that then failed on a
+	// later kind. Always 0 in dry-run.
+	SourceDeleted int
+	// Failed is the number of persistence IDs (assignment failures and
+	// aggregate failures alike) that did not complete successfully. See
+	// Failures for detail.
+	Failed int
+
+	// Aggregates carries the per-kind detail for every assigned persistence
+	// ID (including failed ones).
+	Aggregates []AggregateOutcome
+	// Failures carries every recorded failure, in the order encountered.
+	Failures []AdoptionFailure
+}
+
+// String renders a human-readable, loggable summary of r, including every
+// recorded failure.
+func (r *AdoptionReport) String() string {
+	mode := "run"
+	if r.DryRun {
+		mode = "dry-run"
+	}
+	out := fmt.Sprintf(
+		"tenant adoption %s: scanned=%d assigned=%d skipped_by_assignment=%d copied=%d already_present=%d verified=%d source_deleted=%d failed=%d",
+		mode, r.Scanned, r.Assigned, r.SkippedByAssignment, r.Copied, r.AlreadyPresent, r.Verified, r.SourceDeleted, r.Failed,
+	)
+	for _, f := range r.Failures {
+		out += "\n  - " + f.Error()
+	}
+	return out
+}
+
+// AdoptionOption configures a TenantAdopter. It is a distinct type from
+// this package's Option (which configures Migrator): the two tools are
+// configured independently, even though both follow the same functional
+// options shape.
+type AdoptionOption interface {
+	applyAdoption(a *TenantAdopter)
+}
+
+type adoptionOptionFunc func(a *TenantAdopter)
+
+func (f adoptionOptionFunc) applyAdoption(a *TenantAdopter) { f(a) }
+
+// WithEventsStore sets the events store TenantAdopter copies event records
+// from and to. Omit it for a durable-state-only (or snapshot-only)
+// deployment that never hosts event-sourced entities: nil is treated as
+// "this record kind does not apply", never a panic.
+func WithEventsStore(store persistence.EventsStore) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.eventsStore = store })
+}
+
+// WithSnapshotStore sets the snapshot store TenantAdopter copies snapshot
+// records from and to. Omit it for a deployment that does not snapshot.
+func WithSnapshotStore(store persistence.SnapshotStore) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.snapshotStore = store })
+}
+
+// WithStateStore sets the durable-state store TenantAdopter copies
+// durable-state records from and to. Omit it for a deployment that has no
+// durable-state entities.
+//
+// See the package doc comment's "Durable-state enumeration limitation"
+// section: persistence.StateStore has no PersistenceIDs-style enumeration
+// method, so a durable-state-only adoption also needs WithPersistenceIDs.
+func WithStateStore(store persistence.StateStore) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.stateStore = store })
+}
+
+// WithSourceScope overrides the scope TenantAdopter reads existing
+// aggregates from. The default is persistence.Unscoped(), the normal case
+// of adopting tenancy for the first time; a non-default source scope is
+// only useful for re-partitioning an aggregate already under one tenant
+// scope into another.
+//
+// NewTenantAdopter rejects the invalid zero-value Scope with
+// persistence.ErrInvalidScope before any store is touched.
+func WithSourceScope(scope persistence.Scope) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.sourceScope = scope })
+}
+
+// WithScanPageSize sets the page size used to enumerate persistence IDs
+// from the events store. Default is 500. Zero is rejected by
+// NewTenantAdopter (ErrInvalidScanPageSize): it would enumerate nothing.
+func WithScanPageSize(size uint64) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.pageSize = size })
+}
+
+// WithWriteEnabled turns off dry-run mode: without it, Run only plans and
+// reports, writing nothing at all. This is the tool's one required
+// opt-in for a real, data-moving run — a migration tool that writes by
+// default is a foot-gun.
+func WithWriteEnabled() AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.write = true })
+}
+
+// WithSourceDeletion opts in to removing an aggregate's source-scope copy
+// once (and only once) its target-scope copy has been read back and
+// verified against the FULL record this tool intended to write — a
+// proto.Equal match of the source record with tenant_metadata replaced by
+// the target tenant's plus its adoption receipt, events matched by
+// SequenceNumber rather than slice position or count — not merely a count,
+// sequence number, or version
+// number. A count/sequence/version-only check cannot detect a truncated
+// write, a dropped payload or tenant_metadata, or a missing encryption
+// envelope; a full-record match can, and does. Without this option the
+// source scope is never modified. A failed verification never deletes,
+// regardless of this option.
+//
+// Deletion runs under the adoption fence every write-enabled run holds
+// (WithAdoptionFence): the SPI offers no atomic read-verify-delete, so the
+// fence is what keeps writers out of the source between the final re-read
+// and the delete. Under it, the source must still be exactly the records
+// that were verified or nothing is deleted, and a source that changed
+// anyway is reported as failed — never as source_deleted — with the newer
+// records kept in the source.
+//
+// Durable state is never deleted by this option: persistence.StateStore has
+// no delete method in the SPI (see state_store.go), so a durable-state
+// source copy cannot be removed by this tool at all — see the package doc
+// comment.
+func WithSourceDeletion() AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.deleteSource = true })
+}
+
+// AdoptionFence grants exclusive write access to one aggregate's records in
+// one scope. It is supplied by the application, which is the only party
+// that knows how its writers are coordinated (see WithAdoptionFence).
+type AdoptionFence interface {
+	// Acquire blocks until the caller holds exclusive write access to every
+	// record of persistenceID in scope — events, snapshots, and durable
+	// state — or ctx is done. While it is held, no other writer may create,
+	// modify, or delete any of those records. release ends the hold and must
+	// be safe to call once; Acquire returns a non-nil error, and no release,
+	// when access was not granted.
+	Acquire(ctx context.Context, scope persistence.Scope, persistenceID string) (release func(), err error)
+}
+
+// WithAdoptionFence sets the fence a write-enabled run holds for every
+// aggregate it adopts. It is required whenever WithWriteEnabled is set
+// (ErrAdoptionFenceRequired). For each aggregate the run acquires it for the
+// source scope and the target scope — in a fixed order, before its first
+// read of that aggregate — and holds both through the target check, the
+// write, the read-back, and any source deletion, releasing them on every
+// exit path, including an error or a panic.
+//
+// This is what makes adoption safe against concurrent writers: the snapshot
+// SPI has no write precondition, so without it another writer could create
+// a target snapshot between the adopter's existence check and its write and
+// have it overwritten; and nothing in the SPI makes read-verify-delete
+// atomic for WithSourceDeletion. The fence only protects against writers
+// that honor it: an application must route every writer of an aggregate
+// being adopted — its tenant-bound actor, and anything else — through the
+// same exclusion, for example by stopping the entity and holding a
+// database advisory lock keyed on (scope, persistence ID).
+func WithAdoptionFence(fence AdoptionFence) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.fence = fence })
+}
+
+// WithFailFast stops Run at the first per-aggregate failure instead of
+// collecting it and continuing. The default (unset) is to keep going so
+// one bad aggregate does not block an otherwise-successful adoption run.
+func WithFailFast() AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.failFast = true })
+}
+
+// WithPersistenceIDs adds explicit persistence IDs to the set TenantAdopter
+// scans, in addition to anything the events store enumerates. This is
+// REQUIRED (the only source of IDs) whenever no events store is configured:
+// persistence.SnapshotStore and persistence.StateStore have no
+// PersistenceIDs-style enumeration method in the SPI, so a
+// durable-state-only or snapshot-only deployment cannot be discovered on
+// its own. See the package doc comment.
+func WithPersistenceIDs(ids ...string) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.explicitIDs = append(a.explicitIDs, ids...) })
+}
+
+// WithAdoptionLogger sets the kit-logger Logger used during adoption, the
+// same logging seam Migrator uses. When not set, or when the given logger
+// is nil or a typed-nil pointer, TenantAdopter logs through
+// ego.DefaultLogger().
+func WithAdoptionLogger(logger kitlog.Logger) AdoptionOption {
+	return adoptionOptionFunc(func(a *TenantAdopter) { a.logger = logger })
+}
+
+// TenantAdopter copies aggregates from a source persistence.Scope (normally
+// persistence.Unscoped()) into a per-aggregate target tenant scope, for a
+// deployment that already has data and now wants to adopt tenancy. See
+// NewTenantAdopter.
+type TenantAdopter struct {
+	eventsStore   persistence.EventsStore
+	snapshotStore persistence.SnapshotStore
+	stateStore    persistence.StateStore
+
+	assign      TenantAssignment
+	sourceScope persistence.Scope
+	explicitIDs []string
+	pageSize    uint64
+
+	write        bool
+	deleteSource bool
+	failFast     bool
+	fence        AdoptionFence
+
+	logger kitlog.Logger
+}
+
+// NewTenantAdopter creates a TenantAdopter. assign is required and is not an
+// option: the framework cannot decide which tenant an existing aggregate
+// belongs to, so this business decision must always be supplied explicitly
+// (see TenantAssignment). At least one of WithEventsStore, WithSnapshotStore,
+// or WithStateStore must also be supplied.
+//
+// The returned TenantAdopter defaults to dry-run (see WithWriteEnabled) and
+// a source scope of persistence.Unscoped() (see WithSourceScope).
+func NewTenantAdopter(assign TenantAssignment, opts ...AdoptionOption) (*TenantAdopter, error) {
+	if assign == nil {
+		return nil, ErrAssignmentRequired
+	}
+
+	a := &TenantAdopter{
+		assign:      assign,
+		sourceScope: persistence.Unscoped(),
+		pageSize:    500,
+	}
+	for _, opt := range opts {
+		opt.applyAdoption(a)
+	}
+	// Options may have set a nil or typed-nil logger, which would panic on
+	// the first log call. Resolving after the loop covers every option
+	// path, exactly like Migrator's New.
+	a.logger = ego.ResolveLogger(a.logger)
+
+	if a.eventsStore == nil && a.snapshotStore == nil && a.stateStore == nil {
+		return nil, ErrNoStoresConfigured
+	}
+	if a.pageSize == 0 {
+		return nil, ErrInvalidScanPageSize
+	}
+	if !a.sourceScope.Valid() {
+		return nil, fmt.Errorf("migration: WithSourceScope: %w", persistence.ErrInvalidScope)
+	}
+	if a.write && a.fence == nil {
+		return nil, ErrAdoptionFenceRequired
+	}
+
+	return a, nil
+}
+
+// Run scans the source scope for persistence IDs (from the events store's
+// enumeration, plus any WithPersistenceIDs), asks TenantAssignment which
+// tenant each belongs to, and copies every assigned aggregate's events,
+// snapshot, and durable state into its target tenant scope.
+//
+// Run never returns a non-nil error for a single aggregate's failure unless
+// WithFailFast was set: by default every failure is collected into the
+// returned AdoptionReport and Run keeps going, returning a nil error once
+// every persistence ID has been considered. Run only returns a non-nil
+// error for a failure that prevents scanning at all (an unreachable store,
+// or a failed PersistenceIDs page).
+func (a *TenantAdopter) Run(ctx context.Context) (*AdoptionReport, error) {
+	if err := a.pingStores(ctx); err != nil {
+		return nil, err
+	}
+
+	ids, err := a.collectPersistenceIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	report := &AdoptionReport{DryRun: !a.write}
+
+	for _, id := range ids {
+		report.Scanned++
+
+		if stop, failure := a.processAggregate(ctx, id, report); failure != nil {
+			if stop {
+				return report, failure
+			}
+		}
+	}
+
+	a.logger.InfoContext(ctx, "tenant adoption: completed",
+		"dry_run", report.DryRun,
+		"scanned", report.Scanned,
+		"assigned", report.Assigned,
+		"skipped_by_assignment", report.SkippedByAssignment,
+		"copied", report.Copied,
+		"already_present", report.AlreadyPresent,
+		"verified", report.Verified,
+		"source_deleted", report.SourceDeleted,
+		"failed", report.Failed,
+	)
+
+	return report, nil
+}
+
+// processAggregate handles one persistence ID end to end: assignment,
+// target-scope resolution, and per-kind adoption. It returns the last
+// recorded failure (nil when the id completed without one) and whether
+// WithFailFast requires Run to stop immediately.
+func (a *TenantAdopter) processAggregate(ctx context.Context, id string, report *AdoptionReport) (stop bool, failure error) {
+	tenantID, ok, err := a.assign(ctx, id)
+	if err != nil {
+		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("tenant assignment: %w", err)}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		a.logger.ErrorContext(ctx, "tenant adoption: assignment failed", "persistence_id", id, "error", err)
+		return a.failFast, f
+	}
+	if !ok {
+		report.SkippedByAssignment++
+		return false, nil
+	}
+	report.Assigned++
+
+	target, err := persistence.NewTenantScope(tenantID)
+	if err != nil {
+		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("assigned tenant %q is not a valid target scope: %w", tenantID, err)}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		return a.failFast, f
+	}
+
+	tenantContext, err := tenancy.NewTenantContext(target.TenantID())
+	if err != nil {
+		// Unreachable in practice: NewTenantScope above already validated
+		// the same tenancy.TenantID through the same rules
+		// (tenancy.NewTenantID). Handled anyway rather than assumed, per
+		// R1 (validate, don't assume).
+		f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("building tenant context for %q: %w", tenantID, err)}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		return a.failFast, f
+	}
+	metadata := tenancy.MarshalMetadata(tenantContext)
+
+	if target.Equal(a.sourceScope) {
+		f := AdoptionFailure{PersistenceID: id, Err: errTargetIsSource}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		return a.failFast, f
+	}
+
+	// A write-enabled run holds the fence for the source and the target
+	// before its first read of this aggregate, and keeps it through every
+	// record kind's target check, write, read-back, and source deletion, so
+	// no other writer can create a target record or change the source in
+	// between. The deferred release also runs on error and on panic.
+	if a.write {
+		release, err := a.acquireFences(ctx, id, target)
+		if err != nil {
+			f := AdoptionFailure{PersistenceID: id, Err: fmt.Errorf("acquire adoption fence: %w", err)}
+			report.Failed++
+			report.Failures = append(report.Failures, f)
+			a.logger.ErrorContext(ctx, "tenant adoption: fence not acquired", "persistence_id", id, "error", err)
+			return a.failFast, f
+		}
+		defer release()
+	}
+
+	intent := adoptionIntent{target: target, tenant: tenantContext, metadata: metadata}
+	outcome := AggregateOutcome{PersistenceID: id, Tenant: tenantID}
+	found, copied, aggFailure := false, false, error(nil)
+
+	if a.eventsStore != nil {
+		outcome.Events, aggFailure = a.applyKind(ctx, KindEvents, id, intent, report, a.adoptEvents)
+		found = found || outcome.Events.Status != StatusNone
+		copied = copied || outcome.Events.wroteTarget
+	}
+
+	if aggFailure == nil && a.snapshotStore != nil {
+		outcome.Snapshot, aggFailure = a.applyKind(ctx, KindSnapshot, id, intent, report, a.adoptSnapshot)
+		found = found || outcome.Snapshot.Status != StatusNone
+		copied = copied || outcome.Snapshot.wroteTarget
+	}
+
+	if aggFailure == nil && a.stateStore != nil {
+		outcome.DurableState, aggFailure = a.applyKind(ctx, KindDurableState, id, intent, report, a.adoptState)
+		found = found || outcome.DurableState.Status != StatusNone
+		copied = copied || outcome.DurableState.wroteTarget
+	}
+
+	// A record kind only ever reaches StatusCopied or StatusSourceDeleted
+	// in a real (non-dry-run) run AFTER its own read-back verification
+	// succeeded (adoptEvents/adoptSnapshot/adoptState return StatusFailed
+	// otherwise) — so "copied" already means "verified" whenever a.write
+	// is true. In dry-run, copied instead reflects the plan and nothing
+	// was actually verified or deleted.
+	deleted := outcome.Events.Status == StatusSourceDeleted || outcome.Snapshot.Status == StatusSourceDeleted || outcome.DurableState.Status == StatusSourceDeleted
+
+	report.Aggregates = append(report.Aggregates, outcome)
+
+	switch {
+	case aggFailure != nil:
+		report.Failed++
+		// A record kind processed before the failing one may already have
+		// written the target or deleted its source; those side effects are
+		// irreversible, so they still count. Verified stays an aggregate
+		// verdict: this aggregate as a whole did not verify.
+		if copied {
+			report.Copied++
+		}
+		if deleted {
+			report.SourceDeleted++
+		}
+		return a.failFast, aggFailure
+	case !found:
+		f := AdoptionFailure{PersistenceID: id, Err: errNoSourceRecords}
+		report.Failed++
+		report.Failures = append(report.Failures, f)
+		return a.failFast, f
+	case copied:
+		report.Copied++
+		if !a.write {
+			// Dry-run: Copied reflects the plan, but nothing was actually
+			// written, so nothing was actually verified or deleted.
+			return false, nil
+		}
+		report.Verified++
+		if deleted {
+			report.SourceDeleted++
+		}
+		return false, nil
+	default:
+		report.AlreadyPresent++
+		if deleted {
+			// The target was already the exact adoption, and this
+			// WithSourceDeletion run removed the verified source.
+			report.SourceDeleted++
+		}
+		return false, nil
+	}
+}
+
+// adoptionIntent is what one aggregate's adoption writes: the target tenant
+// scope, the tenant it belongs to, and the tenant_metadata stamped on every
+// copied record.
+type adoptionIntent struct {
+	target   persistence.Scope
+	tenant   tenancy.TenantContext
+	metadata map[string]string
+}
+
+// kindAdopter is the shape shared by adoptEvents, adoptSnapshot, and
+// adoptState.
+type kindAdopter func(ctx context.Context, id string, intent adoptionIntent) RecordOutcome
+
+// applyKind runs adopt for one record kind and, on RecordStatus StatusFailed,
+// records an AdoptionFailure against report.
+func (a *TenantAdopter) applyKind(ctx context.Context, kind RecordKind, id string, intent adoptionIntent, report *AdoptionReport, adopt kindAdopter) (RecordOutcome, error) {
+	outcome := adopt(ctx, id, intent)
+	if outcome.Status == StatusFailed {
+		f := AdoptionFailure{PersistenceID: id, Kind: kind, Err: outcome.Err}
+		report.Failures = append(report.Failures, f)
+		a.logger.ErrorContext(ctx, "tenant adoption: record kind failed", "persistence_id", id, "kind", string(kind), "error", outcome.Err)
+		return outcome, f
+	}
+	return outcome, nil
+}
+
+// adoptEvents copies persistence ID id's events from the source scope into
+// the target. See the package doc comment for the overall algorithm. The
+// target is read first: when it already holds events they are classified by
+// verifyEventsEquivalent (already present or fail closed) and nothing is
+// written — this is what keeps a re-run after WithSourceDeletion, whose
+// source is now empty, a no-op.
+func (a *TenantAdopter) adoptEvents(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
+	sourceEvents, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplaySequence, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source events: %w", err)}
+	}
+
+	// Each adopted event's receipt records the sequence of the adopted event
+	// before it (0 for the first), in sequence order, so a re-run after the
+	// source is gone can prove the adopted run is complete (see
+	// verifyEventsEquivalent) without assuming consecutive sequence numbers.
+	predecessors := adoptedPredecessors(sourceEvents)
+	expected := make([]*egopb.Event, len(sourceEvents))
+	var maxSeq uint64
+	for i, evt := range sourceEvents {
+		clone, ok := proto.Clone(evt).(*egopb.Event)
+		if !ok {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("clone event at sequence %d: unexpected cloned type", evt.GetSequenceNumber())}
+		}
+		predecessor := predecessors[evt.GetSequenceNumber()]
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, &predecessor); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
+		expected[i] = clone
+		if seq := clone.GetSequenceNumber(); seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+
+	existing, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
+	}
+	if len(existing) > 0 {
+		return a.afterVerifiedEvents(ctx, id, sourceEvents, maxSeq, verifyEventsEquivalent(id, expected, existing, intent.tenant, a.sourceScope))
+	}
+
+	if len(sourceEvents) == 0 {
+		return RecordOutcome{Status: StatusNone}
+	}
+	if !a.write {
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+	}
+
+	if err := a.eventsStore.WriteEvents(ctx, intent.target, expected, persistence.ExpectGenesis()); err != nil {
+		var conflict *persistence.ConflictError
+		if !errors.As(err, &conflict) {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target events: %w", err)}
+		}
+		// Another writer created the target between the check above and
+		// this write: classify what it wrote instead of trusting it.
+		raced, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
+		if err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target events: %w", err)}
+		}
+		return a.afterVerifiedEvents(ctx, id, sourceEvents, maxSeq, verifyEventsEquivalent(id, expected, raced, intent.tenant, a.sourceScope))
+	}
+
+	written, err := a.eventsStore.ReplayEvents(ctx, intent.target, id, 1, maxReplaySequence, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target events: %w", err)}
+	}
+	if err := verifyEventsMatchBySequence(id, expected, written); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: err}
+	}
+
+	if a.deleteSource {
+		return a.deleteVerifiedSourceEvents(ctx, id, sourceEvents, maxSeq, true)
+	}
+
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+}
+
+// adoptSnapshot copies persistence ID id's latest snapshot from the source
+// scope into target.
+//
+// Unlike events and durable state, persistence.SnapshotStore.WriteSnapshot
+// takes no persistence.WritePrecondition (see snapshot_store.go): there is
+// no atomic "write only if absent" for snapshots in the SPI. adoptSnapshot
+// therefore reads the target first and skips the write if anything is
+// already there. This has an unavoidable (read, then write) window — the
+// best the current SPI allows — rather than the atomic ExpectGenesis
+// guarantee events and durable state get.
+func (a *TenantAdopter) adoptSnapshot(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
+	snapshot, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source snapshot: %w", err)}
+	}
+
+	var clone *egopb.Snapshot
+	if snapshot != nil {
+		var ok bool
+		clone, ok = proto.Clone(snapshot).(*egopb.Snapshot)
+		if !ok {
+			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone snapshot: unexpected cloned type")}
+		}
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, nil); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
+	}
+
+	existing, err := a.snapshotStore.GetLatestSnapshot(ctx, intent.target, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target snapshot: %w", err)}
+	}
+	if existing != nil {
+		var expected proto.Message
+		if clone != nil {
+			expected = clone
+		}
+		outcome := classifyExisting(verifyRecordEquivalent(id, KindSnapshot, expected, clone.GetSequenceNumber(), existing, existing.GetSequenceNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
+		if outcome.Status == StatusAlreadyPresent && snapshot != nil && a.write && a.deleteSource {
+			return a.deleteVerifiedSourceSnapshot(ctx, id, snapshot, false)
+		}
+		return outcome
+	}
+
+	if snapshot == nil {
+		return RecordOutcome{Status: StatusNone}
+	}
+	if !a.write {
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+	}
+
+	if err := a.snapshotStore.WriteSnapshot(ctx, intent.target, clone); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target snapshot: %w", err)}
+	}
+
+	written, err := a.snapshotStore.GetLatestSnapshot(ctx, intent.target, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot: %w", err)}
+	}
+	// Full-record match, not a sequence-number proxy: clone is exactly the
+	// record this tool intended to write (the source snapshot with
+	// tenant_metadata replaced by target's plus its adoption receipt), so
+	// anything proto.Equal disagrees on — payload, tenant_metadata,
+	// timestamps, encryption
+	// envelope — means the store did not durably persist what was written,
+	// and the source must not be deleted.
+	if written == nil || !proto.Equal(clone, written) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target snapshot for persistence_id %q: read-back does not match what was written (expected sequence %d)", id, snapshot.GetSequenceNumber())}
+	}
+
+	if a.deleteSource {
+		return a.deleteVerifiedSourceSnapshot(ctx, id, snapshot, true)
+	}
+
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+}
+
+// adoptState copies persistence ID id's latest durable state from the
+// source scope into target.
+//
+// Source deletion never applies to durable state, regardless of
+// WithSourceDeletion: persistence.StateStore has no delete method at all
+// (see state_store.go) — there is nothing this tool could call. See the
+// package doc comment.
+func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adoptionIntent) RecordOutcome {
+	state, err := a.stateStore.GetLatestState(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("read source state: %w", err)}
+	}
+
+	var clone *egopb.DurableState
+	if state != nil {
+		var ok bool
+		clone, ok = proto.Clone(state).(*egopb.DurableState)
+		if !ok {
+			return RecordOutcome{Status: StatusFailed, Err: errors.New("clone durable state: unexpected cloned type")}
+		}
+		if err := stampAdoptionReceipt(clone, a.sourceScope, intent.metadata, nil); err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: err}
+		}
+	}
+
+	classifyTarget := func() RecordOutcome {
+		existing, err := a.stateStore.GetLatestState(ctx, intent.target, id)
+		if err != nil {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("check target state: %w", err)}
+		}
+		if existing == nil {
+			return RecordOutcome{Status: StatusNone}
+		}
+		var expected proto.Message
+		if clone != nil {
+			expected = clone
+		}
+		return classifyExisting(verifyRecordEquivalent(id, KindDurableState, expected, clone.GetVersionNumber(), existing, existing.GetVersionNumber(), existing.GetTenantMetadata(), intent.tenant, a.sourceScope))
+	}
+
+	if outcome := classifyTarget(); outcome.Status != StatusNone {
+		return outcome
+	}
+	if state == nil {
+		return RecordOutcome{Status: StatusNone}
+	}
+	if !a.write {
+		return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+	}
+
+	if err := a.stateStore.WriteState(ctx, intent.target, clone, persistence.ExpectGenesis()); err != nil {
+		var conflict *persistence.ConflictError
+		if !errors.As(err, &conflict) {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target state: %w", err)}
+		}
+		// Another writer created the target between the check above and
+		// this write: classify what it wrote instead of trusting it.
+		if outcome := classifyTarget(); outcome.Status != StatusNone {
+			return outcome
+		}
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("write target state: %w", err)}
+	}
+
+	written, err := a.stateStore.GetLatestState(ctx, intent.target, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state: %w", err)}
+	}
+	// Full-record match, not a version-number proxy: clone is exactly the
+	// record this tool intended to write. adoptState never deletes (there is
+	// no delete method on persistence.StateStore), but its verification
+	// still feeds AdoptionReport.Verified, so it must be just as strict as
+	// the events/snapshot checks above.
+	if written == nil || !proto.Equal(clone, written) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("verify target state for persistence_id %q: read-back does not match what was written (expected version %d)", id, state.GetVersionNumber())}
+	}
+
+	return RecordOutcome{Status: StatusCopied, wroteTarget: true}
+}
+
+// verifyEventsMatchBySequence proves that written — the target scope's
+// read-back — is exactly expected, matched by SequenceNumber rather than
+// slice position or count: a store that returns events in a different order
+// would still pass a position-based comparison, and a store that corrupts a
+// payload while preserving the count would still pass the old
+// len(written) != len(sourceEvents) check. Every expected event must be
+// present in written under the same sequence number and proto.Equal it
+// exactly; no extra sequence numbers may appear in written; a sequence
+// number is never expected more than once (WriteEvents already guards a
+// batch to one persistence_id, and eGo's own event log de-duplicates by
+// sequence number — see testkit/eventstore.go's newEventLog). On any
+// mismatch the returned error names id and the sequence number that
+// differed, so the caller never deletes based on a check that cannot detect
+// corruption.
+func verifyEventsMatchBySequence(id string, expected, written []*egopb.Event) error {
+	expectedBySeq := make(map[uint64]*egopb.Event, len(expected))
+	for _, e := range expected {
+		expectedBySeq[e.GetSequenceNumber()] = e
+	}
+	writtenBySeq := make(map[uint64]*egopb.Event, len(written))
+	for _, e := range written {
+		writtenBySeq[e.GetSequenceNumber()] = e
+	}
+
+	if len(writtenBySeq) != len(written) {
+		return fmt.Errorf("verify target events for persistence_id %q: read-back carries more than one row for a sequence number", id)
+	}
+	if len(writtenBySeq) != len(expectedBySeq) {
+		return fmt.Errorf("verify target events for persistence_id %q: wrote %d distinct sequence numbers, read back %d", id, len(expectedBySeq), len(writtenBySeq))
+	}
+	for seq, want := range expectedBySeq {
+		got, ok := writtenBySeq[seq]
+		if !ok {
+			return fmt.Errorf("verify target events for persistence_id %q: sequence %d is missing from the target read-back", id, seq)
+		}
+		if !proto.Equal(want, got) {
+			return fmt.Errorf("verify target events for persistence_id %q: sequence %d does not match what was written", id, seq)
+		}
+	}
+	return nil
+}
+
+// acquireFences takes the adoption fence for id in the source scope and in
+// target, always in the same global order (Unscoped first, then tenant
+// scopes by tenant id) so two runs moving data in opposite directions cannot
+// deadlock. On a failed acquisition every fence already taken is released
+// before returning. The returned func releases all of them, in reverse.
+func (a *TenantAdopter) acquireFences(ctx context.Context, id string, target persistence.Scope) (func(), error) {
+	scopes := []persistence.Scope{a.sourceScope, target}
+	sort.Slice(scopes, func(i, j int) bool { return fenceOrderKey(scopes[i]) < fenceOrderKey(scopes[j]) })
+
+	releases := make([]func(), 0, len(scopes))
+	releaseAll := func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
+	for _, scope := range scopes {
+		release, err := a.fence.Acquire(ctx, scope, id)
+		if err != nil {
+			releaseAll()
+			return nil, err
+		}
+		if release == nil {
+			release = func() {}
+		}
+		releases = append(releases, release)
+	}
+	return releaseAll, nil
+}
+
+// fenceOrderKey orders scopes for acquireFences. It sorts on the scope's
+// kind and tenant id, never on Scope.String().
+func fenceOrderKey(scope persistence.Scope) string {
+	if scope.IsUnscoped() {
+		return "0"
+	}
+	return "1" + string(scope.TenantID())
+}
+
+// afterVerifiedEvents turns the verdict on an events target that already
+// existed into an outcome. A target proven to contain the source exactly is
+// already present, and a write-enabled WithSourceDeletion run then deletes
+// that verified source under the same guard as a fresh copy.
+func (a *TenantAdopter) afterVerifiedEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, verdict error) RecordOutcome {
+	outcome := classifyExisting(verdict)
+	if outcome.Status == StatusAlreadyPresent && len(sourceEvents) > 0 && a.write && a.deleteSource {
+		return a.deleteVerifiedSourceEvents(ctx, id, sourceEvents, maxSeq, false)
+	}
+	return outcome
+}
+
+// deleteVerifiedSourceEvents deletes the source events this run verified
+// (sourceEvents, through maxSeq). It runs under the adoption fence
+// (processAggregate), which is what makes it safe: the SPI has no atomic
+// read-verify-delete, but no writer that honors the fence can change the
+// source between this re-read and the delete. Before deleting, the source
+// must still be exactly sourceEvents — no newer event, and no event rewritten
+// at the same sequence number — or nothing is deleted. After deleting, the
+// source must hold no event at all for id: a newer event, or one that was
+// not removed or was recreated at or below maxSeq (a writer that ignores the
+// fence, or a store that did not delete), is reported as failed, never as
+// source_deleted. The newer or rewritten
+// events always stay in the source.
+func (a *TenantAdopter) deleteVerifiedSourceEvents(ctx context.Context, id string, sourceEvents []*egopb.Event, maxSeq uint64, wroteTarget bool) RecordOutcome {
+	current, err := a.eventsStore.ReplayEvents(ctx, a.sourceScope, id, 1, maxReplaySequence, maxReplayLimit)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
+	}
+	if err := sameEventsBySequence(current, sourceEvents); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: %w; nothing was deleted", errSourceChangedDuringAdoption, id, KindEvents, err)}
+	}
+
+	if err := a.eventsStore.DeleteEvents(ctx, a.sourceScope, id, maxSeq); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source events: %w", err)}
+	}
+
+	latest, err := a.eventsStore.GetLatestEvent(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source events: %w", err)}
+	}
+	// DeleteEvents removes everything through maxSeq, which is every
+	// verified event, so the only read-back that proves the deletion is nil.
+	if latest != nil {
+		if latest.GetSequenceNumber() > maxSeq {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained sequence %d during the deletion; the verified events through %d were deleted, but the newer ones remain only in the source", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
+		}
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source still holds sequence %d after deleting through %d; it was not removed or was recreated", errSourceChangedDuringAdoption, id, KindEvents, latest.GetSequenceNumber(), maxSeq)}
+	}
+	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
+}
+
+// sameEventsBySequence reports whether current holds exactly the events in
+// verified, compared by sequence number rather than position: the SPI does
+// not promise any order for ReplayEvents. Both must have the same count and
+// the same set of sequence numbers, each proto.Equal to its counterpart; a
+// sequence number appearing twice on either side is a mismatch.
+func sameEventsBySequence(current, verified []*egopb.Event) error {
+	if len(current) != len(verified) {
+		return fmt.Errorf("source holds %d events, %d were verified", len(current), len(verified))
+	}
+	verifiedBySeq := make(map[uint64]*egopb.Event, len(verified))
+	for _, e := range verified {
+		if _, dup := verifiedBySeq[e.GetSequenceNumber()]; dup {
+			return fmt.Errorf("verified events repeat sequence %d", e.GetSequenceNumber())
+		}
+		verifiedBySeq[e.GetSequenceNumber()] = e
+	}
+	seen := make(map[uint64]struct{}, len(current))
+	for _, e := range current {
+		seq := e.GetSequenceNumber()
+		if _, dup := seen[seq]; dup {
+			return fmt.Errorf("source repeats sequence %d", seq)
+		}
+		seen[seq] = struct{}{}
+		want, ok := verifiedBySeq[seq]
+		if !ok {
+			return fmt.Errorf("source sequence %d was not verified", seq)
+		}
+		if !proto.Equal(e, want) {
+			return fmt.Errorf("source sequence %d changed after it was verified", seq)
+		}
+	}
+	return nil
+}
+
+// deleteVerifiedSourceSnapshot is deleteVerifiedSourceEvents for the source
+// snapshot this run verified, under the same fence: before deleting, the
+// source's latest snapshot must still be exactly verified (a snapshot
+// rewritten at the same sequence number fails, not just a newer one); after,
+// any snapshot still present — newer, not removed, or recreated — is
+// reported as failed.
+func (a *TenantAdopter) deleteVerifiedSourceSnapshot(ctx context.Context, id string, verified *egopb.Snapshot, wroteTarget bool) RecordOutcome {
+	current, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source snapshot: %w", err)}
+	}
+	if !proto.Equal(current, verified) {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: the source snapshot changed after it was verified (verified sequence %d); nothing was deleted", errSourceChangedDuringAdoption, id, KindSnapshot, verified.GetSequenceNumber())}
+	}
+
+	if err := a.snapshotStore.DeleteSnapshots(ctx, a.sourceScope, id, verified.GetSequenceNumber()); err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("delete source snapshot: %w", err)}
+	}
+
+	latest, err := a.snapshotStore.GetLatestSnapshot(ctx, a.sourceScope, id)
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("re-read source snapshot: %w", err)}
+	}
+	// DeleteSnapshots removes everything through the verified sequence, so
+	// the only read-back that proves the deletion is nil.
+	if latest != nil {
+		if latest.GetSequenceNumber() > verified.GetSequenceNumber() {
+			return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source gained a snapshot at %d during the deletion; the verified snapshot at %d was deleted, but the newer one remains only in the source", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
+		}
+		return RecordOutcome{Status: StatusFailed, Err: fmt.Errorf("%w: persistence_id %q kind %s: source still holds a snapshot at %d after deleting through %d; it was not removed or was recreated", errSourceChangedDuringAdoption, id, KindSnapshot, latest.GetSequenceNumber(), verified.GetSequenceNumber())}
+	}
+	return RecordOutcome{Status: StatusSourceDeleted, wroteTarget: wroteTarget}
+}
+
+// classifyExisting turns the equivalence verdict on a pre-existing target
+// into a RecordOutcome: equivalent is StatusAlreadyPresent, anything else
+// fails closed.
+func classifyExisting(err error) RecordOutcome {
+	if err != nil {
+		return RecordOutcome{Status: StatusFailed, Err: err}
+	}
+	return RecordOutcome{Status: StatusAlreadyPresent}
+}
+
+// ownedByTenant reports whether metadata decodes to exactly tenant.
+func ownedByTenant(metadata map[string]string, tenant tenancy.TenantContext) bool {
+	decoded, err := tenancy.UnmarshalMetadata(tenancy.Metadata(metadata))
+	return err == nil && tenancy.VerifyUnchanged(tenant, decoded) == nil
+}
+
+// verifyEventsEquivalent decides whether the events a target scope already
+// holds are an adoption of expected (the stamped copies of the source
+// events; empty when the source is gone). Every target event must be owned
+// by tenant and carry a distinct sequence number.
+//
+// While the source exists, every expected event must be present under its
+// sequence number and proto.Equal it, and any other target event must come
+// after all of them: the tenant-bound actor appends to the adopted stream,
+// it never rewrites its past. An event stream can prove containment of the
+// source this way; a single latest snapshot or state record cannot (see
+// verifyRecordEquivalent).
+//
+// Once the source is gone there is nothing left to compare with, so the
+// proof is the adoption receipt: the target's lowest sequence numbers must be
+// an unbroken run of events whose receipts are valid for sourceScope, and
+// only later events may lack one. Same-tenant events that no adoption wrote
+// never carry a valid receipt, so they are never mistaken for an adoption.
+func verifyEventsEquivalent(id string, expected, existing []*egopb.Event, tenant tenancy.TenantContext, sourceScope persistence.Scope) error {
+	notEquivalent := func(format string, args ...any) error {
+		return fmt.Errorf("%w: persistence_id %q kind %s: %s", errTargetNotEquivalent, id, KindEvents, fmt.Sprintf(format, args...))
+	}
+
+	existingBySeq := make(map[uint64]*egopb.Event, len(existing))
+	seqs := make([]uint64, 0, len(existing))
+	for _, e := range existing {
+		seq := e.GetSequenceNumber()
+		if _, dup := existingBySeq[seq]; dup {
+			return notEquivalent("sequence %d appears more than once", seq)
+		}
+		if !ownedByTenant(e.GetTenantMetadata(), tenant) {
+			return notEquivalent("sequence %d is not owned by the assigned tenant", seq)
+		}
+		existingBySeq[seq] = e
+		seqs = append(seqs, seq)
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+
+	if len(expected) > 0 {
+		var maxExpected uint64
+		expectedSeqs := make(map[uint64]struct{}, len(expected))
+		for _, want := range expected {
+			seq := want.GetSequenceNumber()
+			got, ok := existingBySeq[seq]
+			if !ok || !proto.Equal(want, got) {
+				return notEquivalent("sequence %d differs from the source", seq)
+			}
+			expectedSeqs[seq] = struct{}{}
+			if seq > maxExpected {
+				maxExpected = seq
+			}
+		}
+		for _, seq := range seqs {
+			if _, adopted := expectedSeqs[seq]; !adopted && seq < maxExpected {
+				return notEquivalent("sequence %d is not part of the source stream", seq)
+			}
+		}
+		return nil
+	}
+
+	// Walk the receipt-bearing prefix as a chain: every receipt records the
+	// sequence of the adopted event before it, and the first adopted event
+	// records 0. A missing first event leaves the chain starting at a
+	// non-zero predecessor, a missing middle event leaves a link pointing
+	// at a sequence that is not the previous one here, and a tampered link
+	// no longer matches its own receipt digest.
+	adopted := 0
+	var previous uint64
+	for _, seq := range seqs {
+		if _, hasReceipt := existingBySeq[seq].GetTenantMetadata()[adoptionReceiptKey]; !hasReceipt {
+			break
+		}
+		predecessor, ok := verifyAdoptionReceipt(existingBySeq[seq], sourceScope)
+		if !ok || predecessor == nil {
+			return notEquivalent("sequence %d does not match its adoption receipt", seq)
+		}
+		if *predecessor != previous {
+			return notEquivalent("adopted sequence %d follows adopted sequence %d, but its receipt records %d: the adopted chain is broken", seq, previous, *predecessor)
+		}
+		previous = seq
+		adopted++
+	}
+	if adopted == 0 {
+		return notEquivalent("the source is gone and no target event carries an adoption receipt, so an adoption cannot be proven")
+	}
+	for _, seq := range seqs[adopted:] {
+		if _, hasReceipt := existingBySeq[seq].GetTenantMetadata()[adoptionReceiptKey]; hasReceipt {
+			return notEquivalent("adopted sequence %d follows events written after adoption", seq)
+		}
+	}
+	return nil
+}
+
+// verifyRecordEquivalent decides whether the single latest snapshot or
+// durable-state record a target holds is an adoption of expected (the
+// stamped copy of the source record; nil when the source is gone).
+//
+// A latest record keeps no history, so it can only prove equivalence by
+// being the exact record this adoption writes. While the source exists that
+// means the same position and proto.Equal; an earlier position, a different
+// record at the same position, and a LATER position all fail closed — a
+// later record owned by the same tenant may be unrelated data, and nothing
+// in it proves it descends from this source. Once the source is gone, the
+// record must still carry a valid adoption receipt for sourceScope; a record
+// the tenant-bound actor rewrote after adoption carries none, so the re-run
+// fails closed rather than presuming the adoption happened.
+func verifyRecordEquivalent(id string, kind RecordKind, expected proto.Message, expectedPos uint64, existing proto.Message, existingPos uint64, existingMetadata map[string]string, tenant tenancy.TenantContext, sourceScope persistence.Scope) error {
+	if !ownedByTenant(existingMetadata, tenant) {
+		return fmt.Errorf("%w: persistence_id %q kind %s: target record is not owned by the assigned tenant", errTargetNotEquivalent, id, kind)
+	}
+	if expected == nil {
+		if predecessor, ok := verifyAdoptionReceipt(existing, sourceScope); !ok || predecessor != nil {
+			return fmt.Errorf("%w: persistence_id %q kind %s: the source is gone and the target record at %d carries no valid adoption receipt, so an adoption cannot be proven", errTargetNotEquivalent, id, kind, existingPos)
+		}
+		return nil
+	}
+	if existingPos != expectedPos || !proto.Equal(expected, existing) {
+		return fmt.Errorf("%w: persistence_id %q kind %s: target record at %d is not the exact adoption of the source at %d", errTargetNotEquivalent, id, kind, existingPos, expectedPos)
+	}
+	return nil
+}
+
+// stampAdoptionReceipt sets record's tenant_metadata to a fresh copy of
+// metadata plus the adoption receipt computed over that stamped record. A
+// fresh copy per record keeps one record's receipt out of another's map.
+// predecessor is the previous adopted event's sequence (0 for the first)
+// for an event, and nil for a snapshot or durable state.
+func stampAdoptionReceipt(record proto.Message, sourceScope persistence.Scope, metadata map[string]string, predecessor *uint64) error {
+	stamped := make(map[string]string, len(metadata)+1)
+	for key, value := range metadata {
+		stamped[key] = value
+	}
+	if !setTenantMetadata(record, stamped) {
+		return fmt.Errorf("stamp adoption receipt: unsupported record type %T", record)
+	}
+	receipt, err := adoptionReceipt(record, sourceScope, predecessor)
+	if err != nil {
+		return err
+	}
+	stamped[adoptionReceiptKey] = receipt
+	return nil
+}
+
+// verifyAdoptionReceipt reports whether record carries a receipt that
+// matches its own content and sourceScope, and returns the predecessor that
+// receipt records: non-nil for an event receipt, nil for a single-record
+// (snapshot or durable-state) receipt.
+func verifyAdoptionReceipt(record proto.Message, sourceScope persistence.Scope) (*uint64, bool) {
+	stripped := proto.Clone(record)
+	metadata := tenantMetadataOf(stripped)
+	receipt, ok := metadata[adoptionReceiptKey]
+	if !ok {
+		return nil, false
+	}
+	var predecessor *uint64
+	body, ok := strings.CutPrefix(receipt, adoptionReceiptVersion)
+	if !ok {
+		return nil, false
+	}
+	if recorded, _, chained := strings.Cut(body, ":"); chained {
+		value, err := strconv.ParseUint(recorded, 10, 64)
+		if err != nil || strconv.FormatUint(value, 10) != recorded {
+			return nil, false
+		}
+		predecessor = &value
+	}
+	withoutReceipt := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if key != adoptionReceiptKey {
+			withoutReceipt[key] = value
+		}
+	}
+	if !setTenantMetadata(stripped, withoutReceipt) {
+		return nil, false
+	}
+	want, err := adoptionReceipt(stripped, sourceScope, predecessor)
+	if err != nil || want != receipt {
+		return nil, false
+	}
+	return predecessor, true
+}
+
+// adoptionReceipt is the receipt value for record (which must not carry a
+// receipt itself) adopted from sourceScope. It hashes the scope's kind and
+// tenant id, not Scope.String(), then — for an event — the recorded
+// predecessor sequence, then the record's deterministic protobuf encoding:
+//
+//	event:            v1:<predecessor>:<hex sha256(scope, 0, predecessor, 0, encoding)>
+//	snapshot, state:  v1:<hex sha256(scope, 0, encoding)>
+//
+// The predecessor is covered by the digest, so it cannot be altered without
+// invalidating the receipt. If the encoding ever changed between the run
+// that wrote a receipt and the run that checks it, the check fails closed.
+func adoptionReceipt(record proto.Message, sourceScope persistence.Scope, predecessor *uint64) (string, error) {
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(record)
+	if err != nil {
+		return "", fmt.Errorf("compute adoption receipt: %w", err)
+	}
+	scopeToken := "unscoped"
+	if !sourceScope.IsUnscoped() {
+		scopeToken = "tenant:" + strconv.Quote(string(sourceScope.TenantID()))
+	}
+	sum := sha256.New()
+	sum.Write([]byte(scopeToken))
+	sum.Write([]byte{0})
+	prefix := adoptionReceiptVersion
+	if predecessor != nil {
+		recorded := strconv.FormatUint(*predecessor, 10)
+		sum.Write([]byte(recorded))
+		sum.Write([]byte{0})
+		prefix += recorded + ":"
+	}
+	sum.Write(encoded)
+	return prefix + hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// adoptedPredecessors maps each event's sequence number to the sequence of
+// the event before it in sequence order, and the lowest to 0.
+func adoptedPredecessors(events []*egopb.Event) map[uint64]uint64 {
+	seqs := make([]uint64, 0, len(events))
+	for _, e := range events {
+		seqs = append(seqs, e.GetSequenceNumber())
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	predecessors := make(map[uint64]uint64, len(seqs))
+	var previous uint64
+	for _, seq := range seqs {
+		predecessors[seq] = previous
+		previous = seq
+	}
+	return predecessors
+}
+
+// tenantMetadataOf returns record's tenant_metadata for the three record
+// kinds TenantAdopter copies.
+func tenantMetadataOf(record proto.Message) map[string]string {
+	switch r := record.(type) {
+	case *egopb.Event:
+		return r.GetTenantMetadata()
+	case *egopb.Snapshot:
+		return r.GetTenantMetadata()
+	case *egopb.DurableState:
+		return r.GetTenantMetadata()
+	default:
+		return nil
+	}
+}
+
+// setTenantMetadata replaces record's tenant_metadata and reports whether
+// record is one of the three kinds TenantAdopter copies.
+func setTenantMetadata(record proto.Message, metadata map[string]string) bool {
+	switch r := record.(type) {
+	case *egopb.Event:
+		r.TenantMetadata = metadata
+	case *egopb.Snapshot:
+		r.TenantMetadata = metadata
+	case *egopb.DurableState:
+		r.TenantMetadata = metadata
+	default:
+		return false
+	}
+	return true
+}
+
+// pingStores preflights every configured store, exactly like Migrator.Run.
+func (a *TenantAdopter) pingStores(ctx context.Context) error {
+	if a.eventsStore != nil {
+		if err := a.eventsStore.Ping(ctx); err != nil {
+			return fmt.Errorf("migration: events store not reachable: %w", err)
+		}
+	}
+	if a.snapshotStore != nil {
+		if err := a.snapshotStore.Ping(ctx); err != nil {
+			return fmt.Errorf("migration: snapshot store not reachable: %w", err)
+		}
+	}
+	if a.stateStore != nil {
+		if err := a.stateStore.Ping(ctx); err != nil {
+			return fmt.Errorf("migration: state store not reachable: %w", err)
+		}
+	}
+	return nil
+}
+
+// collectPersistenceIDs enumerates every distinct persistence ID to scan:
+// every page the events store reports for a.sourceScope (when an events
+// store is configured), plus every id from WithPersistenceIDs.
+//
+// See the package doc comment's "Durable-state enumeration limitation":
+// persistence.SnapshotStore and persistence.StateStore have no
+// PersistenceIDs-style method, so when a.eventsStore is nil, WithPersistenceIDs
+// is the ONLY source of ids — collectPersistenceIDs logs a warning rather
+// than silently scanning nothing when that leaves it with an empty set.
+func (a *TenantAdopter) collectPersistenceIDs(ctx context.Context) ([]string, error) {
+	seen := make(map[string]struct{})
+	var ids []string
+	add := func(id string) {
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	if a.eventsStore != nil {
+		var pageToken string
+		for {
+			page, nextToken, err := a.eventsStore.PersistenceIDs(ctx, a.sourceScope, a.pageSize, pageToken)
+			if err != nil {
+				return nil, fmt.Errorf("migration: failed to list persistence IDs: %w", err)
+			}
+			for _, id := range page {
+				add(id)
+			}
+			if nextToken == "" || len(page) == 0 {
+				break
+			}
+			pageToken = nextToken
+		}
+	} else if len(a.explicitIDs) == 0 {
+		a.logger.WarnContext(ctx, "tenant adoption: no events store configured and no explicit persistence IDs supplied; nothing to scan (see the migration package doc's enumeration limitation)")
+	}
+
+	for _, id := range a.explicitIDs {
+		add(id)
+	}
+
+	return ids, nil
+}

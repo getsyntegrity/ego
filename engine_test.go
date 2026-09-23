@@ -58,8 +58,8 @@ import (
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/projection"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/tenancy"
+	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -229,6 +229,13 @@ func TestEngineEventSourced(t *testing.T) {
 // dispatch, the actor, the handler, or persistence. Legacy mode (no
 // resolver) is exercised separately by TestEngineEventSourced and
 // TestEngineDurableState, which remain unmodified and passing.
+//
+// TENANT-003 T4 note (corrected): Engine.Entity/DurableStateEntity/Saga
+// never call Resolve at spawn (Resolve-Once, Propagate-After reserves
+// Resolve for the command trust boundary alone) — each entity below is
+// spawned with ego.WithTenant declaring its tenant explicitly, so every
+// resolver.callCount() assertion below counts SendCommand's own Resolve
+// calls only.
 func TestSendCommandTenantResolution(t *testing.T) {
 	t.Run("resolves exactly once and attaches the TenantContext before the handler runs", func(t *testing.T) {
 		ctx := context.Background()
@@ -242,12 +249,17 @@ func TestSendCommandTenantResolution(t *testing.T) {
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
 
-		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command")
+		// TENANT-003 T4 (corrected): Entity's spawn declares its tenant via
+		// ego.WithTenant and never calls Resolve, so one SendCommand call
+		// means exactly one Resolve invocation — this is the regression
+		// guard for the defect CI caught (a prior design resolved at spawn
+		// too, doubling this count).
+		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command, never at spawn")
 		assert.EqualValues(t, 1, probe.invocationCount())
 
 		tc, ok := probe.observedTenant()
@@ -266,21 +278,27 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 		wantErr := errors.New("identity provider unavailable")
+		// The entity spawns under an explicit ego.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so an
+		// always-erroring resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises wantErr below.
 		resolver := &erroringTenantResolver{err: wantErr}
 		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 		require.NoError(t, engine.Start(ctx))
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.ErrorIs(t, err, wantErr, "SendCommand must surface the resolver error, not silently transform it")
 
-		assert.EqualValues(t, 1, resolver.callCount())
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
 
-		latest, err := store.GetLatestEvent(ctx, entityID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when Resolve fails")
 
@@ -303,22 +321,28 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		require.NoError(t, store.Connect(ctx))
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
+		// The entity spawns under an explicit ego.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so this
+		// always-zero-value resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises the zero-value case below.
 		resolver := &zeroValueTenantResolver{}
 		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 		require.NoError(t, engine.Start(ctx))
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.Error(t, err, "SendCommand must reject a resolver returning the zero-value TenantContext")
 		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
 
-		assert.EqualValues(t, 1, resolver.callCount())
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
 		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
 
-		latest, err := store.GetLatestEvent(ctx, entityID)
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
 		require.NoError(t, err)
 		assert.Nil(t, latest, "no event may be persisted when the resolved TenantContext is invalid")
 
@@ -340,19 +364,25 @@ func TestSendCommandTenantResolution(t *testing.T) {
 				require.NoError(t, store.Connect(ctx))
 				t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
+				// The entity spawns under an explicit ego.WithTenant
+				// declaration (TENANT-003 T4, corrected): spawn never calls
+				// Resolve, so SendCommand's own resolve is what hits
+				// tt.wantErr.
 				resolver := &erroringTenantResolver{err: tt.wantErr}
 				engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
 				require.NoError(t, engine.Start(ctx))
 
 				entityID := uuid.NewString()
 				probe := newTenancyProbeEventSourcedBehavior(entityID)
-				require.NoError(t, engine.Entity(ctx, probe))
+				require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
 
 				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Zero(t, probe.invocationCount())
 
-				latest, err := store.GetLatestEvent(ctx, entityID)
+				scopeA, err := persistence.NewTenantScope("acme")
+				require.NoError(t, err)
+				latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
 				require.NoError(t, err)
 				assert.Nil(t, latest)
 
@@ -384,7 +414,11 @@ func TestSendCommandTenantResolution(t *testing.T) {
 			tenantIDs[i] = tenancy.TenantID(fmt.Sprintf("tenant-%d", i))
 
 			probes[i] = newTenancyProbeEventSourcedBehavior(entityIDs[i])
-			require.NoError(t, engine.Entity(ctx, probes[i]))
+			// TENANT-003 T4 (corrected): Engine.Entity never calls Resolve
+			// at spawn, so each entity declares its owning tenant explicitly
+			// via ego.WithTenant — the same tenant every SendCommand call
+			// below targets it with.
+			require.NoError(t, engine.Entity(ctx, probes[i], WithTenant(tenantIDs[i])))
 		}
 
 		var wg sync.WaitGroup
@@ -459,7 +493,7 @@ func TestSendCommandSingleTenantZeroPlumbing(t *testing.T) {
 // SendCommand call with the exact same plain ctx; only the registered
 // resolver differs.
 func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
-	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
+	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver, spawnOpts ...SpawnOption) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
 		t.Helper()
 		ctx := context.Background()
 		store := testkit.NewEventsStore()
@@ -471,7 +505,7 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 
 		entityID := uuid.NewString()
 		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe))
+		require.NoError(t, engine.Entity(ctx, probe, spawnOpts...))
 
 		return engine, entityID, probe
 	}
@@ -481,6 +515,10 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		singleTenant, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
 		require.NoError(t, err)
 
+		// No ego.WithTenant here: acceptance criterion 6 requires
+		// single-tenant mode to need no tenant plumbing invented by the
+		// application. tenancy.WithSingleTenant's FixedTenantResolver
+		// capability is what lets spawn determine the tenant without one.
 		engine, entityID, probe := newEngineWithResolver(t, singleTenant)
 		_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
@@ -499,11 +537,17 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		ctx := context.Background()
 		multiTenant := &countingTenantResolver{id: "acme"}
 
-		engine, entityID, probe := newEngineWithResolver(t, multiTenant)
+		// An ordinary multi-tenant resolver has no fixed tenant, so the
+		// application must declare it explicitly via ego.WithTenant.
+		engine, entityID, probe := newEngineWithResolver(t, multiTenant, WithTenant(tenancy.TenantID("acme")))
 		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
 
-		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step")
+		// This is the regression guard for the defect CI caught: an earlier
+		// design called Resolve at spawn too, so this resolver was invoked
+		// twice (spawn + SendCommand) for this exact sequence instead of
+		// once.
+		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step, exactly once")
 		assert.EqualValues(t, 1, probe.invocationCount())
 		tc, ok := probe.observedTenant()
 		require.True(t, ok)
@@ -821,7 +865,7 @@ func TestEngineProjectionsOwnHandlers(t *testing.T) {
 
 	event, err := anypb.New(&testpb.AccountCredited{})
 	require.NoError(t, err)
-	require.NoError(t, store.WriteEvents(ctx, []*egopb.Event{{
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{{
 		PersistenceId:  uuid.NewString(),
 		SequenceNumber: 1,
 		Event:          event,
@@ -2101,7 +2145,7 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 
 	t.Run("GetLatestEvent error", func(t *testing.T) {
 		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, mock.AnythingOfType("string")).
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
 			Return(nil, errors.New("boom"))
 
 		engine := synthEngineWithStores(eventsStore, nil, nil)
@@ -2112,9 +2156,9 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 
 	t.Run("DeleteEvents error", func(t *testing.T) {
 		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, mock.AnythingOfType("string")).
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
 			Return(&egopb.Event{SequenceNumber: 5}, nil)
-		eventsStore.On("DeleteEvents", mock.Anything, mock.AnythingOfType("string"), uint64(5)).
+		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(5)).
 			Return(errors.New("delete fail"))
 
 		engine := synthEngineWithStores(eventsStore, nil, nil)
@@ -2125,13 +2169,13 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 
 	t.Run("DeleteSnapshots error", func(t *testing.T) {
 		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, mock.AnythingOfType("string")).
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
 			Return(&egopb.Event{SequenceNumber: 7}, nil)
-		eventsStore.On("DeleteEvents", mock.Anything, mock.AnythingOfType("string"), uint64(7)).
+		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
 			Return(nil)
 
 		snapStore := new(mockpersistence.SnapshotStore)
-		snapStore.On("DeleteSnapshots", mock.Anything, mock.AnythingOfType("string"), uint64(7)).
+		snapStore.On("DeleteSnapshots", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
 			Return(errors.New("snap fail"))
 
 		engine := synthEngineWithStores(eventsStore, snapStore, nil)

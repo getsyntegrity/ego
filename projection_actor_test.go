@@ -121,7 +121,7 @@ func TestProjection(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		// wait for the data to be persisted by the database since this an eventual consistency case
 		pause.For(2 * time.Second)
@@ -260,7 +260,7 @@ func TestProjection(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		actor := NewProjectionActor()
 		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
@@ -333,7 +333,7 @@ func TestProjection(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		actor := NewProjectionActor()
 		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
@@ -403,7 +403,7 @@ func TestProjection(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		actor := NewProjectionActor()
 		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
@@ -476,7 +476,7 @@ func TestProjection(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		actor := NewProjectionActor()
 		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
@@ -593,7 +593,7 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 			}
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		// spawn the projection the way StartProjection does in standalone mode
 		actor := NewProjectionActor()
@@ -670,7 +670,7 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, journalStore.WriteEvents(ctx, journals, persistence.Unconditional()))
+		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		actor := NewProjectionActor()
 		pid, err := actorSystem.Spawn(ctx, projectionName, actor,

@@ -101,6 +101,12 @@ func (r *countingTenantResolver) callCount() int64 {
 // with a fixed error. Used to prove a resolver failure blocks a command
 // before it ever reaches the actor system. It also counts its own
 // invocations so tests can assert Resolve was tried exactly once.
+//
+// TENANT-003 T4 (corrected): Engine.Entity/DurableStateEntity/Saga no
+// longer call Resolve at spawn at all (Resolve-Once, Propagate-After
+// reserves Resolve for the command trust boundary alone) — a spawn under
+// this resolver instead declares its tenant explicitly via ego.WithTenant,
+// so this resolver can stay a simple always-fail stub with no escape hatch.
 type erroringTenantResolver struct {
 	err   error
 	calls atomic.Int64
@@ -125,6 +131,10 @@ func (r *erroringTenantResolver) callCount() int64 {
 // Engine.SendCommand's trust boundary rejects it (design.md Decision D8)
 // before dispatch, the domain handler, or persistence, rather than treating
 // "no error" as "a valid identity was resolved".
+//
+// TENANT-003 T4 (corrected): as with erroringTenantResolver above, spawn no
+// longer calls Resolve, so a spawn under this resolver declares its tenant
+// via ego.WithTenant and this stub needs no escape hatch either.
 type zeroValueTenantResolver struct {
 	calls atomic.Int64
 }

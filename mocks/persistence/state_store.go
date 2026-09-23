@@ -115,9 +115,9 @@ func (_c *StateStore_Disconnect_Call) RunAndReturn(run func(context.Context) err
 	return _c
 }
 
-// GetLatestState provides a mock function with given fields: ctx, persistenceID
-func (_m *StateStore) GetLatestState(ctx context.Context, persistenceID string) (*egopb.DurableState, error) {
-	ret := _m.Called(ctx, persistenceID)
+// GetLatestState provides a mock function with given fields: ctx, scope, persistenceID
+func (_m *StateStore) GetLatestState(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error) {
+	ret := _m.Called(ctx, scope, persistenceID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLatestState")
@@ -125,19 +125,19 @@ func (_m *StateStore) GetLatestState(ctx context.Context, persistenceID string) 
 
 	var r0 *egopb.DurableState
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (*egopb.DurableState, error)); ok {
-		return rf(ctx, persistenceID)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string) (*egopb.DurableState, error)); ok {
+		return rf(ctx, scope, persistenceID)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) *egopb.DurableState); ok {
-		r0 = rf(ctx, persistenceID)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string) *egopb.DurableState); ok {
+		r0 = rf(ctx, scope, persistenceID)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*egopb.DurableState)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, persistenceID)
+	if rf, ok := ret.Get(1).(func(context.Context, persistence.Scope, string) error); ok {
+		r1 = rf(ctx, scope, persistenceID)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -152,14 +152,15 @@ type StateStore_GetLatestState_Call struct {
 
 // GetLatestState is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - persistenceID string
-func (_e *StateStore_Expecter) GetLatestState(ctx interface{}, persistenceID interface{}) *StateStore_GetLatestState_Call {
-	return &StateStore_GetLatestState_Call{Call: _e.mock.On("GetLatestState", ctx, persistenceID)}
+func (_e *StateStore_Expecter) GetLatestState(ctx interface{}, scope interface{}, persistenceID interface{}) *StateStore_GetLatestState_Call {
+	return &StateStore_GetLatestState_Call{Call: _e.mock.On("GetLatestState", ctx, scope, persistenceID)}
 }
 
-func (_c *StateStore_GetLatestState_Call) Run(run func(ctx context.Context, persistenceID string)) *StateStore_GetLatestState_Call {
+func (_c *StateStore_GetLatestState_Call) Run(run func(ctx context.Context, scope persistence.Scope, persistenceID string)) *StateStore_GetLatestState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(string))
 	})
 	return _c
 }
@@ -169,7 +170,7 @@ func (_c *StateStore_GetLatestState_Call) Return(_a0 *egopb.DurableState, _a1 er
 	return _c
 }
 
-func (_c *StateStore_GetLatestState_Call) RunAndReturn(run func(context.Context, string) (*egopb.DurableState, error)) *StateStore_GetLatestState_Call {
+func (_c *StateStore_GetLatestState_Call) RunAndReturn(run func(context.Context, persistence.Scope, string) (*egopb.DurableState, error)) *StateStore_GetLatestState_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -220,17 +221,17 @@ func (_c *StateStore_Ping_Call) RunAndReturn(run func(context.Context) error) *S
 	return _c
 }
 
-// WriteState provides a mock function with given fields: ctx, state, precondition
-func (_m *StateStore) WriteState(ctx context.Context, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
-	ret := _m.Called(ctx, state, precondition)
+// WriteState provides a mock function with given fields: ctx, scope, state, precondition
+func (_m *StateStore) WriteState(ctx context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
+	ret := _m.Called(ctx, scope, state, precondition)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WriteState")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *egopb.DurableState, persistence.WritePrecondition) error); ok {
-		r0 = rf(ctx, state, precondition)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, *egopb.DurableState, persistence.WritePrecondition) error); ok {
+		r0 = rf(ctx, scope, state, precondition)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -245,15 +246,16 @@ type StateStore_WriteState_Call struct {
 
 // WriteState is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - state *egopb.DurableState
 //   - precondition persistence.WritePrecondition
-func (_e *StateStore_Expecter) WriteState(ctx interface{}, state interface{}, precondition interface{}) *StateStore_WriteState_Call {
-	return &StateStore_WriteState_Call{Call: _e.mock.On("WriteState", ctx, state, precondition)}
+func (_e *StateStore_Expecter) WriteState(ctx interface{}, scope interface{}, state interface{}, precondition interface{}) *StateStore_WriteState_Call {
+	return &StateStore_WriteState_Call{Call: _e.mock.On("WriteState", ctx, scope, state, precondition)}
 }
 
-func (_c *StateStore_WriteState_Call) Run(run func(ctx context.Context, state *egopb.DurableState, precondition persistence.WritePrecondition)) *StateStore_WriteState_Call {
+func (_c *StateStore_WriteState_Call) Run(run func(ctx context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition)) *StateStore_WriteState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*egopb.DurableState), args[2].(persistence.WritePrecondition))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(*egopb.DurableState), args[3].(persistence.WritePrecondition))
 	})
 	return _c
 }
@@ -263,7 +265,7 @@ func (_c *StateStore_WriteState_Call) Return(_a0 error) *StateStore_WriteState_C
 	return _c
 }
 
-func (_c *StateStore_WriteState_Call) RunAndReturn(run func(context.Context, *egopb.DurableState, persistence.WritePrecondition) error) *StateStore_WriteState_Call {
+func (_c *StateStore_WriteState_Call) RunAndReturn(run func(context.Context, persistence.Scope, *egopb.DurableState, persistence.WritePrecondition) error) *StateStore_WriteState_Call {
 	_c.Call.Return(run)
 	return _c
 }

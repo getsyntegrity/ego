@@ -26,10 +26,14 @@
 //
 // Usage:
 //
-//	migrator := migration.New(eventsStore, snapshotStore,
+//	migrator, err := migration.New(eventsStore, snapshotStore,
 //	    migration.WithPageSize(100),
 //	    migration.WithLogger(logger), // any kit-logger Logger
+//	    migration.WithScope(scope),   // optional; persistence.Unscoped() by default
 //	)
+//	if err != nil {
+//	    return err // e.g. an invalid scope
+//	}
 //	if err := migrator.Run(ctx); err != nil {
 //	    logger.Error("migration failed", "error", err)
 //	}
@@ -37,11 +41,67 @@
 // When no logger is supplied the migrator logs through ego.DefaultLogger(),
 // kit-logger's process-wide logger.
 //
-// The migrator reads all persistence IDs from the events store, finds the latest
+// The migrator reads every persistence ID in its scope (see WithScope), finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),
 // and writes a snapshot to the snapshot store seeded from that state. This is a
 // one-time, idempotent operation — running it again will overwrite existing snapshots
 // with the same data.
+//
+// # Adopting tenancy for existing data
+//
+// A separate tool, TenantAdopter, addresses a different migration: a
+// deployment that already has data written under persistence.Unscoped()
+// and now wants to adopt tenancy (TENANT-003). See TenantAdopter's own doc
+// comment for the full usage; in short:
+//
+//	adopter, err := migration.NewTenantAdopter(assignTenant,
+//	    migration.WithEventsStore(eventsStore),
+//	    migration.WithSnapshotStore(snapshotStore),
+//	    migration.WithStateStore(stateStore),
+//	    migration.WithWriteEnabled(), // required opt-in; the default is dry-run
+//	    migration.WithAdoptionFence(fence), // required whenever writes are enabled
+//	)
+//	report, err := adopter.Run(ctx)
+//
+// TenantAssignment (assignTenant above) is a required constructor
+// argument, not an option: the framework has no way to know which tenant an
+// existing aggregate belongs to, since persistence_id is an opaque,
+// caller-assigned string. That is a business decision only the operator
+// holds.
+//
+// TenantAdopter defaults to dry-run (plans and reports, writes nothing) and
+// never deletes source data unless WithSourceDeletion is also set, and then
+// only after a copy has been read back and matched, via proto.Equal, against
+// the exact record this tool intended to write (the source record with
+// tenant_metadata replaced by the target tenant's plus its adoption
+// receipt; events matched by SequenceNumber rather than slice position or
+// count) — not merely a
+// count, sequence number, or version number, none of which can detect a
+// corrupted payload, a dropped tenant_metadata, or a missing encryption
+// envelope.
+//
+// A target tenant scope that already holds a record is never trusted merely
+// because it exists or belongs to the assigned tenant. It is already_present
+// only when it is proven to be this adoption: while the source exists, by
+// exact comparison (an events target contains every source event and may
+// append later ones; a snapshot or durable-state target is the identical
+// record at the same position — a later one proves nothing, since a single
+// latest record keeps no lineage); once WithSourceDeletion removed the
+// source, by the adoption receipt stamped into every adopted record's
+// tenant_metadata, which binds the record's exact content to the source
+// scope it came from. Otherwise that record kind fails closed and nothing is
+// written or deleted. A re-run right after a deleting run is therefore a
+// no-op, while a re-run after the tenant-bound actor has rewritten a
+// snapshot or durable state fails closed: that record no longer carries a
+// receipt, and nothing else can prove it descends from the deleted source.
+//
+// Durable-state enumeration limitation: persistence.EventsStore has
+// PersistenceIDs to enumerate a scope, but neither persistence.SnapshotStore
+// nor persistence.StateStore does. When no events store is configured (a
+// durable-state-only, or snapshot-only, deployment), TenantAdopter has no
+// way to discover which persistence IDs exist on its own — the operator
+// must supply them explicitly via WithPersistenceIDs. This is a real gap in
+// today's persistence SPI, not an oversight in this tool.
 package migration
 
 import (
@@ -55,6 +115,7 @@ import (
 	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // legacyResultingStateFieldNumber is the protobuf field number that was used
@@ -69,14 +130,16 @@ type Migrator struct {
 	snapshotStore persistence.SnapshotStore
 	pageSize      uint64
 	logger        kitlog.Logger
+	scope         persistence.Scope
 }
 
 // New creates a Migrator.
-func New(eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) *Migrator {
+func New(eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) (*Migrator, error) {
 	m := &Migrator{
 		eventsStore:   eventsStore,
 		snapshotStore: snapshotStore,
 		pageSize:      500,
+		scope:         persistence.Unscoped(),
 	}
 	for _, opt := range opts {
 		opt.apply(m)
@@ -84,12 +147,16 @@ func New(eventsStore persistence.EventsStore, snapshotStore persistence.Snapshot
 	// Options may have set a nil or typed-nil logger, which would panic on the
 	// first log call. Resolving after the loop covers every option path.
 	m.logger = ego.ResolveLogger(m.logger)
-	return m
+	if !m.scope.Valid() {
+		return nil, fmt.Errorf("migration: WithScope: %w", persistence.ErrInvalidScope)
+	}
+	return m, nil
 }
 
-// Run executes the migration. It iterates over all persistence IDs in the events
-// store and, for each entity, extracts the resulting_state from the latest event
-// that carried one, writing it as a snapshot.
+// Run executes the migration. It iterates over every persistence ID the events
+// store lists in the Migrator's scope and, for each entity, extracts the
+// resulting_state from the latest event that carried one, writing it as a
+// snapshot in that same scope.
 //
 // The operation is idempotent: running it multiple times produces the same result.
 // Events in the store are not modified.
@@ -107,7 +174,13 @@ func (m *Migrator) Run(ctx context.Context) error {
 	)
 
 	for {
-		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, m.pageSize, pageToken)
+		// A Migrator walks exactly one scope, m.scope (WithScope; Unscoped()
+		// by default): listing, replay, and the snapshot write below all use
+		// it, so records under the same persistence ID in any other scope are
+		// never read or written. It does not sweep every tenant — the SPI has
+		// no way to enumerate scopes — so a deployment with tenant data runs
+		// one Migrator per scope.
+		ids, nextToken, err := m.eventsStore.PersistenceIDs(ctx, m.scope, m.pageSize, pageToken)
 		if err != nil {
 			return fmt.Errorf("migration: failed to list persistence IDs: %w", err)
 		}
@@ -132,18 +205,24 @@ func (m *Migrator) Run(ctx context.Context) error {
 // migrateEntity processes a single entity: reads its events and finds
 // the latest one with a resulting_state, then writes a snapshot.
 func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) error {
-	// Use a safe large limit that won't overflow when cast to int.
-	const maxLimit = uint64(1<<63 - 1)
-	events, err := m.eventsStore.ReplayEvents(ctx, persistenceID, 1, maxLimit, maxLimit)
+	// Same scope Run listed persistenceID in; see Run's comment.
+	// The range covers every sequence number (maxReplaySequence), while the
+	// count limit fits in an int on every architecture (maxReplayLimit); see
+	// tenant_adoption.go.
+	events, err := m.eventsStore.ReplayEvents(ctx, m.scope, persistenceID, 1, maxReplaySequence, maxReplayLimit)
 	if err != nil {
 		return err
 	}
 
-	var bestSnapshot *egopb.Snapshot
+	var (
+		bestSnapshot *egopb.Snapshot
+		bestEvent    *egopb.Event
+	)
 	for _, evt := range events {
 		state := extractLegacyResultingState(evt)
 		if state != nil {
 			if bestSnapshot == nil || evt.GetSequenceNumber() > bestSnapshot.GetSequenceNumber() {
+				bestEvent = evt
 				bestSnapshot = &egopb.Snapshot{
 					PersistenceId:  persistenceID,
 					SequenceNumber: evt.GetSequenceNumber(),
@@ -159,7 +238,12 @@ func (m *Migrator) migrateEntity(ctx context.Context, persistenceID string) erro
 		return nil
 	}
 
-	if err := m.snapshotStore.WriteSnapshot(ctx, bestSnapshot); err != nil {
+	if err := m.stampSnapshotTenant(bestSnapshot, bestEvent); err != nil {
+		return err
+	}
+
+	// Written in the same scope the events were read from; see Run's comment.
+	if err := m.snapshotStore.WriteSnapshot(ctx, m.scope, bestSnapshot); err != nil {
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
@@ -266,4 +350,32 @@ func consumeVarint(b []byte) (uint64, int) {
 		}
 	}
 	return 0, -1
+}
+
+// stampSnapshotTenant gives a snapshot written in a tenant scope the
+// tenant_metadata a tenant-aware EventSourcedActor requires: it loads the
+// snapshot first and refuses one without a tenant scope in its metadata.
+// The metadata comes from source, the event whose resulting_state the
+// snapshot was taken from, and must decode to exactly the Migrator's tenant
+// (tenancy.ErrInvalid when missing or malformed, tenancy.ErrDenied for
+// another tenant); the snapshot is then stamped canonically, the way the
+// actors stamp it. Nothing is written when that cannot be proven. Unscoped
+// runs are unchanged: their snapshots carry no tenant_metadata, as before.
+func (m *Migrator) stampSnapshotTenant(snapshot *egopb.Snapshot, source *egopb.Event) error {
+	if m.scope.IsUnscoped() {
+		return nil
+	}
+	want, err := tenancy.NewTenantContext(m.scope.TenantID())
+	if err != nil {
+		return fmt.Errorf("snapshot tenant for scope %s: %w", m.scope, err)
+	}
+	got, err := tenancy.UnmarshalMetadata(tenancy.Metadata(source.GetTenantMetadata()))
+	if err != nil {
+		return fmt.Errorf("source event %d carries no tenant metadata for scope %s: %w", source.GetSequenceNumber(), m.scope, err)
+	}
+	if err := tenancy.VerifyUnchanged(want, got); err != nil {
+		return fmt.Errorf("source event %d is stamped for another tenant than scope %s: %w", source.GetSequenceNumber(), m.scope, err)
+	}
+	snapshot.TenantMetadata = tenancy.MarshalMetadata(want)
+	return nil
 }

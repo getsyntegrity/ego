@@ -29,6 +29,7 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -72,6 +73,36 @@ type SagaActor struct {
 	// tenant sagas are explicitly out of scope (deferred). Zero value is
 	// noTenantContext (declared in event_sourced_actor.go) until seeded.
 	boundTenant tenancy.TenantContext
+
+	// scope is the persistence.Scope this saga's own event store reads and
+	// writes are bound to (TENANT-003 T4), mirroring EventSourcedActor.scope
+	// position-for-position. Bound once in PreStart via resolveScope, right
+	// after tenantAware is set and BEFORE any store read (including
+	// recover()): persistence.Unscoped() when tenantAware is false, or the
+	// tenant scope carried by the per-spawn extensions.EntityTenantScope
+	// dependency Engine.Saga injects when tenantAware is true. Binding also
+	// pre-seeds boundTenant with the spawn-bound tenancy.TenantContext,
+	// turning recover()'s replay-path binding (SG5, bindOrVerify) into a
+	// cross-check against the spawn-bound tenant instead of a first seed.
+	// The live stream path (handleStreamEvent, SG4) is unaffected in shape:
+	// since boundTenant is already non-zero once PreStart returns, its
+	// "already bound" branch always applies for a tenant-aware saga, and
+	// bindOrVerify cross-checks every event exactly as it already did once
+	// bound — the SG-DUR1 durable-ownership-marker path (persistTenantBinding)
+	// simply never fires anymore for a tenant-aware saga, since spawn itself
+	// is now the durable source of truth for which tenant owns this sagaID.
+	//
+	// # Known limitation: shared actor name across tenants
+	//
+	// Identical to EventSourcedActor.scope's doc comment: a GoAkt actor's
+	// name is the caller-supplied sagaID and is NOT tenant-qualified, so two
+	// tenants using the same sagaID still map to the SAME actor instance.
+	// Fail-closed and leak-free once spawned, but the second tenant cannot
+	// use that saga id at all — a functional limitation, not a security
+	// hole. Follow-up: tenant-qualified actor identity (see
+	// openspec/changes/ego-tenant-003/design.md's "Known limitation"
+	// section); not implemented here.
+	scope persistence.Scope
 
 	// rootMetadata is this saga instance's own root command.Metadata (#60,
 	// M-3), established once in PreStart from sagaID. Every command the
@@ -120,6 +151,10 @@ func (s *SagaActor) PreStart(ctx *goakt.Context) error {
 	// Presence-only signal, set before recover() so replay validation (SG5)
 	// gates on the same tenantAware value the live path uses (SG4).
 	s.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
+
+	if err := s.resolveScope(ctx.Dependencies()); err != nil {
+		return err
+	}
 
 	rootOp, err := command.NewOperationID(s.sagaID)
 	if err != nil {
@@ -205,6 +240,8 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 		}
 	case *egopb.GetStateCommand:
 		s.getStateAndReply(ctx)
+	case *egopb.TenantBindingQuery:
+		ctx.Response(answerTenantBinding(s.tenantAware, s.scope, message))
 	default:
 		ctx.Unhandled()
 	}
@@ -219,12 +256,57 @@ func (s *SagaActor) PostStop(_ *goakt.Context) error {
 	return nil
 }
 
+// resolveScope binds s.scope (and, in tenant-aware mode, s.boundTenant) from
+// deps before any store read (TENANT-003 T4), mirroring
+// EventSourcedActor.resolveScope/DurableStateActor.resolveScope.
+//
+// tenantAware == false binds persistence.Unscoped() and leaves boundTenant
+// untouched (noTenantContext) — legacy mode is byte-identical to before
+// this field existed.
+//
+// tenantAware == true looks for the per-spawn extensions.EntityTenantScope
+// dependency Engine.Saga injects and fails closed with
+// ErrEntityTenantScopeMissing when it is absent or carries an invalid
+// tenant id. On success it also pre-seeds s.boundTenant with the
+// corresponding tenancy.TenantContext, BEFORE recover() runs, so replayed
+// saga events (SG5) are cross-checked against the spawn-bound tenant via
+// bindOrVerify instead of seeding it from the first replayed event.
+func (s *SagaActor) resolveScope(deps []extension.Dependency) error {
+	if !s.tenantAware {
+		s.scope = persistence.Unscoped()
+		return nil
+	}
+
+	for _, dependency := range deps {
+		dep, ok := dependency.(*extensions.EntityTenantScope)
+		if !ok || dep == nil {
+			continue
+		}
+
+		scope, err := persistence.NewTenantScope(tenancy.TenantID(dep.TenantID))
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		tenantContext, err := tenancy.NewTenantContext(scope.TenantID())
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		s.scope = scope
+		s.boundTenant = tenantContext
+		return nil
+	}
+
+	return ErrEntityTenantScopeMissing
+}
+
 // recover rebuilds the saga state from persisted events.
 func (s *SagaActor) recover(ctx context.Context) error {
 	s.currentState = s.behavior.InitialState()
 	s.status = SagaRunning
 
-	latestEvent, err := s.eventsStore.GetLatestEvent(ctx, s.sagaID)
+	latestEvent, err := s.eventsStore.GetLatestEvent(ctx, s.scope, s.sagaID)
 	if err != nil {
 		return fmt.Errorf("failed to get latest saga event: %w", err)
 	}
@@ -234,7 +316,7 @@ func (s *SagaActor) recover(ctx context.Context) error {
 	}
 
 	latestSeqNr := latestEvent.GetSequenceNumber()
-	events, err := s.eventsStore.ReplayEvents(ctx, s.sagaID, 1, latestSeqNr, latestSeqNr)
+	events, err := s.eventsStore.ReplayEvents(ctx, s.scope, s.sagaID, 1, latestSeqNr, latestSeqNr)
 	if err != nil {
 		return fmt.Errorf("failed to replay saga events: %w", err)
 	}
@@ -579,7 +661,7 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 		nextState = newState
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, envelopes, persistence.Unconditional()); err != nil {
+	if err := s.eventsStore.WriteEvents(ctx, s.scope, envelopes, persistence.Unconditional()); err != nil {
 		return err
 	}
 
@@ -616,7 +698,7 @@ func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantC
 		TenantMetadata: tenancy.MarshalMetadata(tc),
 	}
 
-	if err := s.eventsStore.WriteEvents(ctx, []*egopb.Event{envelope}, persistence.Unconditional()); err != nil {
+	if err := s.eventsStore.WriteEvents(ctx, s.scope, []*egopb.Event{envelope}, persistence.Unconditional()); err != nil {
 		return err
 	}
 

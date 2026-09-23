@@ -312,7 +312,7 @@ func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
 			require.Len(t, spy.preconditions, 1, "exactly one physical flush for the whole batch")
 			assert.Equal(t, tc.want, spy.preconditions[0])
 
-			event, err := underlying.GetLatestEvent(ctx, entityID)
+			event, err := underlying.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 			require.NoError(t, err)
 			require.NotNil(t, event)
 			assert.EqualValues(t, len(steps), event.GetSequenceNumber(), "every step's event actually committed")
@@ -352,7 +352,7 @@ func TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter(t *testi
 	require.Len(t, spy.preconditions, 1)
 	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0])
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, event.GetSequenceNumber(), "R=2 after the prefix batch's flush")
 
@@ -375,7 +375,7 @@ func TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter(t *testi
 	assert.NotEqual(t, persistence.ExpectRevision(3), got)
 	assert.NotEqual(t, persistence.ExpectRevision(4), got)
 
-	event, err = store.GetLatestEvent(ctx, entityID)
+	event, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 4, event.GetSequenceNumber(), "both batches' events are committed: 2 (prefix) + 2 (under test)")
 }
@@ -413,7 +413,7 @@ func TestBatchedZeroEventAdmittedCommandStillPreservesLaterPrecondition(t *testi
 	require.Len(t, spy.preconditions, 1, "exactly one physical flush")
 	assert.Equal(t, persistence.ExpectGenesis(), spy.preconditions[0], "the zero-event command's declared ExpectedRevision(1) must still be honored as a real CAS precondition")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, event.GetSequenceNumber(), "only the two real events (founder + filler) were ever persisted")
 }
@@ -441,7 +441,7 @@ func TestBatchedZeroEventFounderNeverOpensBatch(t *testing.T) {
 	require.Len(t, spy.preconditions, 1)
 	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0], "the zero-event command must not have anchored a genesis batchBase")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the real founder's single event was ever persisted")
 }
@@ -485,7 +485,7 @@ func TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshB
 	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0], "forced flush of the original open batch: nothing in it had declared a revision")
 	assert.Equal(t, persistence.ExpectRevision(99), spy.preconditions[1], "the stale command's own fresh batch anchors to its own declared (stale) revision")
 
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the original founder's event ever committed; the stale-founded batch's conflict must not have persisted anything")
 }
@@ -548,7 +548,7 @@ func TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter(t
 		Timestamp:      time.Now().Unix(),
 		Shard:          0,
 	}
-	require.NoError(t, store.WriteEvents(ctx, []*egopb.Event{externalEvent}, persistence.Unconditional()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{externalEvent}, persistence.Unconditional()))
 
 	// Now dispatch the filler command that tips batchNumEvents over the
 	// threshold, forcing the flush.
@@ -601,7 +601,7 @@ func TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter(t
 	// D10 recheck: no rejected event was confirmed, and eventsCounter must
 	// not have advanced as a result of the rejected persist — only the
 	// external writer's single event is visible in the store.
-	event, err := store.GetLatestEvent(ctx, entityID)
+	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the external writer's event ever committed")
 

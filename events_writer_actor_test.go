@@ -88,6 +88,7 @@ func TestEventsWriterActor(t *testing.T) {
 		}
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:        persistence.Unscoped(),
 			envelopes:    envelopes,
 			topic:        "topic.events.0",
 			precondition: persistence.Unconditional(),
@@ -100,7 +101,7 @@ func TestEventsWriterActor(t *testing.T) {
 		assert.Nil(t, resp.Err)
 
 		// verify events were written to the store
-		latest, err := eventStore.GetLatestEvent(ctx, "entity-1")
+		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), "entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 2, latest.GetSequenceNumber())
@@ -127,7 +128,7 @@ func TestEventsWriterActor(t *testing.T) {
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		eventStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		eventStream := eventstream.New()
 		sub := eventStream.AddSubscriber()
@@ -162,6 +163,7 @@ func TestEventsWriterActor(t *testing.T) {
 		}
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:     persistence.Unscoped(),
 			envelopes: envelopes,
 			topic:     "topic.events.0",
 		}, 5*time.Second)
@@ -217,6 +219,7 @@ func TestEventsWriterActor(t *testing.T) {
 		pause.For(time.Second)
 
 		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+			scope:        persistence.Unscoped(),
 			envelopes:    nil,
 			topic:        "topic.events.0",
 			precondition: persistence.Unconditional(),

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### 💥 Breaking Changes
 
+- **`migration.New` now returns `(*Migrator, error)`, and the `Migrator` walks one explicit scope.** Once store calls carry a `persistence.Scope`, the legacy `Migrator` listed, replayed, and wrote snapshots only under `persistence.Unscoped()` while its documentation claimed it walked every tenant, so after tenant adoption it reported success without migrating anything in a tenant scope. The new `migration.WithScope(scope)` selects the scope used for listing, replay, and the snapshot write alike; the default stays `persistence.Unscoped()`, so a caller that passes no scope keeps today's behavior. `New` rejects an invalid (zero-value) scope with `persistence.ErrInvalidScope`, so every `Migrator` it returns is ready to run. It does not sweep all tenants automatically — the SPI has no way to enumerate scopes — so run one `Migrator` per tenant scope. Update callers from `m := migration.New(...)` to `m, err := migration.New(...)` and handle the error.
+
 - **Module path changed to `github.com/pablogore/ego/v4`.** `github.com/pablogore/ego` is a fork of [tochemey/ego](https://github.com/Tochemey/ego), maintained independently since 2026-09. The module, every internal import, the generated protobuf `go_package` options, and this repo's own CI, badges and docs now refer to the fork's own path instead of upstream's. Update `go.mod` and every import: `github.com/tochemey/ego/v4` → `github.com/pablogore/ego/v4`. Dependencies genuinely owned by the original author (`tochemey/goakt`, `tochemey/ego-contrib`, `tochemey/olric`) are unaffected. No tag has been cut for the fork yet, so the satellite modules (`benchmark`, `example/cluster`, `publisher/*`) carry a local `replace` directive back to the monorepo root until a first `pablogore/ego` release exists.
 
 - **eGo logs through [kit-logger](https://github.com/pablogore/kit-logger).** The `ego.Logger` seam and its optional capability interfaces (`LeveledLogger`, `EnabledLogger`, `ContextLogger`, `FieldLogger`), the `WithFields` helper and the `DefaultLogger` variable are gone. Every logging surface of the framework now takes a `github.com/pablogore/kit-logger/pkg/logger.Logger`:
@@ -30,9 +32,106 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   Records written with a context now go through the `*Context` methods, so a kit-logger configured with its OpenTelemetry decorator (`pkg/logger/otel`) stamps `trace_id`/`span_id` on eGo's records for free.
 
+- **`persistence.EventsStore`, `persistence.StateStore` and `persistence.SnapshotStore` now key every record by the pair `(persistence.Scope, persistence_id)`, not `persistence_id` alone (EGO-TENANT-003).** Every record-addressing method gained a required `scope persistence.Scope` parameter, immediately after `ctx`:
+
+  ```go
+  // EventsStore
+  WriteEvents(ctx, events []*egopb.Event, precondition WritePrecondition) error ->
+  WriteEvents(ctx, scope persistence.Scope, events []*egopb.Event, precondition WritePrecondition) error
+
+  DeleteEvents(ctx, persistenceID string, toSequenceNumber uint64) error ->
+  DeleteEvents(ctx, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error
+
+  ReplayEvents(ctx, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) ->
+  ReplayEvents(ctx, scope persistence.Scope, persistenceID string, fromSequenceNumber, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error)
+
+  GetLatestEvent(ctx, persistenceID string) (*egopb.Event, error) ->
+  GetLatestEvent(ctx, scope persistence.Scope, persistenceID string) (*egopb.Event, error)
+
+  PersistenceIDs(ctx, pageSize uint64, pageToken string) ([]string, string, error) ->
+  PersistenceIDs(ctx, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error)
+
+  // StateStore
+  WriteState(ctx, state *egopb.DurableState, precondition WritePrecondition) error ->
+  WriteState(ctx, scope persistence.Scope, state *egopb.DurableState, precondition WritePrecondition) error
+
+  GetLatestState(ctx, persistenceID string) (*egopb.DurableState, error) ->
+  GetLatestState(ctx, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error)
+
+  // SnapshotStore
+  WriteSnapshot(ctx, snapshot *egopb.Snapshot) error ->
+  WriteSnapshot(ctx, scope persistence.Scope, snapshot *egopb.Snapshot) error
+
+  GetLatestSnapshot(ctx, persistenceID string) (*egopb.Snapshot, error) ->
+  GetLatestSnapshot(ctx, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error)
+
+  DeleteSnapshots(ctx, persistenceID string, toSequenceNumber uint64) error ->
+  DeleteSnapshots(ctx, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error
+  ```
+
+  `Connect`, `Disconnect` and `Ping` on all three interfaces are deliberately unchanged: connection lifecycle is not record-addressing, so it carries no tenant boundary. `EventsStore.GetShardEvents` and `EventsStore.ShardOffsets` are also unchanged, for a different reason: both are shard-level projection reads, not `(scope, persistence_id)`-addressed record reads, and read-side/projection isolation across tenants is EGO-TENANT-004's scope — explicitly not decided by this change.
+
+  `persistence.ConflictError` now carries a `Scope` — `NewConflictError(scope, persistenceID, expected, opts...)` requires it, and `(*ConflictError).Scope()` recovers it — and its canonical wire grammar is now versioned, carries the scope, and quotes both identifiers:
+
+  ```
+  ego: concurrency conflict: grammar=v1, scope=<unscoped|tenant:"<id>">, persistence_id="<id>", expected=<unconditional|genesis|N>, actual=<M|unknown>
+  ```
+
+  The tenant id and the persistence id are rendered with `strconv.Quote`, so an identifier containing commas, equals signs, quotes, the grammar's own field separators, or non-ASCII text can no longer make the message ambiguous; `persistence.ParseConflictError(err.Error())` is an exact inverse for every valid scope and persistence id, and rejects any non-canonical rendering. Only `grammar=v1` is parsed back: a message in the previous unversioned `persistence_id=<id>` grammar (for example from a node not yet upgraded) still classifies as `concurrency_conflict` by its unchanged `ego: concurrency conflict` prefix, but no `*ConflictError` cause is reconstructed for it. Anything else that parses `(*ConflictError).Error()`'s text directly, instead of using `errors.As` or `ParseConflictError`, must be updated.
+
+  **Upgrade recipe for an external store adapter:** accept the new `scope persistence.Scope` parameter on every method listed above, and fold it into the record key STRUCTURALLY — for a SQL-backed store that means a real tenant column that participates in the primary key and in every `WHERE` clause, not a string concatenated onto the existing `persistence_id` column. `persistence.Scope.String()` (`"unscoped"`, `"tenant:<id>"`) is a diagnostic rendering only and must never become a storage key: nothing at the string level stops a tenant literally named `"unscoped"` from rendering as `"tenant:unscoped"`, so a store that reduces `Scope` to its string before keying loses the structural guarantee `Scope.Equal` provides. Key on the `Scope` value itself (or its kind and `TenantID()`), never on `String()`.
+
+  **Zero-migration guarantee:** an adapter that maps `persistence.Unscoped()` onto its existing key layout unchanged needs no data migration and no backfill for a deployment that never activates tenancy (no `tenancy.TenantResolver` configured) — every call already carries `Unscoped()` today, before and after the adapter is upgraded. A deployment that *adopts* tenancy on existing data does need a migration: every row written before this change was written under `Unscoped()`, which is a real, distinct `Scope` value, not a wildcard that matches every tenant. Adopting tenancy does not retroactively assign those rows to a tenant — an operator must deliberately decide, per existing `persistence_id`, which tenant (if any) it now belongs to, and either keep serving it under `Unscoped()` or re-key it under a chosen tenant `Scope`.
+
+  **`migration.TenantAdopter` is that migration tool.** It copies an aggregate's events, snapshot, and durable state from a source scope (normally `Unscoped()`) into a per-aggregate target tenant scope:
+
+  ```go
+  adopter, err := migration.NewTenantAdopter(
+      func(ctx context.Context, persistenceID string) (tenancy.TenantID, bool, error) {
+          // Business decision only the operator holds — the framework
+          // cannot infer which tenant an existing aggregate belongs to.
+          return lookupTenantFor(persistenceID)
+      },
+      migration.WithEventsStore(eventsStore),
+      migration.WithSnapshotStore(snapshotStore),
+      migration.WithStateStore(stateStore),
+      migration.WithWriteEnabled(), // required opt-in; the default is dry-run
+      migration.WithAdoptionFence(fence), // required whenever writes are enabled
+  )
+  report, err := adopter.Run(ctx)
+  ```
+
+  The `TenantAssignment` function is a required constructor argument, never an option, and never defaulted: assigning an existing aggregate to a tenant is a business decision the framework has no way to make on its own. `TenantAdopter` defaults to **dry-run** — it plans and reports but writes nothing until `WithWriteEnabled` is passed — and it **never deletes source data** unless `WithSourceDeletion` is also set, and even then only after that aggregate's copy has been written to the target scope, read back, and matched **byte-for-byte against the exact record this tool intended to write** — the source record with `tenant_metadata` replaced by the target tenant's plus its adoption receipt, compared via `proto.Equal`; for events, matched by `SequenceNumber` rather than by slice position or count. A failed verification never deletes. (A count-only, sequence-number-only, or version-number-only check — an earlier version of this text described exactly that — cannot detect a truncated write or a write that dropped the payload, `tenant_metadata`, or the encryption envelope while still matching on count/sequence/version alone; the full-record match added in the same change that fixed the `PersistenceIDs` pagination issue below closes that gap.) Every write into the target scope uses `persistence.ExpectGenesis()` (events, durable state) or a target pre-read (snapshots, which have no write precondition in the SPI), so an existing target record is never silently overwritten. It is reported as `already_present` only when it is proven to be this adoption, and otherwise fails closed with the aggregate named in the report; tenant ownership or existence alone is never enough. While the source still exists, proof is exact comparison: an events target must contain every source event (`proto.Equal`, by `SequenceNumber`) and may only append later events, and a snapshot or durable-state target must be the identical record at the same position — a later snapshot or state proves nothing, because a single latest record keeps no lineage. Once `WithSourceDeletion` removed the source, proof is the **adoption receipt** every adopted record carries in its `tenant_metadata` under `ego.adoption.receipt` (`v1:` plus a SHA-256 over the source scope and the record's deterministic protobuf encoding; an event's receipt also records, under the digest, the sequence of the adopted event before it — `0` for the first — so the adopted events form a chain), which tenant-bound actors never write. The chain lets a re-run accept a legitimately sparse sequence while still detecting a missing first or middle adopted event, or an altered link; it cannot detect a missing last adopted event, since no later receipt points back at it. A re-run right after a deleting run is therefore a no-op; a re-run after the actor has rewritten a snapshot or durable state fails closed, since that record carries no receipt. An id held by neither the source nor the target still fails as missing. The report's per-aggregate counters are not mutually exclusive: record kinds run in order (events, snapshot, durable state), so an aggregate that fails on a later kind still counts toward `Copied` and `SourceDeleted` for an earlier kind that already wrote its target or deleted its source — those side effects are irreversible and never hidden — while `Verified` counts only aggregates that completed without a failure. **A write-enabled run requires a `migration.AdoptionFence`** (`WithAdoptionFence`, otherwise `NewTenantAdopter` returns `migration.ErrAdoptionFenceRequired`). The application supplies it, because only the application knows how its writers are coordinated: while `Acquire(ctx, scope, persistenceID)` is held, no other writer may create, modify, or delete any record of that aggregate in that scope. For every aggregate the run acquires it for the source and the target scope — in a fixed order (Unscoped first, then tenant scopes by id), before its first read of the aggregate — and holds both through the target check, the write, the read-back, and any source deletion, releasing them on every exit path including an error or a panic. This is what makes adoption safe against concurrent writers: the snapshot SPI has no write precondition, so without it another writer could create a target snapshot between the adopter's existence check and its write and have it overwritten; and the SPI offers no atomic read-verify-delete for `WithSourceDeletion`. (Events and durable state are already protected on the target by `ExpectGenesis`.) Under the fence, deletion re-reads the source and deletes only if it is still exactly the verified records — a newer record, or one rewritten at the same sequence number, blocks it — and afterwards requires the source to hold nothing for that aggregate: a newer record, or one not removed or recreated at the same or a lower sequence, reports the aggregate as failed, never `source_deleted`. `WithSourceDeletion` also deletes the source of a target an earlier run already adopted, once that target is proven exact. A target equal to the source scope is rejected. `WithScanPageSize(0)` is rejected with `migration.ErrInvalidScanPageSize` instead of silently scanning nothing, and an invalid (zero-value) `WithSourceScope` with `persistence.ErrInvalidScope`, both at construction before any store is touched. Every copied record's `tenant_metadata` is stamped via `tenancy.MarshalMetadata` of a `tenancy.TenantContext` built for the target tenant — the same way `EventSourcedActor`/`DurableStateActor` stamp it — which matters because T4 (above) turned recovered `tenant_metadata` into a cross-check against the actor's spawn-bound tenant: a copy with missing or stale `tenant_metadata` would otherwise recover successfully into the wrong scope and then fail every subsequent tenant-bound recovery.
+
+  **Durable-state enumeration limitation:** `persistence.EventsStore.PersistenceIDs` can enumerate a scope's ids, but neither `persistence.SnapshotStore` nor `persistence.StateStore` has an equivalent method. A durable-state-only or snapshot-only deployment (no events store configured) cannot be discovered automatically — the operator must supply the ids explicitly via `migration.WithPersistenceIDs`. Separately, `persistence.StateStore` has no delete method at all in the SPI, so `WithSourceDeletion` can never remove a durable-state source copy, regardless of the option. Both are gaps in today's persistence SPI, documented rather than papered over with an invented API.
+
+  **`persistence/conformance` is the acceptance test.** An adapter author wires it into their own test package:
+
+  ```go
+  func TestPostgresEventsStoreConformance(t *testing.T) {
+      conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
+          return newPostgresEventsStore(t) // a fresh, empty store per subtest
+      })
+  }
+  ```
+
+  `conformance.RunStateStoreConformance` and `conformance.RunSnapshotStoreConformance` cover the other two interfaces the same way (see `testkit/conformance_test.go` for the exact wiring against this repo's own stores). Passing the applicable suites is the evidence of EGO-TENANT-003 compliance.
+
+  **Known limitation:** a GoAkt actor's name is still the caller-supplied `entityID`/`sagaID`, not tenant-qualified, so two tenants that happen to use the same entity id contend for one actor. This is fail-closed and leak-free — the actor binds to whichever tenant's spawn wins the race, the other tenant's spawn fails with `ego.ErrSpawnTenantMismatch` (a same-tenant re-spawn stays an idempotent success; a binding the engine cannot read back — e.g. the node owning a remote actor did not answer — fails closed with `ego.ErrSpawnTenantUnverified`, which asserts no conflict and is safe to retry), and every command from the other tenant is rejected before any store is ever touched — but the losing tenant simply cannot use that entity id until a follow-up gives actors tenant-qualified identity.
+
+  **`Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` bind a spawned actor to a tenant via a new `ego.WithTenant(id tenancy.TenantID)` spawn option, not by resolving one.** A `tenancy.TenantResolver` MUST be invoked exactly once, at the command trust boundary (`Engine.Dispatch`/`SendCommand`, `Engine.SagaStatus`, `Engine.EraseEntity`) — never at spawn. An earlier draft of this change called `Resolve` at spawn too, which CI caught as a violation of that rule (`TestSendCommandResolverSwapIdenticalSequence` observed the resolver invoked twice for one spawn-plus-command sequence). The application now declares which tenant an entity/durable-state entity/saga belongs to explicitly, with `ego.WithTenant`, at the same call that spawns it:
+
+  ```go
+  err := engine.Entity(ctx, behavior, ego.WithTenant(tenancy.TenantID("acme")))
+  ```
+
+  `tenancy.WithSingleTenant`'s resolver additionally implements a small new capability interface, `tenancy.FixedTenantResolver` (`FixedTenant() (TenantID, bool)`), so a single-tenant deployment still needs no `WithTenant` at all — the engine reads the resolver's one fixed tenant instead, with no `Resolve` call. When tenancy is active, the registered resolver exposes no fixed tenant, and the caller passed no `WithTenant`, the spawn fails closed with the new `ErrSpawnTenantUndetermined` rather than silently falling back to `persistence.Unscoped()`. `Engine.Saga` gained a trailing `opts ...SpawnOption` parameter (additive, not breaking) solely to carry `WithTenant`; every other spawn option has no effect on a saga. Legacy mode (no resolver registered at all) is unchanged: no `WithTenant` is required and every store call still carries `persistence.Unscoped()`.
+
 ### 🐛 Bug Fixes
 
 - **`migration.WithLogger(nil)` no longer panics.** The migrator stored whatever the option supplied, so a nil — or a typed-nil such as `(*myLogger)(nil)` — replaced the default and the first log call inside `Run` dereferenced it. `migration.New` now resolves the logger after applying every option, so a nil or typed-nil logger falls back to `ego.DefaultLogger()`, the same semantics the engine already applied to `ego.WithLogger`. The `ego.ResolveLogger` helper exposes that single rule to packages outside the root instead of each one re-implementing typed-nil detection.
+
+- **`persistence.EventsStore.PersistenceIDs` pagination no longer silently skips one id at every page boundary.** `testkit/eventstore.go`'s `EventStore.PersistenceIDs` returned `keys[endIndex]` — the first key NOT yet returned — as `nextPageToken`, while the following call resumed strictly AFTER that same token (`key > pageToken`). Together, the key handed back as the token was never itself returned by any page: at the default adopter page size of 500, the 501st, 1002nd, … persistence id was dropped from every enumeration. This predates this change (the identical code is on upstream `main`), but became a real data-loss risk here because `migration.TenantAdopter.collectPersistenceIDs` drives the tenant-adoption scan off this exact enumeration — a run could report success while leaving some aggregates unadopted. Fixed by making `nextPageToken` the last key actually RETURNED on the page (a cursor over what the caller has consumed) rather than the first key held back for later; the `>` comparison on the following page is unchanged, so the two now agree. `persistence.EventsStore.PersistenceIDs`'s doc comment now states the pagination contract normatively (opaque token, no skip, no duplicate, empty token means done) for every implementation, in this repo or external, and `persistence/conformance`'s `Enumeration` group gained `PersistenceIDsPaginationCoversEveryIDExactlyOnce`, which forces several pages at a small page size and asserts exact, duplicate-free coverage — so this defect class is now pinned for every conforming adapter, not just this repo's in-memory store.
 
 ### ⬆️ Dependencies
 

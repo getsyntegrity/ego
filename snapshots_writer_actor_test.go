@@ -40,6 +40,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/pause"
 	mockencryption "github.com/pablogore/ego/v4/mocks/encryption"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
+	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -82,12 +83,12 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
 
-		latest, err := snapshotStore.GetLatestSnapshot(ctx, "entity-1")
+		latest, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 10, latest.GetSequenceNumber())
@@ -140,12 +141,12 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
 
-		latest, err := snapshotStore.GetLatestSnapshot(ctx, "entity-1")
+		latest, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-1")
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.EqualValues(t, 5, latest.GetSequenceNumber())
@@ -171,7 +172,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 
 		eventsStoreMock := new(mocks.EventsStore)
 		eventsStoreMock.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		eventsStoreMock.EXPECT().DeleteEvents(mock.Anything, "entity-1", uint64(10)).Return(nil)
+		eventsStoreMock.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -205,8 +206,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		}
 
 		err = goakt.Tell(ctx, snapshotPID, &persistSnapshotRequest{
+			scope:    persistence.Unscoped(),
 			snapshot: snapshot,
 			retentionReq: &applyRetentionRequest{
+				scope:                  persistence.Unscoped(),
 				persistenceID:          "entity-1",
 				eventsCounter:          10,
 				snapshotInterval:       5,
@@ -236,7 +239,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(assert.AnError)
+		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(assert.AnError)
 
 		eventsStoreMock := new(mocks.EventsStore)
 		eventsStoreMock.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
@@ -273,8 +276,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		}
 
 		err = goakt.Tell(ctx, snapshotPID, &persistSnapshotRequest{
+			scope:    persistence.Unscoped(),
 			snapshot: snapshot,
 			retentionReq: &applyRetentionRequest{
+				scope:                  persistence.Unscoped(),
 				persistenceID:          "entity-1",
 				eventsCounter:          10,
 				snapshotInterval:       5,
@@ -304,7 +309,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 
 		snapshotStore := new(mocks.SnapshotStore)
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, mock.Anything).Return(assert.AnError)
+		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
 			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
@@ -333,7 +338,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(2 * time.Second)
@@ -387,7 +392,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)
@@ -395,7 +400,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		assert.True(t, pid.IsRunning())
 
 		// verify no snapshot was written since encryption failed
-		latest, err := snapshotStore.GetLatestSnapshot(ctx, "entity-1")
+		latest, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-1")
 		require.NoError(t, err)
 		assert.Nil(t, latest)
 
@@ -439,7 +444,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			Timestamp:      time.Now().Unix(),
 		}
 
-		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot})
+		err = goakt.Tell(ctx, pid, &persistSnapshotRequest{snapshot: snapshot, scope: persistence.Unscoped()})
 		require.NoError(t, err)
 
 		pause.For(time.Second)

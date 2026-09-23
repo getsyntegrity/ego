@@ -427,6 +427,114 @@ func (*GetStateCommand) Descriptor() ([]byte, []int) {
 	return file_ego_ego_proto_rawDescGZIP(), []int{5}
 }
 
+// TenantBindingQuery is an engine-internal control message, never a
+// command: Engine.Entity, DurableStateEntity, and Saga send it to the actor
+// a tenant-aware spawn returned (local or on another node) to learn whether
+// that actor is bound to tenant_id. The actor answers from its own spawn
+// binding without running business behavior, resolving a tenant, or
+// touching a store. Engine.Dispatch rejects it as a payload.
+type TenantBindingQuery struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is the tenant the spawn declared.
+	TenantId      string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantBindingQuery) Reset() {
+	*x = TenantBindingQuery{}
+	mi := &file_ego_ego_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantBindingQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantBindingQuery) ProtoMessage() {}
+
+func (x *TenantBindingQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_ego_ego_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantBindingQuery.ProtoReflect.Descriptor instead.
+func (*TenantBindingQuery) Descriptor() ([]byte, []int) {
+	return file_ego_ego_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TenantBindingQuery) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+// TenantBindingReply answers a TenantBindingQuery. It never discloses which
+// tenant the actor is bound to, only whether it is the queried one.
+type TenantBindingReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_aware is true when the actor runs in tenant-aware mode and holds
+	// a tenant binding.
+	TenantAware bool `protobuf:"varint,1,opt,name=tenant_aware,json=tenantAware,proto3" json:"tenant_aware,omitempty"`
+	// matches is true when that binding is exactly the queried tenant.
+	Matches       bool `protobuf:"varint,2,opt,name=matches,proto3" json:"matches,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantBindingReply) Reset() {
+	*x = TenantBindingReply{}
+	mi := &file_ego_ego_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantBindingReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantBindingReply) ProtoMessage() {}
+
+func (x *TenantBindingReply) ProtoReflect() protoreflect.Message {
+	mi := &file_ego_ego_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantBindingReply.ProtoReflect.Descriptor instead.
+func (*TenantBindingReply) Descriptor() ([]byte, []int) {
+	return file_ego_ego_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TenantBindingReply) GetTenantAware() bool {
+	if x != nil {
+		return x.TenantAware
+	}
+	return false
+}
+
+func (x *TenantBindingReply) GetMatches() bool {
+	if x != nil {
+		return x.Matches
+	}
+	return false
+}
+
 // Offset defines the projection offset
 type Offset struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -444,7 +552,7 @@ type Offset struct {
 
 func (x *Offset) Reset() {
 	*x = Offset{}
-	mi := &file_ego_ego_proto_msgTypes[6]
+	mi := &file_ego_ego_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -456,7 +564,7 @@ func (x *Offset) String() string {
 func (*Offset) ProtoMessage() {}
 
 func (x *Offset) ProtoReflect() protoreflect.Message {
-	mi := &file_ego_ego_proto_msgTypes[6]
+	mi := &file_ego_ego_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +577,7 @@ func (x *Offset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Offset.ProtoReflect.Descriptor instead.
 func (*Offset) Descriptor() ([]byte, []int) {
-	return file_ego_ego_proto_rawDescGZIP(), []int{6}
+	return file_ego_ego_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Offset) GetShardNumber() uint64 {
@@ -513,7 +621,7 @@ type ProjectionId struct {
 
 func (x *ProjectionId) Reset() {
 	*x = ProjectionId{}
-	mi := &file_ego_ego_proto_msgTypes[7]
+	mi := &file_ego_ego_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -525,7 +633,7 @@ func (x *ProjectionId) String() string {
 func (*ProjectionId) ProtoMessage() {}
 
 func (x *ProjectionId) ProtoReflect() protoreflect.Message {
-	mi := &file_ego_ego_proto_msgTypes[7]
+	mi := &file_ego_ego_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -538,7 +646,7 @@ func (x *ProjectionId) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectionId.ProtoReflect.Descriptor instead.
 func (*ProjectionId) Descriptor() ([]byte, []int) {
-	return file_ego_ego_proto_rawDescGZIP(), []int{7}
+	return file_ego_ego_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ProjectionId) GetProjectionName() string {
@@ -583,7 +691,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_ego_ego_proto_msgTypes[8]
+	mi := &file_ego_ego_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -595,7 +703,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_ego_ego_proto_msgTypes[8]
+	mi := &file_ego_ego_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -608,7 +716,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_ego_ego_proto_rawDescGZIP(), []int{8}
+	return file_ego_ego_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Snapshot) GetPersistenceId() string {
@@ -684,7 +792,7 @@ type DurableState struct {
 
 func (x *DurableState) Reset() {
 	*x = DurableState{}
-	mi := &file_ego_ego_proto_msgTypes[9]
+	mi := &file_ego_ego_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +804,7 @@ func (x *DurableState) String() string {
 func (*DurableState) ProtoMessage() {}
 
 func (x *DurableState) ProtoReflect() protoreflect.Message {
-	mi := &file_ego_ego_proto_msgTypes[9]
+	mi := &file_ego_ego_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +817,7 @@ func (x *DurableState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DurableState.ProtoReflect.Descriptor instead.
 func (*DurableState) Descriptor() ([]byte, []int) {
-	return file_ego_ego_proto_rawDescGZIP(), []int{9}
+	return file_ego_ego_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DurableState) GetPersistenceId() string {
@@ -790,7 +898,12 @@ const file_ego_ego_proto_rawDesc = "" +
 	"ErrorReply\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"\t\n" +
 	"\aNoReply\"\x11\n" +
-	"\x0fGetStateCommand\"\x88\x01\n" +
+	"\x0fGetStateCommand\"1\n" +
+	"\x12TenantBindingQuery\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"Q\n" +
+	"\x12TenantBindingReply\x12!\n" +
+	"\ftenant_aware\x18\x01 \x01(\bR\vtenantAware\x12\x18\n" +
+	"\amatches\x18\x02 \x01(\bR\amatches\"\x88\x01\n" +
 	"\x06Offset\x12!\n" +
 	"\fshard_number\x18\x01 \x01(\x04R\vshardNumber\x12'\n" +
 	"\x0fprojection_name\x18\x02 \x01(\tR\x0eprojectionName\x12\x14\n" +
@@ -834,33 +947,35 @@ func file_ego_ego_proto_rawDescGZIP() []byte {
 	return file_ego_ego_proto_rawDescData
 }
 
-var file_ego_ego_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_ego_ego_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_ego_ego_proto_goTypes = []any{
-	(*Event)(nil),           // 0: egopb.Event
-	(*CommandReply)(nil),    // 1: egopb.CommandReply
-	(*StateReply)(nil),      // 2: egopb.StateReply
-	(*ErrorReply)(nil),      // 3: egopb.ErrorReply
-	(*NoReply)(nil),         // 4: egopb.NoReply
-	(*GetStateCommand)(nil), // 5: egopb.GetStateCommand
-	(*Offset)(nil),          // 6: egopb.Offset
-	(*ProjectionId)(nil),    // 7: egopb.ProjectionId
-	(*Snapshot)(nil),        // 8: egopb.Snapshot
-	(*DurableState)(nil),    // 9: egopb.DurableState
-	nil,                     // 10: egopb.Event.TenantMetadataEntry
-	nil,                     // 11: egopb.Snapshot.TenantMetadataEntry
-	nil,                     // 12: egopb.DurableState.TenantMetadataEntry
-	(*anypb.Any)(nil),       // 13: google.protobuf.Any
+	(*Event)(nil),              // 0: egopb.Event
+	(*CommandReply)(nil),       // 1: egopb.CommandReply
+	(*StateReply)(nil),         // 2: egopb.StateReply
+	(*ErrorReply)(nil),         // 3: egopb.ErrorReply
+	(*NoReply)(nil),            // 4: egopb.NoReply
+	(*GetStateCommand)(nil),    // 5: egopb.GetStateCommand
+	(*TenantBindingQuery)(nil), // 6: egopb.TenantBindingQuery
+	(*TenantBindingReply)(nil), // 7: egopb.TenantBindingReply
+	(*Offset)(nil),             // 8: egopb.Offset
+	(*ProjectionId)(nil),       // 9: egopb.ProjectionId
+	(*Snapshot)(nil),           // 10: egopb.Snapshot
+	(*DurableState)(nil),       // 11: egopb.DurableState
+	nil,                        // 12: egopb.Event.TenantMetadataEntry
+	nil,                        // 13: egopb.Snapshot.TenantMetadataEntry
+	nil,                        // 14: egopb.DurableState.TenantMetadataEntry
+	(*anypb.Any)(nil),          // 15: google.protobuf.Any
 }
 var file_ego_ego_proto_depIdxs = []int32{
-	13, // 0: egopb.Event.event:type_name -> google.protobuf.Any
-	10, // 1: egopb.Event.tenant_metadata:type_name -> egopb.Event.TenantMetadataEntry
+	15, // 0: egopb.Event.event:type_name -> google.protobuf.Any
+	12, // 1: egopb.Event.tenant_metadata:type_name -> egopb.Event.TenantMetadataEntry
 	2,  // 2: egopb.CommandReply.state_reply:type_name -> egopb.StateReply
 	3,  // 3: egopb.CommandReply.error_reply:type_name -> egopb.ErrorReply
-	13, // 4: egopb.StateReply.state:type_name -> google.protobuf.Any
-	13, // 5: egopb.Snapshot.state:type_name -> google.protobuf.Any
-	11, // 6: egopb.Snapshot.tenant_metadata:type_name -> egopb.Snapshot.TenantMetadataEntry
-	13, // 7: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
-	12, // 8: egopb.DurableState.tenant_metadata:type_name -> egopb.DurableState.TenantMetadataEntry
+	15, // 4: egopb.StateReply.state:type_name -> google.protobuf.Any
+	15, // 5: egopb.Snapshot.state:type_name -> google.protobuf.Any
+	13, // 6: egopb.Snapshot.tenant_metadata:type_name -> egopb.Snapshot.TenantMetadataEntry
+	15, // 7: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
+	14, // 8: egopb.DurableState.tenant_metadata:type_name -> egopb.DurableState.TenantMetadataEntry
 	9,  // [9:9] is the sub-list for method output_type
 	9,  // [9:9] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
@@ -883,7 +998,7 @@ func file_ego_ego_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ego_ego_proto_rawDesc), len(file_ego_ego_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

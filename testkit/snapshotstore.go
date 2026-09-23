@@ -33,8 +33,15 @@ import (
 	"github.com/pablogore/ego/v4/persistence"
 )
 
-// SnapshotKey is a composite key for snapshot storage
+// SnapshotKey is a composite key for snapshot storage. Scope and
+// PersistenceID together form the record's effective identity (see
+// persistence.Scope's doc comment); SequenceNumber distinguishes multiple
+// snapshots retained for the same (Scope, PersistenceID). This struct is
+// used directly as the key of SnapshotStore's internal map — never a
+// Scope.String()-derived or concatenated string — since persistence.Scope
+// is a comparable value type.
 type SnapshotKey struct {
+	Scope          persistence.Scope
 	PersistenceID  string
 	SequenceNumber uint64
 }
@@ -82,8 +89,14 @@ func (x *SnapshotStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (x *SnapshotStore) WriteSnapshot(_ context.Context, snapshot *egopb.Snapshot) error {
+// WriteSnapshot persists a snapshot for a given (scope, persistenceID). An invalid scope is
+// rejected with ErrInvalidScope before anything is written.
+func (x *SnapshotStore) WriteSnapshot(_ context.Context, scope persistence.Scope, snapshot *egopb.Snapshot) error {
+	if !scope.Valid() {
+		return persistence.ErrInvalidScope
+	}
 	key := SnapshotKey{
+		Scope:          scope,
 		PersistenceID:  snapshot.GetPersistenceId(),
 		SequenceNumber: snapshot.GetSequenceNumber(),
 	}
@@ -91,11 +104,17 @@ func (x *SnapshotStore) WriteSnapshot(_ context.Context, snapshot *egopb.Snapsho
 	return nil
 }
 
-func (x *SnapshotStore) GetLatestSnapshot(_ context.Context, persistenceID string) (*egopb.Snapshot, error) {
+// GetLatestSnapshot fetches the latest snapshot for (scope, persistenceID). An invalid scope is
+// rejected with ErrInvalidScope before anything is read, and this never returns a record that
+// belongs to another scope.
+func (x *SnapshotStore) GetLatestSnapshot(_ context.Context, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error) {
+	if !scope.Valid() {
+		return nil, persistence.ErrInvalidScope
+	}
 	var snapshots []*egopb.Snapshot
 	x.db.Range(func(key any, value any) bool {
 		k := key.(SnapshotKey)
-		if k.PersistenceID == persistenceID {
+		if k.Scope.Equal(scope) && k.PersistenceID == persistenceID {
 			snapshots = append(snapshots, value.(*egopb.Snapshot))
 		}
 		return true
@@ -112,10 +131,16 @@ func (x *SnapshotStore) GetLatestSnapshot(_ context.Context, persistenceID strin
 	return snapshots[0], nil
 }
 
-func (x *SnapshotStore) DeleteSnapshots(_ context.Context, persistenceID string, toSequenceNumber uint64) error {
+// DeleteSnapshots deletes all snapshots for (scope, persistenceID) up to toSequenceNumber
+// (inclusive). An invalid scope is rejected with ErrInvalidScope before anything is deleted, and
+// this never affects a record in another scope.
+func (x *SnapshotStore) DeleteSnapshots(_ context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	if !scope.Valid() {
+		return persistence.ErrInvalidScope
+	}
 	x.db.Range(func(key interface{}, _ any) bool {
 		k := key.(SnapshotKey)
-		if k.PersistenceID == persistenceID && k.SequenceNumber <= toSequenceNumber {
+		if k.Scope.Equal(scope) && k.PersistenceID == persistenceID && k.SequenceNumber <= toSequenceNumber {
 			x.db.Delete(key)
 		}
 		return true

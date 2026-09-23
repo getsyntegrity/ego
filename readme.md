@@ -37,6 +37,7 @@ eGo deliberately does not hide the actor runtime. Your application creates and o
 - [Sagas and process managers](#sagas-and-process-managers)
 - [Clustering](#clustering)
 - [Persistence](#persistence)
+    - [Tenant scoping](#tenant-scoping)
 - [Encryption and schema evolution](#encryption-and-schema-evolution)
 - [Observability](#observability)
 - [Logging](#logging)
@@ -503,6 +504,14 @@ import (
 ```
 
 Applications own store connectivity: connect stores before starting the actor system and disconnect them after the engine and actor system have stopped.
+
+### Tenant scoping
+
+Every record-addressing method on `EventsStore`, `StateStore`, and `SnapshotStore` takes a `persistence.Scope`: a persisted record's effective identity is the pair `(Scope, persistence_id)`, never `persistence_id` alone. `persistence.Unscoped()` is the scope every call carries when no [`tenancy.TenantResolver`](./tenancy/resolver.go) is configured, so a deployment that never activates tenancy is unaffected. Registering one with `ego.WithTenantResolver` makes the engine resolve the caller's tenant and attach it to `ctx` at the command trust boundary (`SendCommand`/`Dispatch`, `SagaStatus`, `EraseEntity`) — a `TenantResolver` is invoked exactly once per call, never at spawn. Spawning an entity, durable-state entity, or saga instead declares its tenant with `ego.WithTenant(id)`, so the application states which tenant an aggregate belongs to rather than the engine inferring it; the built-in `tenancy.WithSingleTenant(id)` is the one exception, since a deployment with exactly one tenant can expose it as a fixed identity and needs no `WithTenant` or other per-call plumbing at all.
+
+A custom store adapter must key its records on `(Scope, persistence_id)` structurally, e.g. a real tenant column in a SQL primary key and every `WHERE` clause — never by concatenating `Scope.String()`, which is a diagnostic rendering only. [`persistence/conformance`](./persistence/conformance) is the isolation acceptance suite: wire `conformance.RunEventsStoreConformance` (and its `RunStateStoreConformance`/`RunSnapshotStoreConformance` equivalents) into the adapter's own tests, the way [`testkit/conformance_test.go`](./testkit/conformance_test.go) does for the in-repo stores.
+
+Adopting tenancy on a deployment that already has data written under `Unscoped()`? [`migration.TenantAdopter`](./migration/tenant_adoption.go) copies an aggregate's events, snapshot, and durable state into a per-aggregate target tenant scope, stamping `tenant_metadata` the way the actors do. It defaults to dry-run and never deletes source data without an explicit, verified opt-in. See the `[Unreleased]` entry in [CHANGELOG.md](./CHANGELOG.md) for the full breaking-change and migration details.
 
 ## Encryption and schema evolution
 

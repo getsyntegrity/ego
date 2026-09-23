@@ -69,17 +69,17 @@ func (_c *EventsStore_Connect_Call) RunAndReturn(run func(context.Context) error
 	return _c
 }
 
-// DeleteEvents provides a mock function with given fields: ctx, persistenceID, toSequenceNumber
-func (_m *EventsStore) DeleteEvents(ctx context.Context, persistenceID string, toSequenceNumber uint64) error {
-	ret := _m.Called(ctx, persistenceID, toSequenceNumber)
+// DeleteEvents provides a mock function with given fields: ctx, scope, persistenceID, toSequenceNumber
+func (_m *EventsStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	ret := _m.Called(ctx, scope, persistenceID, toSequenceNumber)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteEvents")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, uint64) error); ok {
-		r0 = rf(ctx, persistenceID, toSequenceNumber)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string, uint64) error); ok {
+		r0 = rf(ctx, scope, persistenceID, toSequenceNumber)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -94,15 +94,16 @@ type EventsStore_DeleteEvents_Call struct {
 
 // DeleteEvents is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - persistenceID string
 //   - toSequenceNumber uint64
-func (_e *EventsStore_Expecter) DeleteEvents(ctx interface{}, persistenceID interface{}, toSequenceNumber interface{}) *EventsStore_DeleteEvents_Call {
-	return &EventsStore_DeleteEvents_Call{Call: _e.mock.On("DeleteEvents", ctx, persistenceID, toSequenceNumber)}
+func (_e *EventsStore_Expecter) DeleteEvents(ctx interface{}, scope interface{}, persistenceID interface{}, toSequenceNumber interface{}) *EventsStore_DeleteEvents_Call {
+	return &EventsStore_DeleteEvents_Call{Call: _e.mock.On("DeleteEvents", ctx, scope, persistenceID, toSequenceNumber)}
 }
 
-func (_c *EventsStore_DeleteEvents_Call) Run(run func(ctx context.Context, persistenceID string, toSequenceNumber uint64)) *EventsStore_DeleteEvents_Call {
+func (_c *EventsStore_DeleteEvents_Call) Run(run func(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64)) *EventsStore_DeleteEvents_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(uint64))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(string), args[3].(uint64))
 	})
 	return _c
 }
@@ -112,7 +113,7 @@ func (_c *EventsStore_DeleteEvents_Call) Return(_a0 error) *EventsStore_DeleteEv
 	return _c
 }
 
-func (_c *EventsStore_DeleteEvents_Call) RunAndReturn(run func(context.Context, string, uint64) error) *EventsStore_DeleteEvents_Call {
+func (_c *EventsStore_DeleteEvents_Call) RunAndReturn(run func(context.Context, persistence.Scope, string, uint64) error) *EventsStore_DeleteEvents_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -163,9 +164,9 @@ func (_c *EventsStore_Disconnect_Call) RunAndReturn(run func(context.Context) er
 	return _c
 }
 
-// GetLatestEvent provides a mock function with given fields: ctx, persistenceID
-func (_m *EventsStore) GetLatestEvent(ctx context.Context, persistenceID string) (*egopb.Event, error) {
-	ret := _m.Called(ctx, persistenceID)
+// GetLatestEvent provides a mock function with given fields: ctx, scope, persistenceID
+func (_m *EventsStore) GetLatestEvent(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Event, error) {
+	ret := _m.Called(ctx, scope, persistenceID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLatestEvent")
@@ -173,19 +174,19 @@ func (_m *EventsStore) GetLatestEvent(ctx context.Context, persistenceID string)
 
 	var r0 *egopb.Event
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (*egopb.Event, error)); ok {
-		return rf(ctx, persistenceID)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string) (*egopb.Event, error)); ok {
+		return rf(ctx, scope, persistenceID)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) *egopb.Event); ok {
-		r0 = rf(ctx, persistenceID)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string) *egopb.Event); ok {
+		r0 = rf(ctx, scope, persistenceID)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*egopb.Event)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, persistenceID)
+	if rf, ok := ret.Get(1).(func(context.Context, persistence.Scope, string) error); ok {
+		r1 = rf(ctx, scope, persistenceID)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -200,14 +201,15 @@ type EventsStore_GetLatestEvent_Call struct {
 
 // GetLatestEvent is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - persistenceID string
-func (_e *EventsStore_Expecter) GetLatestEvent(ctx interface{}, persistenceID interface{}) *EventsStore_GetLatestEvent_Call {
-	return &EventsStore_GetLatestEvent_Call{Call: _e.mock.On("GetLatestEvent", ctx, persistenceID)}
+func (_e *EventsStore_Expecter) GetLatestEvent(ctx interface{}, scope interface{}, persistenceID interface{}) *EventsStore_GetLatestEvent_Call {
+	return &EventsStore_GetLatestEvent_Call{Call: _e.mock.On("GetLatestEvent", ctx, scope, persistenceID)}
 }
 
-func (_c *EventsStore_GetLatestEvent_Call) Run(run func(ctx context.Context, persistenceID string)) *EventsStore_GetLatestEvent_Call {
+func (_c *EventsStore_GetLatestEvent_Call) Run(run func(ctx context.Context, scope persistence.Scope, persistenceID string)) *EventsStore_GetLatestEvent_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(string))
 	})
 	return _c
 }
@@ -217,7 +219,7 @@ func (_c *EventsStore_GetLatestEvent_Call) Return(_a0 *egopb.Event, _a1 error) *
 	return _c
 }
 
-func (_c *EventsStore_GetLatestEvent_Call) RunAndReturn(run func(context.Context, string) (*egopb.Event, error)) *EventsStore_GetLatestEvent_Call {
+func (_c *EventsStore_GetLatestEvent_Call) RunAndReturn(run func(context.Context, persistence.Scope, string) (*egopb.Event, error)) *EventsStore_GetLatestEvent_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -290,9 +292,9 @@ func (_c *EventsStore_GetShardEvents_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
-// PersistenceIDs provides a mock function with given fields: ctx, pageSize, pageToken
-func (_m *EventsStore) PersistenceIDs(ctx context.Context, pageSize uint64, pageToken string) ([]string, string, error) {
-	ret := _m.Called(ctx, pageSize, pageToken)
+// PersistenceIDs provides a mock function with given fields: ctx, scope, pageSize, pageToken
+func (_m *EventsStore) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
+	ret := _m.Called(ctx, scope, pageSize, pageToken)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PersistenceIDs")
@@ -301,25 +303,25 @@ func (_m *EventsStore) PersistenceIDs(ctx context.Context, pageSize uint64, page
 	var r0 []string
 	var r1 string
 	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, uint64, string) ([]string, string, error)); ok {
-		return rf(ctx, pageSize, pageToken)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, uint64, string) ([]string, string, error)); ok {
+		return rf(ctx, scope, pageSize, pageToken)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, uint64, string) []string); ok {
-		r0 = rf(ctx, pageSize, pageToken)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, uint64, string) []string); ok {
+		r0 = rf(ctx, scope, pageSize, pageToken)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]string)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, uint64, string) string); ok {
-		r1 = rf(ctx, pageSize, pageToken)
+	if rf, ok := ret.Get(1).(func(context.Context, persistence.Scope, uint64, string) string); ok {
+		r1 = rf(ctx, scope, pageSize, pageToken)
 	} else {
 		r1 = ret.Get(1).(string)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, uint64, string) error); ok {
-		r2 = rf(ctx, pageSize, pageToken)
+	if rf, ok := ret.Get(2).(func(context.Context, persistence.Scope, uint64, string) error); ok {
+		r2 = rf(ctx, scope, pageSize, pageToken)
 	} else {
 		r2 = ret.Error(2)
 	}
@@ -334,15 +336,16 @@ type EventsStore_PersistenceIDs_Call struct {
 
 // PersistenceIDs is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - pageSize uint64
 //   - pageToken string
-func (_e *EventsStore_Expecter) PersistenceIDs(ctx interface{}, pageSize interface{}, pageToken interface{}) *EventsStore_PersistenceIDs_Call {
-	return &EventsStore_PersistenceIDs_Call{Call: _e.mock.On("PersistenceIDs", ctx, pageSize, pageToken)}
+func (_e *EventsStore_Expecter) PersistenceIDs(ctx interface{}, scope interface{}, pageSize interface{}, pageToken interface{}) *EventsStore_PersistenceIDs_Call {
+	return &EventsStore_PersistenceIDs_Call{Call: _e.mock.On("PersistenceIDs", ctx, scope, pageSize, pageToken)}
 }
 
-func (_c *EventsStore_PersistenceIDs_Call) Run(run func(ctx context.Context, pageSize uint64, pageToken string)) *EventsStore_PersistenceIDs_Call {
+func (_c *EventsStore_PersistenceIDs_Call) Run(run func(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string)) *EventsStore_PersistenceIDs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(uint64), args[2].(string))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(uint64), args[3].(string))
 	})
 	return _c
 }
@@ -352,7 +355,7 @@ func (_c *EventsStore_PersistenceIDs_Call) Return(persistenceIDs []string, nextP
 	return _c
 }
 
-func (_c *EventsStore_PersistenceIDs_Call) RunAndReturn(run func(context.Context, uint64, string) ([]string, string, error)) *EventsStore_PersistenceIDs_Call {
+func (_c *EventsStore_PersistenceIDs_Call) RunAndReturn(run func(context.Context, persistence.Scope, uint64, string) ([]string, string, error)) *EventsStore_PersistenceIDs_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -403,9 +406,9 @@ func (_c *EventsStore_Ping_Call) RunAndReturn(run func(context.Context) error) *
 	return _c
 }
 
-// ReplayEvents provides a mock function with given fields: ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit
-func (_m *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, fromSequenceNumber uint64, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) {
-	ret := _m.Called(ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
+// ReplayEvents provides a mock function with given fields: ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit
+func (_m *EventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, fromSequenceNumber uint64, toSequenceNumber uint64, limit uint64) ([]*egopb.Event, error) {
+	ret := _m.Called(ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReplayEvents")
@@ -413,19 +416,19 @@ func (_m *EventsStore) ReplayEvents(ctx context.Context, persistenceID string, f
 
 	var r0 []*egopb.Event
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, uint64, uint64, uint64) ([]*egopb.Event, error)); ok {
-		return rf(ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string, uint64, uint64, uint64) ([]*egopb.Event, error)); ok {
+		return rf(ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, uint64, uint64, uint64) []*egopb.Event); ok {
-		r0 = rf(ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, string, uint64, uint64, uint64) []*egopb.Event); ok {
+		r0 = rf(ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*egopb.Event)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, uint64, uint64, uint64) error); ok {
-		r1 = rf(ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
+	if rf, ok := ret.Get(1).(func(context.Context, persistence.Scope, string, uint64, uint64, uint64) error); ok {
+		r1 = rf(ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -440,17 +443,18 @@ type EventsStore_ReplayEvents_Call struct {
 
 // ReplayEvents is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - persistenceID string
 //   - fromSequenceNumber uint64
 //   - toSequenceNumber uint64
 //   - limit uint64
-func (_e *EventsStore_Expecter) ReplayEvents(ctx interface{}, persistenceID interface{}, fromSequenceNumber interface{}, toSequenceNumber interface{}, limit interface{}) *EventsStore_ReplayEvents_Call {
-	return &EventsStore_ReplayEvents_Call{Call: _e.mock.On("ReplayEvents", ctx, persistenceID, fromSequenceNumber, toSequenceNumber, limit)}
+func (_e *EventsStore_Expecter) ReplayEvents(ctx interface{}, scope interface{}, persistenceID interface{}, fromSequenceNumber interface{}, toSequenceNumber interface{}, limit interface{}) *EventsStore_ReplayEvents_Call {
+	return &EventsStore_ReplayEvents_Call{Call: _e.mock.On("ReplayEvents", ctx, scope, persistenceID, fromSequenceNumber, toSequenceNumber, limit)}
 }
 
-func (_c *EventsStore_ReplayEvents_Call) Run(run func(ctx context.Context, persistenceID string, fromSequenceNumber uint64, toSequenceNumber uint64, limit uint64)) *EventsStore_ReplayEvents_Call {
+func (_c *EventsStore_ReplayEvents_Call) Run(run func(ctx context.Context, scope persistence.Scope, persistenceID string, fromSequenceNumber uint64, toSequenceNumber uint64, limit uint64)) *EventsStore_ReplayEvents_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(uint64), args[3].(uint64), args[4].(uint64))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].(string), args[3].(uint64), args[4].(uint64), args[5].(uint64))
 	})
 	return _c
 }
@@ -460,7 +464,7 @@ func (_c *EventsStore_ReplayEvents_Call) Return(_a0 []*egopb.Event, _a1 error) *
 	return _c
 }
 
-func (_c *EventsStore_ReplayEvents_Call) RunAndReturn(run func(context.Context, string, uint64, uint64, uint64) ([]*egopb.Event, error)) *EventsStore_ReplayEvents_Call {
+func (_c *EventsStore_ReplayEvents_Call) RunAndReturn(run func(context.Context, persistence.Scope, string, uint64, uint64, uint64) ([]*egopb.Event, error)) *EventsStore_ReplayEvents_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -523,17 +527,17 @@ func (_c *EventsStore_ShardOffsets_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
-// WriteEvents provides a mock function with given fields: ctx, events, precondition
-func (_m *EventsStore) WriteEvents(ctx context.Context, events []*egopb.Event, precondition persistence.WritePrecondition) error {
-	ret := _m.Called(ctx, events, precondition)
+// WriteEvents provides a mock function with given fields: ctx, scope, events, precondition
+func (_m *EventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+	ret := _m.Called(ctx, scope, events, precondition)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WriteEvents")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, []*egopb.Event, persistence.WritePrecondition) error); ok {
-		r0 = rf(ctx, events, precondition)
+	if rf, ok := ret.Get(0).(func(context.Context, persistence.Scope, []*egopb.Event, persistence.WritePrecondition) error); ok {
+		r0 = rf(ctx, scope, events, precondition)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -548,15 +552,16 @@ type EventsStore_WriteEvents_Call struct {
 
 // WriteEvents is a helper method to define mock.On call
 //   - ctx context.Context
+//   - scope persistence.Scope
 //   - events []*egopb.Event
 //   - precondition persistence.WritePrecondition
-func (_e *EventsStore_Expecter) WriteEvents(ctx interface{}, events interface{}, precondition interface{}) *EventsStore_WriteEvents_Call {
-	return &EventsStore_WriteEvents_Call{Call: _e.mock.On("WriteEvents", ctx, events, precondition)}
+func (_e *EventsStore_Expecter) WriteEvents(ctx interface{}, scope interface{}, events interface{}, precondition interface{}) *EventsStore_WriteEvents_Call {
+	return &EventsStore_WriteEvents_Call{Call: _e.mock.On("WriteEvents", ctx, scope, events, precondition)}
 }
 
-func (_c *EventsStore_WriteEvents_Call) Run(run func(ctx context.Context, events []*egopb.Event, precondition persistence.WritePrecondition)) *EventsStore_WriteEvents_Call {
+func (_c *EventsStore_WriteEvents_Call) Run(run func(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition)) *EventsStore_WriteEvents_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].([]*egopb.Event), args[2].(persistence.WritePrecondition))
+		run(args[0].(context.Context), args[1].(persistence.Scope), args[2].([]*egopb.Event), args[3].(persistence.WritePrecondition))
 	})
 	return _c
 }
@@ -566,7 +571,7 @@ func (_c *EventsStore_WriteEvents_Call) Return(_a0 error) *EventsStore_WriteEven
 	return _c
 }
 
-func (_c *EventsStore_WriteEvents_Call) RunAndReturn(run func(context.Context, []*egopb.Event, persistence.WritePrecondition) error) *EventsStore_WriteEvents_Call {
+func (_c *EventsStore_WriteEvents_Call) RunAndReturn(run func(context.Context, persistence.Scope, []*egopb.Event, persistence.WritePrecondition) error) *EventsStore_WriteEvents_Call {
 	_c.Call.Return(run)
 	return _c
 }

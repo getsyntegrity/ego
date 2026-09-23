@@ -88,6 +88,50 @@ var (
 	// Config than the one passed to NewEngine, or when cfg.GoaktOptions()
 	// was not applied at construction time.
 	ErrMissingRequiredExtensions = errors.New("actor system is missing required ego extensions")
+	// ErrSpawnTenantUndetermined is returned by Entity, DurableStateEntity,
+	// and Saga when tenancy is active (a tenancy.TenantResolver is
+	// registered via WithTenantResolver) but the engine cannot determine
+	// which tenant to bind the spawned actor to: the caller did not pass
+	// ego.WithTenant, and the registered resolver does not expose a fixed
+	// tenant via tenancy.FixedTenantResolver (TENANT-003 T4, corrected after
+	// CI caught a Resolve-Once, Propagate-After violation in an earlier
+	// design that called TenantResolver.Resolve at spawn — see
+	// openspec/specs/tenancy-core/spec.md). The engine never falls back to
+	// persistence.Unscoped() in this case: that would silently defeat the
+	// isolation TENANT-003 exists to enforce. The caller must either pass
+	// ego.WithTenant(id) at spawn, or register a resolver whose FixedTenant()
+	// reports one (as tenancy.WithSingleTenant's does).
+	ErrSpawnTenantUndetermined = errors.New("eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver")
+	// ErrSpawnTenantMismatch is returned by Entity, DurableStateEntity, and
+	// Saga in tenant-aware mode when the actor that holds the requested id is
+	// bound to a different tenant than the one this spawn declared (TENANT-003
+	// T4). Actor names are not tenant-qualified, so a second tenant cannot
+	// use an id that is already live for another tenant; the spawn fails
+	// visibly instead of returning the other tenant's actor as a success. The
+	// error also matches tenancy.ErrDenied and carries a *tenancy.Error.
+	// Re-spawning a live id under the SAME tenant stays an idempotent success.
+	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
+	// ErrSpawnTenantUnverified is returned by Entity, DurableStateEntity, and
+	// Saga in tenant-aware mode when the actor a spawn returned did not
+	// answer the engine's TenantBindingQuery — for a remote PID, the node that
+	// owns it did not reply in time — or answered that it holds no tenant
+	// binding. The spawn fails closed, but unlike ErrSpawnTenantMismatch it
+	// asserts no cross-tenant conflict; retrying the spawn is safe, since a
+	// same-tenant re-spawn is idempotent.
+	ErrSpawnTenantUnverified = errors.New("eGo: the spawned actor's tenant binding could not be verified")
+	// ErrNotACommand is returned by Dispatch and SendCommand when the payload
+	// is an engine-internal control message (egopb.TenantBindingQuery) rather
+	// than a command. Rejecting it keeps a caller from asking an actor
+	// whether it belongs to an arbitrary tenant.
+	ErrNotACommand = errors.New("eGo: payload is an engine-internal control message, not a command")
+	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
+	// tenancy is active (extensions.TenancyExtensionID is registered) but no
+	// valid extensions.EntityTenantScope dependency was injected at spawn
+	// (TENANT-003 T4). This is a fail-closed guard: a tenant-aware actor must
+	// never start without a bound persistence.Scope, since that is exactly
+	// the condition that would let it silently read or write Unscoped()
+	// records across tenants.
+	ErrEntityTenantScopeMissing = errors.New("eGo: tenant-aware actor spawned without a bound tenant scope")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
@@ -207,7 +251,7 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	// types live in internal/extensions and cannot be registered by
 	// application code; user behavior kinds come from WithEntityKinds.
 	dependencies := append(
-		[]extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig)},
+		[]extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig), new(extensions.EntityTenantScope)},
 		config.entityKinds...,
 	)
 	if err := actorSys.Inject(dependencies...); err != nil {
@@ -618,6 +662,19 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	_ = actorSystem.Inject(behavior)
 
 	config := newSpawnConfig(opts...)
+
+	// Tenant-aware mode: determine which tenant this entity belongs to and
+	// inject it as a per-spawn dependency the entity's PreStart binds into
+	// its persistence.Scope before it ever reads a store (TENANT-003 T4).
+	// The engine never calls TenantResolver.Resolve here — see
+	// spawnTenantScope's doc comment for why, and where Resolve is actually
+	// called instead. Legacy mode (no resolver registered) is byte-identical:
+	// nothing is injected.
+	tenantScope, tenantErr := engine.spawnTenantScope(config)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
 	sOptions := buildSpawnOptionsFromConfig(config)
 
 	entityConfig := extensions.NewEntityConfig(config.snapshotInterval)
@@ -631,10 +688,144 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	entityConfig.BatchThreshold = config.batchThreshold
 	entityConfig.BatchFlushWindow = config.batchFlushWindow
 	_ = actorSystem.Inject(entityConfig)
-	sOptions = append(sOptions, goakt.WithDependencies(behavior, entityConfig))
 
-	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
-	return err
+	deps := []extension.Dependency{behavior, entityConfig}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+	sOptions = append(sOptions, goakt.WithDependencies(deps...))
+
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
+	if err != nil {
+		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
+	}
+	return verifySpawnedTenant(ctx, pid, tenantScope)
+}
+
+// spawnTenantScope determines the per-spawn tenant dependency to inject for
+// a single entity/durable-state/saga spawn (TENANT-003 T4).
+//
+// It returns (nil, nil) in legacy mode (engine.tenantResolver == nil):
+// callers must inject nothing in that case, keeping spawn dependencies
+// byte-identical to pre-TENANT-003 behavior.
+//
+// This function deliberately never calls TenantResolver.Resolve. An earlier
+// design did, at spawn time, which CI caught as a violation of
+// Resolve-Once, Propagate-After (openspec/specs/tenancy-core/spec.md's
+// tenancy-core requirement): TestSendCommandResolverSwapIdenticalSequence
+// observed a resolver invoked twice (once at spawn, once at SendCommand)
+// for a single spawn-plus-command sequence. The corrected design resolves
+// the tenant exactly once, at the command trust boundary (Dispatch,
+// SagaStatus), and determines the spawn-time tenant from two sources that
+// require no Resolve call at all, in this order:
+//
+//  1. config.tenantID, set by the application via ego.WithTenant(id) — the
+//     application declares which tenant this entity/durable-state
+//     entity/saga belongs to, rather than the engine inferring it.
+//  2. the registered resolver's fixed tenant, when it implements
+//     tenancy.FixedTenantResolver and reports one. tenancy.WithSingleTenant
+//     always does, which is what lets a single-tenant deployment spawn
+//     entities without ever passing ego.WithTenant (acceptance criterion 6).
+//
+// If neither source yields a tenant, the spawn fails closed with
+// ErrSpawnTenantUndetermined: falling back to persistence.Unscoped() would
+// silently defeat the isolation TENANT-003 exists to enforce.
+func (engine *Engine) spawnTenantScope(config *spawnConfig) (*extensions.EntityTenantScope, error) {
+	if engine.tenantResolver == nil {
+		return nil, nil
+	}
+
+	if config.tenantID != "" {
+		return extensions.NewEntityTenantScope(string(config.tenantID)), nil
+	}
+
+	if fixed, ok := engine.tenantResolver.(tenancy.FixedTenantResolver); ok {
+		if tenantID, hasFixed := fixed.FixedTenant(); hasFixed {
+			return extensions.NewEntityTenantScope(string(tenantID)), nil
+		}
+	}
+
+	return nil, ErrSpawnTenantUndetermined
+}
+
+// spawnBindingQueryTimeout bounds how long verifySpawnedTenant waits for the
+// returned actor to answer its TenantBindingQuery.
+const spawnBindingQueryTimeout = 5 * time.Second
+
+// verifySpawnedTenant proves that the actor a tenant-aware spawn returned is
+// bound to the tenant that spawn declared (TENANT-003 T4). It is a no-op in
+// legacy mode (requested == nil).
+//
+// GoAkt's Spawn returns an already-running actor's PID with a nil error, and
+// concurrent spawns of one name coalesce onto a single execution — on the
+// local node, and on the peer that serves a remote placement — so the PID
+// may belong to an actor another spawn created, possibly on another node.
+// The authority is therefore the returned actor itself: the engine asks it,
+// with the engine-internal egopb.TenantBindingQuery, whether the binding
+// its PreStart established (resolveScope) is the declared tenant. goakt
+// delivers that request/reply to the node that owns the actor, so a local
+// and a remote PID are verified the same way, and nothing about the answer
+// is taken from the caller's own intent or from PID metadata. Whichever
+// spawn created the actor fixed its tenant, so every other caller is
+// compared against that fixed binding and there is no window between
+// checking and spawning.
+//
+// This never calls TenantResolver.Resolve: requested was declared by the
+// caller via WithTenant or the resolver's fixed tenant (spawnTenantScope).
+func verifySpawnedTenant(ctx context.Context, pid *goakt.PID, requested *extensions.EntityTenantScope) error {
+	if requested == nil {
+		return nil
+	}
+	reply, err := goakt.Ask(ctx, pid, &egopb.TenantBindingQuery{TenantId: requested.TenantID}, spawnBindingQueryTimeout)
+	if err != nil {
+		return fmt.Errorf("%w: actor %q did not answer its tenant binding query: %w", ErrSpawnTenantUnverified, pid.Name(), err)
+	}
+	answer, ok := reply.(*egopb.TenantBindingReply)
+	if !ok {
+		return fmt.Errorf("%w: actor %q answered its tenant binding query with %T", ErrSpawnTenantUnverified, pid.Name(), reply)
+	}
+	return classifyTenantBinding(pid.Name(), requested, answer)
+}
+
+// classifyTenantBinding maps an actor's TenantBindingReply to the spawn
+// outcome: a matching binding is an idempotent success, a different one is
+// ErrSpawnTenantMismatch (also tenancy.ErrDenied), and an actor that holds
+// no tenant binding at all is ErrSpawnTenantUnverified.
+func classifyTenantBinding(name string, requested *extensions.EntityTenantScope, answer *egopb.TenantBindingReply) error {
+	requestedTenant, err := tenancy.NewTenantContext(tenancy.TenantID(requested.TenantID))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSpawnTenantMismatch, err)
+	}
+	if !answer.GetTenantAware() {
+		return fmt.Errorf("%w: actor %q holds no tenant binding", ErrSpawnTenantUnverified, name)
+	}
+	if !answer.GetMatches() {
+		// The reply deliberately does not say which tenant the actor is bound
+		// to; VerifyUnchanged against the zero TenantContext yields the
+		// tenancy package's own typed denial for "a different identity".
+		return fmt.Errorf("%w: actor %q is bound to another tenant: %w", ErrSpawnTenantMismatch, name,
+			tenancy.VerifyUnchanged(requestedTenant, tenancy.TenantContext{}))
+	}
+	return nil
+}
+
+// resolveExistingSpawn handles a spawn that goakt refused because the name
+// already exists. In cluster mode goakt rejects every spawn of a live name
+// with ErrActorAlreadyExists, even under the same tenant; in tenant-aware
+// mode the engine instead looks the actor up and verifies its binding, so
+// a same-tenant re-spawn is idempotent and a different tenant is
+// ErrSpawnTenantMismatch everywhere. Legacy mode, and every other error,
+// is returned unchanged.
+func resolveExistingSpawn(ctx context.Context, actorSystem goakt.ActorSystem, name string, requested *extensions.EntityTenantScope, spawnErr error) error {
+	if requested == nil || !errors.Is(spawnErr, goakterrors.ErrActorAlreadyExists) {
+		return spawnErr
+	}
+	pid, err := actorSystem.ActorOf(ctx, name)
+	if err != nil {
+		return errors.Join(spawnErr, err)
+	}
+	return verifySpawnedTenant(ctx, pid, requested)
 }
 
 // EntityExists reports whether an entity with the given ID is currently alive in the cluster.
@@ -719,11 +910,30 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	// Started check above already rules out.
 	_ = actorSystem.Inject(behavior)
 
-	sOptions := buildSpawnOptions(opts...)
-	sOptions = append(sOptions, goakt.WithDependencies(behavior))
+	config := newSpawnConfig(opts...)
 
-	_, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
-	return err
+	// Tenant-aware mode: determine which tenant this entity belongs to and
+	// inject it as a per-spawn dependency, mirroring Entity (TENANT-003 T4).
+	// See spawnTenantScope's doc comment for the fail-closed rules (no
+	// ego.WithTenant and no resolver-exposed fixed tenant).
+	tenantScope, tenantErr := engine.spawnTenantScope(config)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
+	sOptions := buildSpawnOptionsFromConfig(config)
+	deps := []extension.Dependency{behavior}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+	sOptions = append(sOptions, goakt.WithDependencies(deps...))
+
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
+	if err != nil {
+		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
+	}
+	return verifySpawnedTenant(ctx, pid, tenantScope)
 }
 
 // Dispatch sends env's payload to the entity identified by entityID and
@@ -764,6 +974,10 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 	// entityID is not defined
 	if entityID == "" {
 		return command.Result{}, ErrUndefinedEntityID
+	}
+
+	if _, internal := env.Payload().(*egopb.TenantBindingQuery); internal {
+		return command.Result{}, ErrNotACommand
 	}
 
 	// env may be a caller-constructed zero-value command.Envelope{} (Envelope's
@@ -1072,9 +1286,13 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 //   - ctx: Execution context for controlling the saga lifecycle.
 //   - behavior: Defines the saga's logic including event handling, command dispatch, and compensation.
 //   - timeout: Maximum duration for the saga. Zero means no timeout.
+//   - opts: Additional spawning options. In tenant-aware mode, ego.WithTenant
+//     declares which tenant this saga belongs to (TENANT-003 T4); every
+//     other SpawnOption is not applicable to a saga spawn and is ignored, a
+//     saga already fixes its own supervision/placement/relocation behavior.
 //
 // Returns an error if the saga fails to initialize.
-func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration) error {
+func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
 	}
@@ -1091,20 +1309,39 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 	// actor system is not started, which the Started check above rules out.
 	_ = actorSystem.Inject(behavior)
 
+	config := newSpawnConfig(opts...)
+
+	// Tenant-aware mode: determine which tenant this saga belongs to and
+	// inject it as a per-spawn dependency, mirroring Entity/
+	// DurableStateEntity (TENANT-003 T4).
+	tenantScope, tenantErr := engine.spawnTenantScope(config)
+	if tenantErr != nil {
+		return tenantErr
+	}
+
 	sagaCfg := extensions.NewSagaConfig(timeout)
 	_ = actorSystem.Inject(sagaCfg)
 	actor := newSagaActor()
 
-	_, err := actorSystem.Spawn(ctx, behavior.ID(),
+	deps := []extension.Dependency{behavior, sagaCfg}
+	if tenantScope != nil {
+		_ = actorSystem.Inject(tenantScope)
+		deps = append(deps, tenantScope)
+	}
+
+	pid, err := actorSystem.Spawn(ctx, behavior.ID(),
 		actor,
 		goakt.WithLongLived(),
-		goakt.WithDependencies(behavior, sagaCfg),
+		goakt.WithDependencies(deps...),
 		goakt.WithSupervisor(newSupervisor(RestartDirective)))
 	if err != nil {
+		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err {
+			return resolved
+		}
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)
 	}
 
-	return nil
+	return verifySpawnedTenant(ctx, pid, tenantScope)
 }
 
 // SagaStatus returns the current status and state of the named saga.
@@ -1184,19 +1421,50 @@ func (engine *Engine) EraseEntity(ctx context.Context, persistenceID string, ful
 	snapshotStore := engine.snapshotStore
 	engine.mutex.RUnlock()
 
+	// Tenant-aware mode: resolve the caller's tenant identity and scope the
+	// erasure to it (TENANT-003 T4). Before this fix, EraseEntity bypassed
+	// every actor and called the stores with persistence.Unscoped()
+	// unconditionally, so any caller who knew a persistenceID could erase
+	// ANY tenant's events and snapshots regardless of who they were
+	// resolved to be — the exact isolation hole this ticket closes. A
+	// resolver error, or a resolved TenantContext that carries no tenant
+	// identity (administrative scope, or an invalid/zero-value context),
+	// fails the erasure closed rather than silently falling back to
+	// Unscoped(). Legacy mode (no resolver registered) is unchanged: it
+	// still erases Unscoped() records, exactly as before.
+	scope := persistence.Unscoped()
+	if engine.tenantResolver != nil {
+		tenantContext, resolveErr := engine.tenantResolver.Resolve(ctx)
+		if resolveErr != nil {
+			return fmt.Errorf("failed to resolve tenant for erasure: %w", resolveErr)
+		}
+
+		tenantID, ok := tenantContext.Tenant()
+		if !ok {
+			return fmt.Errorf("failed to erase entity: erasure requires a tenant-scoped identity, got %s: %w",
+				tenantContext.Scope(), tenancy.ErrDenied)
+		}
+
+		var scopeErr error
+		scope, scopeErr = persistence.NewTenantScope(tenantID)
+		if scopeErr != nil {
+			return fmt.Errorf("failed to build erasure scope: %w", scopeErr)
+		}
+	}
+
 	if full {
 		// Get the latest event to find the max sequence number
-		latestEvent, err := eventsStore.GetLatestEvent(ctx, persistenceID)
+		latestEvent, err := eventsStore.GetLatestEvent(ctx, scope, persistenceID)
 		if err != nil {
 			return fmt.Errorf("failed to get latest event for erasure: %w", err)
 		}
 		if latestEvent != nil {
-			if err := eventsStore.DeleteEvents(ctx, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			if err := eventsStore.DeleteEvents(ctx, scope, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete events for erasure: %w", err)
 			}
 		}
 		if snapshotStore != nil && latestEvent != nil {
-			if err := snapshotStore.DeleteSnapshots(ctx, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
+			if err := snapshotStore.DeleteSnapshots(ctx, scope, persistenceID, latestEvent.GetSequenceNumber()); err != nil {
 				return fmt.Errorf("failed to delete snapshots for erasure: %w", err)
 			}
 		}
@@ -1389,10 +1657,6 @@ func resultToLegacy(result command.Result) (State, uint64, error) {
 	}
 }
 
-func buildSpawnOptions(opts ...SpawnOption) []goakt.SpawnOption {
-	return buildSpawnOptionsFromConfig(newSpawnConfig(opts...))
-}
-
 func buildSpawnOptionsFromConfig(config *spawnConfig) []goakt.SpawnOption {
 	sOptions := []goakt.SpawnOption{
 		goakt.WithLongLived(),
@@ -1416,8 +1680,8 @@ func buildSpawnOptionsFromConfig(config *spawnConfig) []goakt.SpawnOption {
 	// in-flight command around its async persist write (see persistAsync in
 	// event_sourced_actor.go, fixing issue #64). The stash buffer is inert
 	// until Stash is actually called, so enabling it here is a no-op for any
-	// spawn — including DurableStateActor's, via buildSpawnOptions — that
-	// never calls it.
+	// spawn — including DurableStateActor's, via buildSpawnOptionsFromConfig
+	// — that never calls it.
 	sOptions = append(sOptions, goakt.WithStashing())
 
 	return sOptions

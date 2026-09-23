@@ -156,7 +156,16 @@ func newBoundSagaActor(t *testing.T, behavior SagaBehavior) *SagaActor {
 		status:       SagaRunning,
 		sagaID:       behavior.ID(),
 		tenantAware:  true,
-		logger:       DiscardLogger,
+		// scope is deliberately persistence.Unscoped() here even though
+		// tenantAware is true: this helper builds a directly-constructed
+		// SagaActor with no actor system and no PreStart/resolveScope call,
+		// used to unit-test handleStreamEvent/recover's lazy
+		// bind-on-first-event logic (SG4/SG5) in isolation from
+		// TENANT-003 T4's spawn-time scope binding, which is covered
+		// separately by the actorSystem.Spawn-based tests. boundTenant is
+		// deliberately left at its zero value for the same reason.
+		scope:  persistence.Unscoped(),
+		logger: DiscardLogger,
 	}
 }
 
@@ -246,7 +255,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 		require.Equal(t, 1, handleEventCalls)
 		require.Equal(t, tenantA, s.boundTenant)
 
-		boundLatest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		boundLatest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
 		require.NoError(t, err)
 		require.NotNil(t, boundLatest, "the first, relevant event must have persisted a saga event")
 
@@ -257,7 +266,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must remain unchanged after a rejected foreign event")
 		assert.Equal(t, SagaRunning, s.status, "status must be untouched by a rejected event")
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
 		require.NoError(t, err)
 		assert.Equal(t, boundLatest.GetSequenceNumber(), latest.GetSequenceNumber(), "no additional saga event may be persisted for a rejected foreign-tenant event")
 	})
@@ -400,7 +409,7 @@ func TestSagaActorPersistAndApplyEventsWritesTenantMetadata(t *testing.T) {
 		err = s.persistAndApplyEvents(ctx, []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
 		require.NoError(t, err)
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.Equal(t, tenantMetadata(t, tenantA), latest.GetTenantMetadata())
@@ -414,7 +423,7 @@ func TestSagaActorPersistAndApplyEventsWritesTenantMetadata(t *testing.T) {
 		err := s.persistAndApplyEvents(context.Background(), []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
 		require.NoError(t, err)
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
 		require.NoError(t, err)
 		require.NotNil(t, latest)
 		assert.Empty(t, latest.GetTenantMetadata())
@@ -478,7 +487,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 
 		sagaID := "saga-" + uuid.NewString()
 		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -486,6 +495,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -508,7 +518,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 		sagaID := "saga-" + uuid.NewString()
 		firstEvent := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
 		secondEvent := newAnyEvent(t, sagaID, 2, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantB))
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{firstEvent, secondEvent}, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{firstEvent, secondEvent}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -516,6 +526,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -532,7 +543,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 
 		sagaID := "saga-" + uuid.NewString()
 		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
-		require.NoError(t, store.WriteEvents(context.Background(), []*egopb.Event{event}, persistence.Unconditional()))
+		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		s := &SagaActor{
@@ -540,6 +551,7 @@ func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 
@@ -595,7 +607,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 		require.True(t, ok, "the command must still be dispatched after the durable bind succeeds")
 		assert.Equal(t, tenantA, observed)
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), s.sagaID)
+		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
 		require.NoError(t, err)
 		require.NotNil(t, latest, "a Commands-only action must still leave a durable record behind, even with zero business events")
 		assert.Equal(t, tenantMetadata(t, tenantA), latest.GetTenantMetadata())
@@ -647,6 +659,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			status:       SagaRunning,
 			sagaID:       sagaID,
 			tenantAware:  true,
+			scope:        persistence.Unscoped(),
 			logger:       DiscardLogger,
 			actorSystem:  actorSystem,
 		}
@@ -659,6 +672,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			eventsStore: store,
 			sagaID:      sagaID,
 			tenantAware: true,
+			scope:       persistence.Unscoped(),
 			logger:      DiscardLogger,
 		}
 		require.NoError(t, second.recover(context.Background()))
@@ -678,7 +692,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 		require.NoError(t, err)
 
 		failingStore := new(mocks.EventsStore)
-		failingStore.EXPECT().WriteEvents(mock.Anything, mock.Anything, mock.Anything).Return(assert.AnError).Once()
+		failingStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError).Once()
 
 		var handleEventCalls int
 		behavior := &callbackSagaBehavior{
@@ -703,6 +717,7 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 			status:       SagaRunning,
 			sagaID:       behavior.ID(),
 			tenantAware:  true,
+			scope:        persistence.Unscoped(),
 			logger:       DiscardLogger,
 			// actorSystem is intentionally left nil: if dispatchActionEffects
 			// ran despite the failed persist, sendCommand would panic

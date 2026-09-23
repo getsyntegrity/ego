@@ -139,14 +139,14 @@ func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T)
 	require.NoError(t, store.Connect(ctx))
 
 	const persistenceID = "t8-event-race"
-	require.NoError(t, store.WriteEvents(ctx, markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
 
 	errA, errB := raceTwoWriters(
 		func() error {
-			return store.WriteEvents(ctx, markedEvent(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
+			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
 		},
 		func() error {
-			return store.WriteEvents(ctx, markedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
+			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
 		},
 	)
 
@@ -154,7 +154,7 @@ func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T)
 	assert.Equal(t, 1, successes, "exactly one of the two racing writers must commit")
 	assert.Equal(t, 1, conflicts, "the losing writer must observe a typed concurrency conflict")
 
-	latest, err := store.GetLatestEvent(ctx, persistenceID)
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 2, latest.GetSequenceNumber())
@@ -177,14 +177,14 @@ func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.
 	require.NoError(t, store.Connect(ctx))
 
 	const persistenceID = "t9-state-race"
-	require.NoError(t, store.WriteState(ctx, markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
 
 	errA, errB := raceTwoWriters(
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
 		},
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
 		},
 	)
 
@@ -192,7 +192,7 @@ func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.
 	assert.Equal(t, 1, successes, "exactly one of the two racing writers must commit")
 	assert.Equal(t, 1, conflicts, "the losing writer must observe a typed concurrency conflict, and must not overwrite the winner")
 
-	got, err := store.GetLatestState(ctx, persistenceID)
+	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.EqualValues(t, 2, got.GetVersionNumber())
@@ -218,10 +218,10 @@ func TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 
 	errA, errB := raceTwoWriters(
 		func() error {
-			return store.WriteEvents(ctx, markedEvent(t, persistenceID, 1, 111), persistence.ExpectGenesis())
+			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 111), persistence.ExpectGenesis())
 		},
 		func() error {
-			return store.WriteEvents(ctx, markedEvent(t, persistenceID, 1, 222), persistence.ExpectGenesis())
+			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 222), persistence.ExpectGenesis())
 		},
 	)
 
@@ -229,7 +229,7 @@ func TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 	assert.Equal(t, 1, successes, "exactly one genesis commit must succeed")
 	assert.Equal(t, 1, conflicts, "the losing genesis attempt must observe a typed concurrency conflict")
 
-	latest, err := store.GetLatestEvent(ctx, persistenceID)
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.EqualValues(t, 1, latest.GetSequenceNumber())
@@ -251,10 +251,10 @@ func TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 
 	errA, errB := raceTwoWriters(
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, 1, 111), persistence.ExpectGenesis())
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 111), persistence.ExpectGenesis())
 		},
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, 1, 222), persistence.ExpectGenesis())
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 222), persistence.ExpectGenesis())
 		},
 	)
 
@@ -262,7 +262,7 @@ func TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 	assert.Equal(t, 1, successes, "exactly one genesis commit must succeed")
 	assert.Equal(t, 1, conflicts, "the losing genesis attempt must observe a typed concurrency conflict")
 
-	got, err := store.GetLatestState(ctx, persistenceID)
+	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.EqualValues(t, 1, got.GetVersionNumber())
@@ -289,14 +289,14 @@ func TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates(t *test
 	const rounds = 50
 	for i := 0; i < rounds; i++ {
 		persistenceID := fmt.Sprintf("t8-bulk-%d", i)
-		require.NoError(t, store.WriteEvents(ctx, markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
 
 		errA, errB := raceTwoWriters(
 			func() error {
-				return store.WriteEvents(ctx, markedEvent(t, persistenceID, 2, 1), persistence.ExpectRevision(1))
+				return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 1), persistence.ExpectRevision(1))
 			},
 			func() error {
-				return store.WriteEvents(ctx, markedEvent(t, persistenceID, 2, 2), persistence.ExpectRevision(1))
+				return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 2), persistence.ExpectRevision(1))
 			},
 		)
 
@@ -329,7 +329,7 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 	require.NoError(t, store.Connect(ctx))
 
 	const persistenceID = "checkpreconditions-narrow-responsibility"
-	require.NoError(t, store.WriteState(ctx, markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
 
 	const observedVersion = 1
 	const newVersion = observedVersion + 1
@@ -343,10 +343,10 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 
 	errA, errB := raceTwoWriters(
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, newVersion, 111), persistence.ExpectRevision(observedVersion))
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, newVersion, 111), persistence.ExpectRevision(observedVersion))
 		},
 		func() error {
-			return store.WriteState(ctx, markedState(t, persistenceID, newVersion, 222), persistence.ExpectRevision(observedVersion))
+			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, newVersion, 222), persistence.ExpectRevision(observedVersion))
 		},
 	)
 
@@ -354,7 +354,7 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 	assert.Equal(t, 1, successes, "checkPreconditions-shaped agreement on both sides must not let both writers commit")
 	assert.Equal(t, 1, conflicts, "the loser must observe a typed concurrency conflict raised by the StateStore, not by checkPreconditions")
 
-	got, err := store.GetLatestState(ctx, persistenceID)
+	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.EqualValues(t, newVersion, got.GetVersionNumber())

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -233,6 +234,40 @@ type EventSourcedActor struct {
 	// tenant's identity is itself the leak, whether or not the handler goes
 	// on to produce any events.
 	actorTenant tenancy.TenantContext
+
+	// scope is the persistence.Scope this actor's store reads and writes
+	// are bound to (TENANT-003 T4). Bound once in PreStart via
+	// resolveScope, right after tenantAware is set and BEFORE any store
+	// read (including recover()): persistence.Unscoped() when
+	// tenantAware is false, or the tenant scope carried by the per-spawn
+	// extensions.EntityTenantScope dependency Engine.Entity injects when
+	// tenantAware is true. Threaded through to the child writer/janitor
+	// actors on their request structs (persistEventsRequest.scope,
+	// persistSnapshotRequest.scope, applyRetentionRequest.scope) rather
+	// than re-derived there, since those are separate actors that never
+	// see PreStart's dependencies.
+	//
+	// # Known limitation: shared actor name across tenants
+	//
+	// A GoAkt actor's name is the caller-supplied entityID and is NOT
+	// tenant-qualified (see engine.go's Entity/DurableStateEntity/Saga).
+	// Two tenants using the same entityID therefore still map to the SAME
+	// actor instance: whichever tenant's spawn reaches PreStart first
+	// binds scope (and actorTenant, see resolveScope), and every later
+	// spawn attempt or command for that same entityID under a DIFFERENT
+	// tenant is denied — a spawn under a different tenant is rejected by
+	// Engine.Entity with ErrSpawnTenantMismatch after comparing the
+	// returned actor's own spawn binding (engine.go's verifySpawnedTenant),
+	// and a command against an already-running instance is denied by the
+	// existing actorTenant cross-check in processCommandAndReply/
+	// processAndBatch. This is fail-closed and leak-free — no cross-tenant
+	// read or write ever happens — but it means the second tenant cannot
+	// use that entity id at all under the current identity scheme. This is
+	// a functional limitation, not a security hole. Follow-up:
+	// tenant-qualified actor identity is explicitly not implemented by
+	// TENANT-003 (see openspec/changes/ego-tenant-003/design.md's "Known
+	// limitation" section).
+	scope persistence.Scope
 }
 
 var _ goakt.Actor = (*EventSourcedActor)(nil)
@@ -266,6 +301,10 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 	// reach a TenantResolver through it.
 	entity.tenantAware = ctx.Extension(extensions.TenancyExtensionID) != nil
 
+	if err := entity.resolveScope(ctx.Dependencies()); err != nil {
+		return err
+	}
+
 	entity.loadOptionalExtensions(ctx)
 	entity.setConfig(ctx)
 
@@ -294,6 +333,8 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 		entity.spawnChildren(ctx)
 	case *egopb.GetStateCommand:
 		entity.handleGetStateCommand(ctx)
+	case *egopb.TenantBindingQuery:
+		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, msg))
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
 	case *persistEventsResponse:
@@ -386,6 +427,54 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 	}
 }
 
+// resolveScope binds entity.scope (and, in tenant-aware mode,
+// entity.actorTenant) from deps before any store read (TENANT-003 T4).
+//
+// tenantAware == false binds persistence.Unscoped() and leaves actorTenant
+// untouched (noTenantContext) — legacy mode is byte-identical to before
+// this field existed.
+//
+// tenantAware == true looks for the per-spawn extensions.EntityTenantScope
+// dependency Engine.Entity injects (engine.go's spawnTenantScope) and
+// fails closed with ErrEntityTenantScopeMissing when it is absent or
+// carries an invalid tenant id: a tenant-aware actor must never start
+// without a bound scope. On success it also pre-seeds entity.actorTenant
+// with the corresponding tenancy.TenantContext, BEFORE recover() runs. This
+// is what turns seedActorTenant's later calls (recoverFromSnapshot, recover)
+// from a first-seed into a cross-check against the spawn-bound tenant (D6):
+// recovered tenant_metadata that disagrees with the tenant this actor was
+// actually spawned for now fails closed via tenancy.VerifyUnchanged, rather
+// than being trusted as the source of actorTenant.
+func (entity *EventSourcedActor) resolveScope(deps []extension.Dependency) error {
+	if !entity.tenantAware {
+		entity.scope = persistence.Unscoped()
+		return nil
+	}
+
+	for _, dependency := range deps {
+		dep, ok := dependency.(*extensions.EntityTenantScope)
+		if !ok || dep == nil {
+			continue
+		}
+
+		scope, err := persistence.NewTenantScope(tenancy.TenantID(dep.TenantID))
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		tenantContext, err := tenancy.NewTenantContext(scope.TenantID())
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+		}
+
+		entity.scope = scope
+		entity.actorTenant = tenantContext
+		return nil
+	}
+
+	return ErrEntityTenantScopeMissing
+}
+
 // validateAndRecover ensures required dependencies are present, pings the
 // backing stores, and replays persisted state.
 func (entity *EventSourcedActor) validateAndRecover(ctx *goakt.Context) error {
@@ -456,7 +545,7 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 		}
 	}
 
-	latestEvent, err := entity.eventsStore.GetLatestEvent(ctx, entity.persistenceID)
+	latestEvent, err := entity.eventsStore.GetLatestEvent(ctx, entity.scope, entity.persistenceID)
 	if err != nil {
 		return fmt.Errorf("failed to get latest event: %w", err)
 	}
@@ -505,7 +594,7 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 // together with the sequence number to replay from. When no snapshot exists the
 // initial state and a replayFrom of 1 are returned unchanged.
 func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initial State) (State, uint64, error) {
-	snapshot, err := entity.snapshotStore.GetLatestSnapshot(ctx, entity.persistenceID)
+	snapshot, err := entity.snapshotStore.GetLatestSnapshot(ctx, entity.scope, entity.persistenceID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to load snapshot: %w", err)
 	}
@@ -548,7 +637,7 @@ func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initia
 // replayEvents applies persisted events to the given state in sequence order
 // and returns the resulting state.
 func (entity *EventSourcedActor) replayEvents(ctx context.Context, state State, from, to uint64) (State, error) {
-	events, err := entity.eventsStore.ReplayEvents(ctx, entity.persistenceID, from, to, to-from+1)
+	events, err := entity.eventsStore.ReplayEvents(ctx, entity.scope, entity.persistenceID, from, to, to-from+1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to replay events: %w", err)
 	}
@@ -950,6 +1039,7 @@ func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trac
 func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span, precondition persistence.WritePrecondition) {
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout
+	scope := entity.scope
 
 	entity.directPendingState = pendingState
 	entity.directPendingCounter = pendingCounter
@@ -961,7 +1051,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 	ctx.Stash()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, eventsTopic, timeout, precondition)
+		return askEventsWriter(writer, envelopes, eventsTopic, timeout, precondition, scope)
 	})
 
 	entity.phase = phasePersisting
@@ -1177,11 +1267,12 @@ func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error
 // the returned *persistEventsResponse's Err field rather than returned as a
 // Go error, so PipeTo always delivers a persistEventsResponse message that
 // Receive already knows how to route.
-func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition) (*persistEventsResponse, error) {
+func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition, scope persistence.Scope) (*persistEventsResponse, error) {
 	reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
 		envelopes:    envelopes,
 		topic:        topic,
 		precondition: precondition,
+		scope:        scope,
 	}, timeout)
 
 	if err != nil {
@@ -1232,6 +1323,7 @@ func (entity *EventSourcedActor) triggerSnapshotAndRetention(ctx *goakt.ReceiveC
 func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
 	req := &persistSnapshotRequest{
 		snapshot: entity.newSnapshotEnvelope(entity.currentStateAny()),
+		scope:    entity.scope,
 	}
 
 	if entity.eventsJanitor != nil && entity.retentionPolicy != nil {
@@ -1242,6 +1334,7 @@ func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
 			deleteEventsOnSnapshot:    entity.retentionPolicy.DeleteEventsOnSnapshot,
 			deleteSnapshotsOnSnapshot: entity.retentionPolicy.DeleteSnapshotsOnSnapshot,
 			eventsRetentionCount:      entity.retentionPolicy.EventsRetentionCount,
+			scope:                     entity.scope,
 		}
 		req.janitor = entity.eventsJanitor
 	}
@@ -1581,9 +1674,10 @@ func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout
 	precondition := entity.resolveBatchPrecondition()
+	scope := entity.scope
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, topic, timeout, precondition)
+		return askEventsWriter(writer, envelopes, topic, timeout, precondition, scope)
 	})
 
 	entity.phase = phaseFlushing
