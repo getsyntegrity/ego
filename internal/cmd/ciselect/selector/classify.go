@@ -93,7 +93,6 @@ var fullFallbackExactFiles = map[string]bool{
 	"Makefile":      true,
 	"Dockerfile.ci": true,
 	".golangci.yml": true,
-	"codecov.yml":   true,
 	"buf.yaml":      true,
 	"buf.gen.yaml":  true,
 }

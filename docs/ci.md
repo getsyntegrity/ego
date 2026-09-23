@@ -39,14 +39,14 @@ race detector.
    are visible on every PR run, not just inferred from logs.
 4. **Run tests**: `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`,
    with `GO_TEST_RACE=1` (the race detector stays on for pull requests).
-5. **Codecov upload**: only when the selector's mode was `full`. A partial
-   package selection produces a partial coverage profile, and uploading
-   that as "project coverage" would misstate it — Codecov's percentage
-   would swing based on which packages happened to be touched, not on
-   actual coverage change. When the mode is `affected` or `none`, the
-   workflow instead writes a line to the job summary explaining that
-   coverage was not uploaded and that `main`'s full-suite run remains the
-   source of truth.
+5. **Coverage summary**: when `coverage.out` was produced, the workflow runs
+   `go tool cover -func=coverage.out`, takes its final `total:` line, and
+   appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
+   selection mode. In `affected` mode that total only reflects the
+   packages that actually ran — the denominator (`-coverpkg`) is still
+   every included package, so an `affected`-mode total is not directly
+   comparable to a `full`-mode total. When the mode is `none`, no
+   `coverage.out` exists and the summary says so in one line.
 
 ### `build.yml` (the full-suite gate)
 
@@ -55,8 +55,8 @@ via the Actions "Run workflow" button (`workflow_dispatch`). It runs
 `go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` — always
 the full suite, no change detection — appends the summary to the job
 summary the same way, then `scripts/ci/go-test.sh` with the race detector
-on, and uploads to Codecov. This is the mandatory gate and the source of
-truth for Codecov's project coverage.
+on, and appends the same coverage summary to the job summary. This is the
+mandatory gate and always runs the complete suite.
 
 ### `scripts/ci/go-test.sh`
 
@@ -93,7 +93,7 @@ buckets, checked in this order:
 
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
-| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `codecov.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
+| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
 | Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`)                          | Selects nothing for that file; recorded as "not covered by this lane" |
 | No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
@@ -164,19 +164,23 @@ included package set, in every mode, so a PR's `affected`-mode coverage
 number and `main`'s `full`-mode coverage number are directly comparable —
 only the numerator (which packages actually ran) differs.
 
-Only complete runs upload to Codecov: every `build.yml` run, and a
-`pull_request.yml` run whose own selection happened to be `full`. An
-`affected` or `none` PR run never uploads, so Codecov's project coverage
-always reflects a complete run.
+There is no external coverage service. Codecov was removed in #108: it was
+inherited from the upstream project this repo was forked from
+(`tochemey/ego`), the maintainers do not use it, and every upload was
+silently rejected before #108 for lack of a `CODECOV_TOKEN` secret ("Token
+required - not valid tokenless upload"). `codecov.yml`, the `codecov/codecov-action`
+step, the token check, and the README badge are gone.
 
-Uploads need the `CODECOV_TOKEN` repository secret (Codecov rejects
-tokenless uploads for this repository). A `Check Codecov token` step runs
-first: when the secret is missing it emits a `::warning::` and a job-summary
-line and skips the upload; when it is present the upload runs with
-`fail_ci_if_error: true`, so a rejected upload fails the job instead of
-being swallowed. Before #108 the upload used `fail_ci_if_error: false` and
-every run on `main` was silently rejected with "Token required - not valid
-tokenless upload".
+Instead, both workflows publish the coverage total to the job itself. A
+`Coverage summary` step runs `go tool cover -func=coverage.out` and appends
+its final `total:` line to `$GITHUB_STEP_SUMMARY`, alongside the selection
+mode, on every run that actually tests something. `build.yml` always
+reports a `full`-mode total. `pull_request.yml` reports whatever mode
+`ciselect` picked; an `affected`-mode total only reflects the packages
+that ran, so it is not directly comparable to a `full`-mode total, even
+though the denominator (`-coverpkg`) is the same full package set in both.
+A `none`-mode PR run has no `coverage.out`, and the summary says so in one
+line instead of running `go tool cover`.
 
 The Go module and build caches come from `actions/setup-go`'s built-in cache
 (keyed on `go.sum`). A separate `actions/cache` step over the same paths was

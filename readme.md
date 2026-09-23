@@ -8,7 +8,6 @@
   <a href="https://github.com/pablogore/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/pablogore/ego/build.yml?branch=main" alt="Build status"></a>
   <a href="https://pkg.go.dev/github.com/pablogore/ego/v4"><img src="https://pkg.go.dev/badge/github.com/pablogore/ego/v4.svg" alt="Go reference"></a>
   <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/pablogore/ego" alt="Go version"></a>
-  <a href="https://codecov.io/gh/pablogore/ego"><img src="https://codecov.io/gh/pablogore/ego/branch/main/graph/badge.svg?token=Z5b9gM6Mnt" alt="Code coverage"></a>
   <a href="https://github.com/pablogore/ego/releases/latest"><img src="https://img.shields.io/github/v/release/pablogore/ego?label=release" alt="Latest release"></a>
   <a href="https://github.com/pablogore/ego/tags"><img src="https://img.shields.io/github/v/tag/pablogore/ego?label=tag" alt="Pre-release"></a>
   <a href="https://human-oss.dev"><img src="https://human-oss.dev/badge.svg" alt="Open Source AI Manifesto"></a>

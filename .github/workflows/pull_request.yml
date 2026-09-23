@@ -67,29 +67,27 @@ jobs:
           GO_TEST_RACE: "1"
         run: |
           scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
-      - name: Note skipped Codecov upload
-        if: steps.select.outputs.mode != 'full'
-        shell: bash
-        run: |
-          echo "Coverage not uploaded to Codecov: package selection was partial (mode=${{ steps.select.outputs.mode }}); a partial profile would misstate project coverage. main's full-suite run remains the Codecov source of truth." >> "$GITHUB_STEP_SUMMARY"
-      - name: Check Codecov token
-        if: steps.select.outputs.mode == 'full'
-        id: codecov
+      - name: Coverage summary
+        if: always() && hashFiles('coverage.out') != ''
         shell: bash
         env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          GOFLAGS: -mod=vendor
         run: |
-          if [ -n "$CODECOV_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::CODECOV_TOKEN is not configured for this repository; coverage was not uploaded to Codecov."
-            echo "Coverage not uploaded to Codecov: the CODECOV_TOKEN secret is not configured for this repository." >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: codecov/codecov-action@v7
-        if: steps.select.outputs.mode == 'full' && steps.codecov.outputs.enabled == 'true'
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.out
-          fail_ci_if_error: true
-          verbose: false
+          {
+            echo "### Coverage"
+            echo
+            echo "Selection mode: \`${{ steps.select.outputs.mode }}\`"
+            echo
+            if [ "${{ steps.select.outputs.mode }}" = "affected" ]; then
+              echo "In \`affected\` mode the total only reflects the packages that ran; the denominator is still every included package."
+              echo
+            fi
+            echo '```'
+            go tool cover -func=coverage.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage summary (no coverage)
+        if: always() && hashFiles('coverage.out') == ''
+        shell: bash
+        run: |
+          echo "Coverage: no coverage.out was produced (selection mode: \`${{ steps.select.outputs.mode }}\`)." >> "$GITHUB_STEP_SUMMARY"
