@@ -189,7 +189,7 @@ S1 has two steps with different preconditions:
 - *S1a, root only* — changes only root-module files and may land before #111. The root lane compiles the root module only, though, and the moved API has consumers outside it: the four publishers use `EventPublisher`, `StatePublisher` and `ErrPublisherNotStarted`, and `benchmark` and `example/cluster` compile against the root through their `replace` directives. **Merging S1a therefore requires the nested-consumer check below, observed on the S1a head and recorded in the PR, even though #111 does not automate it yet.**
 - *S1b, publisher migration* — switching the four publishers from package `ego` to `port/publishing` MUST wait for #111, so that a publisher-only change runs that module's build, vet and lint.
 
-Nested-consumer check (merge condition for S1a, and repeated for S1b):
+Nested-consumer check (merge condition for S1a, and repeated for S1b). Run this as a script, not by pasting `set -e` into an interactive shell:
 
 ```sh
 set -e
@@ -266,7 +266,7 @@ Unless a row names another commit, measurements used baseline `a4edded` exported
 | Satellite gap | `go run ./internal/cmd/ciselect -changed kafka.txt -out-dir out` with the five `publisher/kafka` paths | `mode=none`, 0 of 20 |
 | Publisher coupling | `(cd publisher/kafka && go list -deps ./... \| wc -l)` | 592 packages (15 root, 45 GoAkt) |
 | S1 prototype | same, after the throwaway extraction; cold build with `GOCACHE=$(mktemp -d) /usr/bin/time go build ./...` | 290 packages (2 root, 0 GoAkt); see proposal table |
-| Nested-consumer check at `main` `b43fad5` (before S1) | the section 5 loop, Go 1.26.6 | the four publishers, `benchmark` and `mocks/ego` pass; `example/cluster` fails: `*PostgresEventStore does not implement persistence.EventsStore (wrong type for method DeleteEvents)`. Its `DeleteEvents` lacks the `persistence.Scope` parameter (`stores.go:45`, `main.go:126`) |
+| Nested-consumer check at `main` `b43fad5` (before S1) | the section 5 commands, with `example/cluster` run separately; Go 1.26.6 | the four publishers, `benchmark` and `mocks/ego` pass; `example/cluster` fails: `*PostgresEventStore does not implement persistence.EventsStore (wrong type for method DeleteEvents)`. Its `DeleteEvents` lacks the `persistence.Scope` parameter (`stores.go:45`, `main.go:126`) |
 
 Limits: the S1 prototype covered Kafka only, over two rounds on a loaded host. Max RSS is per process. Alias compatibility was checked by compilation only. No CI, race or cold-module-download timings were taken.
 
