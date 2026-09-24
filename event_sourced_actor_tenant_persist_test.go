@@ -489,7 +489,6 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 	behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -503,7 +502,6 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -562,7 +560,6 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 	behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -576,7 +573,6 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -632,7 +628,6 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 	behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -646,7 +641,6 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -692,7 +686,6 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -706,7 +699,6 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	tenantA, err := tenancy.NewTenantContext("acme")
 	require.NoError(t, err)

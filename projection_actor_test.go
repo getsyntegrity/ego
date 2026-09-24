@@ -528,8 +528,6 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		actor := NewProjectionActor()
 		_, err = actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
 		require.Error(t, err)
@@ -572,8 +570,6 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		require.NotNil(t, actorSystem)
 
 		require.NoError(t, actorSystem.Start(ctx))
-
-		pause.For(time.Second)
 
 		// persist events before the projection pulls for the first time
 		event, err := anypb.New(&testpb.AccountCredited{})
@@ -653,8 +649,6 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		require.NotNil(t, actorSystem)
 
 		require.NoError(t, actorSystem.Start(ctx))
-
-		pause.For(time.Second)
 
 		event, err := anypb.New(&testpb.AccountCredited{})
 		require.NoError(t, err)

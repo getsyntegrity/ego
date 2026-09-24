@@ -249,8 +249,6 @@ func TestDurableStateBehavior(t *testing.T) {
 		durableStore := testkit.NewDurableStore()
 		require.NoError(t, durableStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		persistenceID := uuid.NewString()
 		behavior := NewAccountDurableStateBehavior(persistenceID)
 
@@ -735,7 +733,6 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newDurableStateActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -849,7 +846,6 @@ func TestDurableStateActorTenancyWritePath(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newDurableStateActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,

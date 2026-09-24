@@ -63,8 +63,6 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -144,8 +142,6 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -210,8 +206,6 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -257,8 +251,6 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pause.For(time.Second)
-
 		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", newEventsWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -285,8 +277,6 @@ func TestEventsWriterActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-
-		pause.For(time.Second)
 
 		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)

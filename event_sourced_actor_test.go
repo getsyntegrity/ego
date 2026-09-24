@@ -337,8 +337,6 @@ func TestEventSourcedActor(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
@@ -847,8 +845,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// pre-write a snapshot
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -1124,8 +1120,6 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// create an instance of events stream
 		eventStream := eventstream.New()
 
@@ -1208,8 +1202,6 @@ func TestEventSourcedActor(t *testing.T) {
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-
-		pause.For(time.Second)
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1302,8 +1294,6 @@ func TestEventSourcedActor(t *testing.T) {
 		// connect the event store
 		require.NoError(t, eventStore.Connect(ctx))
 
-		pause.For(time.Second)
-
 		// pre-write an event to the store
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -1395,8 +1385,6 @@ func TestEventSourcedActor(t *testing.T) {
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-
-		pause.For(time.Second)
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1552,7 +1540,6 @@ func TestEventSourcedActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -1584,7 +1571,6 @@ func TestEventSourcedActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem2.Start(ctx))
-		pause.For(time.Second)
 
 		behavior2 := NewAccountEventSourcedBehavior(persistenceID)
 		actor2 := newEventSourcedActor()
@@ -1629,8 +1615,6 @@ func TestEventSourcedActor(t *testing.T) {
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-
-		pause.For(time.Second)
 
 		// create an instance of events stream
 		eventStream := eventstream.New()
@@ -1735,7 +1719,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -1749,7 +1732,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -1795,7 +1777,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -1818,7 +1799,6 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 			goakt.WithActorInitMaxRetries(3))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -1924,7 +1904,6 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -1948,7 +1927,6 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2038,7 +2016,6 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2057,7 +2034,6 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2139,7 +2115,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2161,7 +2136,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2260,7 +2234,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
-	pause.For(time.Second)
 
 	eventStream := eventstream.New()
 
@@ -2279,7 +2252,6 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 		goakt.WithActorInitMaxRetries(3))
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
-	pause.For(time.Second)
 
 	actor := newEventSourcedActor()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -2346,7 +2318,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// spawn with no behavior dependency
 		actor := newEventSourcedActor()
@@ -2383,7 +2354,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2404,7 +2374,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an "encrypted" snapshot with dummy ciphertext
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
@@ -2437,7 +2406,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2460,7 +2428,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -2493,7 +2460,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2516,7 +2482,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write snapshot with incompatible state type (AccountCredited instead of Account)
 		wrongState, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
@@ -2542,7 +2507,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2563,7 +2527,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an "encrypted" event with dummy ciphertext
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
@@ -2595,7 +2558,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2615,7 +2577,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -2647,7 +2608,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2667,7 +2627,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -2695,7 +2654,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2715,7 +2673,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// write an event with an unknown TypeUrl so UnmarshalNew fails
 		event := &egopb.Event{
@@ -2738,7 +2695,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2758,7 +2714,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		// pre-write an event that the behavior will fail to handle
 		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
@@ -2784,7 +2739,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2804,7 +2758,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -2822,7 +2775,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
@@ -2857,7 +2809,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -2878,7 +2829,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		entityCfg := &extensions.EntityConfig{SnapshotInterval: 1}
 		actor := newEventSourcedActor()
@@ -2941,7 +2891,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		entityCfg := &extensions.EntityConfig{
 			SnapshotInterval:       2,
@@ -3005,7 +2954,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		entityCfg := &extensions.EntityConfig{
 			SnapshotInterval:          2,
@@ -3056,7 +3004,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3070,7 +3017,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3120,7 +3066,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3233,7 +3178,6 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3340,7 +3284,6 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3436,7 +3379,6 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -3520,7 +3462,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3593,7 +3534,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3669,7 +3609,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3724,7 +3663,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3781,7 +3719,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3849,7 +3786,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -3952,7 +3888,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4006,7 +3941,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4036,7 +3970,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4059,7 +3992,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4090,7 +4022,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4113,7 +4044,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4148,7 +4078,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4171,7 +4100,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4203,7 +4131,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4226,7 +4153,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4258,7 +4184,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4276,7 +4201,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4311,7 +4235,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4330,7 +4253,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4367,7 +4289,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4394,7 +4315,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4425,7 +4345,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4448,7 +4367,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4508,7 +4426,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4533,7 +4450,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4635,7 +4551,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4655,7 +4570,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4798,7 +4712,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4818,7 +4731,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -4920,7 +4832,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -4940,7 +4851,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
@@ -5041,7 +4951,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		behavior := NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
-		pause.For(time.Second)
 
 		eventStream := eventstream.New()
 
@@ -5065,7 +4974,6 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		actor := newEventSourcedActor()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,

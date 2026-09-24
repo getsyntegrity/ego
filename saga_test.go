@@ -87,7 +87,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Spawn with no behavior dependency
 		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(), goakt.WithLongLived())
@@ -116,7 +115,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -150,7 +148,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -190,7 +187,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -233,7 +229,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -277,7 +272,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -327,7 +321,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -378,7 +371,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -425,7 +417,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		compensated := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -477,7 +468,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		compensateCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -546,7 +536,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{id: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
@@ -589,7 +578,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleEventCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -643,7 +631,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleEventCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -703,7 +690,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// the saga processes events on its own goroutine, so the counter must
 		// be atomic for the test goroutine to read it safely
@@ -769,7 +755,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		secondEventHandled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -841,7 +826,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		callCount := 0
 		secondHandled := make(chan struct{}, 1)
@@ -906,7 +890,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -963,7 +946,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -1013,7 +995,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		// the saga processes events on its own goroutine, so the counter must
@@ -1080,7 +1061,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1141,7 +1121,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		applied := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1210,7 +1189,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -1262,7 +1240,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
@@ -1317,7 +1294,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Spawn a target actor that accepts compensation commands
 		compensationReply := &egopb.CommandReply{
@@ -1395,7 +1371,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1457,7 +1432,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1522,7 +1496,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target responds with a non-CommandReply message
 		_, err = actorSystem.Spawn(ctx, targetID,
@@ -1593,7 +1566,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target returns an error reply (parseCommandReply will return error)
 		errorReply := &egopb.CommandReply{
@@ -1668,7 +1640,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		errorReply := &egopb.CommandReply{
 			Reply: &egopb.CommandReply_ErrorReply{
@@ -1744,7 +1715,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// Target returns a successful state reply
 		successReply := &egopb.CommandReply{
@@ -1825,7 +1795,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		successReply := &egopb.CommandReply{
 			Reply: &egopb.CommandReply_StateReply{
@@ -1904,7 +1873,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1998,7 +1966,6 @@ func TestSagaFailsClosed(t *testing.T) {
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
-		pause.For(time.Second)
 
 		// The saga's real target: a genuine tenant-aware EventSourcedActor,
 		// not a stub. If the gate ever regressed and let a saga-dispatched
