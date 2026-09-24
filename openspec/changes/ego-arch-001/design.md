@@ -19,6 +19,7 @@ Vocabulary used below:
 - **Schema** — generated protobuf message types (`egopb`). Contracts may depend on it until the protobuf policy is decided.
 - **Adapter** — code that binds a contract to a technology (GoAkt, Kafka, NATS, a database).
 - **Application** — a service that orchestrates contracts and runtime (for example `migration`).
+- **Composition root** — the code that constructs the runtime and the concrete adapters (stores, publishers, telemetry) and wires them into the contracts. Section 4.1 identifies where that happens today.
 - **Compatibility alias** — a Go type alias (`type X = other.X`) or variable (`var E = other.E`) left at the old import path so existing callers keep compiling.
 
 ## 2. Target topology
@@ -130,6 +131,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1 (this ADR designs it) |
 | `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | Neutral contract package | S3, #103 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
+| `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
 | `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |
 | `egopb` | Schema | — | Stay | Protobuf policy (open) |
 | `migration` | Application | `ego`, `egopb`, `persistence`, `tenancy` | Stay | Revisit after S3/S4 |
@@ -140,7 +142,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `persistence/conformance` | Test support | `egopb`, `persistence`, `tenancy`, `test/data/testpb` | Stay | — |
 | `mocks/ego`, `mocks/persistence`, `mocks/offsetstore`, `mocks/encryption`, `mocks/eventadapter`, `mocks/tenancy` | Test support (generated) | contract packages, `egopb` | Stay; `mocks/ego` regenerated or aliased in S1 | S1 |
 | `test/data/testpb`, `example/examplepb` | Test/example schema | — | Stay | — |
-| `example/durablestate`, `example/eventssourced`, `example/saga` | Consumer example | `ego`, `example/examplepb`, `testkit` | Stay | — |
+| `example/durablestate`, `example/eventssourced`, `example/saga` | Consumer example; each `main.go` is that program's composition root | `ego`, `example/examplepb`, `testkit` | Stay | — |
 
 Test-only edges (14 in total) that CI selection must keep visible: `ego` tests import `example/examplepb`, `internal/pause`, the five `mocks/*` packages it uses, `test/data/testpb` and `testkit`; `internal/extensions` tests import `testkit`; `migration` tests import `test/data/testpb` and `testkit`; `testkit` tests import `persistence/conformance` and `test/data/testpb`.
 
@@ -150,7 +152,21 @@ Nested modules, for completeness:
 |---|---|---|
 | `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket` | `ego.EventPublisher`, `ego.StatePublisher`, `ego.ErrPublisherNotStarted`, `egopb.Event`, `egopb.DurableState` | Import `port/publishing` after #111 |
 | `benchmark` | `ego`, `egopb`, `example/examplepb`, `persistence`, `testkit` | Unreleased consumer; unchanged |
-| `example/cluster` | `ego`, `egopb`, `example/examplepb`, `offsetstore`, `persistence`, `projection` | Unreleased consumer; unchanged |
+| `example/cluster` | `ego`, `egopb`, `example/examplepb`, `offsetstore`, `persistence`, `projection` | Unreleased consumer; unchanged. Does not build at `b43fad5` (section 9) |
+
+### 4.1 Composition root today
+
+Issue #104 asks for every package to be classified, including the composition root. Ego has no dedicated composition-root package today. Assembly is split between package `ego` and the consumer's program:
+
+1. The consumer calls `ego.NewConfig(eventsStore, opts...)` (`option.go`). The `With*` options collect the concrete stores, event adapters, encryptor, telemetry, tenant resolver and projections. `NewConfig` also allocates the in-process event stream.
+2. The consumer passes `cfg.GoaktOptions()` to `goakt.NewActorSystem` and starts the actor system. `GoaktOptions` translates each configured contract into a GoAkt extension from `internal/extensions`. This is adapter wiring, and it lives in package `ego`.
+3. The consumer calls `ego.NewEngine(sys, cfg)` (`engine.go`). It validates that the required extensions are registered and injects the spawn-configuration dependency types, then `Engine.Start` configures the OpenTelemetry propagator when telemetry is set.
+4. Publishers are attached after construction with `Engine.AddEventPublishers` and `Engine.AddStatePublishers`, which also start them.
+5. Shutdown is split: `Engine.Stop` closes the publishers and the event stream but does not stop the actor system, which the consumer stops.
+
+The consumer's `main` is therefore the actual composition root. The three root-module examples and `example/cluster` all follow it: `NewConfig`, then `GoaktOptions`, then `goakt.NewActorSystem`, then `NewEngine`. The helpers it depends on are mixed into the GoAkt runtime adapter package `ego`.
+
+This ADR only records that classification. Where the composition root should live, how it validates the graph and who owns Start/Stop ordering are decided by #105 (EGO-ARCH-003), which depends on this change and on #103. This change does not move or redesign any of these functions.
 
 ## 5. Slices
 
@@ -170,13 +186,24 @@ var ErrPublisherNotStarted = publishing.ErrPublisherNotStarted
 
 S1 has two steps with different preconditions:
 
-- *S1a, root only* — may land before #111, because the root lane verifies it. It changes only root-module files.
+- *S1a, root only* — changes only root-module files and may land before #111. The root lane compiles the root module only, though, and the moved API has consumers outside it: the four publishers use `EventPublisher`, `StatePublisher` and `ErrPublisherNotStarted`, and `benchmark` and `example/cluster` compile against the root through their `replace` directives. **Merging S1a therefore requires the nested-consumer check below, observed on the S1a head and recorded in the PR, even though #111 does not automate it yet.**
 - *S1b, publisher migration* — switching the four publishers from package `ego` to `port/publishing` MUST wait for #111, so that a publisher-only change runs that module's build, vet and lint.
+
+Nested-consumer check (merge condition for S1a, and repeated for S1b):
+
+```sh
+for m in publisher/kafka publisher/nats publisher/pulsar publisher/websocket benchmark example/cluster; do
+  (cd "$m" && go build ./... && go vet ./...)
+done
+go build ./mocks/ego/ && go vet ./mocks/ego/
+```
+
+The four publishers, `benchmark` and `mocks/ego` MUST pass. `example/cluster` already fails to build on `main` at `b43fad5`, for a reason unrelated to S1 (section 9). For it, the S1a head MUST report the same errors as `main`, with no new ones, until that failure is fixed separately. Once #111 builds nested modules in CI, its job replaces this manual check.
 
 S1 counts as implemented only when all of the following have been observed:
 
 1. An API-compatibility comparison of package `ego` between the baseline and S1 (for example `golang.org/x/exp/cmd/apidiff`) reports no incompatible change.
-2. All four publishers, `benchmark`, `example/cluster` and `mocks/ego` build and vet against the S1 root.
+2. The nested-consumer check above passes against the S1 root: the four publishers, `benchmark` and `mocks/ego` build and vet, and `example/cluster` introduces no new errors (or builds, once its existing failure is fixed).
 3. `errors.Is(err, ego.ErrPublisherNotStarted)` holds for errors returned by the publishers, and a publisher value still satisfies `var _ ego.EventPublisher = ...` assertions.
 4. After S1b, `go list -deps` for each publisher contains no `github.com/tochemey/goakt/v4` package.
 
@@ -204,7 +231,7 @@ Existing nested modules are judged by the same criterion. The publishers already
 ## 7. Impact on CI and test selection
 
 - **Today:** `internal/cmd/ciselect` classifies any nested-module file as satellite, and returns `ModeNone` when a change touches only satellite files (reproduced with the five `publisher/kafka` files: `mode=none`, 0 of 20 included packages). The root workflows lint and test only the root module.
-- **Consequence for this ADR:** no new `go.mod` and no publisher migration (S1b) before #111. S1a and S2 touch only the root module and are covered by the existing root lane.
+- **Consequence for this ADR:** no new `go.mod` and no publisher migration (S1b) before #111. S2 touches only the root module and is covered by the existing root lane. S1a touches only root files, but it changes an API that nested modules consume, so the root lane covers it only together with the manual nested-consumer check in section 5.
 - **Selection rule the topology enables:** for a change to package X, run the tests of X and of X's transitive reverse consumers, including packages that import X only in tests. Moving contracts out of package `ego` matters because today every root-package file forces a full-suite fallback.
 - **Existing boundaries:** after S1b, a publisher change should select only that publisher module, since the root module no longer compiles GoAkt for it. A change to `port/publishing` selects the root reverse consumers plus the four publishers.
 - **Test latency** in the root package (about 592 s, mostly fixed waits) limits how much any selection improvement shows in wall time. It is tracked in #112 and is not part of this decision.
@@ -228,7 +255,7 @@ Open inputs: which root version to publish first, and whether the module path st
 
 ## 9. Evidence and reproduction
 
-All measurements used baseline `a4edded` exported with `git archive` into a disposable directory, local Go 1.26.6 on linux/amd64, and no `-race` flag. CI uses Go 1.27.0.
+Unless a row names another commit, measurements used baseline `a4edded` exported with `git archive` into a disposable directory, local Go 1.26.6 on linux/amd64, and no `-race` flag. CI uses Go 1.27.0.
 
 | Claim | Command | Observed |
 |---|---|---|
@@ -238,6 +265,7 @@ All measurements used baseline `a4edded` exported with `git archive` into a disp
 | Satellite gap | `go run ./internal/cmd/ciselect -changed kafka.txt -out-dir out` with the five `publisher/kafka` paths | `mode=none`, 0 of 20 |
 | Publisher coupling | `(cd publisher/kafka && go list -deps ./... \| wc -l)` | 592 packages (15 root, 45 GoAkt) |
 | S1 prototype | same, after the throwaway extraction; cold build with `GOCACHE=$(mktemp -d) /usr/bin/time go build ./...` | 290 packages (2 root, 0 GoAkt); see proposal table |
+| Nested-consumer check at `main` `b43fad5` (before S1) | the section 5 loop, Go 1.26.6 | the four publishers, `benchmark` and `mocks/ego` pass; `example/cluster` fails: `*PostgresEventStore does not implement persistence.EventsStore (wrong type for method DeleteEvents)`. Its `DeleteEvents` lacks the `persistence.Scope` parameter (`stores.go:45`, `main.go:126`) |
 
 Limits: the S1 prototype covered Kafka only, over two rounds on a loaded host. Max RSS is per process. Alias compatibility was checked by compilation only. No CI, race or cold-module-download timings were taken.
 
@@ -248,4 +276,5 @@ Limits: the S1 prototype covered Kafka only, over two rounds on a loaded host. M
 | Protobuf policy: are `egopb` and `proto.Message` part of the supported public contract? | It decides whether `persistence`, `offsetstore` and `port/publishing` may keep importing `egopb`, and whether `command`, `eventadapter` and `projection` may keep importing the protobuf runtime. Removing GoAkt does not answer it. | A follow-up ADR before any contract drops or wraps `egopb` |
 | Module path `github.com/pablogore/ego/v4` versus the repository `getsyntegrity/ego` | The proxy resolves the path through a GitHub redirect. Migrating the path is a breaking import change for every consumer. | Maintainers, before the first release |
 | First published root version | Nested modules require `v4.4.3`, which does not exist; no tags exist in either repository. | Release owner, together with #111's release verification |
+| Composition root destination | Assembly is split today between package `ego` (`NewConfig`, `GoaktOptions`, `NewEngine`, publisher registration) and the consumer's `main` (section 4.1). This ADR only classifies it. | #105 |
 | Alias deprecation window | Aliases keep v4 compatible; whether and when to mark them `Deprecated:` is not decided. | S1 implementer, recorded in the S1 PR |

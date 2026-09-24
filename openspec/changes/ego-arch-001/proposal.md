@@ -67,7 +67,7 @@ Limits of that evidence: Kafka only; two rounds on a host with variable load (lo
 
 ## Dependencies and sequencing
 
-- **#111 blocks** any new `go.mod` and the migration of the publisher modules to `port/publishing`, because a publisher-only change is not verified by CI today. Designing and extracting `port/publishing` **inside the root module** is not blocked: it is verified by the existing root lane. The publisher migration lands only after #111 makes a Kafka-only change run Kafka build, vet and lint.
+- **#111 blocks** any new `go.mod` and the migration of the publisher modules to `port/publishing`, because a publisher-only change is not verified by CI today. Designing and extracting `port/publishing` **inside the root module** is not blocked, but the root lane alone does not verify it: the publishers, `benchmark` and `example/cluster` consume the root API from nested modules. Merging that extraction (S1a) requires the manual nested-consumer build and vet check defined in `design.md` section 5 until #111 automates it. The publisher migration lands only after #111 makes a Kafka-only change run Kafka build, vet and lint.
 - **Verification against a published tag is a release condition.** It is not a requirement to accept this ADR, nor to extract a package inside the root module. It becomes mandatory when a nested module is released (see `design.md`, versioning policy).
 - **#103 and #11** consume this topology; this change does not lock their signatures.
 - **#112** is independent; nothing here depends on test latency improvements.
