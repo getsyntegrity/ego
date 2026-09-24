@@ -192,13 +192,14 @@ S1 has two steps with different preconditions:
 Nested-consumer check (merge condition for S1a, and repeated for S1b):
 
 ```sh
-for m in publisher/kafka publisher/nats publisher/pulsar publisher/websocket benchmark example/cluster; do
+set -e
+for m in publisher/kafka publisher/nats publisher/pulsar publisher/websocket benchmark; do
   (cd "$m" && go build ./... && go vet ./...)
 done
 go build ./mocks/ego/ && go vet ./mocks/ego/
 ```
 
-The four publishers, `benchmark` and `mocks/ego` MUST pass. `example/cluster` already fails to build on `main` at `b43fad5`, for a reason unrelated to S1 (section 9). For it, the S1a head MUST report the same errors as `main`, with no new ones, until that failure is fixed separately. Once #111 builds nested modules in CI, its job replaces this manual check.
+The four publishers, `benchmark` and `mocks/ego` MUST pass; `set -e` makes any failed build or vet stop the gate. Check `example/cluster` separately against the same commands on `main` and the S1a head, recording both outputs in the PR. It already fails to build on `main` at `b43fad5` because its store implements the old interface (section 9; tracked by #115). Until #115 is fixed, S1a MUST introduce no new errors there. After #115, `example/cluster` MUST build and vet too. Once #111 builds nested modules in CI, its job replaces this manual check.
 
 S1 counts as implemented only when all of the following have been observed:
 
