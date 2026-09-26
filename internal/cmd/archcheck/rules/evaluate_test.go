@@ -661,6 +661,21 @@ func TestExternalAdapterNoRuntime_ForbidsRootAndGoAktOnly(t *testing.T) {
 	}
 }
 
+// TestApplicationNoRuntime_SourceIsDesignDoc proves I3 (design.md §3 now
+// documents an explicit Application section for migration, matching this
+// rule): application-no-runtime's Source names design.md §3 directly,
+// rather than the older "#107 scope" placeholder from before the ADR
+// caught up with what archcheck actually enforces.
+func TestApplicationNoRuntime_SourceIsDesignDoc(t *testing.T) {
+	rule, ok := ruleByID(DefaultRules(root), "application-no-runtime")
+	if !ok {
+		t.Fatal("application-no-runtime rule not found in DefaultRules")
+	}
+	if rule.Source != "design.md §3" {
+		t.Errorf("Source = %q, want %q", rule.Source, "design.md §3")
+	}
+}
+
 func TestNoCrossModuleInternal_ForbidsRootInternal(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{

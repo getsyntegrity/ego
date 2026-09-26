@@ -50,13 +50,10 @@ func (k Kind) String() string {
 	}
 }
 
-// Rule is one dependency-direction rule from design.md §3 (or, for
-// application-no-runtime and no-cross-module-internal, from the #107
-// issue scope that extends it to layers the ADR names but does not yet
-// enforce). A Rule applies to every package Layer.Match selects, and
-// forbids every non-stdlib import Forbids reports true for; Evaluate
-// filters out stdlib imports before calling Forbids, so Forbids is never
-// asked about one.
+// Rule is one dependency-direction rule from design.md §3. A Rule applies
+// to every package Layer.Match selects, and forbids every non-stdlib
+// import Forbids reports true for; Evaluate filters out stdlib imports
+// before calling Forbids, so Forbids is never asked about one.
 type Rule struct {
 	// ID is the rule's stable identifier, used in reports and by
 	// BaselineEntry.Rule to reference it, e.g. "contract-allowlist".
@@ -109,9 +106,9 @@ func allowedContractImport(rootModulePath, importPath string) bool {
 	return hasPathOrSubpath(importPath, "google.golang.org/protobuf")
 }
 
-// DefaultRules returns the repository's current rule table (design.md §3
-// plus the #107 scope additions), for the root Go module at
-// rootModulePath. Callers read rootModulePath from the root go.mod
+// DefaultRules returns the repository's current rule table (design.md §3),
+// for the root Go module at rootModulePath. Callers read rootModulePath
+// from the root go.mod
 // (parseGoModModulePath in internal/cmd/archcheck) rather than assuming a
 // hard-coded value, so the rule table stays correct if the module path
 // ever changes. DefaultRules returns a fresh slice on every call; Rule
@@ -137,7 +134,7 @@ func DefaultRules(rootModulePath string) []Rule {
 		{
 			ID:          "application-no-runtime",
 			Description: "the migration application must not import the root package ego, internal/extensions or the GoAkt runtime",
-			Source:      "#107 scope",
+			Source:      "design.md §3",
 			Layer:       ApplicationLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {

@@ -108,6 +108,12 @@ These rules apply to the root module. A rule check (slice S2) enforces them from
 - MAY import contracts, `egopb`, GoAkt and OpenTelemetry.
 - MUST keep a compatibility alias in package `ego` for every exported symbol that moves out of it during v4, with no rename.
 
+**Application** (`migration`):
+
+- MUST NOT import the root package `ego`, `internal/extensions` or `github.com/tochemey/goakt/v4` (enforced by archcheck's `application-no-runtime` rule).
+- MAY import contract packages and `egopb`.
+- `migration` violates this rule today — it imports package `ego` directly to replay through its runtime types (section 4) — so the violation is recorded in `internal/cmd/archcheck/baseline.go` and stays baselined until runtime-neutral contracts exist for what it uses (S3/S4, #103, #11).
+
 **External adapters** (publisher modules, future store adapters):
 
 - MUST depend on contract packages and `egopb` only, unless they genuinely need the runtime.
