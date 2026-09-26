@@ -31,6 +31,12 @@ import (
 	"github.com/pablogore/ego/v4/port/publishing"
 )
 
+// Compiles only if the types are identical (i.e. aliases).
+var (
+	_ *publishing.EventPublisher = (*EventPublisher)(nil)
+	_ *publishing.StatePublisher = (*StatePublisher)(nil)
+)
+
 // TestPublisherContractsAliasPortPublishing pins the compatibility promise of
 // ADR ego-arch-001 slice S1a: the publisher contracts moved to port/publishing
 // and package ego keeps aliases, so both import paths name the same types and
