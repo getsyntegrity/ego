@@ -108,10 +108,7 @@ func DefaultRules() []Rule {
 					return false
 				}
 				rel := stripRootModulePrefix(importPath)
-				if isContractRelPath(rel) {
-					return false
-				}
-				return true
+				return !isContractRelPath(rel)
 			},
 		},
 		{
