@@ -5,9 +5,17 @@ metadata:
   namespace: ego-example
 data:
   init.sql: |
-    -- events_store (from resources/eventstore_postgres.sql)
+    -- events_store, kept in sync by hand with example/cluster/stores.go's
+    -- eventsStoreSchemaDDL constant, which that module's Postgres-backed tests
+    -- run. The repo-root resources/eventstore_postgres.sql is NOT a source of
+    -- this schema: it predates tenant_id, events_store_revisions and
+    -- tenant_metadata, and is not kept in sync with this file.
+    --
+    -- tenant_id defaults to '' (Unscoped()); see README.md for the migration
+    -- note when adding this column to an existing database.
     CREATE TABLE IF NOT EXISTS events_store
     (
+        tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
         persistence_id    VARCHAR(255)          NOT NULL,
         sequence_number   BIGINT                NOT NULL,
         is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
@@ -17,12 +25,34 @@ data:
         shard_number      BIGINT                NOT NULL,
         encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
         is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-        PRIMARY KEY (persistence_id, sequence_number)
+        tenant_metadata   JSONB,
+        PRIMARY KEY (tenant_id, persistence_id, sequence_number)
     );
-    CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(persistence_id);
+    -- tenant_metadata is nullable (proto3 cannot distinguish a nil map from
+    -- an empty one, so both write NULL); ADD COLUMN IF NOT EXISTS migrates
+    -- an existing database with no backfill. See README.md's migration note.
+    ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
+    CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
     CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
     CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
     CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
+
+    -- events_store_revisions keeps each record's StorageRevision (highest
+    -- sequence number ever committed) so DeleteEvents cannot lower it; the
+    -- INSERT backfills existing records and is a no-op on a fresh database.
+    CREATE TABLE IF NOT EXISTS events_store_revisions
+    (
+        tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+        persistence_id VARCHAR(255)            NOT NULL,
+        revision       BIGINT                  NOT NULL,
+        PRIMARY KEY (tenant_id, persistence_id)
+    );
+    INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+    SELECT tenant_id, persistence_id, MAX(sequence_number)
+    FROM events_store
+    GROUP BY tenant_id, persistence_id
+    ON CONFLICT (tenant_id, persistence_id)
+    DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
 
     -- offsets_store (from resources/offsetstore_postgres.sql)
     CREATE TABLE IF NOT EXISTS offsets_store

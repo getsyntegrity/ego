@@ -339,6 +339,98 @@ The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so
 
 A separate headless service (`ego-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
 
+## Tenant column (`tenant_id`)
+
+`events_store` carries a `tenant_id` column (default `''`), because
+`persistence.EventsStore`'s record-addressing methods now take a
+`persistence.Scope` and key every record by the pair `(tenant_id,
+persistence_id)`, not `persistence_id` alone. This example always writes and
+reads with `persistence.Unscoped()`, which maps to `tenant_id = ''` — a valid
+tenant id is never empty, so `''` unambiguously means "no tenant" and never
+collides with a real one.
+
+Migrating an existing deployment's database needs no data rewrite: every
+existing row keeps reading back as `Unscoped()` once the column is added with
+its default.
+
+```sql
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255) DEFAULT '' NOT NULL;
+ALTER TABLE events_store DROP CONSTRAINT IF EXISTS events_store_pkey;
+ALTER TABLE events_store ADD PRIMARY KEY (tenant_id, persistence_id, sequence_number);
+DROP INDEX IF EXISTS idx_events_store_persistence_id;
+CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
+```
+
+## Revision table (`events_store_revisions`)
+
+A conditional write (`ExpectGenesis()` or `ExpectRevision(n)`) compares
+against the record's *storage revision*: the highest sequence number ever
+committed for that `(tenant_id, persistence_id)`. That value lives in its own
+table, not in `MAX(sequence_number)`, because `DeleteEvents` removes old events
+for retention. If the revision were derived from the remaining events,
+deleting them would let `ExpectGenesis()` succeed again and let a writer with a
+stale revision win.
+
+The revision row is also the per-record lock. Every write takes it before
+touching `events_store`: a conditional write locks it with `SELECT ... FOR
+UPDATE`, and an unconditional write upserts it (never lowering the revision).
+An unconditional write therefore cannot commit between a conditional write's
+revision check and its insert. A batch with several persistence ids locks
+them in sorted order, so two batches cannot deadlock each other.
+
+`DeleteEvents` takes part in the same lock: it row-locks the record's
+revision row (if one exists) before running its `DELETE`, so a delete can
+never interleave with a concurrent write of the same record, and vice versa.
+Unlike a write, it never creates the revision row when none exists — doing
+that would make a persistence id that was never written look established,
+so a later `ExpectGenesis()` would wrongly conflict. It never modifies the
+revision either way.
+
+To migrate an existing database, run the statements below (they are also the
+tail of `k8s/postgres.yaml`'s `init.sql`, and are safe to re-run). The backfill
+takes each record's highest *retained* sequence number, so a record whose
+latest events were already deleted before this migration cannot recover its
+old revision.
+
+```sql
+CREATE TABLE IF NOT EXISTS events_store_revisions
+(
+    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id VARCHAR(255)            NOT NULL,
+    revision       BIGINT                  NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id)
+);
+INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+SELECT tenant_id, persistence_id, MAX(sequence_number)
+FROM events_store
+GROUP BY tenant_id, persistence_id
+ON CONFLICT (tenant_id, persistence_id)
+DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
+```
+
+Run it while no writer is active, so no event commits between the backfill
+and the new code taking over.
+
+## Tenant metadata column (`tenant_metadata`)
+
+`events_store` also carries a nullable `tenant_metadata JSONB` column, which
+persists `egopb.Event.TenantMetadata` — the map a tenant-aware
+`EventSourcedActor` serializes with `tenancy.MarshalMetadata` before writing
+and reconstructs with `tenancy.UnmarshalMetadata` on recovery. Without this
+column, `insertEvent`/`scanEvents` silently dropped that map, so a
+tenant-scoped actor rejected its own recovered events after a restart.
+
+The column is nullable rather than `NOT NULL DEFAULT '{}'` on purpose:
+proto3 cannot distinguish a nil map from an empty one on the wire, so an
+event written with no tenant metadata — and every pre-existing legacy row —
+stores `NULL` and reads back as a nil map. Migrating an existing deployment's
+database needs no backfill and invents no tenant identity for a row that
+never had one:
+
+```sql
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
+```
+
 ## Dependency Isolation
 
 This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
