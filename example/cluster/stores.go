@@ -57,7 +57,10 @@ import (
 // record. It is separate from events_store because DeleteEvents removes
 // replayable events for retention but must never lower the revision, or
 // ExpectGenesis() would succeed again and a stale ExpectRevision would win.
-// The row is also the per-record lock every write takes (see WriteEvents).
+// The row is also the per-record lock: every write takes it before touching
+// events_store (see WriteEvents), and so does DeleteEvents before its DELETE
+// (see DeleteEvents), so a delete can never interleave with a concurrent
+// write of the same record.
 //
 // The script is idempotent and doubles as the migration for a database
 // created before events_store_revisions existed: the final INSERT backfills
@@ -281,7 +284,11 @@ func (s *PostgresEventStore) writeUnconditional(ctx context.Context, tenantID st
 // events_store_revisions row (lockRevision), which every writer of that
 // record takes before touching events_store, so the revision check, the
 // inserts and the revision update happen with no other writer's commit in
-// between. The insert does NOT use ON CONFLICT DO NOTHING: a primary-key
+// between. DeleteEvents locks the same row (lockRevisionIfExists) before its
+// DELETE, so it also serializes against writeConditional and
+// writeUnconditional for an established record; see DeleteEvents's doc
+// comment for why it cannot reuse lockRevision as is. The insert does NOT use
+// ON CONFLICT DO NOTHING: a primary-key
 // clash under the held lock means two callers disagree about the target
 // sequence numbers, and that must fail the transaction rather than silently
 // drop the write.
@@ -340,6 +347,11 @@ func (s *PostgresEventStore) writeConditional(ctx context.Context, scope persist
 // upsert of that key waits on it) and disappears if tx rolls back. When the
 // placeholder insert finds a row that another transaction committed in the
 // meantime, the row is locked and read again.
+//
+// Only a writer (writeConditional) calls lockRevision: claiming the record
+// with a revision-0 placeholder is correct there because the caller is about
+// to commit at least one event for it. DeleteEvents must NOT do that — see
+// lockRevisionIfExists, which it uses instead.
 func lockRevision(ctx context.Context, tx pgx.Tx, tenantID, persistenceID string) (revision uint64, exists bool, err error) {
 	for {
 		err := tx.QueryRow(ctx,
@@ -368,19 +380,69 @@ func lockRevision(ctx context.Context, tx pgx.Tx, tenantID, persistenceID string
 	}
 }
 
+// lockRevisionIfExists row-locks (tenantID, persistenceID)'s
+// events_store_revisions row for the rest of tx, if one exists, and reports
+// whether it did. Unlike lockRevision, it never creates a placeholder row
+// when none exists: DeleteEvents is its only caller, and inserting a
+// revision-0 row for a persistence id that has never been written would make
+// that id look established, so a later ExpectGenesis() would wrongly
+// conflict against a record that in fact does not exist.
+func lockRevisionIfExists(ctx context.Context, tx pgx.Tx, tenantID, persistenceID string) (exists bool, err error) {
+	var revision uint64
+	err = tx.QueryRow(ctx,
+		`SELECT revision FROM events_store_revisions WHERE tenant_id = $1 AND persistence_id = $2 FOR UPDATE`,
+		tenantID, persistenceID,
+	).Scan(&revision)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("lock revision: %w", err)
+	}
+}
+
 // DeleteEvents implements persistence.EventsStore. scope is validated before
 // anything is touched, and this never affects a record in another scope.
 // Only replayable events are removed: the record's events_store_revisions
-// row is left as is, so its StorageRevision survives retention.
+// row, and the StorageRevision it holds, are never modified, so retention
+// can never reopen ExpectGenesis() or let a stale ExpectRevision win.
+//
+// DeleteEvents takes part in the same per-record lock protocol as
+// WriteEvents (see events_store_revisions's and writeConditional's doc
+// comments): inside a transaction, it row-locks the record's
+// events_store_revisions row with lockRevisionIfExists BEFORE running the
+// DELETE, so a concurrent conditional or unconditional write of the same
+// record can never commit between the lock and the delete, and vice versa.
+// It deliberately uses lockRevisionIfExists rather than lockRevision — see
+// that function's doc comment for why. When no revision row exists yet, the
+// DELETE still runs without creating one: that case only ever matches
+// legacy rows written before events_store_revisions existed, and there is
+// no revision to protect for a persistence id that was never written.
 func (s *PostgresEventStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx,
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded
+
+	if _, err := lockRevisionIfExists(ctx, tx, tenantID, persistenceID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number<=$3`,
-		tenantID, persistenceID, toSequenceNumber)
-	return err
+		tenantID, persistenceID, toSequenceNumber,
+	); err != nil {
+		return fmt.Errorf("delete events: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // ReplayEvents implements persistence.EventsStore. scope is validated before

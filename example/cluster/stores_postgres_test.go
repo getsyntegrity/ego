@@ -36,10 +36,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -381,6 +383,110 @@ func requireConflictAt(t *testing.T, err error, revision uint64) {
 	require.Equal(t, revision, actual)
 }
 
+// appendApplicationName returns dsn with an application_name query parameter
+// appended, so a store's own pooled connections can be told apart from any
+// other connection against the same database when polling pg_stat_activity.
+func appendApplicationName(dsn, name string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "application_name=" + name
+}
+
+// newPostgresTestStoreNamed behaves exactly like newPostgresTestStore, except
+// every connection the returned store opens for its own operations carries
+// applicationName. A deterministic lock-pinning race test uses that tag to
+// identify, via pg_locks joined to pg_stat_activity, exactly which lock
+// requests belong to this store — not to some other connection, another
+// test, or another database — so it can wait for a precise number of lock
+// waiters instead of a fixed sleep. Setup (schema creation and truncation)
+// still runs over the plain, untagged dsn.
+func newPostgresTestStoreNamed(t *testing.T, dsn, applicationName string) *PostgresEventStore {
+	t.Helper()
+	store := newPostgresTestStore(t, dsn)
+	store.dsn = appendApplicationName(dsn, applicationName)
+	return store
+}
+
+// waitForLockWaiters polls pg_locks/pg_stat_activity, scoped to
+// applicationName and the current database so unrelated connections, other
+// databases and any test running concurrently cannot pollute the count,
+// until at least want ungranted lock requests are observed. It fails the
+// test with a clear message on timeout instead of letting a race test hang
+// or, worse, proceed on unverified timing.
+func waitForLockWaiters(t *testing.T, dsn, applicationName string, want int, timeout time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	adminPool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer adminPool.Close()
+
+	deadline := time.Now().Add(timeout)
+	var lastCount int
+	for {
+		err := adminPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_locks l
+			JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE a.application_name = $1 AND a.datname = current_database() AND NOT l.granted`,
+			applicationName,
+		).Scan(&lastCount)
+		require.NoError(t, err)
+		if lastCount >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %d lock waiter(s) tagged %q, last saw %d", timeout, want, applicationName, lastCount)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// rawLockTable opens a dedicated connection outside any store's pool, begins
+// a transaction on it, and locks table in the given PostgreSQL lock mode.
+// release rolls the transaction back (it never writes data on purpose) and
+// closes the connection, both of which drop the lock. Used to pause a store
+// write or delete deterministically at a precise point instead of relying on
+// goroutine scheduling luck.
+func rawLockTable(t *testing.T, ctx context.Context, dsn, table, mode string) (release func()) {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	require.NoError(t, err)
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, fmt.Sprintf("LOCK TABLE %s IN %s MODE", table, mode))
+	require.NoError(t, err)
+	return func() {
+		_ = tx.Rollback(ctx)
+		_ = conn.Close(ctx)
+	}
+}
+
+// rawLockRow behaves like rawLockTable, but row-locks (with FOR UPDATE) the
+// rows matched by query instead of locking a whole table. It fails the test
+// if query matches no row, since that would silently lock nothing.
+func rawLockRow(t *testing.T, ctx context.Context, dsn, query string, args ...any) (release func()) {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	require.NoError(t, err)
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err)
+	rows, err := tx.Query(ctx, query, args...)
+	require.NoError(t, err)
+	matched := 0
+	for rows.Next() {
+		matched++
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	require.Positive(t, matched, "lock query matched no rows: %s", query)
+	return func() {
+		_ = tx.Rollback(ctx)
+		_ = conn.Close(ctx)
+	}
+}
+
 // TestPostgresEventStore_PartialDeleteKeepsRevision deletes the oldest events
 // and proves the revision a conditional write compares against is still the
 // highest committed sequence number.
@@ -460,6 +566,229 @@ func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
 	require.NoError(t, store.WriteEvents(ctx, tenantB, pgMarkedEvent(t, persistenceID, 3, 3), persistence.ExpectRevision(2)))
 	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
+}
+
+// TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData is the
+// Postgres-backed companion to TestPostgresEventStore_PersistenceIDs_ZeroPageSize
+// (which proves the degenerate case with a nil pool and never reaches the
+// database): here the scope actually holds persistence ids, so the zero-page
+// short circuit is proven to return an empty page and an empty token even
+// when there is real data it could otherwise have paged over.
+func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	store := newPostgresTestStore(t, dsn)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	scope := persistence.Unscoped()
+	for _, id := range []string{"pg-page-a", "pg-page-b", "pg-page-c"} {
+		require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, id, 1, 1), persistence.ExpectGenesis()))
+	}
+
+	ids, next, err := store.PersistenceIDs(ctx, scope, 0, "")
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+	assert.Empty(t, next)
+}
+
+// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict pins the
+// per-record lock deterministically instead of relying on goroutine
+// scheduling luck: a raw connection holds a table-level lock that blocks any
+// INSERT into events_store, so an Unconditional() write can be paused exactly
+// after it has advanced the events_store_revisions row (see
+// writeUnconditional) but before its own event insert commits. A concurrent
+// ExpectRevision(1) write is then started and is forced to queue behind that
+// same revision row (lockRevision) rather than racing straight for
+// events_store, which is exactly the shared lock writeConditional and
+// writeUnconditional's doc comments describe. The two writers target
+// different sequence numbers (7 and 2), so there is no primary-key clash to
+// mask a broken lock: without it, the conditional write could read the stale
+// revision (1), "successfully" insert sequence 2, and never learn that
+// revision 7 already won.
+func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	const appName = "pg-race-distinct"
+	store := newPostgresTestStoreNamed(t, dsn, appName)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	// t.Cleanup, not a plain defer: it must run even if this goroutine is
+	// currently unwinding via t.Fatalf (e.g. from waitForLockWaiters timing
+	// out), and it must run AFTER the raw lock's own t.Cleanup(release)
+	// below (t.Cleanup runs last-registered-first), or a still-blocked
+	// writer goroutine would make store.Disconnect's pool.Close() hang
+	// forever waiting for its connection to be returned.
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	scope := persistence.Unscoped()
+	const persistenceID = "pg-race-distinct-seq"
+	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+
+	release := rawLockTable(t, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
+	// Safety net: if a later assertion (or waitForLockWaiters itself) fails
+	// before the explicit release() below runs, this still drops the raw
+	// lock during cleanup, so a blocked goroutine cannot deadlock
+	// store.Disconnect's pool.Close(). release is idempotent (a second
+	// Rollback/Close is a harmless no-op error).
+	t.Cleanup(release)
+
+	unconditionalDone := make(chan error, 1)
+	go func() {
+		unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 7, 777), persistence.Unconditional())
+	}()
+	// The unconditional write advances the revision row (uncontended, since
+	// nothing else holds it yet) and then blocks on its own INSERT, which
+	// conflicts with the held table lock: exactly one waiter so far.
+	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+
+	conditionalDone := make(chan error, 1)
+	go func() {
+		conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
+	}()
+	// The conditional write's lockRevision now queues behind the
+	// unconditional write's held-but-uncommitted revision row lock: a second
+	// waiter, blocked on a different lock than the first.
+	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+
+	release()
+
+	errUnconditional := <-unconditionalDone
+	errConditional := <-conditionalDone
+
+	require.NoError(t, errUnconditional, "the unconditional write must always succeed")
+	requireConflictAt(t, errConditional, 7)
+
+	var count int
+	require.NoError(t, store.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
+		"", persistenceID, 2,
+	).Scan(&count))
+	assert.Equal(t, 0, count, "the losing conditional write must never have inserted sequence 2")
+}
+
+// TestPostgresEventStore_UnconditionalRaceSameSequenceConflict is the same
+// deterministic pin as TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict,
+// except both writers target the SAME sequence number. Without the shared
+// revision-row lock, the conditional write's own INSERT would be the one to
+// discover the clash, surfacing a raw primary-key violation instead of a
+// typed *persistence.ConflictError — exactly the failure mode
+// TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision already
+// guards against under timing luck; this test pins it deterministically.
+func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	const appName = "pg-race-same"
+	store := newPostgresTestStoreNamed(t, dsn, appName)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	// See the identical t.Cleanup ordering comment in
+	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	scope := persistence.Unscoped()
+	const persistenceID = "pg-race-same-seq"
+	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+
+	release := rawLockTable(t, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
+	// Safety net: if a later assertion (or waitForLockWaiters itself) fails
+	// before the explicit release() below runs, this still drops the raw
+	// lock during cleanup, so a blocked goroutine cannot deadlock
+	// store.Disconnect's pool.Close(). release is idempotent (a second
+	// Rollback/Close is a harmless no-op error).
+	t.Cleanup(release)
+
+	unconditionalDone := make(chan error, 1)
+	go func() {
+		unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 222), persistence.Unconditional())
+	}()
+	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+
+	conditionalDone := make(chan error, 1)
+	go func() {
+		conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 999), persistence.ExpectRevision(1))
+	}()
+	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+
+	release()
+
+	errUnconditional := <-unconditionalDone
+	errConditional := <-conditionalDone
+
+	require.NoError(t, errUnconditional, "the unconditional write must always succeed")
+
+	var conflictErr *persistence.ConflictError
+	require.True(t, errors.As(errConditional, &conflictErr), "expected a *persistence.ConflictError, got %v", errConditional)
+	actual, ok := conflictErr.ActualRevision()
+	require.True(t, ok)
+	assert.EqualValues(t, 2, actual)
+
+	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.EqualValues(t, 222, pgEventMarker(t, latest), "only the unconditional writer's row may occupy sequence 2")
+}
+
+// TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite
+// proves DeleteEvents takes part in the same per-record lock as WriteEvents
+// (see DeleteEvents's doc comment): a raw connection row-locks sequence 1 so
+// a total DeleteEvents(..., 2) call blocks on its own DELETE statement AFTER
+// it has already locked the events_store_revisions row via
+// lockRevisionIfExists. A concurrent ExpectRevision(2) write is then started
+// and must queue behind that same revision row rather than racing straight
+// ahead, which this test confirms by observing exactly two lock waiters
+// before releasing the pause: the blocked DELETE, and the blocked
+// lockRevision. Once released, both operations must succeed, the delete must
+// never have touched the revision, and the newly written sequence 3 becomes
+// the record's new frontier.
+func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	const appName = "pg-race-delete"
+	store := newPostgresTestStoreNamed(t, dsn, appName)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	// See the identical t.Cleanup ordering comment in
+	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	scope := persistence.Unscoped()
+	const persistenceID = "pg-race-delete-target"
+	writeRevisions(t, store, scope, persistenceID, 2)
+
+	release := rawLockRow(t, ctx, dsn,
+		`SELECT sequence_number FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3 FOR UPDATE`,
+		"", persistenceID, uint64(1))
+	// Safety net: see the identical t.Cleanup(release) comment in
+	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+	t.Cleanup(release)
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- store.DeleteEvents(ctx, scope, persistenceID, 2)
+	}()
+	// DeleteEvents has locked the revision row and is now blocked on its own
+	// DELETE, which needs sequence 1's row lock: one waiter.
+	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 3, 3), persistence.ExpectRevision(2))
+	}()
+	// The conditional write's lockRevision now queues behind DeleteEvents's
+	// held revision-row lock: a second waiter, blocked on a different lock
+	// than the first.
+	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+
+	release()
+
+	require.NoError(t, <-deleteDone)
+	require.NoError(t, <-writeDone, "the conditional write must observe the unchanged revision and succeed")
+
+	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 10, 10)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1, "only sequence 3 must remain once the delete and the write both commit")
+	assert.EqualValues(t, 3, replayed[0].GetSequenceNumber())
+
+	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
+	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
 }
 
 // legacyEventsStoreDDL is events_store as it existed before

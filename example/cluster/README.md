@@ -378,6 +378,14 @@ An unconditional write therefore cannot commit between a conditional write's
 revision check and its insert. A batch with several persistence ids locks
 them in sorted order, so two batches cannot deadlock each other.
 
+`DeleteEvents` takes part in the same lock: it row-locks the record's
+revision row (if one exists) before running its `DELETE`, so a delete can
+never interleave with a concurrent write of the same record, and vice versa.
+Unlike a write, it never creates the revision row when none exists — doing
+that would make a persistence id that was never written look established,
+so a later `ExpectGenesis()` would wrongly conflict. It never modifies the
+revision either way.
+
 To migrate an existing database, run the statements below (they are also the
 tail of `k8s/postgres.yaml`'s `init.sql`, and are safe to re-run). The backfill
 takes each record's highest *retained* sequence number, so a record whose
