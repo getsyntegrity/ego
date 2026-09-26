@@ -61,7 +61,7 @@ rule keeps leaf changes cheap and still catches real reverse consumers.
 - [x] T4 `release.yml`: discovered publishers + published-version build with
       `replace` dropped. Check: `scripts/ci/verify-published.sh` fails
       clearly for an unpublished version (v4.4.3) and passes for a published one.
-- [ ] T5 Docs: `docs/ci.md`, `CHANGELOG.md`, toolchain notes. Check: readback.
+- [x] T5 Docs: `docs/ci.md`, `CHANGELOG.md`, toolchain notes. Check: readback.
 
 ## Acceptance (from #111)
 
@@ -77,6 +77,19 @@ rule keeps leaf changes cheap and still catches real reverse consumers.
 
 Forecast about 600 authored lines. Single PR with one commit per task
 (assumption, see PR description); it can be split at T3/T4 if a reviewer asks.
+
+Actual, `git diff --stat` from before T1 to the end of T5: 972 insertions,
+22 deletions across 15 files (one commit per task, plus one
+`docs(odd)` progress commit per task on the feature branch). This is
+above the ~600-line forecast, mostly `docs/ci.md` (172 lines, replacing
+and substantially extending the old "Multi-module path (#104)" section)
+and the two new test files (127 + 129 lines) the strict-TDD rule
+requires alongside the selector and main.go changes. Per this
+repository's advisory-only line heuristic, this is reported rather than
+split or trimmed: no task boundary was artificial, each commit is an
+independent, reviewable work unit, and no test, doc or comment was cut to
+fit the number. No PR was opened as part of this work (out of scope for
+this session); pushing and opening the PR remain the user's decision.
 
 ## Progress
 
@@ -199,3 +212,48 @@ Forecast about 600 authored lines. Single PR with one commit per task
   lacks `port/publishing`" risk the task named does not apply to this
   particular version — that risk is real for an OLDER root version,
   which is not reachable here since none exists yet.
+
+### T5 (commit c3a2623)
+
+- `docs/ci.md`: replaced the "Multi-module path (#104)" section with
+  "Nested module CI (#111)" — the selection rules, `modules.json`, what
+  `verify-module.sh` runs, the matrix job, the integrated-vs-published
+  verification distinction, the version policy, and the toolchain table.
+  Readback: cross-checked every concrete claim (rule order, file names,
+  flags, reasons) against the actual code in `select.go`/`main.go`/the
+  scripts; all matched.
+- `CHANGELOG.md`: one bullet under the existing `[Unreleased]` →
+  `### 🧹 Improvements` section, in the same style as the neighboring
+  #107/#108 entries.
+- `internal/cmd/archcheck/baseline.go`: left unchanged. Its
+  `RemovalCriterion` text ("S1b: switch to port/publishing once #111
+  builds and verifies nested modules in CI") stays true after this
+  change — #111 now does exactly that — so nothing needed editing.
+- Final full check: `go run ./internal/cmd/archcheck` → `15 packages
+  checked, 70 edges checked, 5 baselined, 0 violation(s), 0 stale
+  entries`; `go test ./internal/cmd/ciselect/...` → both packages `ok`;
+  `golangci-lint run ./internal/cmd/...` → `0 issues` (all with the
+  matching go1.26.6 SDK, see the toolchain note under T1+T2).
+
+## Close-out
+
+All five tasks done. Acceptance re-checked against #111's own list:
+Kafka-only changes now select and verify Kafka (T1/T2, manually
+reproduced); all six modules are discovered and verified with no static
+list (T3, `findSatelliteDirs` + `modules.json` feed the matrix, and
+`release.yml`'s publisher list is now discovered too, T4); root-only leaf
+changes keep the fast lane (`TestSelect_Modules_RootLeafChangeNot...`);
+a failing nested build/vet/lint/test fails the module's own job, and
+therefore the check, since `verify-module.sh` runs each step under
+`set -euo pipefail`; selection and reasons are visible in the job summary
+(`## Nested modules` section); release verification fails clearly for an
+unpublished root version (reproduced with `v4.4.3`); tests cover
+satellite-only changes (`TestSelect_SatelliteOnlyIsNone`, updated) and
+module discovery (`TestModuleDiscovery_FindsNestedModulesAndTheirRootImports`).
+
+Not run: the actual GitHub Actions workflows (no CI trigger available
+from this session) — the workflow YAML was validated for syntax only
+(`python3 -c 'yaml.safe_load(...)'`) and reasoned through against the
+`build`/`modules` job wiring; `actionlint` was not available and was not
+installed, per instructions. No PR was opened; pushing and opening one
+remain the user's decision.
