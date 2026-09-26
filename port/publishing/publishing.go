@@ -26,8 +26,9 @@
 // It is a runtime-neutral contract package: it depends only on the standard
 // library, egopb and the protobuf runtime, never on the GoAkt runtime. A
 // publisher implementation can import it without pulling in package ego.
-// Package ego keeps type aliases for every declaration here, so
-// ego.EventPublisher and publishing.EventPublisher are the same type.
+// Package ego keeps type aliases for the publisher interfaces, so
+// ego.EventPublisher and publishing.EventPublisher are the same type, and
+// re-exports ErrPublisherNotStarted as a variable holding the same error value.
 package publishing
 
 import (
@@ -98,7 +99,7 @@ type StatePublisher interface {
 	//   - error: If an error occurs during state publication, it is returned.
 	Publish(ctx context.Context, state *egopb.DurableState) error
 
-	// Close closes the durbable state publisher.
+	// Close closes the durable state publisher.
 	// This method is called when the publisher is being shut down.
 	// It should be used to clean up any resources used by the publisher.
 	//
