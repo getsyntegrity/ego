@@ -128,9 +128,13 @@ func isVendoredImportPath(importPath string) bool {
 
 // discoverNestedModuleDirs finds every directory under repoRoot that holds
 // its own go.mod, other than repoRoot's own. It never descends into
-// vendor/, testdata/, a hidden directory, or a satellite module once found
-// (a module inside another module is not a case this repository has, but
-// the loader must not silently merge one into its parent if it ever does).
+// vendor/, testdata/ or a hidden directory, but it keeps descending after
+// finding a module's go.mod, so a module nested inside another nested
+// module (this repository has none today, but the loader must not
+// silently merge one into its parent if it ever does) is discovered too,
+// under its own directory, rather than only its outermost ancestor.
+// loadNestedModule (loader.go) is what keeps such an inner module's files
+// out of its outer module's own package set.
 func discoverNestedModuleDirs(repoRoot string) ([]string, error) {
 	var dirs []string
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
@@ -148,7 +152,6 @@ func discoverNestedModuleDirs(repoRoot string) ([]string, error) {
 		}
 		if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
 			dirs = append(dirs, path)
-			return filepath.SkipDir
 		}
 		return nil
 	})
@@ -189,6 +192,12 @@ func parseGoModModulePath(path string) (string, error) {
 // rules.Package per non-empty directory. A directory's import path is the
 // module path, plus "/" and the directory's path relative to moduleDir
 // when that is not the module root itself.
+//
+// It never descends into a subdirectory (other than moduleDir itself) that
+// holds its own go.mod: that subdirectory is a separate nested module, and
+// discoverNestedModuleDirs already finds and loads it on its own, under
+// its own module path, so merging its files into moduleDir's package set
+// here would count them twice, under the wrong import path.
 func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 	modulePath, err := parseGoModModulePath(filepath.Join(moduleDir, "go.mod"))
 	if err != nil {
@@ -205,6 +214,11 @@ func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 		if d.IsDir() {
 			if path != moduleDir && skipDirName(d.Name()) {
 				return filepath.SkipDir
+			}
+			if path != moduleDir {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

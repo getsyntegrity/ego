@@ -154,6 +154,35 @@ func TestLoadNestedModule_SkipsVendor(t *testing.T) {
 	}
 }
 
+// TestDiscoverNestedModuleDirs_FindsModuleNestedInsideAnotherModule proves
+// discoverNestedModuleDirs keeps descending once it finds a module's
+// go.mod, so a module nested inside another nested module is discovered
+// too, instead of stopping at the outer module and never seeing the inner
+// one.
+func TestDiscoverNestedModuleDirs_FindsModuleNestedInsideAnotherModule(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeFile(t, filepath.Join(repoRoot, "go.mod"), "module github.com/example/root\n")
+	writeFile(t, filepath.Join(repoRoot, "outer", "go.mod"), "module github.com/example/outer\n")
+	writeFile(t, filepath.Join(repoRoot, "outer", "inner", "go.mod"), "module github.com/example/inner\n")
+
+	dirs, err := discoverNestedModuleDirs(repoRoot)
+	if err != nil {
+		t.Fatalf("discoverNestedModuleDirs: %v", err)
+	}
+	want := []string{
+		filepath.Join(repoRoot, "outer"),
+		filepath.Join(repoRoot, "outer", "inner"),
+	}
+	if len(dirs) != len(want) {
+		t.Fatalf("dirs = %v, want %v", dirs, want)
+	}
+	for i, w := range want {
+		if dirs[i] != w {
+			t.Errorf("dirs[%d] = %q, want %q", i, dirs[i], w)
+		}
+	}
+}
+
 func TestDiscoverNestedModuleDirs(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeFile(t, filepath.Join(repoRoot, "go.mod"), "module github.com/example/root\n")
@@ -172,6 +201,55 @@ func TestDiscoverNestedModuleDirs(t *testing.T) {
 	want := filepath.Join(repoRoot, "publisher", "kafka")
 	if dirs[0] != want {
 		t.Errorf("dirs[0] = %q, want %q", dirs[0], want)
+	}
+}
+
+// TestLoadNestedModule_DoesNotMergeInnerModule proves loadNestedModule
+// stops descending at a subdirectory that has its own go.mod: the outer
+// module's package set must not include the inner module's files, and the
+// inner module loads separately, under its own module path, when
+// loadNestedModule is called on it directly (as discoverNestedModuleDirs
+// now does).
+func TestLoadNestedModule_DoesNotMergeInnerModule(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/outer\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "outer.go"), `package outer
+
+import "fmt"
+
+var _ = fmt.Sprintf
+`)
+	writeFile(t, filepath.Join(dir, "inner", "go.mod"), "module github.com/example/inner\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "inner", "inner.go"), `package inner
+
+import "context"
+
+var _ = context.Background
+`)
+
+	outerPkgs, err := loadNestedModule(dir)
+	if err != nil {
+		t.Fatalf("loadNestedModule(outer): %v", err)
+	}
+	if len(outerPkgs) != 1 {
+		t.Fatalf("outer pkgs = %+v, want exactly 1 (inner must not be merged in)", outerPkgs)
+	}
+	if outerPkgs[0].ImportPath != "github.com/example/outer" {
+		t.Errorf("outer ImportPath = %q, want github.com/example/outer", outerPkgs[0].ImportPath)
+	}
+	if containsImport(outerPkgs[0].Imports, "context") {
+		t.Errorf("outer Imports = %v, must not contain the inner module's import context", outerPkgs[0].Imports)
+	}
+
+	innerPkgs, err := loadNestedModule(filepath.Join(dir, "inner"))
+	if err != nil {
+		t.Fatalf("loadNestedModule(inner): %v", err)
+	}
+	if len(innerPkgs) != 1 {
+		t.Fatalf("inner pkgs = %+v, want exactly 1", innerPkgs)
+	}
+	if innerPkgs[0].ImportPath != "github.com/example/inner" {
+		t.Errorf("inner ImportPath = %q, want github.com/example/inner", innerPkgs[0].ImportPath)
 	}
 }
 
