@@ -52,13 +52,23 @@ type BaselineEntry struct {
 }
 
 // ValidateBaseline checks that every entry in baseline is well formed:
-// Owner, Justification and RemovalCriterion are non-empty, and Rule names
-// a rule that exists in ruleset. It reports every problem found, not just
-// the first, joined with errors.Join, so a baseline with several broken
-// entries is fixed in one pass.
+// Importer and Import are non-empty, Owner, Justification and
+// RemovalCriterion are non-empty, Rule names a rule that exists in
+// ruleset, and no two entries share the same (Importer, Import, Rule) —
+// Evaluate can only use the first of a pair of duplicates, so a duplicate
+// is dead weight at best and a maintenance trap at worst. It reports every
+// problem found, not just the first, joined with errors.Join, so a
+// baseline with several broken entries is fixed in one pass.
 func ValidateBaseline(baseline []BaselineEntry, ruleset []Rule) error {
 	var errs []error
+	seen := make(map[baselineKey]bool, len(baseline))
 	for _, entry := range baseline {
+		if strings.TrimSpace(entry.Importer) == "" {
+			errs = append(errs, fmt.Errorf("baseline entry (importer=%q, import=%q, rule %s): missing importer", entry.Importer, entry.Import, entry.Rule))
+		}
+		if strings.TrimSpace(entry.Import) == "" {
+			errs = append(errs, fmt.Errorf("baseline entry %s -> %q (rule %s): missing import", entry.Importer, entry.Import, entry.Rule))
+		}
 		if strings.TrimSpace(entry.Owner) == "" {
 			errs = append(errs, fmt.Errorf("baseline entry %s -> %s (rule %s): missing owner", entry.Importer, entry.Import, entry.Rule))
 		}
@@ -71,6 +81,12 @@ func ValidateBaseline(baseline []BaselineEntry, ruleset []Rule) error {
 		if _, ok := ruleByID(ruleset, entry.Rule); !ok {
 			errs = append(errs, unknownRuleErr(entry))
 		}
+
+		key := keyOf(entry.Importer, entry.Import, entry.Rule)
+		if seen[key] {
+			errs = append(errs, fmt.Errorf("baseline entry %s -> %s (rule %s): duplicate entry", entry.Importer, entry.Import, entry.Rule))
+		}
+		seen[key] = true
 	}
 	return errors.Join(errs...)
 }

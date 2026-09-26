@@ -237,6 +237,10 @@ func TestValidateBaseline_MissingFieldsRejected(t *testing.T) {
 		{"missing justification", BaselineEntry{Importer: "a", Import: "b", Rule: "contract-allowlist", Owner: "@x", RemovalCriterion: "r"}},
 		{"missing removal criterion", BaselineEntry{Importer: "a", Import: "b", Rule: "contract-allowlist", Owner: "@x", Justification: "j"}},
 		{"unknown rule", BaselineEntry{Importer: "a", Import: "b", Rule: "no-such-rule", Owner: "@x", Justification: "j", RemovalCriterion: "r"}},
+		{"empty importer", BaselineEntry{Importer: "", Import: "b", Rule: "contract-allowlist", Owner: "@x", Justification: "j", RemovalCriterion: "r"}},
+		{"blank importer", BaselineEntry{Importer: "   ", Import: "b", Rule: "contract-allowlist", Owner: "@x", Justification: "j", RemovalCriterion: "r"}},
+		{"empty import", BaselineEntry{Importer: "a", Import: "", Rule: "contract-allowlist", Owner: "@x", Justification: "j", RemovalCriterion: "r"}},
+		{"blank import", BaselineEntry{Importer: "a", Import: "   ", Rule: "contract-allowlist", Owner: "@x", Justification: "j", RemovalCriterion: "r"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -244,6 +248,45 @@ func TestValidateBaseline_MissingFieldsRejected(t *testing.T) {
 				t.Fatalf("ValidateBaseline() = nil error, want a rejection for %+v", c.entry)
 			}
 		})
+	}
+}
+
+func TestValidateBaseline_DuplicateEntryRejected(t *testing.T) {
+	entry := BaselineEntry{
+		Importer:         root + "/publisher/kafka",
+		Import:           root,
+		Rule:             "external-adapter-no-runtime",
+		Owner:            "@pablogore",
+		Justification:    "test fixture",
+		RemovalCriterion: "never; test only",
+	}
+	// Two entries with the same (Importer, Import, Rule): the second is a
+	// duplicate even though the whole struct is byte-identical.
+	err := ValidateBaseline([]BaselineEntry{entry, entry}, DefaultRules(root))
+	if err == nil {
+		t.Fatal("ValidateBaseline() = nil error, want a rejection for a duplicate entry")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error %q does not mention duplicate", err)
+	}
+}
+
+func TestValidateBaseline_DuplicateEntryDifferentRuleIsNotADuplicate(t *testing.T) {
+	// Same Importer and Import, but a different Rule: not the same key, so
+	// not a duplicate (a real import could plausibly break two rules at
+	// once, e.g. a nested module's root-package import).
+	a := BaselineEntry{
+		Importer:         root + "/publisher/kafka",
+		Import:           root,
+		Rule:             "external-adapter-no-runtime",
+		Owner:            "@pablogore",
+		Justification:    "test fixture",
+		RemovalCriterion: "never; test only",
+	}
+	b := a
+	b.Rule = "no-cross-module-internal"
+	if err := ValidateBaseline([]BaselineEntry{a, b}, DefaultRules(root)); err != nil {
+		t.Fatalf("ValidateBaseline() = %v, want nil: same importer/import but different rules is not a duplicate", err)
 	}
 }
 
