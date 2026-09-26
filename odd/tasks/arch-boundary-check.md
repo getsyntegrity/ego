@@ -325,3 +325,25 @@ All run from the repository root, `2e5660a` (branch head after R1–R7):
    no longer matches a violation; delete it`; reverted with `git checkout --`, re-ran → exit 0 again.
 8. `git status` clean except the doc-update commit this task list is part of;
    `git log --oneline 3cd6a19..HEAD` shows exactly the 7 commits above plus this doc-update commit.
+
+## Review round 2 (PR #117)
+
+The branch was rebased onto `main` `d2cb902` (#116, `port/publishing`). The only conflict was in
+`CHANGELOG.md`, and both Improvements entries were kept. After the rebase, `contract-allowlist`
+matches `port/publishing` for the first time, so the summary line is now
+`archcheck: 15 packages checked, 70 edges checked, 5 baselined, 0 violation(s), 0 stale entries`.
+The +1 package and +1 edge are `port/publishing` and its single non-stdlib import (`egopb`). The
+baseline is unchanged.
+
+- [x] **R8** Hermetic e2e fixtures: `requireGo` clears `GOFLAGS` and sets `GOWORK=off`; fixture
+  `go.mod` files declare `go 1.21`. RED: `TestRequireGo_IsolatesInheritedGoEnv` failed
+  (`GOFLAGS = "-mod=vendor", want empty`); GREEN after the fix, also with `GOFLAGS=-mod=vendor`.
+  Commit `b8bea9d`.
+- [x] **R9** `docs/ci.md`: an emptied layer fails the check, so remove or retarget its rule in the
+  same change. Structural readback.
+
+Checks: `go test -count=1 ./internal/cmd/archcheck/...` ok (plain and with `GOFLAGS=-mod=vendor`);
+`golangci-lint` 0 issues (needs `vendor/` present because `.golangci.yml` sets
+`modules-download-mode: vendor`, and `GOTOOLCHAIN=go1.26.6` locally); `go run ./internal/cmd/archcheck`
+and `GOFLAGS=-mod=vendor go run ./internal/cmd/archcheck` exit 0 with the line above. Not
+verified locally: `-race` (CI only, per user policy).
