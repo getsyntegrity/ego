@@ -55,6 +55,42 @@ func TestParseGoModModulePath(t *testing.T) {
 	}
 }
 
+// TestParseGoModModulePath_Forms covers every module-declaration form the
+// go.mod grammar allows (https://go.dev/ref/mod#go-mod-file-module), since
+// this repository does not depend on golang.org/x/mod and hand-parses
+// go.mod files itself.
+func TestParseGoModModulePath_Forms(t *testing.T) {
+	const want = "github.com/pablogore/ego/v4"
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"plain", "module github.com/pablogore/ego/v4\n\ngo 1.26.0\n"},
+		{"quoted", "module \"github.com/pablogore/ego/v4\"\n\ngo 1.26.0\n"},
+		{"trailing comment", "module github.com/pablogore/ego/v4 // root module\n\ngo 1.26.0\n"},
+		{"quoted with trailing comment", "module \"github.com/pablogore/ego/v4\" // root module\n\ngo 1.26.0\n"},
+		{"block form", "module (\n\tgithub.com/pablogore/ego/v4\n)\n\ngo 1.26.0\n"},
+		{"block form quoted", "module (\n\t\"github.com/pablogore/ego/v4\"\n)\n\ngo 1.26.0\n"},
+		{"block form with comment on the path line", "module (\n\tgithub.com/pablogore/ego/v4 // root module\n)\n\ngo 1.26.0\n"},
+		{"leading comment line", "// this is the root module\nmodule github.com/pablogore/ego/v4\n\ngo 1.26.0\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			goMod := filepath.Join(dir, "go.mod")
+			writeFile(t, goMod, c.content)
+
+			got, err := parseGoModModulePath(goMod)
+			if err != nil {
+				t.Fatalf("parseGoModModulePath(%q): %v", c.content, err)
+			}
+			if got != want {
+				t.Errorf("parseGoModModulePath() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestParseGoModModulePath_NoModuleLine(t *testing.T) {
 	dir := t.TempDir()
 	goMod := filepath.Join(dir, "go.mod")

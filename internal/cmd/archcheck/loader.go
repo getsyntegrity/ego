@@ -162,10 +162,16 @@ func discoverNestedModuleDirs(repoRoot string) ([]string, error) {
 	return dirs, nil
 }
 
-// parseGoModModulePath extracts the module path from the "module ..." line
-// of the go.mod file at path, without depending on golang.org/x/mod: only
-// the module's own declared identity is needed here, not full go.mod
-// semantics.
+// parseGoModModulePath extracts the module path from the "module"
+// directive of the go.mod file at path, without depending on
+// golang.org/x/mod (not a dependency of this repository's root module):
+// only the module's own declared identity is needed here, not full go.mod
+// semantics. It accepts every form the go.mod grammar
+// (https://go.dev/ref/mod#go-mod-file-module) allows for that directive: a
+// plain path, a path quoted as a Go string literal (for the rare path that
+// needs escaping), a trailing "// comment", and the parenthesized block
+// form (verb "(", one argument line, ")") that every go.mod directive may
+// use.
 func parseGoModModulePath(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -174,16 +180,66 @@ func parseGoModModulePath(path string) (string, error) {
 	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
+	inBlock := false
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if rest, ok := strings.CutPrefix(line, "module "); ok {
-			return strings.TrimSpace(rest), nil
+		line := strings.TrimSpace(stripGoModLineComment(scanner.Text()))
+		if line == "" {
+			continue
 		}
+		if inBlock {
+			if line == ")" {
+				inBlock = false
+				continue
+			}
+			return unquoteModulePathToken(line)
+		}
+		rest, ok := strings.CutPrefix(line, "module")
+		if !ok {
+			continue
+		}
+		if rest != "" && rest[0] != ' ' && rest[0] != '\t' {
+			// A line starting with "module" but not the verb itself, e.g.
+			// "moduleX ...": not a match, keep scanning.
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "(" {
+			inBlock = true
+			continue
+		}
+		if rest == "" {
+			// "module" alone with nothing else on the line is not a valid
+			// single-line directive; keep scanning defensively rather than
+			// returning an empty path.
+			continue
+		}
+		return unquoteModulePathToken(rest)
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
 	return "", fmt.Errorf("%s: no module line found", path)
+}
+
+// stripGoModLineComment removes a trailing "// ..." line comment, per the
+// go.mod grammar. It is not quote-aware: a module path never legitimately
+// contains "//" inside a quoted string, so a plain substring search is
+// enough for the one directive this parser cares about.
+func stripGoModLineComment(line string) string {
+	if idx := strings.Index(line, "//"); idx >= 0 {
+		return line[:idx]
+	}
+	return line
+}
+
+// unquoteModulePathToken returns tok with Go string-literal quoting
+// removed, if tok is quoted; an unquoted tok is returned unchanged.
+func unquoteModulePathToken(tok string) (string, error) {
+	tok = strings.TrimSpace(tok)
+	if len(tok) > 0 && tok[0] == '"' {
+		return strconv.Unquote(tok)
+	}
+	return tok, nil
 }
 
 // loadNestedModule parses every non-_test .go file under moduleDir with
