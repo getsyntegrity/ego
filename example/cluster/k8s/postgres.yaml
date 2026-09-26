@@ -5,9 +5,11 @@ metadata:
   namespace: ego-example
 data:
   init.sql: |
-    -- events_store (from resources/eventstore_postgres.sql; kept in sync by
-    -- hand with example/cluster/stores.go's eventsStoreSchemaDDL constant,
-    -- used by that module's Postgres-backed tests)
+    -- events_store, kept in sync by hand with example/cluster/stores.go's
+    -- eventsStoreSchemaDDL constant, which that module's Postgres-backed tests
+    -- run. The repo-root resources/eventstore_postgres.sql is NOT a source of
+    -- this schema: it predates tenant_id, events_store_revisions and
+    -- tenant_metadata, and is not kept in sync with this file.
     --
     -- tenant_id defaults to '' (Unscoped()); see README.md for the migration
     -- note when adding this column to an existing database.
