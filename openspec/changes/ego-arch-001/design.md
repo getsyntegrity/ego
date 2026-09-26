@@ -33,7 +33,7 @@ flowchart TB
     command["command"]
     persistence["persistence"]
     offsetstore["offsetstore"]
-    publishing["port/publishing<br/>(proposed S1; today ego/publisher.go)"]
+    publishing["port/publishing<br/>(S1a done, #116; ego/publisher.go keeps compatibility aliases)"]
     projection["projection"]
     eventstream["eventstream"]
     encryption["encryption"]
@@ -84,15 +84,15 @@ flowchart TB
 Notes on the diagram:
 
 - `ext --> contracts` summarizes six real edges: `internal/extensions` imports `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence` and `projection`.
-- `ego --> contracts` summarizes the root package's imports of `command`, `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` and `tenancy`. After S1 it also imports `port/publishing` to declare the aliases.
+- `ego --> contracts` summarizes the root package's imports of `command`, `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` and `tenancy`. Since S1a (#116), it also imports `port/publishing` to declare the compatibility aliases (`publisher.go`).
 - Test support (`testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`) and examples are omitted for readability; their edges are listed in section 4.
-- Today the publishers import package `ego` and `egopb`; the arrow to `port/publishing` is the target, which lands only after #111 (section 5).
+- The publishers still import package `ego` and `egopb` today; the arrow to `port/publishing` is S1b's target, which lands only after #111 builds and verifies nested modules in CI (section 5). Until then, the four publisher-importing-`ego` edges stay in `internal/cmd/archcheck/baseline.go`.
 
 **Canonical location for a new contract.** A new top-level contract package goes under `port/`, the way `port/publishing` does for S1; a subpackage of an existing contract (for example something added under `persistence/`) stays under that contract's own root instead. The eight contracts that already exist at the repository root (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`) are not moved under `port/` in v4 — moving them would be a breaking import-path change for every consumer, and section 4's source-to-destination map already gives every one of them a "Stay" destination. `port/` is where a contract is *born* from now on, not a relocation target for the ones that already have a stable path.
 
 ## 3. Dependency rules
 
-These rules apply to the root module. A rule check (slice S2) enforces them from `go list -deps` output; until S2 lands they are review rules.
+These rules apply to the root module and, where named, to nested modules. A rule check (slice S2, `internal/cmd/archcheck`, done — #117) enforces them, but not by walking a full transitive dependency closure. It checks direct production import edges: the root module's own graph from `go list -e -json ./...`, and each nested module's imports parsed directly with `go/parser` (imports only, no build and no network — see docs/ci.md, "Architecture boundary check", for the tool's exact mechanics and its rule table). Direct edges are enough for the rules below because contracts use a closed allowlist, and every package that allowlist admits is itself already runtime-free; a transitive path from a contract to GoAkt would therefore need a new *direct* edge first, and that edge is exactly what the check sees. This is also how "MUST NOT import any package whose dependency closure contains GoAkt" is enforced for contracts, without literally computing a closure. One thing it does not cover: S1 criterion 4 below (that a publisher's transitive `go list -deps` output excludes GoAkt after S1b) is a nested-module, post-migration check that belongs to #111's CI job, not to archcheck.
 
 **Contracts** (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, and every package under `port/`):
 
@@ -139,7 +139,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `eventstream` | Contract | `internal/queue`, `internal/syncmap` | Stay | — |
 | `encryption` | Contract | — | Stay | — |
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
-| `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1 (this ADR designs it) |
+| `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b (publisher migration) pending on #111 |
 | `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/<name>` (exact name left to #103) | S3, #103 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
@@ -149,6 +149,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `internal/queue`, `internal/syncmap` | Utility (used by a contract) | — | Stay | Move only with the module that uses them |
 | `internal/runner`, `internal/ticker`, `internal/pause` | Utility (runtime and tests) | — | Stay | — |
 | `internal/cmd/ciselect`, `.../selector` | Tooling | `.../selector` | Stay | Extended by #111 |
+| `internal/cmd/archcheck` | Tooling | `.../rules` | Stay | S2 done, #117 |
 | `testkit` | Test support (public) | `egopb`, `encryption`, `offsetstore`, `persistence` | Stay | — |
 | `persistence/conformance` | Test support | `egopb`, `persistence`, `tenancy`, `test/data/testpb` | Stay | — |
 | `mocks/ego`, `mocks/persistence`, `mocks/offsetstore`, `mocks/encryption`, `mocks/eventadapter`, `mocks/tenancy` | Test support (generated) | contract packages, `egopb` | Stay; `mocks/ego` regenerated or aliased in S1 | S1 |
@@ -221,8 +222,8 @@ S1 counts as implemented only when all of the following have been observed:
 
 Once a release exposes `port/publishing`, it is public API for the rest of v4. From then on, rolling back S1 may revert in-repository callers but MUST NOT delete the package (see the proposal's Rollback section).
 
-**S2 — dependency-rule check.**
-A check derived from `go list -deps -json` that fails CI when a rule in section 3 is violated, and prints the offending import path. It needs no module change and can land in parallel with S1a. How it is wired into CI is #111's decision.
+**S2 — dependency-rule check. Done (#117).**
+`internal/cmd/archcheck` checks every direct production import edge in section 3's layers — the root module's graph from `go list -e -json ./...`, plus each nested module parsed with `go/parser` — against a baseline of known violations, and fails CI when an edge breaks a rule that no baseline entry covers, printing the importer, the forbidden import and the rule. It needed no module change and landed in parallel with S1a, as planned. It runs in both `pull_request.yml` and `build.yml`, right after dependencies are installed and before the linter (docs/ci.md, "Architecture boundary check").
 
 **S3 — neutral behavior contracts** (#103). Remove `extension.Dependency` from `EventSourcedBehavior`, `DurableStateBehavior` and `SagaBehavior`, or add neutral definitions with a documented bridge. #103 owns the signatures and the compatibility plan.
 
