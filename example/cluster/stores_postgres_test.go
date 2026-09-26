@@ -50,6 +50,7 @@ import (
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/persistence/conformance"
+	"github.com/pablogore/ego/v4/tenancy"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 )
 
@@ -111,6 +112,35 @@ func pgEventMarker(t *testing.T, event *egopb.Event) float64 {
 	var msg testpb.AccountCreated
 	require.NoError(t, event.GetEvent().UnmarshalTo(&msg))
 	return msg.GetAccountBalance()
+}
+
+// pgMarkedEventWithMetadata behaves exactly like pgMarkedEvent, except the
+// built event also carries tenantMetadata — the field a tenant-aware
+// EventSourcedActor populates via tenancy.MarshalMetadata before persisting
+// (event_sourced_actor.go's marshalEvent), and which insertEvent/scanEvents
+// must round-trip exactly (#115 Codex P2).
+func pgMarkedEventWithMetadata(t *testing.T, persistenceID string, sequenceNumber uint64, marker float64, tenantMetadata map[string]string) []*egopb.Event {
+	t.Helper()
+	events := pgMarkedEvent(t, persistenceID, sequenceNumber, marker)
+	events[0].TenantMetadata = tenantMetadata
+	return events
+}
+
+// pgRealisticTenantMetadata returns a TenantContext for tenantID and the
+// Metadata a real write path actually attaches to an event: exactly what
+// tenancy.MarshalMetadata(tc) produces (the ego.tenant.* carrier keys), plus
+// one arbitrary extra key that is no part of that contract — proving the
+// store round-trips the map byte for byte rather than special-casing known
+// keys.
+func pgRealisticTenantMetadata(t *testing.T, tenantID string) (tenancy.TenantContext, map[string]string) {
+	t.Helper()
+	id, err := tenancy.NewTenantID(tenantID)
+	require.NoError(t, err)
+	tc, err := tenancy.NewTenantContext(id)
+	require.NoError(t, err)
+	metadata := map[string]string(tenancy.MarshalMetadata(tc))
+	metadata["x-extra-carried-key"] = "pg-md-extra-value"
+	return tc, metadata
 }
 
 // raceTwoWriters runs a and b as independent goroutines released
@@ -791,6 +821,138 @@ func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *t
 	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
 }
 
+// TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite proves an
+// unconditional write persists egopb.Event.TenantMetadata exactly, and both
+// GetLatestEvent and ReplayEvents recover it unchanged (#115 Codex P2:
+// insertEvent/scanEvents used to drop this field on every write and read
+// path, so a tenant-aware EventSourcedActor rejected its own recovered
+// events after a restart — see event_sourced_actor.go:572 and
+// tenancy.UnmarshalMetadata).
+func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	store := newPostgresTestStore(t, dsn)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-unconditional-tenant")
+	scope, err := persistence.NewTenantScope("pg-md-unconditional-tenant")
+	require.NoError(t, err)
+	const persistenceID = "pg-md-unconditional-event"
+
+	require.NoError(t, store.WriteEvents(ctx, scope,
+		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
+		persistence.Unconditional()))
+
+	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, metadata, latest.GetTenantMetadata(), "GetLatestEvent must recover the exact tenant metadata map")
+
+	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1)
+	require.Equal(t, metadata, replayed[0].GetTenantMetadata(), "ReplayEvents must recover the exact tenant metadata map")
+
+	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
+	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
+	require.Equal(t, tc, gotTC)
+}
+
+// TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite is the same
+// proof as TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite,
+// against writeConditional's insertEventSQL path instead of
+// writeUnconditional's insertEventIgnoreDuplicateSQL (#115 Codex P2).
+func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	store := newPostgresTestStore(t, dsn)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-conditional-tenant")
+	scope, err := persistence.NewTenantScope("pg-md-conditional-tenant")
+	require.NoError(t, err)
+	const persistenceID = "pg-md-conditional-event"
+
+	require.NoError(t, store.WriteEvents(ctx, scope,
+		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
+		persistence.ExpectGenesis()))
+
+	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, metadata, latest.GetTenantMetadata(), "GetLatestEvent must recover the exact tenant metadata map")
+
+	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1)
+	require.Equal(t, metadata, replayed[0].GetTenantMetadata(), "ReplayEvents must recover the exact tenant metadata map")
+
+	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
+	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
+	require.Equal(t, tc, gotTC)
+}
+
+// TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents proves
+// GetShardEvents — the third scanEvents call site — also recovers
+// egopb.Event.TenantMetadata exactly (#115 Codex P2).
+func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	store := newPostgresTestStore(t, dsn)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-shard-tenant")
+	scope, err := persistence.NewTenantScope("pg-md-shard-tenant")
+	require.NoError(t, err)
+	const persistenceID = "pg-md-shard-event"
+
+	require.NoError(t, store.WriteEvents(ctx, scope,
+		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
+		persistence.ExpectGenesis()))
+
+	events, _, err := store.GetShardEvents(ctx, 1, 0, 10)
+	require.NoError(t, err)
+
+	var found *egopb.Event
+	for _, event := range events {
+		if event.GetPersistenceId() == persistenceID {
+			found = event
+		}
+	}
+	require.NotNil(t, found, "GetShardEvents must return the event written above")
+	require.Equal(t, metadata, found.GetTenantMetadata(), "GetShardEvents must recover the exact tenant metadata map")
+
+	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(found.GetTenantMetadata()))
+	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
+	require.Equal(t, tc, gotTC)
+}
+
+// TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone proves an event
+// written with no TenantMetadata (the nil, non-tenant-aware case — most of
+// this file's other events) reads back with none: proto3 cannot distinguish
+// a nil map from an empty one, so this is the same wire shape a legacy row
+// produces (#115 Codex P2).
+func TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	store := newPostgresTestStore(t, dsn)
+	ctx := context.Background()
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	scope := persistence.Unscoped()
+	const persistenceID = "pg-md-absent-event"
+
+	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+
+	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Empty(t, latest.GetTenantMetadata(), "an event written with no tenant metadata must read back with none")
+}
+
 // legacyEventsStoreDDL is events_store as it existed before
 // events_store_revisions: the revision was derived from MAX(sequence_number).
 const legacyEventsStoreDDL = `
@@ -853,4 +1015,82 @@ func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent(t, "pg-legacy", 4, 4), persistence.ExpectRevision(3)))
 	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, "pg-legacy", 1, 0), persistence.ExpectGenesis()), 1)
 	require.NoError(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, "pg-legacy", 2, 2), persistence.ExpectRevision(1)))
+}
+
+// legacyEventsStoreDDLBeforeTenantMetadata is events_store and
+// events_store_revisions as they existed right after #115's scoped-store
+// migration but before tenant_metadata existed: everything
+// eventsStoreSchemaDDL creates today except that column.
+const legacyEventsStoreDDLBeforeTenantMetadata = `
+CREATE TABLE events_store
+(
+    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id    VARCHAR(255)          NOT NULL,
+    sequence_number   BIGINT                NOT NULL,
+    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
+    event_payload     BYTEA                 NOT NULL,
+    event_manifest    VARCHAR(255)          NOT NULL,
+    timestamp         BIGINT                NOT NULL,
+    shard_number      BIGINT                NOT NULL,
+    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
+    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
+);
+CREATE TABLE events_store_revisions
+(
+    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id VARCHAR(255)            NOT NULL,
+    revision       BIGINT                  NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id)
+);
+`
+
+// TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata starts from a
+// database that has events_store and events_store_revisions but no
+// tenant_metadata column, inserts an event row the old way with plain SQL
+// (no such column to write to), applies eventsStoreSchemaDDL (the same
+// idempotent script the k8s init and README use), and proves the column is
+// added with NO backfill: the pre-existing row's tenant_metadata is NULL —
+// never an invented tenant identity — and the row is otherwise unchanged.
+// Applying the script twice is a no-op (#115 Codex P2).
+func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	ctx := context.Background()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
+	require.NoError(t, err)
+
+	const persistenceID = "pg-legacy-tenant-metadata"
+	_, err = pool.Exec(ctx, `
+		INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
+		VALUES ('', $1, 1, ''::bytea, '', 1000, 1)`, persistenceID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+	require.NoError(t, err, "the schema script must be idempotent")
+
+	var tenantMetadataIsNull bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT tenant_metadata IS NULL FROM events_store WHERE tenant_id='' AND persistence_id=$1 AND sequence_number=1`,
+		persistenceID,
+	).Scan(&tenantMetadataIsNull))
+	assert.True(t, tenantMetadataIsNull, "the migration must not backfill or invent tenant metadata for a pre-existing row")
+
+	store := NewPostgresEventStore(dsn)
+	require.NoError(t, store.Connect(ctx))
+	defer store.Disconnect(ctx)
+
+	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Empty(t, latest.GetTenantMetadata(), "a pre-existing row must read back with no tenant metadata, never an invented identity")
+	assert.EqualValues(t, 1000, latest.GetTimestamp(), "the legacy row's other columns must be unaffected by the migration")
 }

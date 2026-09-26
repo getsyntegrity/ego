@@ -23,8 +23,13 @@ data:
         shard_number      BIGINT                NOT NULL,
         encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
         is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
+        tenant_metadata   JSONB,
         PRIMARY KEY (tenant_id, persistence_id, sequence_number)
     );
+    -- tenant_metadata is nullable (proto3 cannot distinguish a nil map from
+    -- an empty one, so both write NULL); ADD COLUMN IF NOT EXISTS migrates
+    -- an existing database with no backfill. See README.md's migration note.
+    ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
     CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
     CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
     CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);

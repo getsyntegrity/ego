@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -66,6 +67,21 @@ import (
 // created before events_store_revisions existed: the final INSERT backfills
 // each record's revision from its highest retained sequence number, and never
 // lowers a revision that is already stored.
+//
+// tenant_metadata is a nullable JSONB column carrying egopb.Event's
+// TenantMetadata (proto field 10), the map a tenant-aware EventSourcedActor
+// serializes via tenancy.MarshalMetadata before persisting and reconstructs
+// via tenancy.UnmarshalMetadata on recovery (event_sourced_actor.go). It must
+// be nullable rather than NOT NULL DEFAULT '{}': proto3 cannot distinguish a
+// nil map from an empty one on the wire, so insertEvent (below) writes NULL
+// for both, and scanEvents reads NULL back as a nil map — the same shape
+// GetTenantMetadata() returns for an event that never carried tenant
+// metadata at all. A JSON object, not a second key/value table, mirrors the
+// map's own shape and keeps a single-record write to one row (#115 Codex
+// P2). ADD COLUMN IF NOT EXISTS migrates a database created before this
+// column existed with NO backfill: an existing row's tenant_metadata is
+// NULL, which is already the correct "no tenant metadata" reading for a row
+// nothing ever attached an identity to — inventing one here would be wrong.
 const eventsStoreSchemaDDL = `
 CREATE TABLE IF NOT EXISTS events_store
 (
@@ -79,8 +95,10 @@ CREATE TABLE IF NOT EXISTS events_store
     shard_number      BIGINT                NOT NULL,
     encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
     is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
+    tenant_metadata   JSONB,
     PRIMARY KEY (tenant_id, persistence_id, sequence_number)
 );
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
 CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
 CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
 CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
@@ -197,19 +215,36 @@ const (
 	insertEventSQL = `
 		INSERT INTO events_store
 			(tenant_id, persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-			 timestamp, shard_number, encryption_key_id, is_encrypted)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+			 timestamp, shard_number, encryption_key_id, is_encrypted, tenant_metadata)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
 	insertEventIgnoreDuplicateSQL = insertEventSQL + `
 		ON CONFLICT (tenant_id, persistence_id, sequence_number) DO NOTHING`
 )
 
 // insertEvent writes event under tenantID inside tx using query, which is
 // insertEventSQL or insertEventIgnoreDuplicateSQL.
+//
+// event.GetTenantMetadata() is marshaled to JSON for tenant_metadata. A nil
+// or empty map marshals to a nil []byte, which pgx sends as SQL NULL rather
+// than the JSON object "{}" — proto3 cannot tell a nil map from an empty one
+// apart, so both write NULL and both read back as a nil map from scanEvents,
+// matching egopb.Event.GetTenantMetadata()'s own zero value (#115 Codex P2;
+// see eventsStoreSchemaDDL's doc comment above for why the column is
+// nullable).
 func insertEvent(ctx context.Context, tx pgx.Tx, query, tenantID string, event *egopb.Event) error {
 	payload, err := proto.Marshal(event.GetEvent())
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
+
+	var tenantMetadata []byte
+	if metadata := event.GetTenantMetadata(); len(metadata) > 0 {
+		tenantMetadata, err = json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("marshal tenant metadata: %w", err)
+		}
+	}
+
 	if _, err := tx.Exec(ctx, query,
 		tenantID,
 		event.GetPersistenceId(),
@@ -221,6 +256,7 @@ func insertEvent(ctx context.Context, tx pgx.Tx, query, tenantID string, event *
 		event.GetShard(),
 		event.GetEncryptionKeyId(),
 		event.GetIsEncrypted(),
+		tenantMetadata,
 	); err != nil {
 		return fmt.Errorf("insert event: %w", err)
 	}
@@ -455,7 +491,7 @@ func (s *PostgresEventStore) ReplayEvents(ctx context.Context, scope persistence
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-		       timestamp, shard_number, encryption_key_id, is_encrypted
+		       timestamp, shard_number, encryption_key_id, is_encrypted, tenant_metadata
 		FROM events_store
 		WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number>=$3 AND sequence_number<=$4
 		ORDER BY sequence_number ASC
@@ -478,7 +514,7 @@ func (s *PostgresEventStore) GetLatestEvent(ctx context.Context, scope persisten
 	}
 	events, err := s.pool.Query(ctx, `
 		SELECT persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-		       timestamp, shard_number, encryption_key_id, is_encrypted
+		       timestamp, shard_number, encryption_key_id, is_encrypted, tenant_metadata
 		FROM events_store
 		WHERE tenant_id=$1 AND persistence_id=$2
 		ORDER BY sequence_number DESC
@@ -553,7 +589,7 @@ func (s *PostgresEventStore) PersistenceIDs(ctx context.Context, scope persisten
 func (s *PostgresEventStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-		       timestamp, shard_number, encryption_key_id, is_encrypted
+		       timestamp, shard_number, encryption_key_id, is_encrypted, tenant_metadata
 		FROM events_store
 		WHERE shard_number=$1 AND timestamp > $2
 		ORDER BY timestamp ASC
@@ -596,7 +632,9 @@ func (s *PostgresEventStore) ShardOffsets(ctx context.Context) (map[uint64]int64
 	return offsets, rows.Err()
 }
 
-// scanEvents reads rows into egopb.Event slices.
+// scanEvents reads rows into egopb.Event slices. Every caller's SELECT (see
+// ReplayEvents, GetLatestEvent, GetShardEvents) must list tenant_metadata
+// last, matching the Scan order below.
 func scanEvents(rows pgx.Rows) ([]*egopb.Event, error) {
 	var events []*egopb.Event
 	for rows.Next() {
@@ -610,15 +648,26 @@ func scanEvents(rows pgx.Rows) ([]*egopb.Event, error) {
 			shardNumber     uint64
 			encryptionKeyID string
 			isEncrypted     bool
+			tenantMetadata  []byte
 		)
 		if err := rows.Scan(&persistenceID, &sequenceNumber, &isDeleted, &payload, &manifest,
-			&timestamp, &shardNumber, &encryptionKeyID, &isEncrypted); err != nil {
+			&timestamp, &shardNumber, &encryptionKeyID, &isEncrypted, &tenantMetadata); err != nil {
 			return nil, err
 		}
 
 		eventAny := &anypb.Any{TypeUrl: manifest}
 		if err := proto.Unmarshal(payload, eventAny); err != nil {
 			return nil, fmt.Errorf("unmarshal event payload: %w", err)
+		}
+
+		// A NULL tenant_metadata column (legacy rows, and any event written
+		// with no tenant metadata — see insertEvent) leaves metadata nil,
+		// matching egopb.Event.GetTenantMetadata()'s zero value exactly.
+		var metadata map[string]string
+		if len(tenantMetadata) > 0 {
+			if err := json.Unmarshal(tenantMetadata, &metadata); err != nil {
+				return nil, fmt.Errorf("unmarshal tenant metadata: %w", err)
+			}
 		}
 
 		events = append(events, &egopb.Event{
@@ -630,6 +679,7 @@ func scanEvents(rows pgx.Rows) ([]*egopb.Event, error) {
 			Shard:           shardNumber,
 			EncryptionKeyId: encryptionKeyID,
 			IsEncrypted:     isEncrypted,
+			TenantMetadata:  metadata,
 		})
 	}
 	return events, rows.Err()

@@ -411,6 +411,26 @@ DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revi
 Run it while no writer is active, so no event commits between the backfill
 and the new code taking over.
 
+## Tenant metadata column (`tenant_metadata`)
+
+`events_store` also carries a nullable `tenant_metadata JSONB` column, which
+persists `egopb.Event.TenantMetadata` — the map a tenant-aware
+`EventSourcedActor` serializes with `tenancy.MarshalMetadata` before writing
+and reconstructs with `tenancy.UnmarshalMetadata` on recovery. Without this
+column, `insertEvent`/`scanEvents` silently dropped that map, so a
+tenant-scoped actor rejected its own recovered events after a restart.
+
+The column is nullable rather than `NOT NULL DEFAULT '{}'` on purpose:
+proto3 cannot distinguish a nil map from an empty one on the wire, so an
+event written with no tenant metadata — and every pre-existing legacy row —
+stores `NULL` and reads back as a nil map. Migrating an existing deployment's
+database needs no backfill and invents no tenant identity for a row that
+never had one:
+
+```sql
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
+```
+
 ## Dependency Isolation
 
 This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
