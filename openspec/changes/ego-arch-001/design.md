@@ -116,7 +116,8 @@ These rules apply to the root module. A rule check (slice S2) enforces them from
 
 **External adapters** (publisher modules, future store adapters):
 
-- MUST depend on contract packages and `egopb` only, unless they genuinely need the runtime.
+- The restriction applies to first-party dependencies only: from this repository, an external adapter MAY import only contract packages and `egopb`. Third-party libraries are allowed without restriction — a publisher genuinely needs a broker client (`github.com/segmentio/kafka-go` and similar) — and archcheck's `external-adapter-no-runtime` rule only ever denies a first-party target (the root package `ego` or GoAkt), never a third-party import.
+- MUST NOT import package `ego` or GoAkt, unless the adapter genuinely needs the runtime.
 - MUST NOT import package `ego` merely to reach a contract that exists in a contract package.
 
 **Across module boundaries:**
