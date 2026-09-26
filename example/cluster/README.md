@@ -339,6 +339,28 @@ The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so
 
 A separate headless service (`ego-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
 
+## Tenant column (`tenant_id`)
+
+`events_store` carries a `tenant_id` column (default `''`), because
+`persistence.EventsStore`'s record-addressing methods now take a
+`persistence.Scope` and key every record by the pair `(tenant_id,
+persistence_id)`, not `persistence_id` alone. This example always writes and
+reads with `persistence.Unscoped()`, which maps to `tenant_id = ''` — a valid
+tenant id is never empty, so `''` unambiguously means "no tenant" and never
+collides with a real one.
+
+Migrating an existing deployment's database needs no data rewrite: every
+existing row keeps reading back as `Unscoped()` once the column is added with
+its default.
+
+```sql
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255) DEFAULT '' NOT NULL;
+ALTER TABLE events_store DROP CONSTRAINT IF EXISTS events_store_pkey;
+ALTER TABLE events_store ADD PRIMARY KEY (tenant_id, persistence_id, sequence_number);
+DROP INDEX IF EXISTS idx_events_store_persistence_id;
+CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
+```
+
 ## Dependency Isolation
 
 This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.

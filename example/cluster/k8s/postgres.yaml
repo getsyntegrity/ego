@@ -5,9 +5,15 @@ metadata:
   namespace: ego-example
 data:
   init.sql: |
-    -- events_store (from resources/eventstore_postgres.sql)
+    -- events_store (from resources/eventstore_postgres.sql; kept in sync by
+    -- hand with example/cluster/stores.go's eventsStoreSchemaDDL constant,
+    -- used by that module's Postgres-backed tests)
+    --
+    -- tenant_id defaults to '' (Unscoped()); see README.md for the migration
+    -- note when adding this column to an existing database.
     CREATE TABLE IF NOT EXISTS events_store
     (
+        tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
         persistence_id    VARCHAR(255)          NOT NULL,
         sequence_number   BIGINT                NOT NULL,
         is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
@@ -17,9 +23,9 @@ data:
         shard_number      BIGINT                NOT NULL,
         encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
         is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-        PRIMARY KEY (persistence_id, sequence_number)
+        PRIMARY KEY (tenant_id, persistence_id, sequence_number)
     );
-    CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(persistence_id);
+    CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
     CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
     CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
     CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
