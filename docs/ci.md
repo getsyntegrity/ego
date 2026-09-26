@@ -169,7 +169,7 @@ Each rule applies to one layer and checks the direct import edges of every packa
 
 | Rule | Applies to | Constraint |
 |---|---|---|
-| `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` |
+| `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` — and stdlib itself excludes `net/http`, `net/rpc`, `database/sql` and everything under them |
 | `application-no-runtime` | `migration` | Must not import package `ego`, `internal/extensions` or GoAkt |
 | `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `ego` or GoAkt |
 | `no-cross-module-internal` | every nested module | Must not import root-module `internal/...` |
@@ -181,6 +181,8 @@ github.com/pablogore/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: 
 ```
 
 The fix is almost always to depend on a contract package instead of the runtime. Do not add a baseline entry to silence a new violation.
+
+**Stdlib transport and database packages are forbidden in contracts.** `contract-allowlist` also denies `net/http`, `net/rpc` and `database/sql`, and everything under them, matched by whole path segment (`net/http/httptest` is forbidden; a hypothetical `net/httpx` would not be). gRPC and other third-party transports are already excluded by the closed allowlist; this stdlib denylist closes the remaining gap, and the rest of the standard library — including `net` itself, for value types such as `net.IP` — stays allowed. It applies to direct imports only: the standard library is not a closed set the way the allowlist's third-party targets are, so a transitive path such as `expvar` importing `net/http` internally is possible and is not enforced (design.md §3).
 
 ### Baseline: known violations that can only shrink
 

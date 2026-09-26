@@ -71,10 +71,14 @@ type Result struct {
 	// EdgesChecked is how many distinct (importer, import) pairs were
 	// inspected by at least one rule: every non-stdlib import of a
 	// package matched by that rule's Layer, whether or not the import
-	// turned out to be forbidden. A pair inspected by more than one rule
-	// (e.g. a publisher/* import checked by both
-	// external-adapter-no-runtime and no-cross-module-internal) is
-	// counted once.
+	// turned out to be forbidden, plus every stdlib import that actually
+	// matched a rule's StdlibDenylist (design.md §3, I1). A stdlib import
+	// that does not match any rule's StdlibDenylist is not counted, the
+	// same as before I1: this keeps EdgesChecked's meaning "edges the
+	// rules actually had an opinion about" rather than "every import in
+	// the graph". A pair inspected by more than one rule (e.g. a
+	// publisher/* import checked by both external-adapter-no-runtime and
+	// no-cross-module-internal) is counted once.
 	EdgesChecked int
 	// RuleStats is one entry per rule in the ruleset Evaluate was called
 	// with, in that order.
@@ -134,6 +138,22 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 			packagesChecked[pkg.ImportPath] = true
 			for _, imp := range pkg.Imports {
 				if IsStdlib(imp) {
+					prefix, denied := matchStdlibDenylist(rule.StdlibDenylist, imp)
+					if !denied {
+						continue
+					}
+					edgesChecked[edgeKey{Importer: pkg.ImportPath, Import: imp}] = true
+					key := keyOf(pkg.ImportPath, imp, rule.ID)
+					if _, ok := baselineByKey[key]; ok {
+						used[key] = true
+						continue
+					}
+					violations = append(violations, Violation{
+						Importer: pkg.ImportPath,
+						Import:   imp,
+						Rule:     rule.ID,
+						Reason:   reasonForStdlib(rule, imp, prefix),
+					})
 					continue
 				}
 				edgesChecked[edgeKey{Importer: pkg.ImportPath, Import: imp}] = true
@@ -193,6 +213,26 @@ func reasonFor(rule Rule, importPath string) string {
 		return "not on the " + rule.Layer.Name + " allowlist"
 	}
 	return "matches a forbidden import for " + rule.Layer.Name
+}
+
+// matchStdlibDenylist reports whether importPath (already known to be
+// stdlib) matches one of rule's forbidden prefixes, matched by whole path
+// segment (hasPathOrSubpath), and returns the matched prefix. denylist is
+// typically a Rule.StdlibDenylist; nil or empty means nothing is denied.
+func matchStdlibDenylist(denylist []string, importPath string) (prefix string, denied bool) {
+	for _, p := range denylist {
+		if hasPathOrSubpath(importPath, p) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// reasonForStdlib explains why a stdlib import broke rule's StdlibDenylist,
+// naming both the forbidden import and the denylist entry it matched (I1,
+// design.md §3).
+func reasonForStdlib(rule Rule, importPath, matchedPrefix string) string {
+	return fmt.Sprintf("imports the standard-library package %s, forbidden for %s (matches stdlib denylist entry %s): contracts must not depend on transport or database packages", importPath, rule.Layer.Name, matchedPrefix)
 }
 
 func sortViolations(vs []Violation) {

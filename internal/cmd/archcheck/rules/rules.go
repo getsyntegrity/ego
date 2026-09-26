@@ -50,13 +50,10 @@ func (k Kind) String() string {
 	}
 }
 
-// Rule is one dependency-direction rule from design.md §3 (or, for
-// application-no-runtime and no-cross-module-internal, from the #107
-// issue scope that extends it to layers the ADR names but does not yet
-// enforce). A Rule applies to every package Layer.Match selects, and
-// forbids every non-stdlib import Forbids reports true for; Evaluate
-// filters out stdlib imports before calling Forbids, so Forbids is never
-// asked about one.
+// Rule is one dependency-direction rule from design.md §3. A Rule applies
+// to every package Layer.Match selects, and forbids every non-stdlib
+// import Forbids reports true for; Evaluate filters out stdlib imports
+// before calling Forbids, so Forbids is never asked about one.
 type Rule struct {
 	// ID is the rule's stable identifier, used in reports and by
 	// BaselineEntry.Rule to reference it, e.g. "contract-allowlist".
@@ -80,6 +77,17 @@ type Rule struct {
 	// generic reason phrased from Semantics and Layer; see reasonFor in
 	// evaluate.go. Only ever called when Forbids already returned true.
 	Reason func(importPath string) string
+	// StdlibDenylist optionally names standard-library import path prefixes
+	// this rule forbids even though they are stdlib (Evaluate otherwise
+	// allows every stdlib import unconditionally; see IsStdlib). Matching is
+	// by whole path segment (hasPathOrSubpath): an entry "net/http" forbids
+	// net/http and net/http/httptest, but not net/httpx. nil (the default)
+	// means no stdlib restriction, the previous behavior. Only
+	// contract-allowlist sets this today (design.md §3, I1: net/http,
+	// net/rpc, database/sql); it applies to direct imports only — stdlib is
+	// not a closed set, so a transitive path (e.g. expvar -> net/http) is
+	// possible and is not enforced.
+	StdlibDenylist []string
 }
 
 // allowedContractImport reports whether importPath is one of the targets
@@ -98,9 +106,9 @@ func allowedContractImport(rootModulePath, importPath string) bool {
 	return hasPathOrSubpath(importPath, "google.golang.org/protobuf")
 }
 
-// DefaultRules returns the repository's current rule table (design.md §3
-// plus the #107 scope additions), for the root Go module at
-// rootModulePath. Callers read rootModulePath from the root go.mod
+// DefaultRules returns the repository's current rule table (design.md §3),
+// for the root Go module at rootModulePath. Callers read rootModulePath
+// from the root go.mod
 // (parseGoModModulePath in internal/cmd/archcheck) rather than assuming a
 // hard-coded value, so the rule table stays correct if the module path
 // ever changes. DefaultRules returns a fresh slice on every call; Rule
@@ -110,7 +118,7 @@ func DefaultRules(rootModulePath string) []Rule {
 	return []Rule{
 		{
 			ID:          "contract-allowlist",
-			Description: "contract packages may import only stdlib, other contract packages, egopb, google.golang.org/protobuf/..., internal/queue, internal/syncmap, github.com/google/uuid and go.uber.org/atomic",
+			Description: "contract packages may import only stdlib (except net/http, net/rpc, database/sql and everything under them), other contract packages, egopb, google.golang.org/protobuf/..., internal/queue, internal/syncmap, github.com/google/uuid and go.uber.org/atomic",
 			Source:      "design.md §3",
 			Layer:       ContractLayer(rootModulePath),
 			Semantics:   Allowlist,
@@ -121,11 +129,12 @@ func DefaultRules(rootModulePath string) []Rule {
 				rel := stripRootModulePrefix(rootModulePath, importPath)
 				return !isContractRelPath(rel)
 			},
+			StdlibDenylist: []string{"net/http", "net/rpc", "database/sql"},
 		},
 		{
 			ID:          "application-no-runtime",
 			Description: "the migration application must not import the root package ego, internal/extensions or the GoAkt runtime",
-			Source:      "#107 scope",
+			Source:      "design.md §3",
 			Layer:       ApplicationLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {

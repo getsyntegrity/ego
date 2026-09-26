@@ -514,6 +514,78 @@ func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 	}
 }
 
+// TestContractAllowlist_ForbidsTransportAndDatabaseStdlib proves the I1
+// restriction (design.md §3): contract-allowlist forbids net/http, net/rpc
+// and database/sql, and everything under them, matched by whole path
+// segment, even though they are standard library — while the rest of
+// stdlib (e.g. net/url) stays allowed, and a lookalike path that merely
+// shares a prefix character-wise (net/httpx) is not caught by the
+// segment-based match.
+func TestContractAllowlist_ForbidsTransportAndDatabaseStdlib(t *testing.T) {
+	cases := []struct {
+		name          string
+		importPath    string
+		wantViolation bool
+	}{
+		{"net/http forbidden", "net/http", true},
+		{"net/http/httptest forbidden (subpackage)", "net/http/httptest", true},
+		{"net/rpc forbidden", "net/rpc", true},
+		{"database/sql forbidden", "database/sql", true},
+		{"net/url allowed (rest of stdlib)", "net/url", false},
+		{"net/httpx allowed (path-segment match only, not substring)", "net/httpx", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			graph := Graph{Packages: []Package{
+				{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{c.importPath}},
+			}}
+			result, err := Evaluate(graph, rulesFor(t, "contract-allowlist"), nil)
+			if err != nil {
+				t.Fatalf("Evaluate returned error: %v", err)
+			}
+			if !c.wantViolation {
+				if len(result.Violations) != 0 {
+					t.Fatalf("len(Violations) = %d, want 0: %+v", len(result.Violations), result.Violations)
+				}
+				return
+			}
+			if len(result.Violations) != 1 {
+				t.Fatalf("len(Violations) = %d, want 1: %+v", len(result.Violations), result.Violations)
+			}
+			v := result.Violations[0]
+			if v.Importer != root+"/tenancy" {
+				t.Errorf("Importer = %q, want %s/tenancy", v.Importer, root)
+			}
+			if v.Import != c.importPath {
+				t.Errorf("Import = %q, want %q", v.Import, c.importPath)
+			}
+			if v.Rule != "contract-allowlist" {
+				t.Errorf("Rule = %q, want contract-allowlist", v.Rule)
+			}
+			if !strings.Contains(v.Reason, c.importPath) {
+				t.Errorf("Reason = %q, want it to name the forbidden import %q", v.Reason, c.importPath)
+			}
+		})
+	}
+}
+
+// TestApplicationNoRuntime_NetHTTPImportPasses proves the I1 stdlib
+// restriction applies only to contract-allowlist: a non-contract package
+// (migration, checked by application-no-runtime) may still import
+// net/http, because application-no-runtime carries no stdlib denylist.
+func TestApplicationNoRuntime_NetHTTPImportPasses(t *testing.T) {
+	graph := Graph{Packages: []Package{
+		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{"net/http"}},
+	}}
+	result, err := Evaluate(graph, rulesFor(t, "application-no-runtime"), nil)
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if len(result.Violations) != 0 {
+		t.Fatalf("len(Violations) = %d, want 0: %+v", len(result.Violations), result.Violations)
+	}
+}
+
 func TestEvaluate_OutputOrderingIsDeterministic(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{
@@ -586,6 +658,35 @@ func TestExternalAdapterNoRuntime_ForbidsRootAndGoAktOnly(t *testing.T) {
 	}
 	if len(result.Violations) != 2 {
 		t.Fatalf("len(Violations) = %d, want 2 (root + goakt, not egopb): %+v", len(result.Violations), result.Violations)
+	}
+}
+
+// TestApplicationNoRuntime_SourceIsDesignDoc proves I3 (design.md §3 now
+// documents an explicit Application section for migration, matching this
+// rule): application-no-runtime's Source names design.md §3 directly,
+// rather than the older "#107 scope" placeholder from before the ADR
+// caught up with what archcheck actually enforces.
+func TestApplicationNoRuntime_SourceIsDesignDoc(t *testing.T) {
+	rule, ok := ruleByID(DefaultRules(root), "application-no-runtime")
+	if !ok {
+		t.Fatal("application-no-runtime rule not found in DefaultRules")
+	}
+	if rule.Source != "design.md §3" {
+		t.Errorf("Source = %q, want %q", rule.Source, "design.md §3")
+	}
+}
+
+// The description is printed with every violation, so it must name the
+// standard-library packages the rule forbids.
+func TestContractAllowlist_DescriptionNamesStdlibExceptions(t *testing.T) {
+	rule, ok := ruleByID(DefaultRules(root), "contract-allowlist")
+	if !ok {
+		t.Fatal("contract-allowlist rule not found in DefaultRules")
+	}
+	for _, want := range []string{"net/http", "net/rpc", "database/sql"} {
+		if !strings.Contains(rule.Description, want) {
+			t.Errorf("Description = %q, want it to mention %q", rule.Description, want)
+		}
 	}
 }
 
