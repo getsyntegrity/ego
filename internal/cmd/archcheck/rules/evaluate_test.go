@@ -676,6 +676,20 @@ func TestApplicationNoRuntime_SourceIsDesignDoc(t *testing.T) {
 	}
 }
 
+// The description is printed with every violation, so it must name the
+// standard-library packages the rule forbids.
+func TestContractAllowlist_DescriptionNamesStdlibExceptions(t *testing.T) {
+	rule, ok := ruleByID(DefaultRules(root), "contract-allowlist")
+	if !ok {
+		t.Fatal("contract-allowlist rule not found in DefaultRules")
+	}
+	for _, want := range []string{"net/http", "net/rpc", "database/sql"} {
+		if !strings.Contains(rule.Description, want) {
+			t.Errorf("Description = %q, want it to mention %q", rule.Description, want)
+		}
+	}
+}
+
 func TestNoCrossModuleInternal_ForbidsRootInternal(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{

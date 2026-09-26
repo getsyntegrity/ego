@@ -118,7 +118,7 @@ func DefaultRules(rootModulePath string) []Rule {
 	return []Rule{
 		{
 			ID:          "contract-allowlist",
-			Description: "contract packages may import only stdlib, other contract packages, egopb, google.golang.org/protobuf/..., internal/queue, internal/syncmap, github.com/google/uuid and go.uber.org/atomic",
+			Description: "contract packages may import only stdlib (except net/http, net/rpc, database/sql and everything under them), other contract packages, egopb, google.golang.org/protobuf/..., internal/queue, internal/syncmap, github.com/google/uuid and go.uber.org/atomic",
 			Source:      "design.md §3",
 			Layer:       ContractLayer(rootModulePath),
 			Semantics:   Allowlist,
