@@ -80,6 +80,17 @@ type Rule struct {
 	// generic reason phrased from Semantics and Layer; see reasonFor in
 	// evaluate.go. Only ever called when Forbids already returned true.
 	Reason func(importPath string) string
+	// StdlibDenylist optionally names standard-library import path prefixes
+	// this rule forbids even though they are stdlib (Evaluate otherwise
+	// allows every stdlib import unconditionally; see IsStdlib). Matching is
+	// by whole path segment (hasPathOrSubpath): an entry "net/http" forbids
+	// net/http and net/http/httptest, but not net/httpx. nil (the default)
+	// means no stdlib restriction, the previous behavior. Only
+	// contract-allowlist sets this today (design.md §3, I1: net/http,
+	// net/rpc, database/sql); it applies to direct imports only — stdlib is
+	// not a closed set, so a transitive path (e.g. expvar -> net/http) is
+	// possible and is not enforced.
+	StdlibDenylist []string
 }
 
 // allowedContractImport reports whether importPath is one of the targets
@@ -121,6 +132,7 @@ func DefaultRules(rootModulePath string) []Rule {
 				rel := stripRootModulePrefix(rootModulePath, importPath)
 				return !isContractRelPath(rel)
 			},
+			StdlibDenylist: []string{"net/http", "net/rpc", "database/sql"},
 		},
 		{
 			ID:          "application-no-runtime",
