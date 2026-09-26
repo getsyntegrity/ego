@@ -88,6 +88,8 @@ Notes on the diagram:
 - Test support (`testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`) and examples are omitted for readability; their edges are listed in section 4.
 - Today the publishers import package `ego` and `egopb`; the arrow to `port/publishing` is the target, which lands only after #111 (section 5).
 
+**Canonical location for a new contract.** A new top-level contract package goes under `port/`, the way `port/publishing` does for S1; a subpackage of an existing contract (for example something added under `persistence/`) stays under that contract's own root instead. The eight contracts that already exist at the repository root (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`) are not moved under `port/` in v4 — moving them would be a breaking import-path change for every consumer, and section 4's source-to-destination map already gives every one of them a "Stay" destination. `port/` is where a contract is *born* from now on, not a relocation target for the ones that already have a stable path.
+
 ## 3. Dependency rules
 
 These rules apply to the root module. A rule check (slice S2) enforces them from `go list -deps` output; until S2 lands they are review rules.
@@ -99,6 +101,7 @@ These rules apply to the root module. A rule check (slice S2) enforces them from
 - MUST NOT import the root package `ego`, `internal/extensions`, `migration`, or any test-support package (`testkit`, `mocks/*`, `test/*`, `persistence/conformance`) outside `_test.go` files.
 - MUST NOT import OpenTelemetry, broker clients or database drivers. Instrumentation belongs in adapters.
 - MUST NOT import the standard-library transport or database packages `net/http`, `net/rpc`, `database/sql`, or anything under them (matched by path segment, so `net/http/httptest` is forbidden but a hypothetical `net/httpx` would not be). gRPC and other third-party transports are already excluded by the closed allowlist above; this rule closes the one gap the allowlist leaves open, since the rest of the standard library is allowed. This restriction applies to direct imports only: unlike a third-party dependency, the standard library is not a closed set the allowlist can enumerate, so a transitive path to one of these packages is possible and is not enforced — for example `expvar` imports `net/http` internally (`expvar.Handler()` returns `http.Handler`), so a contract that imported `expvar` would not be caught even though its dependency closure reaches `net/http`. `net` itself stays allowed: it also carries value types such as `net.IP` that a contract may legitimately need, and only its `net/http` and `net/rpc` subpackages are transport.
+- An adapter MUST NOT live under a contract package's own path (for example, a Postgres store belongs in its own adapter location, not `persistence/postgres`): every package under a contract's path is itself a contract by `contract-allowlist`'s definition (section "Canonical location for a new contract" above) and must satisfy the same allowlist, which an adapter generally cannot.
 
 **GoAkt runtime adapter** (package `ego` and `internal/extensions` in v4):
 
@@ -130,7 +133,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `encryption` | Contract | — | Stay | — |
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
 | `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1 (this ADR designs it) |
-| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | Neutral contract package | S3, #103 |
+| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/<name>` (exact name left to #103) | S3, #103 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
 | `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |
