@@ -41,14 +41,16 @@ mix two risks in one PR.
 
 ## Tasks
 
-- [ ] **T1** Create `port/publishing` with the contracts and turn `publisher.go` into aliases.
+- [x] **T1** Create `port/publishing` with the contracts and turn `publisher.go` into aliases.
   Check: RED test (alias identity, `errors.Is`, dependency allowlist) fails first, then
   `go build ./... && go vet ./... && go test ./port/...` pass.
-- [ ] **T2** Record compatibility evidence required by design.md §5 items 1–3.
-  Check: `apidiff` reports no incompatible change for package `ego`; nested-consumer script passes
+- [x] **T2** Record compatibility evidence required by design.md §5 items 1–3.
+  Check (revised during T2): `apidiff` was run and its output recorded, but it flags every
+  cross-package alias, so criterion 1 is decided by a base-API consumer compiled against base and
+  head (see evidence); nested-consumer script passes
   for the four publishers, `benchmark` and `mocks/ego`; `example/cluster` shows no new errors
   versus `main`.
-- [ ] **T3** Document the move: `CHANGELOG.md` entry and package doc for `port/publishing`.
+- [x] **T3** Document the move: `CHANGELOG.md` entry and package doc for `port/publishing`.
   Check: structural readback.
 
 ## Acceptance criteria
@@ -70,4 +72,35 @@ S1b (publishers import `port/publishing`) is blocked on #111.
 
 ## Progress and evidence
 
-_(updated per task)_
+**T1 — done, commit `f616f29`.** RED observed first: `go test ./port/publishing/` failed
+("no non-standard dependency was checked") and the root alias test failed to build (package missing).
+GREEN: `go build ./...`, `go vet . ./port/...`, `go test ./port/publishing/` and
+`go test -run Publisher .` (13.9 s) pass; `golangci-lint run --config .golangci.yml` on `./port/...`
+and on the root package (`--new-from-rev=origin/main`, after `go mod vendor` like CI): 0 issues.
+
+**T2 — done, evidence only (no code).** Go 1.26.6, linux/amd64, no `-race`.
+
+- `apidiff` (golang.org/x/exp, `85c1c2202aba`) base `a5265aa` → head reports four "incompatible"
+  changes: `EventPublisher`, `StatePublisher`, `(*Engine).AddEventPublishers`,
+  `(*Engine).AddStatePublishers`, each "changed from X to X". This is a tool limitation, not a
+  source break: `apidiff.go` line 1 reads `TODO: test exported alias refers to something in another
+  package -- does correspondence work then?`
+- Consumer comparison (the check that decides criterion 1): a program written against the base API
+  — implements `ego.EventPublisher`, embeds both interfaces, assigns the mocks, binds
+  `(&ego.Engine{}).AddEventPublishers` to `func(...ego.EventPublisher) error`, type-asserts and wraps
+  `ego.ErrPublisherNotStarted` — builds, vets and prints identical results against base and head.
+  The only difference is `reflect.TypeOf(...).String()`: `ego.EventPublisher` → `publishing.EventPublisher`.
+  Documented in `CHANGELOG.md`.
+- Nested-consumer check (design.md §5): `publisher/kafka`, `nats`, `pulsar`, `websocket`,
+  `benchmark` and `mocks/ego` build and vet on head.
+- `example/cluster`: fails identically on base and head (pre-existing #115 error,
+  `*PostgresEventStore does not implement persistence.EventsStore (wrong type for method DeleteEvents)`);
+  `diff` of the two outputs is empty, so S1a adds no error.
+
+**T3 — done.** `CHANGELOG.md` Improvements entry; package doc in `port/publishing/publishing.go`.
+Check: structural readback.
+
+**Review:** RDD is off (global), so no native review ran; delivery follows ordinary repository policy.
+
+**Next step:** push and open the PR for S1a, then spec 2 of the chain, or #107 (S2) which the ADR
+allows in parallel.
