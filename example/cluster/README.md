@@ -361,6 +361,48 @@ DROP INDEX IF EXISTS idx_events_store_persistence_id;
 CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
 ```
 
+## Revision table (`events_store_revisions`)
+
+A conditional write (`ExpectGenesis()` or `ExpectRevision(n)`) compares
+against the record's *storage revision*: the highest sequence number ever
+committed for that `(tenant_id, persistence_id)`. That value lives in its own
+table, not in `MAX(sequence_number)`, because `DeleteEvents` removes old events
+for retention. If the revision were derived from the remaining events,
+deleting them would let `ExpectGenesis()` succeed again and let a writer with a
+stale revision win.
+
+The revision row is also the per-record lock. Every write takes it before
+touching `events_store`: a conditional write locks it with `SELECT ... FOR
+UPDATE`, and an unconditional write upserts it (never lowering the revision).
+An unconditional write therefore cannot commit between a conditional write's
+revision check and its insert. A batch with several persistence ids locks
+them in sorted order, so two batches cannot deadlock each other.
+
+To migrate an existing database, run the statements below (they are also the
+tail of `k8s/postgres.yaml`'s `init.sql`, and are safe to re-run). The backfill
+takes each record's highest *retained* sequence number, so a record whose
+latest events were already deleted before this migration cannot recover its
+old revision.
+
+```sql
+CREATE TABLE IF NOT EXISTS events_store_revisions
+(
+    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id VARCHAR(255)            NOT NULL,
+    revision       BIGINT                  NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id)
+);
+INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+SELECT tenant_id, persistence_id, MAX(sequence_number)
+FROM events_store
+GROUP BY tenant_id, persistence_id
+ON CONFLICT (tenant_id, persistence_id)
+DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
+```
+
+Run it while no writer is active, so no event commits between the backfill
+and the new code taking over.
+
 ## Dependency Isolation
 
 This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.

@@ -24,8 +24,10 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -49,6 +51,18 @@ import (
 // Existing rows from before this column existed read back as ”, so an
 // existing non-tenant deployment needs no data rewrite — see README.md's
 // migration note for the ALTER TABLE recipe on an existing database.
+//
+// events_store_revisions holds one row per (tenant_id, persistence_id): the
+// StorageRevision, i.e. the highest sequence number ever committed for that
+// record. It is separate from events_store because DeleteEvents removes
+// replayable events for retention but must never lower the revision, or
+// ExpectGenesis() would succeed again and a stale ExpectRevision would win.
+// The row is also the per-record lock every write takes (see WriteEvents).
+//
+// The script is idempotent and doubles as the migration for a database
+// created before events_store_revisions existed: the final INSERT backfills
+// each record's revision from its highest retained sequence number, and never
+// lowers a revision that is already stored.
 const eventsStoreSchemaDDL = `
 CREATE TABLE IF NOT EXISTS events_store
 (
@@ -68,6 +82,20 @@ CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenan
 CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
 CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
+
+CREATE TABLE IF NOT EXISTS events_store_revisions
+(
+    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id VARCHAR(255)            NOT NULL,
+    revision       BIGINT                  NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id)
+);
+INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+SELECT tenant_id, persistence_id, MAX(sequence_number)
+FROM events_store
+GROUP BY tenant_id, persistence_id
+ON CONFLICT (tenant_id, persistence_id)
+DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
 `
 
 // scopeKey validates scope and returns the tenant_id column value it maps
@@ -158,13 +186,68 @@ func (s *PostgresEventStore) WriteEvents(ctx context.Context, scope persistence.
 	return s.writeConditional(ctx, scope, tenantID, persistenceID, events, precondition)
 }
 
+// insertEventSQL inserts one event row. A conditional write uses it as is, so
+// a primary-key clash fails the transaction; an unconditional write appends
+// insertEventIgnoreDuplicateSQL to keep its legacy "duplicates are ignored"
+// behavior.
+const (
+	insertEventSQL = `
+		INSERT INTO events_store
+			(tenant_id, persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
+			 timestamp, shard_number, encryption_key_id, is_encrypted)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+	insertEventIgnoreDuplicateSQL = insertEventSQL + `
+		ON CONFLICT (tenant_id, persistence_id, sequence_number) DO NOTHING`
+)
+
+// insertEvent writes event under tenantID inside tx using query, which is
+// insertEventSQL or insertEventIgnoreDuplicateSQL.
+func insertEvent(ctx context.Context, tx pgx.Tx, query, tenantID string, event *egopb.Event) error {
+	payload, err := proto.Marshal(event.GetEvent())
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+	if _, err := tx.Exec(ctx, query,
+		tenantID,
+		event.GetPersistenceId(),
+		event.GetSequenceNumber(),
+		event.GetIsDeleted(),
+		payload,
+		event.GetEvent().GetTypeUrl(),
+		event.GetTimestamp(),
+		event.GetShard(),
+		event.GetEncryptionKeyId(),
+		event.GetIsEncrypted(),
+	); err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+	return nil
+}
+
 // writeUnconditional preserves legacy, precondition-free write semantics:
 // every event commits, keyed by (tenantID, its own PersistenceId,
-// SequenceNumber). A primary-key clash is silently ignored, matching this
-// store's pre-scope behavior.
+// SequenceNumber), and a primary-key clash is silently ignored.
+//
+// It still takes part in the per-record lock protocol shared with
+// writeConditional. Before inserting any event, it upserts the
+// events_store_revisions row of every persistence id in the batch, raising
+// the revision to the batch's highest sequence number for that id (never
+// lowering it). The upsert row-locks each revision row until commit, so an
+// unconditional write can never commit between a conditional writer's
+// revision check and its insert. The ids are locked in sorted order, so two
+// batches that share ids always acquire their locks in the same order and
+// cannot deadlock each other.
 func (s *PostgresEventStore) writeUnconditional(ctx context.Context, tenantID string, events []*egopb.Event) error {
 	if len(events) == 0 {
 		return nil
+	}
+
+	highest := make(map[string]uint64)
+	for _, event := range events {
+		id := event.GetPersistenceId()
+		if seq, seen := highest[id]; !seen || event.GetSequenceNumber() > seq {
+			highest[id] = event.GetSequenceNumber()
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -173,57 +256,40 @@ func (s *PostgresEventStore) writeUnconditional(ctx context.Context, tenantID st
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded
 
-	for _, event := range events {
-		payload, err := proto.Marshal(event.GetEvent())
-		if err != nil {
-			return fmt.Errorf("marshal event: %w", err)
+	for _, persistenceID := range slices.Sorted(maps.Keys(highest)) {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (tenant_id, persistence_id)
+			DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision)`,
+			tenantID, persistenceID, highest[persistenceID],
+		); err != nil {
+			return fmt.Errorf("advance revision: %w", err)
 		}
-		manifest := string(event.GetEvent().GetTypeUrl())
+	}
 
-		_, err = tx.Exec(ctx, `
-			INSERT INTO events_store
-				(tenant_id, persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-				 timestamp, shard_number, encryption_key_id, is_encrypted)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-			ON CONFLICT (tenant_id, persistence_id, sequence_number) DO NOTHING`,
-			tenantID,
-			event.GetPersistenceId(),
-			event.GetSequenceNumber(),
-			event.GetIsDeleted(),
-			payload,
-			manifest,
-			event.GetTimestamp(),
-			event.GetShard(),
-			event.GetEncryptionKeyId(),
-			event.GetIsEncrypted(),
-		)
-		if err != nil {
-			return fmt.Errorf("insert event: %w", err)
+	for _, event := range events {
+		if err := insertEvent(ctx, tx, insertEventIgnoreDuplicateSQL, tenantID, event); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)
 }
 
 // writeConditional evaluates precondition for (scope, persistenceID) and
-// commits events as one atomic operation. A transaction-scoped advisory lock
-// on (tenantID, persistenceID) serializes concurrent conditional writers
-// targeting the same record, so the revision read and the eventual insert
-// happen as a single atomic step: there is no window in which another
-// writer's commit can interleave between them. Unlike writeUnconditional,
-// the insert here does NOT use ON CONFLICT DO NOTHING — a primary-key clash
-// under a held advisory lock would mean two callers disagree about the
-// target sequence numbers, and that must fail the transaction rather than
-// silently drop the write.
+// commits events as one atomic operation. It first locks the record's
+// events_store_revisions row (lockRevision), which every writer of that
+// record takes before touching events_store, so the revision check, the
+// inserts and the revision update happen with no other writer's commit in
+// between. The insert does NOT use ON CONFLICT DO NOTHING: a primary-key
+// clash under the held lock means two callers disagree about the target
+// sequence numbers, and that must fail the transaction rather than silently
+// drop the write.
 //
-// Deviation from the original design note: the design's
-// hashtextextended($1 || chr(0) || $2, 0) key never runs, because
-// PostgreSQL's text type rejects an embedded NUL byte outright
-// ("ERROR: null character not permitted"), so chr(0) can never be used as an
-// in-string separator to combine two identifiers before hashing. This uses
-// pg_advisory_xact_lock's own two-key overload instead — hashtext(tenantID)
-// and hashtext(persistenceID) as two independent lock keys — which is
-// PostgreSQL's documented idiom for locking on a pair of identifiers and
-// carries no such restriction.
+// The revision compared against is the stored StorageRevision, not
+// MAX(sequence_number): DeleteEvents removes events for retention without
+// touching the revision, so deleted events never reopen ExpectGenesis() or
+// let a stale ExpectRevision win.
 func (s *PostgresEventStore) writeConditional(ctx context.Context, scope persistence.Scope, tenantID, persistenceID string, events []*egopb.Event, precondition persistence.WritePrecondition) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -231,24 +297,9 @@ func (s *PostgresEventStore) writeConditional(ctx context.Context, scope persist
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded
 
-	if _, err := tx.Exec(ctx,
-		`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
-		tenantID, persistenceID,
-	); err != nil {
-		return fmt.Errorf("advisory lock: %w", err)
-	}
-
-	var maxSequence sql.NullInt64
-	if err := tx.QueryRow(ctx,
-		`SELECT MAX(sequence_number) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2`,
-		tenantID, persistenceID,
-	).Scan(&maxSequence); err != nil {
-		return fmt.Errorf("read current revision: %w", err)
-	}
-	exists := maxSequence.Valid
-	var revision uint64
-	if exists {
-		revision = uint64(maxSequence.Int64)
+	revision, exists, err := lockRevision(ctx, tx, tenantID, persistenceID)
+	if err != nil {
+		return err
 	}
 
 	if precondition.IsGenesis() {
@@ -265,37 +316,62 @@ func (s *PostgresEventStore) writeConditional(ctx context.Context, scope persist
 		}
 	}
 
+	highest := revision
 	for _, event := range events {
-		payload, err := proto.Marshal(event.GetEvent())
-		if err != nil {
-			return fmt.Errorf("marshal event: %w", err)
+		if err := insertEvent(ctx, tx, insertEventSQL, tenantID, event); err != nil {
+			return err
 		}
-		manifest := string(event.GetEvent().GetTypeUrl())
+		highest = max(highest, event.GetSequenceNumber())
+	}
 
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO events_store
-				(tenant_id, persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
-				 timestamp, shard_number, encryption_key_id, is_encrypted)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			tenantID,
-			event.GetPersistenceId(),
-			event.GetSequenceNumber(),
-			event.GetIsDeleted(),
-			payload,
-			manifest,
-			event.GetTimestamp(),
-			event.GetShard(),
-			event.GetEncryptionKeyId(),
-			event.GetIsEncrypted(),
-		); err != nil {
-			return fmt.Errorf("insert event: %w", err)
-		}
+	if _, err := tx.Exec(ctx,
+		`UPDATE events_store_revisions SET revision = $3 WHERE tenant_id = $1 AND persistence_id = $2`,
+		tenantID, persistenceID, highest,
+	); err != nil {
+		return fmt.Errorf("advance revision: %w", err)
 	}
 	return tx.Commit(ctx)
 }
 
+// lockRevision row-locks (tenantID, persistenceID)'s events_store_revisions
+// row for the rest of tx and returns its revision. exists is false when the
+// record has never been committed; in that case lockRevision inserts a
+// placeholder row, which holds the same lock (a concurrent writer's insert or
+// upsert of that key waits on it) and disappears if tx rolls back. When the
+// placeholder insert finds a row that another transaction committed in the
+// meantime, the row is locked and read again.
+func lockRevision(ctx context.Context, tx pgx.Tx, tenantID, persistenceID string) (revision uint64, exists bool, err error) {
+	for {
+		err := tx.QueryRow(ctx,
+			`SELECT revision FROM events_store_revisions WHERE tenant_id = $1 AND persistence_id = $2 FOR UPDATE`,
+			tenantID, persistenceID,
+		).Scan(&revision)
+		switch {
+		case err == nil:
+			return revision, true, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return 0, false, fmt.Errorf("lock revision: %w", err)
+		}
+
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+			VALUES ($1, $2, 0)
+			ON CONFLICT (tenant_id, persistence_id) DO NOTHING`,
+			tenantID, persistenceID,
+		)
+		if err != nil {
+			return 0, false, fmt.Errorf("claim revision: %w", err)
+		}
+		if tag.RowsAffected() == 1 {
+			return 0, false, nil
+		}
+	}
+}
+
 // DeleteEvents implements persistence.EventsStore. scope is validated before
 // anything is touched, and this never affects a record in another scope.
+// Only replayable events are removed: the record's events_store_revisions
+// row is left as is, so its StorageRevision survives retention.
 func (s *PostgresEventStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
@@ -367,10 +443,18 @@ func (s *PostgresEventStore) GetLatestEvent(ctx context.Context, scope persisten
 // those two facts agree, so iterating from "" until an empty token is
 // returned yields every persistence id in scope exactly once, matching
 // persistence.EventsStore.PersistenceIDs's pagination contract.
+//
+// A zero pageSize is a degenerate page: it returns no ids and an empty
+// nextPageToken without querying, like testkit's in-memory EventStore. An
+// empty token there means "iteration complete", which stops a caller that
+// passes 0 instead of handing it a token that repeats the same empty page.
 func (s *PostgresEventStore) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return nil, "", err
+	}
+	if pageSize == 0 {
+		return []string{}, "", nil
 	}
 
 	var rows pgx.Rows

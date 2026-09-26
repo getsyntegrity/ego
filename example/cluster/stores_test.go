@@ -114,6 +114,23 @@ func TestPostgresEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
 	require.Empty(t, next)
 }
 
+// A zero pageSize is a degenerate page: it lists nothing and returns an empty
+// nextPageToken, so an iteration that passes it terminates instead of looping
+// on the same empty page. This mirrors testkit's in-memory EventStore. The
+// store's nil pool proves no query runs.
+func TestPostgresEventStore_PersistenceIDs_ZeroPageSize(t *testing.T) {
+	store := unvalidatedStore()
+	ids, next, err := store.PersistenceIDs(context.Background(), persistence.Unscoped(), 0, "")
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	require.Empty(t, next)
+
+	ids, next, err = store.PersistenceIDs(context.Background(), persistence.Unscoped(), 0, "some-id")
+	require.NoError(t, err)
+	require.Empty(t, ids)
+	require.Empty(t, next)
+}
+
 func TestPostgresEventStore_ImplementsEventsStore(t *testing.T) {
 	var _ persistence.EventsStore = (*PostgresEventStore)(nil)
 }
