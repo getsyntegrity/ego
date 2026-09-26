@@ -66,17 +66,21 @@ whether the graph is legal. Mixing them would make one tool's fallback hide the 
 
 ## Tasks
 
-- [ ] **T1** Rule engine (`internal/cmd/archcheck/rules`): layer table, edge evaluation, baseline
+- [x] **T1** Rule engine (`internal/cmd/archcheck/rules`): layer table, edge evaluation, baseline
   with stale-entry detection, deterministic sorted output.
   Check: RED then GREEN unit tests with in-memory graphs — forbidden import fails with importer,
   import and rule in the message; allowed graph passes; baselined violation passes; stale baseline
   entry fails.
-- [ ] **T2** Loaders and CLI (`internal/cmd/archcheck/main.go`): root module via `go list`, nested
+  Route: delegated direct (writer trigger). Commit `05a49dc`.
+- [x] **T2** Loaders and CLI (`internal/cmd/archcheck/main.go`): root module via `go list`, nested
   modules via `go/parser`; repository baseline.
   Check: `go run ./internal/cmd/archcheck` exits 0 on the branch; a throwaway GoAkt import in a
   contract package makes it exit 1 with an actionable message.
-- [ ] **T3** Wire the step into `pull_request.yml` and `build.yml`.
+  Route: delegated direct (writer trigger). Commit `1866d0a`.
+- [x] **T3** Wire the step into `pull_request.yml` and `build.yml`.
   Check: workflow YAML readback; CI run on the PR.
+  Route: inline. Step "Check architecture boundaries" added after "Install dependencies", before the
+  linter, in both workflows, with `GOFLAGS=-mod=vendor` like the selector step. YAML parses.
 - [ ] **T4** Document it in `docs/ci.md` (rules, baseline policy, how to add a layer) and
   `CHANGELOG.md`. Check: structural readback.
 
@@ -88,4 +92,59 @@ removal criterion; automated, not review-only; documented update procedure.
 
 ## Progress and evidence
 
-_(updated per task)_
+### T1 (rule engine) — done, commit `05a49dc`
+
+- Files: `internal/cmd/archcheck/rules/{graph,layers,rules,baseline,evaluate,report}.go`,
+  `evaluate_test.go`.
+- TDD: wrote `evaluate_test.go` against the not-yet-existing package, moved the implementation
+  files aside, `go test` failed with `undefined: Graph/Package/RootModule/...` (RED, build
+  failure), restored the implementation, `go test` passed all 16 test functions (GREEN).
+- `go vet ./internal/cmd/archcheck/...`: no issues. `gofmt -l`: clean.
+- The `contract-allowlist` layer matches the 8 named contracts and `port/...` (and their
+  subpackages), explicitly excluding `persistence/conformance` (test support, not a contract),
+  per the task spec.
+
+### T2 (loaders + CLI) — done, commit `1866d0a`
+
+- Files: `internal/cmd/archcheck/{main,loader,baseline}.go`, `loader_test.go`, plus a 1-line
+  staticcheck fixup in `rules/rules.go` and a wording fixup in `rules/report.go`.
+- TDD: wrote `loader_test.go` first (t.TempDir fixtures for `parseGoModModulePath`,
+  `loadNestedModule`, `discoverNestedModuleDirs`); `go test` failed with `undefined:
+  parseGoModModulePath/loadNestedModule/discoverNestedModuleDirs` (RED), then implemented
+  `loader.go` until GREEN.
+- Verification (all observed on this branch, from the repository root):
+  1. `go build ./... && go vet ./internal/cmd/archcheck/...` → both clean, no output.
+  2. `go test -count=1 ./internal/cmd/archcheck/...` (no `-race`) → `ok` both packages
+     (`archcheck`, `archcheck/rules`).
+  3. `go run ./internal/cmd/archcheck` → exit 0,
+     `archcheck: 14 packages checked, 94 edges checked, 5 baselined, 0 violation(s), 0 stale entries`,
+     wall time ≈0.39s (`time` output: `0,39s total`).
+  4. Fixture proof: added `tenancy/zz_violation.go` importing
+     `github.com/tochemey/goakt/v4/actor`; `go run ./internal/cmd/archcheck` → exit 1, reported
+     `github.com/pablogore/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: rule
+     contract-allowlist (design.md §3): ...`; file deleted, `git status` confirmed clean.
+  5. Stale proof: temporarily appended a bogus baseline entry
+     (`tenancy -> github.com/tochemey/goakt/v4/nonexistent`) to `repoBaseline`; `go run
+     ./internal/cmd/archcheck` → exit 1, reported "baseline entry ... no longer matches a
+     violation; delete it"; reverted, re-ran → exit 0 again.
+  6. `GOFLAGS=-mod=vendor go run ./internal/cmd/archcheck` (after `go mod vendor`) → exit 0, same
+     summary line.
+  7. `golangci-lint run --config .golangci.yml ./internal/cmd/archcheck/...` → `0 issues.` (one
+     staticcheck S1008 finding was fixed in `rules.go` before this final run).
+  8. `gofmt -l internal/cmd/archcheck` → empty output (clean).
+- Real baseline used matches the spec exactly: `publisher/kafka`, `publisher/nats`,
+  `publisher/pulsar`, `publisher/websocket` (each a single-package nested module, one production
+  import of the root package) under `external-adapter-no-runtime`, and `migration` under
+  `application-no-runtime`. No deviation from the task's proposed baseline was found; the real
+  import graph matches it exactly (verified via `rg` before writing loaders, and confirmed by the
+  tool's own 0-violation/0-stale run above).
+- Open note: `example/cluster` (a nested module, not under `publisher/`) imports the root package
+  `github.com/pablogore/ego/v4` directly. This is **not** a violation under the current rule
+  table: `external-adapter-no-runtime` only covers `publisher/*`, and
+  `no-cross-module-internal` only forbids `internal/...` imports, not the root package itself.
+  This matches design.md's classification of `example/cluster` as an "unreleased consumer,
+  unchanged" rather than an external adapter, so no rule was written for it — flagging this in
+  case the next slice wants to tighten that.
+
+T3 (workflow wiring) and T4 (docs/CHANGELOG) are not part of this writer's scope and remain
+unstarted.

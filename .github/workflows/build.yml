@@ -28,6 +28,12 @@ jobs:
       - name: Install dependencies
         run: |
           go mod download
+      - name: Check architecture boundaries
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run ./internal/cmd/archcheck
       - name: Run Linter
         uses: golangci/golangci-lint-action@v9
         with:
