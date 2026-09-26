@@ -81,7 +81,7 @@ whether the graph is legal. Mixing them would make one tool's fallback hide the 
   Check: workflow YAML readback; CI run on the PR.
   Route: inline. Step "Check architecture boundaries" added after "Install dependencies", before the
   linter, in both workflows, with `GOFLAGS=-mod=vendor` like the selector step. YAML parses.
-- [ ] **T4** Document it in `docs/ci.md` (rules, baseline policy, how to add a layer) and
+- [x] **T4** Document it in `docs/ci.md` (rules, baseline policy, how to add a layer) and
   `CHANGELOG.md`. Check: structural readback.
 
 ## Acceptance criteria (#107)
@@ -148,3 +148,20 @@ removal criterion; automated, not review-only; documented update procedure.
 
 T3 (workflow wiring) and T4 (docs/CHANGELOG) are not part of this writer's scope and remain
 unstarted.
+
+### T3 — done, commit `260c778`
+Step "Check architecture boundaries" in `pull_request.yml` and `build.yml`, after "Install
+dependencies" and before the linter, `GOFLAGS=-mod=vendor`. Both files parse as YAML. The CI run on
+the PR is the remaining proof.
+
+### T4 — done
+`docs/ci.md` gains "Architecture boundary check" (rules table, baseline policy, how to add a layer);
+`CHANGELOG.md` Improvements entry. Check: structural readback; names cited in the doc
+(`DefaultRules`, `contractRoots`, `baseline.go`) verified against the code.
+
+### Delivery note
+The feature is ~1,200 production lines plus ~540 test lines, above the ~400-line heuristic. It ships
+as one PR with one commit per task: the engine, the loaders and the wiring are only useful together,
+and splitting them would land an inert half. Review commit by commit.
+
+**Review:** RDD is off (global); no native review ran.

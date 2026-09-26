@@ -154,6 +154,47 @@ on `main` and an `affected` run on a PR.
   `summary.md`. `none` is reserved for changes that are provably
   documentation/governance or satellite-only.
 
+## Architecture boundary check
+
+Both workflows run `go run ./internal/cmd/archcheck` right after dependencies are installed and before the linter, so a broken layer boundary fails the run in seconds instead of after the test suite. It enforces the dependency rules of the ego-arch-001 ADR (`openspec/changes/ego-arch-001/design.md` §3), tracked by [#107](https://github.com/getsyntegrity/ego/issues/107).
+
+The tool reads the import graph in two ways:
+
+- **Root module:** `go list -e -json ./...`, which gives each package's production imports with build constraints resolved. A package that fails to load fails the check (fail closed).
+- **Nested modules** (`publisher/*`, `benchmark`, `example/cluster`): every non-test `.go` file is parsed in imports-only mode with `go/parser`. No module download or network is needed, which keeps the step at well under a second.
+
+Each rule applies to one layer and checks the direct import edges of every package in it. Contract layers use a closed allowlist, and every allowed target is itself runtime-free, so a transitive path to GoAkt cannot open without adding a new direct edge that the check sees.
+
+| Rule | Applies to | Constraint |
+|---|---|---|
+| `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` |
+| `application-no-runtime` | `migration` | Must not import package `ego`, `internal/extensions` or GoAkt |
+| `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `ego` or GoAkt |
+| `no-cross-module-internal` | every nested module | Must not import root-module `internal/...` |
+
+A failure names the importer, the forbidden import and the rule, for example:
+
+```text
+github.com/pablogore/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: rule contract-allowlist (design.md §3): ...
+```
+
+The fix is almost always to depend on a contract package instead of the runtime. Do not add a baseline entry to silence a new violation.
+
+### Baseline: known violations that can only shrink
+
+Violations that cannot be fixed yet are listed in `internal/cmd/archcheck/baseline.go`. Every entry must name an owner, a justification and a removal criterion, or the tool refuses to run. An entry that no longer matches a real violation fails the check as **stale**, so the entry has to be deleted in the same change that fixes the violation. The baseline can shrink, but nothing can quietly stay in it after its violation is gone.
+
+At the start the baseline holds five entries: the four publishers importing package `ego` (removed by S1b, once #111 verifies nested modules in CI) and `migration` importing package `ego` (removed by S3/S4, #103 and #11).
+
+### Adding a layer or changing a rule
+
+1. Declare the layer in `internal/cmd/archcheck/rules/layers.go`: a `Layer` with a name and a `Match` function over the package's import path and kind (root or nested module). A new contract package only needs its path added to `contractRoots`.
+2. Add the rule to `DefaultRules` in `internal/cmd/archcheck/rules/rules.go`, with an ID, a description, the source (ADR section or issue) and allowlist or denylist semantics.
+3. Add unit tests in `internal/cmd/archcheck/rules/evaluate_test.go`: one graph that breaks the rule and one that satisfies it.
+4. Run `go run ./internal/cmd/archcheck` locally. If existing code violates the new rule and cannot be fixed in the same change, add baseline entries with owner, justification and removal criterion, and update the ADR if the rule is normative.
+
+The per-package architecture tests (`tenancy_architecture_test.go`, `command_architecture_test.go`, `port/publishing`) stay. They are stricter than the general contract rule (for example, `tenancy` is stdlib-only), and `logger_architecture_test.go` enforces a different policy by scanning source.
+
 ## Coverage policy
 
 Coverage is always produced by native `go test -covermode=atomic
