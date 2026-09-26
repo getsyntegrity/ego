@@ -32,10 +32,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pablogore/ego/v4/internal/cmd/ciselect/selector"
@@ -132,10 +137,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("scanning for satellite modules: %w", err)
 	}
 
+	modules := make([]selector.Module, 0, len(satelliteDirs))
+	for _, dir := range satelliteDirs {
+		imports, err := discoverModuleImports(moduleDir, dir, modulePath)
+		if err != nil {
+			return fmt.Errorf("discovering imports for module %s: %w", dir, err)
+		}
+		modules = append(modules, selector.Module{Dir: dir, Imports: imports})
+	}
+
 	result := selector.Select(graph, moduleRelChanged, selector.Options{
 		All:           *allFlag,
 		Reason:        *reasonFlag,
 		SatelliteDirs: satelliteDirs,
+		Modules:       modules,
 	})
 
 	summary := selector.BuildSummary(result)
@@ -303,16 +318,21 @@ func findSatelliteDirs(root string) ([]string, error) {
 	return satellites, nil
 }
 
-// writeOutputs writes mode, packages.txt, coverpkg and summary.md into
-// outDir, creating it if necessary.
+// writeOutputs writes mode, packages.txt, coverpkg, modules.json and
+// summary.md into outDir, creating it if necessary.
 func writeOutputs(outDir string, result selector.Result, summary string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
+	}
+	modulesJSON, err := modulesJSON(result.Modules)
+	if err != nil {
+		return fmt.Errorf("encoding modules.json: %w", err)
 	}
 	files := map[string]string{
 		"mode":         string(result.Mode) + "\n",
 		"packages.txt": joinLines(result.Selected),
 		"coverpkg":     strings.Join(result.Included, ","),
+		"modules.json": modulesJSON,
 		"summary.md":   summary,
 	}
 	for name, content := range files {
@@ -321,6 +341,87 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 		}
 	}
 	return nil
+}
+
+// modulesJSON renders the selected module directories as a JSON array of
+// strings, always valid JSON: "[]" when none were selected, never "null".
+// This is what pull_request.yml and build.yml feed into a matrix job's
+// fromJSON().
+func modulesJSON(modules []selector.ModuleSelection) (string, error) {
+	dirs := make([]string, 0, len(modules))
+	for _, m := range modules {
+		dirs = append(dirs, m.Dir)
+	}
+	b, err := json.Marshal(dirs)
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
+}
+
+// moduleImportsSkipDir reports whether a directory named name must never be
+// descended into while parsing a nested module's own files: skipDirs
+// (module/build caches, VCS metadata) plus "vendor", which a released
+// nested module never checks in but a locally `go mod vendor`-ed one
+// might.
+func moduleImportsSkipDir(name string) bool {
+	return skipDirs[name] || name == "vendor"
+}
+
+// discoverModuleImports parses every non-vendor .go file under the nested
+// module at repo-relative dir (resolved against moduleDir), including
+// _test.go files — a nested module's tests can import a root package its
+// production code does not, and a CI-selection decision must not miss
+// that — with go/parser in imports-only mode: no module download, no
+// network, no build. It returns the sorted, de-duplicated set of import
+// paths that start with modulePath (the root module being selected for);
+// a nested module's other dependencies can never appear in the root
+// package graph, so they are dropped here rather than carried around
+// unused.
+func discoverModuleImports(moduleDir, dir, modulePath string) ([]string, error) {
+	root := filepath.Join(moduleDir, filepath.FromSlash(dir))
+	fset := token.NewFileSet()
+	imports := make(map[string]bool)
+
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != root && moduleImportsSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return fmt.Errorf("parsing %s: %w", path, parseErr)
+		}
+		for _, imp := range file.Imports {
+			impPath, unquoteErr := strconv.Unquote(imp.Path.Value)
+			if unquoteErr != nil {
+				return fmt.Errorf("parsing import in %s: %w", path, unquoteErr)
+			}
+			if impPath == modulePath || strings.HasPrefix(impPath, modulePath+"/") {
+				imports[impPath] = true
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	out := make([]string, 0, len(imports))
+	for imp := range imports {
+		out = append(out, imp)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func joinLines(lines []string) string {

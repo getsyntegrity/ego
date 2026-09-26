@@ -96,6 +96,15 @@ func BuildSummary(r Result) string {
 		fmt.Fprintf(&b, "> Satellite-module changes are not covered by this lane (see #104).\n")
 	}
 
+	fmt.Fprintf(&b, "\n## Nested modules\n\n")
+	if len(r.Modules) == 0 {
+		fmt.Fprintf(&b, "no nested modules selected\n")
+	} else {
+		for _, m := range r.Modules {
+			fmt.Fprintf(&b, "- `%s`: %s\n", m.Dir, m.Reason)
+		}
+	}
+
 	return b.String()
 }
 

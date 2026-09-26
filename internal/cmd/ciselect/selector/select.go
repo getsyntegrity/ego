@@ -58,6 +58,36 @@ type Options struct {
 	// to contain their own go.mod (and therefore fall outside this
 	// module's package graph).
 	SatelliteDirs []string
+	// Modules describes every nested Go module discovered under this
+	// module's directory (normally one entry per SatelliteDirs entry),
+	// together with the root-module import paths its own non-vendor .go
+	// files (including tests) import. It drives module selection,
+	// independent of the root package Mode/Selected/Included decision
+	// above.
+	Modules []Module
+}
+
+// Module is one nested Go module discovered under the repository, as input
+// to module selection.
+type Module struct {
+	// Dir is the module's directory, relative to the module root, using
+	// forward slashes (e.g. "publisher/kafka").
+	Dir string
+	// Imports is the sorted, de-duplicated set of root-module import
+	// paths that this module's own non-vendor .go files (including
+	// _test.go) import. Only root-module paths matter here: a nested
+	// module's other dependencies never appear in the root package
+	// graph, so they can never intersect the root affected set.
+	Imports []string
+}
+
+// ModuleSelection is one nested module selected to be built, vetted,
+// linted and tested for this run, and why.
+type ModuleSelection struct {
+	// Dir is the module's directory, exactly as given in Options.Modules.
+	Dir string
+	// Reason explains why this module was selected.
+	Reason string
 }
 
 // Result is the outcome of a Select call.
@@ -81,15 +111,29 @@ type Result struct {
 	// Changed is one entry per input changed path, in input order, with
 	// its classification.
 	Changed []ChangedFile
+	// Modules is the sorted-by-Dir set of nested modules selected for
+	// this run, and why. It is always independent of Mode: a module can
+	// be selected while the root lane is ModeNone, and can stay empty
+	// while the root lane is ModeFull.
+	Modules []ModuleSelection
 }
 
-// Select decides which packages g's changes must test and cover.
+// Select decides which packages g's changes must test and cover, and which
+// nested modules (opts.Modules) must be built, vetted, linted and tested.
 //
 // changed is the list of changed files exactly as given by the caller
 // (repo-relative paths are fine; Select classifies them against g's
 // directories and the well-known high-impact paths without needing the
 // filesystem). It is ignored entirely when opts.All is set.
 func Select(g Graph, changed []string, opts Options) Result {
+	res := selectRoot(g, changed, opts)
+	res.Modules = selectModules(res, changed, opts)
+	return res
+}
+
+// selectRoot is the root package Mode/Selected/Included decision: exactly
+// Select's original behavior, before module selection existed, unchanged.
+func selectRoot(g Graph, changed []string, opts Options) Result {
 	included := Included(g)
 	res := Result{
 		Included:    included,
@@ -177,4 +221,101 @@ func Select(g Graph, changed []string, opts Options) Result {
 		res.Reasons = []string{fmt.Sprintf("affected by %d changed package(s)", len(changedPkgs))}
 	}
 	return res
+}
+
+// moduleFullGateDirs are the module-relative directory prefixes whose
+// change forces every nested module to be selected: CI and selector
+// configuration that affects every module's own build, exactly as listed
+// in the #111 design (this is a smaller, closed set than the root lane's
+// own fullFallbackPrefixDirs, which also includes protos/, egopb/ and
+// other paths that do not change how a nested module is verified).
+var moduleFullGateDirs = []string{
+	".github",
+	"scripts/ci",
+	"internal/cmd/ciselect",
+}
+
+// moduleFullGateReason returns the reason every nested module must be
+// selected, or "" when no module full-gate condition applies. It never
+// looks at the filesystem or at g: it only inspects opts.All and the raw
+// changed paths.
+func moduleFullGateReason(opts Options, changed []string) string {
+	if opts.All {
+		return "full gate: -all requested"
+	}
+	for _, c := range changed {
+		sp := normalizeChangedPath(c)
+		if sp == "go.mod" || sp == "go.sum" || sp == ".golangci.yml" {
+			return fmt.Sprintf("full gate: %s changed", sp)
+		}
+		if _, ok := matchingPrefix(sp, moduleFullGateDirs); ok {
+			return fmt.Sprintf("full gate: %s changed", sp)
+		}
+	}
+	return ""
+}
+
+// selectModules decides which of opts.Modules must be built, vetted,
+// linted and tested for this run, and why. It never varies with the root
+// Mode: a module change or a module full-gate condition selects modules
+// regardless of what the root package lane decided, and a root package
+// change only reaches a module through root.Selected, the exact set of
+// root packages this run already decided are affected (which equals every
+// included root package whenever root.Mode is ModeFull).
+func selectModules(root Result, changed []string, opts Options) []ModuleSelection {
+	if len(opts.Modules) == 0 {
+		return nil
+	}
+
+	if reason := moduleFullGateReason(opts, changed); reason != "" {
+		out := make([]ModuleSelection, 0, len(opts.Modules))
+		for _, m := range opts.Modules {
+			out = append(out, ModuleSelection{Dir: m.Dir, Reason: reason})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })
+		return out
+	}
+
+	rootAffected := make(map[string]bool, len(root.Selected))
+	for _, p := range root.Selected {
+		rootAffected[p] = true
+	}
+
+	var out []ModuleSelection
+	for _, m := range opts.Modules {
+		if changedUnderModuleDir(changed, m.Dir) {
+			out = append(out, ModuleSelection{Dir: m.Dir, Reason: fmt.Sprintf("changed files in %s", m.Dir)})
+			continue
+		}
+		if imp, ok := firstIntersect(m.Imports, rootAffected); ok {
+			out = append(out, ModuleSelection{Dir: m.Dir, Reason: fmt.Sprintf("imports affected root package %s", imp)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })
+	return out
+}
+
+// changedUnderModuleDir reports whether any path in changed falls under
+// dir (a module-relative, forward-slash directory).
+func changedUnderModuleDir(changed []string, dir string) bool {
+	for _, c := range changed {
+		if hasPathPrefix(normalizeChangedPath(c), dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// firstIntersect returns the first (alphabetically) import in imports that
+// is a member of set, for a deterministic, input-order-independent reason
+// string.
+func firstIntersect(imports []string, set map[string]bool) (string, bool) {
+	sorted := append([]string{}, imports...)
+	sort.Strings(sorted)
+	for _, imp := range sorted {
+		if set[imp] {
+			return imp, true
+		}
+	}
+	return "", false
 }
