@@ -33,12 +33,6 @@ package rules
 
 import "strings"
 
-// rootModulePath is the import path of the repository's root Go module.
-// The layer predicates below are root-module-specific (design.md §3 states
-// the rules for this module only), so they refer to it directly rather than
-// threading it through every call.
-const rootModulePath = "github.com/pablogore/ego/v4"
-
 // ModuleKind distinguishes a package that lives in the root module from one
 // that lives in a nested module (its own go.mod under the repository, e.g.
 // publisher/kafka).

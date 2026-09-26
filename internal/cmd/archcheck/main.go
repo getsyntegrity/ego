@@ -61,6 +61,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("resolving -repo-root: %w", err)
 	}
 
+	return runCheck(repoRoot, repoBaseline, stdout)
+}
+
+// runCheck loads the import graph rooted at repoRoot, reads the root
+// module's own path from its go.mod so the rule table always matches the
+// graph it checks (see rules.DefaultRules), and checks it against
+// baseline, writing the report and summary line to stdout. It is the
+// testable core of run(): tests inject a fixture repoRoot and baseline
+// instead of the CLI flags and the repository's real baseline.
+func runCheck(repoRoot string, baseline []rules.BaselineEntry, stdout io.Writer) error {
+	modulePath, err := parseGoModModulePath(filepath.Join(repoRoot, "go.mod"))
+	if err != nil {
+		return fmt.Errorf("reading root module path: %w", err)
+	}
+
 	rootPkgs, err := loadRootModule(repoRoot)
 	if err != nil {
 		return fmt.Errorf("loading root module: %w", err)
@@ -71,9 +86,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	graph := rules.Graph{Packages: append(rootPkgs, nestedPkgs...)}
-	ruleset := rules.DefaultRules()
+	ruleset := rules.DefaultRules(modulePath)
 
-	result, err := rules.Evaluate(graph, ruleset, repoBaseline)
+	result, err := rules.Evaluate(graph, ruleset, baseline)
 	if err != nil {
 		return fmt.Errorf("evaluating baseline: %w", err)
 	}
@@ -82,38 +97,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprint(stdout, rules.FormatReport(result, ruleset))
 	}
 
-	packagesChecked, edgesChecked := countCheckedEdges(graph, ruleset)
-	baselined := len(repoBaseline) - len(result.Stale)
+	baselined := len(baseline) - len(result.Stale)
 	fmt.Fprintf(stdout, "archcheck: %d packages checked, %d edges checked, %d baselined, %d violation(s), %d stale entries\n",
-		packagesChecked, edgesChecked, baselined, len(result.Violations), len(result.Stale))
+		result.PackagesChecked, result.EdgesChecked, baselined, len(result.Violations), len(result.Stale))
 
 	if len(result.Violations) > 0 || len(result.Stale) > 0 {
 		return fmt.Errorf("%d violation(s), %d stale baseline entries", len(result.Violations), len(result.Stale))
 	}
 	return nil
-}
-
-// countCheckedEdges reports how many packages had at least one applicable
-// rule, and how many (package, rule, non-stdlib import) edges were
-// actually evaluated by Evaluate, for the summary line. It mirrors
-// Evaluate's own iteration exactly so the count matches what was really
-// checked, without Evaluate needing to expose internal counters through
-// its public Result.
-func countCheckedEdges(graph rules.Graph, ruleset []rules.Rule) (packagesChecked, edgesChecked int) {
-	checked := make(map[string]bool, len(graph.Packages))
-	for _, rule := range ruleset {
-		for _, pkg := range graph.Packages {
-			if !rule.Layer.Match(pkg) {
-				continue
-			}
-			checked[pkg.ImportPath] = true
-			for _, imp := range pkg.Imports {
-				if rules.IsStdlib(imp) {
-					continue
-				}
-				edgesChecked++
-			}
-		}
-	}
-	return len(checked), edgesChecked
 }

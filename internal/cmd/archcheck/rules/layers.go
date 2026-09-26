@@ -68,53 +68,63 @@ func isContractRelPath(rel string) bool {
 	return false
 }
 
-// ContractLayer is the layer named "Contract packages" in design.md §3:
-// tenancy, command, persistence, offsetstore, projection, eventstream,
-// encryption, eventadapter, and every package under port/.
-var ContractLayer = Layer{
-	Name: "contract packages",
-	Match: func(pkg Package) bool {
-		if pkg.Kind != RootModule {
-			return false
-		}
-		rel := strings.TrimPrefix(pkg.ImportPath, rootModulePath+"/")
-		if rel == pkg.ImportPath {
-			// pkg.ImportPath does not start with rootModulePath+"/": either
-			// it is the root package itself (never a contract) or it is not
-			// a root-module package at all.
-			return false
-		}
-		return isContractRelPath(rel)
-	},
+// ContractLayer returns the layer named "Contract packages" in design.md
+// §3: tenancy, command, persistence, offsetstore, projection, eventstream,
+// encryption, eventadapter, and every package under port/. rootModulePath
+// is the repository's root Go module's import path, read from its go.mod
+// (see DefaultRules); the layer is root-module-specific, so every Rule
+// built from it takes rootModulePath explicitly rather than assuming a
+// hard-coded value.
+func ContractLayer(rootModulePath string) Layer {
+	return Layer{
+		Name: "contract packages",
+		Match: func(pkg Package) bool {
+			if pkg.Kind != RootModule {
+				return false
+			}
+			rel := strings.TrimPrefix(pkg.ImportPath, rootModulePath+"/")
+			if rel == pkg.ImportPath {
+				// pkg.ImportPath does not start with rootModulePath+"/":
+				// either it is the root package itself (never a contract)
+				// or it is not a root-module package at all.
+				return false
+			}
+			return isContractRelPath(rel)
+		},
+	}
 }
 
-// ApplicationLayer is the layer named "Application: migration" in
+// ApplicationLayer returns the layer named "Application: migration" in
 // design.md §3: the root-module package migration and its subpackages.
-var ApplicationLayer = Layer{
-	Name: "application package migration",
-	Match: func(pkg Package) bool {
-		if pkg.Kind != RootModule {
-			return false
-		}
-		rel := strings.TrimPrefix(pkg.ImportPath, rootModulePath+"/")
-		if rel == pkg.ImportPath {
-			return false
-		}
-		return hasPathOrSubpath(rel, "migration")
-	},
+func ApplicationLayer(rootModulePath string) Layer {
+	return Layer{
+		Name: "application package migration",
+		Match: func(pkg Package) bool {
+			if pkg.Kind != RootModule {
+				return false
+			}
+			rel := strings.TrimPrefix(pkg.ImportPath, rootModulePath+"/")
+			if rel == pkg.ImportPath {
+				return false
+			}
+			return hasPathOrSubpath(rel, "migration")
+		},
+	}
 }
 
-// ExternalAdapterLayer is the layer named "Nested adapter modules:
+// ExternalAdapterLayer returns the layer named "Nested adapter modules:
 // publisher/*" in design.md §3: every package in a nested module rooted
 // under publisher/.
-var ExternalAdapterLayer = Layer{
-	Name: "external adapter modules (publisher/*)",
-	Match: func(pkg Package) bool {
-		if pkg.Kind != NestedModule {
-			return false
-		}
-		return hasPathOrSubpath(pkg.ImportPath, rootModulePath+"/publisher")
-	},
+func ExternalAdapterLayer(rootModulePath string) Layer {
+	return Layer{
+		Name: "external adapter modules (publisher/*)",
+		Match: func(pkg Package) bool {
+			if pkg.Kind != NestedModule {
+				return false
+			}
+			return hasPathOrSubpath(pkg.ImportPath, rootModulePath+"/publisher")
+		},
+	}
 }
 
 // AnyNestedModuleLayer is "every nested module" in design.md §3: it backs

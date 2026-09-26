@@ -29,6 +29,36 @@ import (
 
 const root = "github.com/pablogore/ego/v4"
 
+// rulesFor returns the subset of DefaultRules(root) named by ids, in that
+// order. Evaluate now rejects a ruleset where any rule's Layer matched zero
+// packages (R1), so a test whose fixture graph deliberately populates only
+// one or two layers must narrow the ruleset to just the rule(s) under test,
+// rather than passing every DefaultRules(root) rule against a partial
+// graph.
+func rulesFor(t *testing.T, ids ...string) []Rule {
+	t.Helper()
+	all := DefaultRules(root)
+	out := make([]Rule, 0, len(ids))
+	for _, id := range ids {
+		r, ok := ruleByID(all, id)
+		if !ok {
+			t.Fatalf("unknown rule id %q", id)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// ruleStat looks up one rule's stat from a Result's RuleStats by ID.
+func ruleStat(stats []RuleStat, id string) (RuleStat, bool) {
+	for _, s := range stats {
+		if s.RuleID == id {
+			return s, true
+		}
+	}
+	return RuleStat{}, false
+}
+
 // forbiddenGraph has one contract package (tenancy) that directly imports
 // the GoAkt runtime: a plain forbidden import in a contract package.
 func forbiddenGraph() Graph {
@@ -92,7 +122,8 @@ func allowedGraph() Graph {
 }
 
 func TestEvaluate_ForbiddenImportInContractPackageFails(t *testing.T) {
-	result, err := Evaluate(forbiddenGraph(), DefaultRules(), nil)
+	ruleset := rulesFor(t, "contract-allowlist")
+	result, err := Evaluate(forbiddenGraph(), ruleset, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -110,7 +141,7 @@ func TestEvaluate_ForbiddenImportInContractPackageFails(t *testing.T) {
 		t.Errorf("Rule = %q, want contract-allowlist", v.Rule)
 	}
 
-	report := FormatReport(result, DefaultRules())
+	report := FormatReport(result, ruleset)
 	for _, want := range []string{v.Importer, v.Import, v.Rule} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report %q does not contain %q", report, want)
@@ -119,7 +150,7 @@ func TestEvaluate_ForbiddenImportInContractPackageFails(t *testing.T) {
 }
 
 func TestEvaluate_AllowedGraphPasses(t *testing.T) {
-	result, err := Evaluate(allowedGraph(), DefaultRules(), nil)
+	result, err := Evaluate(allowedGraph(), DefaultRules(root), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -132,7 +163,7 @@ func TestEvaluate_AllowedGraphPasses(t *testing.T) {
 }
 
 func TestEvaluate_PersistenceConformanceImportingTestifyIsNotAViolation(t *testing.T) {
-	result, err := Evaluate(allowedGraph(), DefaultRules(), nil)
+	result, err := Evaluate(allowedGraph(), DefaultRules(root), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -154,7 +185,7 @@ func TestEvaluate_BaselinedViolationPasses(t *testing.T) {
 			RemovalCriterion: "never; test only",
 		},
 	}
-	result, err := Evaluate(forbiddenGraph(), DefaultRules(), baseline)
+	result, err := Evaluate(forbiddenGraph(), rulesFor(t, "contract-allowlist"), baseline)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -179,7 +210,8 @@ func TestEvaluate_StaleBaselineEntryIsReported(t *testing.T) {
 	}
 	// forbiddenGraph's real violation (.../actor) is NOT in this baseline,
 	// so it must still be reported, alongside the stale entry above.
-	result, err := Evaluate(forbiddenGraph(), DefaultRules(), baseline)
+	ruleset := rulesFor(t, "contract-allowlist")
+	result, err := Evaluate(forbiddenGraph(), ruleset, baseline)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -190,7 +222,7 @@ func TestEvaluate_StaleBaselineEntryIsReported(t *testing.T) {
 		t.Fatalf("len(Violations) = %d, want 1 (unbaselined real violation): %+v", len(result.Violations), result.Violations)
 	}
 
-	report := FormatReport(result, DefaultRules())
+	report := FormatReport(result, ruleset)
 	if !strings.Contains(report, "no longer matches a violation") {
 		t.Errorf("report %q does not mention the stale entry", report)
 	}
@@ -208,7 +240,7 @@ func TestValidateBaseline_MissingFieldsRejected(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := ValidateBaseline([]BaselineEntry{c.entry}, DefaultRules()); err == nil {
+			if err := ValidateBaseline([]BaselineEntry{c.entry}, DefaultRules(root)); err == nil {
 				t.Fatalf("ValidateBaseline() = nil error, want a rejection for %+v", c.entry)
 			}
 		})
@@ -219,8 +251,104 @@ func TestEvaluate_RejectsMalformedBaseline(t *testing.T) {
 	baseline := []BaselineEntry{
 		{Importer: "a", Import: "b", Rule: "contract-allowlist"}, // no owner/justification/removal
 	}
-	if _, err := Evaluate(allowedGraph(), DefaultRules(), baseline); err == nil {
+	if _, err := Evaluate(allowedGraph(), DefaultRules(root), baseline); err == nil {
 		t.Fatal("Evaluate() = nil error, want a rejection for a malformed baseline")
+	}
+}
+
+// TestEvaluate_ZeroMatchRulesFailClosed reproduces the R1 bug directly: a
+// graph whose packages live under a different module path than the one
+// DefaultRules was built for. Every rule's Layer is root-module-path
+// specific (or requires a nested module, which this graph also has none
+// of), so every rule matches zero packages, and Evaluate must reject that
+// instead of silently reporting a clean run.
+func TestEvaluate_ZeroMatchRulesFailClosed(t *testing.T) {
+	graph := Graph{Packages: []Package{
+		{
+			ImportPath: "github.com/other/module/tenancy",
+			Kind:       RootModule,
+			Imports:    []string{"context"},
+		},
+	}}
+	_, err := Evaluate(graph, DefaultRules(root), nil)
+	if err == nil {
+		t.Fatal("Evaluate() = nil error, want an error naming every rule that matched zero packages")
+	}
+	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal"} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error %q does not name rule %s", err, id)
+		}
+	}
+}
+
+// TestEvaluate_ContractAllowlistDoesNotNeedPortPackages proves the
+// zero-match check is per rule, not per contract root: contract-allowlist
+// covers nine roots (tenancy, command, ..., port), and a graph that has no
+// port/... package at all must not trip the check, because the rule as a
+// whole still matched real contract packages.
+func TestEvaluate_ContractAllowlistDoesNotNeedPortPackages(t *testing.T) {
+	graph := Graph{Packages: []Package{
+		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
+		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
+		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/egopb"}},
+	}}
+	result, err := Evaluate(graph, DefaultRules(root), nil)
+	if err != nil {
+		t.Fatalf("Evaluate returned error even though every rule matched something: %v", err)
+	}
+	if len(result.Violations) != 0 {
+		t.Fatalf("len(Violations) = %d, want 0: %+v", len(result.Violations), result.Violations)
+	}
+	stat, ok := ruleStat(result.RuleStats, "contract-allowlist")
+	if !ok {
+		t.Fatalf("no RuleStat for contract-allowlist in %+v", result.RuleStats)
+	}
+	if stat.PackagesMatched == 0 {
+		t.Fatalf("contract-allowlist PackagesMatched = 0, want > 0 (tenancy alone should count) even with no port/... package present")
+	}
+}
+
+// TestEvaluate_SummaryCountsAreExactAndDeduped exercises the exact scenario
+// the R1 problem statement names: publisher/kafka is a nested module, so
+// both external-adapter-no-runtime and no-cross-module-internal check its
+// imports; PackagesChecked and EdgesChecked must count each package and
+// each (importer, import) pair once, not once per rule that inspected it.
+func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
+	graph := Graph{Packages: []Package{
+		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
+		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
+		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root, root + "/egopb"}},
+	}}
+	baseline := []BaselineEntry{
+		{
+			Importer:         root + "/publisher/kafka",
+			Import:           root,
+			Rule:             "external-adapter-no-runtime",
+			Owner:            "@pablogore",
+			Justification:    "test fixture",
+			RemovalCriterion: "never; test only",
+		},
+	}
+	result, err := Evaluate(graph, DefaultRules(root), baseline)
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if len(result.Violations) != 0 {
+		t.Fatalf("len(Violations) = %d, want 0 (baselined): %+v", len(result.Violations), result.Violations)
+	}
+	if len(result.Stale) != 0 {
+		t.Fatalf("len(Stale) = %d, want 0 (entry was used): %+v", len(result.Stale), result.Stale)
+	}
+	// tenancy, migration and publisher/kafka: 3 distinct packages, each
+	// matched by at least one rule.
+	if result.PackagesChecked != 3 {
+		t.Errorf("PackagesChecked = %d, want 3: %+v", result.PackagesChecked, result.RuleStats)
+	}
+	// migration -> tenancy (1), publisher/kafka -> root (1, checked by two
+	// rules but counted once) and publisher/kafka -> egopb (1) = 3. tenancy
+	// has no non-stdlib imports.
+	if result.EdgesChecked != 3 {
+		t.Errorf("EdgesChecked = %d, want 3 (deduped): %+v", result.EdgesChecked, result.RuleStats)
 	}
 }
 
@@ -242,6 +370,11 @@ func TestIsStdlib(t *testing.T) {
 func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{
+			ImportPath: root + "/tenancy",
+			Kind:       RootModule,
+			Imports:    []string{"context"},
+		},
+		{
 			ImportPath: root + "/migration",
 			Kind:       RootModule,
 			Imports:    []string{"context", "os", "sync", "encoding/json"},
@@ -252,7 +385,7 @@ func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 			Imports:    []string{"fmt", "net/http"},
 		},
 	}}
-	result, err := Evaluate(graph, DefaultRules(), nil)
+	result, err := Evaluate(graph, DefaultRules(root), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -274,14 +407,15 @@ func TestEvaluate_OutputOrderingIsDeterministic(t *testing.T) {
 			Imports:    []string{"github.com/tochemey/goakt/v4/actor"},
 		},
 	}}
-	first, err := Evaluate(graph, DefaultRules(), nil)
+	ruleset := rulesFor(t, "application-no-runtime", "contract-allowlist")
+	first, err := Evaluate(graph, ruleset, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
 	// Reverse the package order and re-evaluate: the sorted output must be
 	// identical regardless of input order.
 	reversed := Graph{Packages: []Package{graph.Packages[1], graph.Packages[0]}}
-	second, err := Evaluate(reversed, DefaultRules(), nil)
+	second, err := Evaluate(reversed, ruleset, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -309,7 +443,7 @@ func TestApplicationNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
 			Imports:    []string{root, root + "/internal/extensions", "github.com/tochemey/goakt/v4"},
 		},
 	}}
-	result, err := Evaluate(graph, DefaultRules(), nil)
+	result, err := Evaluate(graph, rulesFor(t, "application-no-runtime"), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -326,7 +460,7 @@ func TestExternalAdapterNoRuntime_ForbidsRootAndGoAktOnly(t *testing.T) {
 			Imports:    []string{root, "github.com/tochemey/goakt/v4/actor", root + "/egopb"},
 		},
 	}}
-	result, err := Evaluate(graph, DefaultRules(), nil)
+	result, err := Evaluate(graph, rulesFor(t, "external-adapter-no-runtime"), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -343,7 +477,7 @@ func TestNoCrossModuleInternal_ForbidsRootInternal(t *testing.T) {
 			Imports:    []string{root + "/internal/queue"},
 		},
 	}}
-	result, err := Evaluate(graph, DefaultRules(), nil)
+	result, err := Evaluate(graph, rulesFor(t, "no-cross-module-internal"), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}

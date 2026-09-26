@@ -79,7 +79,7 @@ type Rule struct {
 // design.md §3 allows a contract package to import, besides stdlib and
 // other contract packages (handled separately, since they need the
 // relative-path check isContractRelPath, not a flat list).
-func allowedContractImport(importPath string) bool {
+func allowedContractImport(rootModulePath, importPath string) bool {
 	switch importPath {
 	case rootModulePath + "/egopb",
 		rootModulePath + "/internal/queue",
@@ -92,22 +92,26 @@ func allowedContractImport(importPath string) bool {
 }
 
 // DefaultRules returns the repository's current rule table (design.md §3
-// plus the #107 scope additions). It returns a fresh slice on every call;
-// Rule holds only funcs and strings, so callers may freely keep or discard
-// the result without sharing mutable state.
-func DefaultRules() []Rule {
+// plus the #107 scope additions), for the root Go module at
+// rootModulePath. Callers read rootModulePath from the root go.mod
+// (parseGoModModulePath in internal/cmd/archcheck) rather than assuming a
+// hard-coded value, so the rule table stays correct if the module path
+// ever changes. DefaultRules returns a fresh slice on every call; Rule
+// holds only funcs and strings, so callers may freely keep or discard the
+// result without sharing mutable state.
+func DefaultRules(rootModulePath string) []Rule {
 	return []Rule{
 		{
 			ID:          "contract-allowlist",
 			Description: "contract packages may import only stdlib, other contract packages, egopb, google.golang.org/protobuf/..., internal/queue, internal/syncmap, github.com/google/uuid and go.uber.org/atomic",
 			Source:      "design.md §3",
-			Layer:       ContractLayer,
+			Layer:       ContractLayer(rootModulePath),
 			Semantics:   Allowlist,
 			Forbids: func(importPath string) bool {
-				if allowedContractImport(importPath) {
+				if allowedContractImport(rootModulePath, importPath) {
 					return false
 				}
-				rel := stripRootModulePrefix(importPath)
+				rel := stripRootModulePrefix(rootModulePath, importPath)
 				return !isContractRelPath(rel)
 			},
 		},
@@ -115,7 +119,7 @@ func DefaultRules() []Rule {
 			ID:          "application-no-runtime",
 			Description: "the migration application must not import the root package ego, internal/extensions or the GoAkt runtime",
 			Source:      "#107 scope",
-			Layer:       ApplicationLayer,
+			Layer:       ApplicationLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {
 				if importPath == rootModulePath {
@@ -131,7 +135,7 @@ func DefaultRules() []Rule {
 			ID:          "external-adapter-no-runtime",
 			Description: "nested adapter modules under publisher/ must not import the root package ego or the GoAkt runtime",
 			Source:      "design.md §3",
-			Layer:       ExternalAdapterLayer,
+			Layer:       ExternalAdapterLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {
 				if importPath == rootModulePath {
@@ -153,11 +157,11 @@ func DefaultRules() []Rule {
 	}
 }
 
-// stripRootModulePrefix returns importPath relative to the root module,
-// or importPath unchanged if it is not a root-module import path (in
-// which case it can never be a contract package either).
-func stripRootModulePrefix(importPath string) string {
-	const prefix = rootModulePath + "/"
+// stripRootModulePrefix returns importPath relative to rootModulePath, or
+// importPath unchanged if it is not a rootModulePath import path (in which
+// case it can never be a contract package either).
+func stripRootModulePrefix(rootModulePath, importPath string) string {
+	prefix := rootModulePath + "/"
 	if len(importPath) <= len(prefix) || importPath[:len(prefix)] != prefix {
 		return importPath
 	}
