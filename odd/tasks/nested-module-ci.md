@@ -55,7 +55,7 @@ rule keeps leaf changes cheap and still catches real reverse consumers.
 - [x] T2 `ciselect` main: parse nested imports, write `modules.json`.
       Check: run ciselect on a kafka-only change list → kafka selected;
       docs-only → `[]`.
-- [ ] T3 `scripts/ci/verify-module.sh` + matrix jobs in `pull_request.yml` and
+- [x] T3 `scripts/ci/verify-module.sh` + matrix jobs in `pull_request.yml` and
       `build.yml`. Check: script passes locally for all six modules;
       `actionlint` if available.
 - [ ] T4 `release.yml`: discovered publishers + published-version build with
@@ -117,3 +117,44 @@ Forecast about 600 authored lines. Single PR with one commit per task
 - Manual check: `go run ./internal/cmd/ciselect -changed <kafka-only>
   -out-dir <dir>` → `modules.json` = `["publisher/kafka"]`, mode `none`;
   same for a docs-only change → `modules.json` = `[]`, mode `none`.
+
+### T3 (commit 190a779)
+
+- `scripts/ci/verify-module.sh <module-dir>`: `go mod download`, `go build`
+  (scratch `-o` dir only when the module has a `main` package, otherwise a
+  bare `go build ./...`, to avoid dropping a stray binary into the module's
+  own tree), `go vet`, `golangci-lint run --modules-download-mode=mod
+  --config <repo-root>/.golangci.yml` (root config, overridden off
+  `vendor` mode since nested modules have no `vendor/`), and `go test`
+  only when a `*_test.go` file exists, `-race` gated by `GO_TEST_RACE`
+  (default off). Writes a short block to `$GITHUB_STEP_SUMMARY` when set.
+- Ran it locally (`GO_TEST_RACE` unset, matching go1.26.6 SDK — see the
+  toolchain note above) for all six modules, one at a time:
+  - `publisher/kafka`: build/vet clean; lint found 2 real pre-existing
+    `revive` (unused `ctx` parameter in both `Publish` methods) and 2
+    `staticcheck` `SA4006` (the reassigned `ctx` from
+    `context.WithTimeout` in both `Close` methods is never used — the
+    timeout was already dead code before this change) findings. Fixed
+    minimally: renamed the unused `Publish` parameters to `_`, changed
+    `ctx, cancel := context.WithTimeout(...)` to `_, cancel := ...` in
+    both `Close` methods. Re-run: `0 issues`, no tests (module has none).
+  - `publisher/nats`: `0 issues`, no tests.
+  - `publisher/pulsar`: `0 issues`, no tests.
+  - `publisher/websocket`: lint found the same unused-`ctx`-parameter
+    pattern in `Publish`; fixed the same way. Re-run: `0 issues`, no
+    tests.
+  - `benchmark`: `0 issues`; `go test ./...` → `ok ... [no tests to run]`
+    (its one `_test.go` holds only `Benchmark*` functions).
+  - `example/cluster`: `0 issues`; `go test ./...` → `ok` (its two test
+    files ran and passed without needing a live Postgres — no skip or
+    failure observed).
+- `actionlint`: not installed in this environment (`which actionlint`
+  found nothing); not installed per instructions. Validated both
+  workflow files instead with `python3 -c 'import yaml; yaml.safe_load(...)'`
+  — both parse as valid YAML.
+- `pull_request.yml`'s root `go mod tidy && go mod vendor` step runs only
+  in the `build` job, against the root module; the new `modules` job is a
+  separate job/runner that never sets `GOFLAGS=-mod=vendor` and never
+  touches the root `vendor/` directory, so it does not interfere with
+  nested-module verification (confirmed by reasoning about job isolation,
+  not by running the workflow in Actions).
