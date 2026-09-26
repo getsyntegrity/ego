@@ -163,7 +163,9 @@ The tool reads the import graph in two ways:
 - **Root module:** `go list -e -json ./...`, which gives each package's production imports with build constraints resolved. A package that fails to load fails the check (fail closed).
 - **Nested modules** (`publisher/*`, `benchmark`, `example/cluster`): every non-test `.go` file is parsed in imports-only mode with `go/parser`. No module download or network is needed, which keeps the step at well under a second.
 
-Each rule applies to one layer and checks the direct import edges of every package in it. Contract layers use a closed allowlist, and every allowed target is itself runtime-free, so a transitive path to GoAkt cannot open without adding a new direct edge that the check sees.
+Each rule applies to one layer and checks the direct import edges of every package in it. Contract layers use a closed allowlist, and every allowed target is itself runtime-free, so a transitive path to GoAkt cannot open without adding a new direct edge that the check sees. `rules.Evaluate` counts how many packages each rule's layer actually matched, and fails the whole run — naming the empty rule and its layer — if any rule matched zero packages: that is almost always a sign the root module path or a layer definition is wrong, not that the layer is genuinely empty, since a check that matches nothing passes vacuously instead of catching anything.
+
+**Build-constraint coverage.** The root module is loaded via `go list`, which resolves build constraints (`//go:build` tags, `_linux.go`-style suffixes) for the CI host's own `GOOS`/`GOARCH` only; a file restricted to another platform is not part of the graph `go list` reports, so an import that only exists on a platform the CI host does not build for is not checked. Nested modules are parsed with `go/parser` directly, ignoring build constraints entirely, so a file's imports are read regardless of which platform it is restricted to; this can only over-report a nested module's imports, never miss one, so it stays fail-safe in the direction that matters for this check.
 
 | Rule | Applies to | Constraint |
 |---|---|---|
@@ -188,8 +190,8 @@ At the start the baseline holds five entries: the four publishers importing pack
 
 ### Adding a layer or changing a rule
 
-1. Declare the layer in `internal/cmd/archcheck/rules/layers.go`: a `Layer` with a name and a `Match` function over the package's import path and kind (root or nested module). A new contract package only needs its path added to `contractRoots`.
-2. Add the rule to `DefaultRules` in `internal/cmd/archcheck/rules/rules.go`, with an ID, a description, the source (ADR section or issue) and allowlist or denylist semantics.
+1. Declare the layer in `internal/cmd/archcheck/rules/layers.go`: a function taking the root module path and returning a `Layer` with a name and a `Match` function over the package's import path and kind (root or nested module). A new contract package only needs its path added to `contractRoots`.
+2. Add the rule to `DefaultRules(rootModulePath string)` in `internal/cmd/archcheck/rules/rules.go`, with an ID, a description, the source (ADR section or issue), allowlist or denylist semantics and, for a denylist rule, a `Reason` func naming the specific forbidden prefix it matched.
 3. Add unit tests in `internal/cmd/archcheck/rules/evaluate_test.go`: one graph that breaks the rule and one that satisfies it.
 4. Run `go run ./internal/cmd/archcheck` locally. If existing code violates the new rule and cannot be fixed in the same change, add baseline entries with owner, justification and removal criterion, and update the ADR if the rule is normative.
 
