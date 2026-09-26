@@ -103,9 +103,6 @@ func loadRootModule(repoRoot string) ([]rules.Package, error) {
 			loadErrs = append(loadErrs, fmt.Sprintf("%s: %s", raw.ImportPath, raw.Error.Err))
 			continue
 		}
-		if isVendoredImportPath(raw.ImportPath) {
-			continue
-		}
 		pkgs = append(pkgs, rules.Package{
 			ImportPath: raw.ImportPath,
 			Kind:       rules.RootModule,
@@ -120,10 +117,6 @@ func loadRootModule(repoRoot string) ([]rules.Package, error) {
 		return nil, fmt.Errorf("root module package graph has load errors:\n%s", strings.Join(loadErrs, "\n"))
 	}
 	return pkgs, nil
-}
-
-func isVendoredImportPath(importPath string) bool {
-	return importPath == "vendor" || strings.Contains(importPath, "/vendor/") || strings.HasPrefix(importPath, "vendor/")
 }
 
 // discoverNestedModuleDirs finds every directory under repoRoot that holds

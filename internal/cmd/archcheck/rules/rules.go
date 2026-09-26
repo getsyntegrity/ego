@@ -73,6 +73,13 @@ type Rule struct {
 	// Forbids reports whether importPath breaks this rule for a package in
 	// Layer. Never called for a stdlib import.
 	Forbids func(importPath string) bool
+	// Reason optionally returns a rule- and import-specific explanation of
+	// why importPath broke this rule, for a Violation's Reason field (e.g.
+	// naming the exact forbidden prefix a denylist rule matched, rather
+	// than only the rule's layer name). When nil, Evaluate falls back to a
+	// generic reason phrased from Semantics and Layer; see reasonFor in
+	// evaluate.go. Only ever called when Forbids already returned true.
+	Reason func(importPath string) string
 }
 
 // allowedContractImport reports whether importPath is one of the targets
@@ -130,6 +137,16 @@ func DefaultRules(rootModulePath string) []Rule {
 				}
 				return hasPathOrSubpath(importPath, "github.com/tochemey/goakt/v4")
 			},
+			Reason: func(importPath string) string {
+				switch {
+				case importPath == rootModulePath:
+					return "imports the root package " + rootModulePath + " directly, not a runtime-neutral contract"
+				case hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions"):
+					return "imports " + rootModulePath + "/internal/extensions, the GoAkt runtime adapter's internal package"
+				default:
+					return "imports the GoAkt runtime (github.com/tochemey/goakt/v4)"
+				}
+			},
 		},
 		{
 			ID:          "external-adapter-no-runtime",
@@ -143,6 +160,12 @@ func DefaultRules(rootModulePath string) []Rule {
 				}
 				return hasPathOrSubpath(importPath, "github.com/tochemey/goakt/v4")
 			},
+			Reason: func(importPath string) string {
+				if importPath == rootModulePath {
+					return "imports the root package " + rootModulePath + " directly, not a contract package"
+				}
+				return "imports the GoAkt runtime (github.com/tochemey/goakt/v4)"
+			},
 		},
 		{
 			ID:          "no-cross-module-internal",
@@ -152,6 +175,9 @@ func DefaultRules(rootModulePath string) []Rule {
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {
 				return hasPathOrSubpath(importPath, rootModulePath+"/internal")
+			},
+			Reason: func(importPath string) string {
+				return "imports " + importPath + ", which crosses the root module's internal/ boundary (" + rootModulePath + "/internal)"
 			},
 		},
 	}

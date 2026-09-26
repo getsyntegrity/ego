@@ -395,6 +395,83 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 	}
 }
 
+// TestEvaluate_ViolationReasonNamesForbiddenPrefix proves a denylist rule's
+// Violation.Reason names the specific forbidden prefix or import that
+// matched, not just a generic restatement of the rule's layer name.
+func TestEvaluate_ViolationReasonNamesForbiddenPrefix(t *testing.T) {
+	cases := []struct {
+		name       string
+		ruleID     string
+		graph      Graph
+		wantImport string
+		wantSubstr string
+	}{
+		{
+			name:   "application-no-runtime root import",
+			ruleID: "application-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root}},
+			}},
+			wantImport: root,
+			wantSubstr: root,
+		},
+		{
+			name:   "application-no-runtime internal/extensions import",
+			ruleID: "application-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/internal/extensions"}},
+			}},
+			wantImport: root + "/internal/extensions",
+			wantSubstr: "internal/extensions",
+		},
+		{
+			name:   "application-no-runtime goakt import",
+			ruleID: "application-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{"github.com/tochemey/goakt/v4/actor"}},
+			}},
+			wantImport: "github.com/tochemey/goakt/v4/actor",
+			wantSubstr: "goakt",
+		},
+		{
+			name:   "external-adapter-no-runtime goakt import",
+			ruleID: "external-adapter-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{"github.com/tochemey/goakt/v4"}},
+			}},
+			wantImport: "github.com/tochemey/goakt/v4",
+			wantSubstr: "goakt",
+		},
+		{
+			name:   "no-cross-module-internal import",
+			ruleID: "no-cross-module-internal",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/benchmark", Kind: NestedModule, Imports: []string{root + "/internal/queue"}},
+			}},
+			wantImport: root + "/internal/queue",
+			wantSubstr: "internal",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, err := Evaluate(c.graph, rulesFor(t, c.ruleID), nil)
+			if err != nil {
+				t.Fatalf("Evaluate returned error: %v", err)
+			}
+			if len(result.Violations) != 1 {
+				t.Fatalf("len(Violations) = %d, want 1: %+v", len(result.Violations), result.Violations)
+			}
+			v := result.Violations[0]
+			if v.Import != c.wantImport {
+				t.Fatalf("Import = %q, want %q", v.Import, c.wantImport)
+			}
+			if !strings.Contains(v.Reason, c.wantSubstr) {
+				t.Errorf("Reason = %q, want it to contain %q (rule-specific, not just the layer name)", v.Reason, c.wantSubstr)
+			}
+		})
+	}
+}
+
 func TestIsStdlib(t *testing.T) {
 	cases := map[string]bool{
 		"fmt":                              true,

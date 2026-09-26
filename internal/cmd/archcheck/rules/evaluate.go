@@ -149,7 +149,7 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 					Importer: pkg.ImportPath,
 					Import:   imp,
 					Rule:     rule.ID,
-					Reason:   reasonFor(rule),
+					Reason:   reasonFor(rule, imp),
 				})
 			}
 		}
@@ -185,7 +185,10 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 
 // reasonFor gives a short, human explanation of why a rule forbids an
 // import, phrased by the rule's semantics.
-func reasonFor(rule Rule) string {
+func reasonFor(rule Rule, importPath string) string {
+	if rule.Reason != nil {
+		return rule.Reason(importPath)
+	}
 	if rule.Semantics == Allowlist {
 		return "not on the " + rule.Layer.Name + " allowlist"
 	}
