@@ -22,18 +22,31 @@
 
 package ego
 
-import "github.com/pablogore/ego/v4/port/publishing"
+import (
+	"errors"
+	"testing"
 
-// The publisher contracts live in package port/publishing, which does not
-// depend on the GoAkt runtime. These aliases keep the historical import path
-// compiling with identical types (ADR ego-arch-001, slice S1a).
-type (
-	// EventPublisher is an alias of publishing.EventPublisher.
-	EventPublisher = publishing.EventPublisher
-	// StatePublisher is an alias of publishing.StatePublisher.
-	StatePublisher = publishing.StatePublisher
+	"github.com/stretchr/testify/assert"
+
+	"github.com/pablogore/ego/v4/port/publishing"
 )
 
-// ErrPublisherNotStarted is publishing.ErrPublisherNotStarted, kept here so
-// errors.Is checks against ego.ErrPublisherNotStarted continue to match.
-var ErrPublisherNotStarted = publishing.ErrPublisherNotStarted
+// TestPublisherContractsAliasPortPublishing pins the compatibility promise of
+// ADR ego-arch-001 slice S1a: the publisher contracts moved to port/publishing
+// and package ego keeps aliases, so both import paths name the same types and
+// the same sentinel error.
+func TestPublisherContractsAliasPortPublishing(t *testing.T) {
+	var (
+		eventPub publishing.EventPublisher = (*recordingEventPublisher)(nil)
+		statePub publishing.StatePublisher = (*recordingStatePublisher)(nil)
+	)
+
+	var legacyEvent EventPublisher = eventPub
+	var legacyState StatePublisher = statePub
+	assert.Equal(t, eventPub, legacyEvent)
+	assert.Equal(t, statePub, legacyState)
+
+	assert.Same(t, publishing.ErrPublisherNotStarted, ErrPublisherNotStarted)
+	assert.True(t, errors.Is(publishing.ErrPublisherNotStarted, ErrPublisherNotStarted))
+	assert.True(t, errors.Is(ErrPublisherNotStarted, publishing.ErrPublisherNotStarted))
+}
