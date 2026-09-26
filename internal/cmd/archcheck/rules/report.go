@@ -46,7 +46,7 @@ func FormatReport(result Result, ruleset []Rule) string {
 	}
 
 	if len(result.Stale) > 0 {
-		fmt.Fprintf(&b, "%d stale baseline entr(y/ies):\n\n", len(result.Stale))
+		fmt.Fprintf(&b, "%d stale baseline entries:\n\n", len(result.Stale))
 		for _, entry := range result.Stale {
 			writeStaleEntry(&b, entry)
 		}
