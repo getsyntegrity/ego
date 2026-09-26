@@ -44,7 +44,7 @@ func writeFile(t *testing.T, path, content string) {
 func TestParseGoModModulePath(t *testing.T) {
 	dir := t.TempDir()
 	goMod := filepath.Join(dir, "go.mod")
-	writeFile(t, goMod, "module github.com/pablogore/ego/v4/publisher/kafka\n\ngo 1.26.0\n\nrequire github.com/pablogore/ego/v4 v4.0.0\n")
+	writeFile(t, goMod, "module github.com/pablogore/ego/v4/publisher/kafka\n\ngo 1.21\n\nrequire github.com/pablogore/ego/v4 v4.0.0\n")
 
 	got, err := parseGoModModulePath(goMod)
 	if err != nil {
@@ -65,14 +65,14 @@ func TestParseGoModModulePath_Forms(t *testing.T) {
 		name    string
 		content string
 	}{
-		{"plain", "module github.com/pablogore/ego/v4\n\ngo 1.26.0\n"},
-		{"quoted", "module \"github.com/pablogore/ego/v4\"\n\ngo 1.26.0\n"},
-		{"trailing comment", "module github.com/pablogore/ego/v4 // root module\n\ngo 1.26.0\n"},
-		{"quoted with trailing comment", "module \"github.com/pablogore/ego/v4\" // root module\n\ngo 1.26.0\n"},
-		{"block form", "module (\n\tgithub.com/pablogore/ego/v4\n)\n\ngo 1.26.0\n"},
-		{"block form quoted", "module (\n\t\"github.com/pablogore/ego/v4\"\n)\n\ngo 1.26.0\n"},
-		{"block form with comment on the path line", "module (\n\tgithub.com/pablogore/ego/v4 // root module\n)\n\ngo 1.26.0\n"},
-		{"leading comment line", "// this is the root module\nmodule github.com/pablogore/ego/v4\n\ngo 1.26.0\n"},
+		{"plain", "module github.com/pablogore/ego/v4\n\ngo 1.21\n"},
+		{"quoted", "module \"github.com/pablogore/ego/v4\"\n\ngo 1.21\n"},
+		{"trailing comment", "module github.com/pablogore/ego/v4 // root module\n\ngo 1.21\n"},
+		{"quoted with trailing comment", "module \"github.com/pablogore/ego/v4\" // root module\n\ngo 1.21\n"},
+		{"block form", "module (\n\tgithub.com/pablogore/ego/v4\n)\n\ngo 1.21\n"},
+		{"block form quoted", "module (\n\t\"github.com/pablogore/ego/v4\"\n)\n\ngo 1.21\n"},
+		{"block form with comment on the path line", "module (\n\tgithub.com/pablogore/ego/v4 // root module\n)\n\ngo 1.21\n"},
+		{"leading comment line", "// this is the root module\nmodule github.com/pablogore/ego/v4\n\ngo 1.21\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -94,7 +94,7 @@ func TestParseGoModModulePath_Forms(t *testing.T) {
 func TestParseGoModModulePath_NoModuleLine(t *testing.T) {
 	dir := t.TempDir()
 	goMod := filepath.Join(dir, "go.mod")
-	writeFile(t, goMod, "go 1.26.0\n")
+	writeFile(t, goMod, "go 1.21\n")
 
 	if _, err := parseGoModModulePath(goMod); err == nil {
 		t.Fatal("parseGoModModulePath() = nil error, want an error for a go.mod with no module line")
@@ -108,7 +108,7 @@ func TestParseGoModModulePath_NoModuleLine(t *testing.T) {
 func fixtureNestedModule(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/nested\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/nested\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "root.go"), `package nested
 
 import (
@@ -248,14 +248,14 @@ func TestDiscoverNestedModuleDirs(t *testing.T) {
 // now does).
 func TestLoadNestedModule_DoesNotMergeInnerModule(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/outer\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/outer\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "outer.go"), `package outer
 
 import "fmt"
 
 var _ = fmt.Sprintf
 `)
-	writeFile(t, filepath.Join(dir, "inner", "go.mod"), "module github.com/example/inner\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "inner", "go.mod"), "module github.com/example/inner\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "inner", "inner.go"), `package inner
 
 import "context"

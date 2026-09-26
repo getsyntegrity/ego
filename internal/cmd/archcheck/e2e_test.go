@@ -28,6 +28,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,25 @@ func requireGo(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH")
+	}
+	// The fixtures are self-contained modules: do not inherit the caller's
+	// module mode (CI sets GOFLAGS=-mod=vendor) or an enclosing workspace.
+	t.Setenv("GOFLAGS", "")
+	t.Setenv("GOWORK", "off")
+}
+
+// TestRequireGo_IsolatesInheritedGoEnv checks that the fixtures do not
+// inherit the caller's module settings: CI runs the tests with
+// GOFLAGS=-mod=vendor, and the temp-dir modules have no vendor directory.
+func TestRequireGo_IsolatesInheritedGoEnv(t *testing.T) {
+	t.Setenv("GOFLAGS", "-mod=vendor")
+	t.Setenv("GOWORK", "/nonexistent/go.work")
+	requireGo(t)
+	if got := os.Getenv("GOFLAGS"); got != "" {
+		t.Errorf("GOFLAGS = %q, want empty", got)
+	}
+	if got := os.Getenv("GOWORK"); got != "off" {
+		t.Errorf("GOWORK = %q, want off", got)
 	}
 }
 
@@ -55,7 +75,7 @@ func TestLoadRootModule_RealGoList(t *testing.T) {
 
 	dir := t.TempDir()
 	const modulePath = "github.com/example/tinymod"
-	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "contract", "contract.go"), `package contract
 
 // Marker stands in for a contract type with no runtime dependency.
@@ -132,7 +152,7 @@ func TestLoadRootModule_LoadErrorFailsClosed(t *testing.T) {
 	requireGo(t)
 
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/brokenmod\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/brokenmod\n\ngo 1.21\n")
 	// An unterminated import block: go list -e -json reports this package
 	// with a non-nil "Error", unlike a syntax error later in the file
 	// (which go list's own lightweight prescan does not always catch).
@@ -154,11 +174,11 @@ func writeRunFixture(t *testing.T, withViolation bool) (dir, modulePath string) 
 	t.Helper()
 	dir = t.TempDir()
 	modulePath = "github.com/example/archcheckfixture"
-	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.21\n")
 	writeFile(t, filepath.Join(dir, "tenancy", "tenancy.go"), "package tenancy\n\n// Marker is a contract type.\ntype Marker struct{}\n")
 	writeFile(t, filepath.Join(dir, "migration", "migration.go"),
 		"package migration\n\nimport \""+modulePath+"/tenancy\"\n\nvar _ = tenancy.Marker{}\n")
-	writeFile(t, filepath.Join(dir, "publisher", "kafka", "go.mod"), "module "+modulePath+"/publisher/kafka\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(dir, "publisher", "kafka", "go.mod"), "module "+modulePath+"/publisher/kafka\n\ngo 1.21\n")
 
 	kafka := "package kafka\n\nimport \"fmt\"\n\nvar _ = fmt.Sprintf\n"
 	if withViolation {
