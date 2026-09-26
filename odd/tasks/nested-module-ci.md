@@ -58,7 +58,7 @@ rule keeps leaf changes cheap and still catches real reverse consumers.
 - [x] T3 `scripts/ci/verify-module.sh` + matrix jobs in `pull_request.yml` and
       `build.yml`. Check: script passes locally for all six modules;
       `actionlint` if available.
-- [ ] T4 `release.yml`: discovered publishers + published-version build with
+- [x] T4 `release.yml`: discovered publishers + published-version build with
       `replace` dropped. Check: `scripts/ci/verify-published.sh` fails
       clearly for an unpublished version (v4.4.3) and passes for a published one.
 - [ ] T5 Docs: `docs/ci.md`, `CHANGELOG.md`, toolchain notes. Check: readback.
@@ -158,3 +158,44 @@ Forecast about 600 authored lines. Single PR with one commit per task
   touches the root `vendor/` directory, so it does not interfere with
   nested-module verification (confirmed by reasoning about job isolation,
   not by running the workflow in Actions).
+
+### T4 (commit fc0b144)
+
+- `release.yml`: replaced both hardcoded `PUBLISHERS="kafka nats pulsar
+  websocket"` lines with a `Discover publishers` step that lists
+  `publisher/*/go.mod` and passes its output through
+  `steps.discover-publishers.outputs.publishers`. Verified the discovery
+  shell logic locally against the real tree: it produces exactly
+  `kafka nats pulsar websocket`, the same set as before.
+- `scripts/ci/verify-published.sh <module-dir> <ego-version>`: copies the
+  module into a scratch directory, `go mod edit -dropreplace -require=` in
+  one edit (dropping the replace and pointing at the target version
+  together, so the module graph is never resolved against the old,
+  unpublished require line before the update applies — an earlier
+  `-dropreplace` then `go get` ordering failed on exactly that), then
+  `go mod tidy && go build ./...`. `go list -m <root>@<version>` is
+  checked first and prints one `::error::` line and exits 1 if it fails.
+  Called from `release.yml` for each publisher right after its own
+  `go get`/`go mod tidy`, before the tag-creation loop.
+- Honest finding: `go list -m -versions github.com/pablogore/ego/v4`
+  against the real proxy returns **no tagged version at all** — this repo
+  has not cut its first release yet, exactly as
+  `openspec/changes/ego-arch-001/design.md` §8 and §9 already say
+  (`require v4.4.3` "does not exist; the first release must fix that").
+  The proxy's `@latest` endpoint does resolve a pseudo-version off the
+  current `main` tip, `v4.0.0-20260926225153-3b15be0c4306` — there is no
+  real "latest published tag" to test against.
+- `scripts/ci/verify-published.sh publisher/kafka v4.4.3` →
+  `::error::root module github.com/pablogore/ego/v4 v4.4.3 is not
+  published; local replace cannot be used for release verification`,
+  exit 1, as required.
+- `scripts/ci/verify-published.sh publisher/kafka
+  v4.0.0-20260926225153-3b15be0c4306` (the one resolvable version found)
+  → downloads it and its transitive deps, `go build ./...` succeeds,
+  prints `verify-published.sh: publisher/kafka builds against published
+  github.com/pablogore/ego/v4@v4.0.0-...`, exit 0. Since this pseudo-version
+  is the current `main` tip, it already contains `port/publishing`
+  (merged in #116), so the "may fail to build because the published root
+  lacks `port/publishing`" risk the task named does not apply to this
+  particular version — that risk is real for an OLDER root version,
+  which is not reachable here since none exists yet.
