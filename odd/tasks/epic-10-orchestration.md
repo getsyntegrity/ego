@@ -98,6 +98,9 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 10. (2026-09-27) Created #134 (publishers not installable: /v4 in the
    middle of nested module paths), label bug; linked from #39 "Issues hijos
    esperados" (one line added, rest byte-identical, updatedAt checked).
+11. (2026-09-27) #137, #138, #139 merged. ctx.Err() check before each
+   start step approved for #105 IMPL-4. No release tag between S3-2 and
+   S3-4.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -120,17 +123,18 @@ history of this file.
 | W0e | #10 body | — | — | done | applied after updatedAt check |
 | W1a | #123 design | docs/propose-ego-arch-002-s3 @3f3b725 | #128 | merged (e729b1b) | names and criterion 1 decided; #123 criterion 1 reworded |
 | W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @adc416c | #131 | merged (543da2c) | merged tree vetted against main before merge |
-| W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge @1dfa090 | #139 | ready to merge @dff1bb7 (approved, CI 7/7; nil/typed-nil rejected in every mode) | apidiff: 3 additions only; value-type RED hang reproduced; spawn* functions ready for IMPL-4 guard |
-| W1a-3..5 | #123 S3-3..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last. No release tag between S3-2 and S3-4 (ErrBehaviorNotPointer names WithBehaviorKinds). GoAkt restart clears actor dependencies (pre-existing, affects all behaviors) — note for #11 |
+| W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge @1dfa090 | #139 | merged (9084b80) | apidiff: 3 additions only; value-type RED hang reproduced; spawn* functions ready for IMPL-4 guard |
+| W1a-3 | #123 S3-3 | feat/123-s3-3-spawn-methods | — | in progress | engine_spawn.go, new cluster test, engine_test.go helper only |
+| W1a-4..5 | #123 S3-4..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last. No release tag between S3-2 and S3-4 (ErrBehaviorNotPointer names WithBehaviorKinds). GoAkt restart clears actor dependencies (pre-existing, affects all behaviors) — note for #11 |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
-| W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | ready to merge (approved, CI 7/7, tidy step seen in job log) | all six modules tidy on main; no workflow change |
-| W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
+| W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | merged (23bc7f4) | all six modules tidy on main; no workflow change |
+| W1c-1 | #105 IMPL-1 (#126) | fix/126-engine-lifecycle | — | in progress | owns engine.go; tests in a new file (engine_test.go belongs to S3-3) |
 | W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
-| W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @dddcea5 | #137 | ready to merge (approved, CI green) | DefaultShutdownTimeout 30s only when unset (open question with #24) |
-| W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
+| W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @dddcea5 | #137 | merged (ab41d3c) | DefaultShutdownTimeout 30s only when unset (open question with #24) |
+| W1c-4 | #105 IMPL-4 | — | — | planned | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
-| W3-S1 | #102 S1 test/compat | — | — | planned | after the tidy gate (shares verify-module.sh, docs/ci.md); writer cap 3 |
+| W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat | — | in progress | from main 9084b80 |
 | W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
 | W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
 | W2b | #106 | — | — | planned | after S3 and #105 IMPL-4 |
