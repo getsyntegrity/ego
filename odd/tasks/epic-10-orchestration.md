@@ -95,6 +95,9 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    paths, show it before creating. D1–D8 approved to guide S2/S3; D1 needs
    an explicit target path + migration plan confirmed before execution; D8
    waits for F4.
+10. (2026-09-27) Created #134 (publishers not installable: /v4 in the
+   middle of nested module paths), label bug; linked from #39 "Issues hijos
+   esperados" (one line added, rest byte-identical, updatedAt checked).
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
