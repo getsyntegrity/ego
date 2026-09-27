@@ -172,9 +172,9 @@ history of this file.
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
 | W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types @f504e10 | #156 | in review | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
-| W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 | in review | port/adapter + external-adapter-no-composition |
-| W2b-2 | #106 spec 2 adapter-conformance | — | — | planned | after spec 1 |
-| W2b-3 | #106 spec 3 adapter-composition | — | — | planned | after spec 2 and #147 S4-4 |
+| W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 | approved with nits (fixing isNil kinds + odd doc) | port/adapter + external-adapter-no-composition |
+| W2b-2 | #106 spec 2 adapter-conformance | — | — | planned | after spec 1; carry-over: document "nil or typed-nil is undeclared" in the accessor contract |
+| W2b-3 | #106 spec 3 adapter-composition | — | — | planned | after spec 2 and #147 S4-4; carry-over: source-scan test for single assertion sites; §D6 reflection wording |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @e6a669e | #142 | merged (658bbae) | approved with nits, CI 8/8; maintainer chose option (c): no reflect/unsafe, per-publisher pre-Start check + identity check in test/compat, ADR note, nits; then review + CI |
