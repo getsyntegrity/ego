@@ -24,7 +24,7 @@ Vocabulary used below:
 
 ## 2. Target topology
 
-The diagram shows compiler-resolved production imports at `a4edded`, plus the proposed `port/publishing` package (slice S1). Solid arrows are first-party imports. Dotted arrows are direct imports of the protobuf runtime library (`google.golang.org/protobuf`) by packages that do **not** import `egopb`. Exactly three contracts import `egopb`: `persistence`, `offsetstore` and the proposed `port/publishing` (today `publisher.go` in package `ego`).
+The diagram shows compiler-resolved production imports at `a4edded`, updated for slice S1: the `port/publishing` package (S1a) and the publishers' switch to it (S1b). Solid arrows are first-party imports. Dotted arrows are direct imports of the protobuf runtime library (`google.golang.org/protobuf`) by packages that do **not** import `egopb`. Exactly three contracts import `egopb`: `persistence`, `offsetstore` and `port/publishing`.
 
 ```mermaid
 flowchart TB
@@ -33,7 +33,7 @@ flowchart TB
     command["command"]
     persistence["persistence"]
     offsetstore["offsetstore"]
-    publishing["port/publishing<br/>(S1a done, #116; ego/publisher.go keeps compatibility aliases)"]
+    publishing["port/publishing<br/>(S1a done, #116; S1b done; ego/publisher.go keeps compatibility aliases)"]
     projection["projection"]
     eventstream["eventstream"]
     encryption["encryption"]
@@ -71,8 +71,7 @@ flowchart TB
   ext --> goakt
 
   pubs["publisher/kafka, nats, pulsar, websocket<br/>(nested modules)"]
-  pubs -- "target after #111" --> publishing
-  pubs -. "today" .-> ego
+  pubs -- "since S1b" --> publishing
   pubs --> egopb
 
   migration["migration<br/>(application)"] --> ego
@@ -86,13 +85,13 @@ Notes on the diagram:
 - `ext --> contracts` summarizes six real edges: `internal/extensions` imports `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence` and `projection`.
 - `ego --> contracts` summarizes the root package's imports of `command`, `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` and `tenancy`. Since S1a (#116), it also imports `port/publishing` to declare the compatibility aliases (`publisher.go`).
 - Test support (`testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`) and examples are omitted for readability; their edges are listed in section 4.
-- The publishers still import package `ego` and `egopb` today; the arrow to `port/publishing` is S1b's target, which lands only after #111 builds and verifies nested modules in CI (section 5). Until then, the four publisher-importing-`ego` edges stay in `internal/cmd/archcheck/baseline.go`.
+- Since S1b, the publishers import `port/publishing` and `egopb` instead of package `ego`. S1b landed after #111 made CI build and verify nested modules (section 5), and it removed the four publisher-importing-`ego` edges from `internal/cmd/archcheck/baseline.go`, so the `external-adapter-no-runtime` rule now holds with no exception.
 
 **Canonical location for a new contract.** A new top-level contract package goes under `port/`, the way `port/publishing` does for S1; a subpackage of an existing contract (for example something added under `persistence/`) stays under that contract's own root instead. The eight contracts that already exist at the repository root (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`) are not moved under `port/` in v4 — moving them would be a breaking import-path change for every consumer, and section 4's source-to-destination map already gives every one of them a "Stay" destination. `port/` is where a contract is *born* from now on, not a relocation target for the ones that already have a stable path.
 
 ## 3. Dependency rules
 
-These rules apply to the root module and, where named, to nested modules. A rule check (slice S2, `internal/cmd/archcheck`, done — #117) enforces them, but not by walking a full transitive dependency closure. It checks direct production import edges: the root module's own graph from `go list -e -json ./...`, and each nested module's imports parsed directly with `go/parser` (imports only, no build and no network — see docs/ci.md, "Architecture boundary check", for the tool's exact mechanics and its rule table). Direct edges are enough for the rules below because contracts use a closed allowlist, and every package that allowlist admits is itself already runtime-free; a transitive path from a contract to GoAkt would therefore need a new *direct* edge first, and that edge is exactly what the check sees. This is also how "MUST NOT import any package whose dependency closure contains GoAkt" is enforced for contracts, without literally computing a closure. One thing it does not cover: S1 criterion 4 below (that a publisher's transitive `go list -deps` output excludes GoAkt after S1b) is a nested-module, post-migration check that belongs to #111's CI job, not to archcheck.
+These rules apply to the root module and, where named, to nested modules. A rule check (slice S2, `internal/cmd/archcheck`, done — #117) enforces them, but not by walking a full transitive dependency closure. It checks direct production import edges: the root module's own graph from `go list -e -json ./...`, and each nested module's imports parsed directly with `go/parser` (imports only, no build and no network — see docs/ci.md, "Architecture boundary check", for the tool's exact mechanics and its rule table). Direct edges are enough for the rules below because contracts use a closed allowlist, and every package that allowlist admits is itself already runtime-free; a transitive path from a contract to GoAkt would therefore need a new *direct* edge first, and that edge is exactly what the check sees. This is also how "MUST NOT import any package whose dependency closure contains GoAkt" is enforced for contracts, without literally computing a closure. One thing it does not cover: S1 criterion 4 below (that a publisher's transitive `go list -deps` output excludes GoAkt after S1b) is a transitive, nested-module check. It was observed on the S1b pull request; neither archcheck nor #111's module job (`scripts/ci/verify-module.sh`) re-runs it.
 
 **Contracts** (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, and every package under `port/`):
 
@@ -140,7 +139,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `eventstream` | Contract | `internal/queue`, `internal/syncmap` | Stay | — |
 | `encryption` | Contract | — | Stay | — |
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
-| `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b (publisher migration) pending on #111 |
+| `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b done (publishers import `port/publishing`) |
 | `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/<name>` (exact name left to #103) | S3, #103 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
@@ -200,7 +199,7 @@ var ErrPublisherNotStarted = publishing.ErrPublisherNotStarted
 S1 has two steps with different preconditions:
 
 - *S1a, root only* — changes only root-module files and may land before #111. The root lane compiles the root module only, though, and the moved API has consumers outside it: the four publishers use `EventPublisher`, `StatePublisher` and `ErrPublisherNotStarted`, and `benchmark` and `example/cluster` compile against the root through their `replace` directives. **Merging S1a therefore requires the nested-consumer check below, observed on the S1a head and recorded in the PR, even though #111 does not automate it yet.**
-- *S1b, publisher migration* — switching the four publishers from package `ego` to `port/publishing` MUST wait for #111, so that a publisher-only change runs that module's build, vet and lint.
+- *S1b, publisher migration* — switching the four publishers from package `ego` to `port/publishing` MUST wait for #111, so that a publisher-only change runs that module's build, vet and lint. **Done** after #111 (#120): the publishers import `port/publishing`, each has a test that checks the `ego` aliases and `errors.Is` against both sentinels, and the four publisher entries are gone from the archcheck baseline.
 
 Nested-consumer check (merge condition for S1a, and repeated for S1b). Run this as a script, not by pasting `set -e` into an interactive shell:
 
@@ -247,7 +246,7 @@ Existing nested modules are judged by the same criterion. The publishers already
 - **Today:** `internal/cmd/ciselect` classifies any nested-module file as satellite, and returns `ModeNone` when a change touches only satellite files (reproduced with the five `publisher/kafka` files: `mode=none`, 0 of 20 included packages). The root workflows lint and test only the root module.
 - **Consequence for this ADR:** no new `go.mod` and no publisher migration (S1b) before #111. S2 touches only the root module and is covered by the existing root lane. S1a touches only root files, but it changes an API that nested modules consume, so the root lane covers it only together with the manual nested-consumer check in section 5.
 - **Selection rule the topology enables:** for a change to package X, run the tests of X and of X's transitive reverse consumers, including packages that import X only in tests. Moving contracts out of package `ego` matters because today every root-package file forces a full-suite fallback.
-- **Existing boundaries:** after S1b, a publisher change should select only that publisher module, since the root module no longer compiles GoAkt for it. A change to `port/publishing` selects the root reverse consumers plus the four publishers.
+- **Existing boundaries:** since S1b, a publisher change selects only that publisher module (observed: a change to `publisher/kafka/kafka.go` alone yields `modules.json` `["publisher/kafka"]` and root mode `none`), and that module no longer compiles GoAkt. A change to `port/publishing` selects the root reverse consumers plus the four publishers.
 - **Test latency** in the root package (about 592 s, mostly fixed waits) limits how much any selection improvement shows in wall time. It is tracked in #112 and is not part of this decision.
 
 ## 8. Versioning policy (proposed)

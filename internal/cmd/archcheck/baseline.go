@@ -32,38 +32,6 @@ import "github.com/pablogore/ego/v4/internal/cmd/archcheck/rules"
 // violation as stale, so this list can only shrink.
 var repoBaseline = []rules.BaselineEntry{
 	{
-		Importer:         "github.com/pablogore/ego/v4/publisher/kafka",
-		Import:           "github.com/pablogore/ego/v4",
-		Rule:             "external-adapter-no-runtime",
-		Owner:            "@pablogore",
-		Justification:    "publishers still import package ego for EventPublisher/StatePublisher; the contracts move to port/publishing in S1a (#103)",
-		RemovalCriterion: "S1b: switch to port/publishing once #111 builds and verifies nested modules in CI",
-	},
-	{
-		Importer:         "github.com/pablogore/ego/v4/publisher/nats",
-		Import:           "github.com/pablogore/ego/v4",
-		Rule:             "external-adapter-no-runtime",
-		Owner:            "@pablogore",
-		Justification:    "publishers still import package ego for EventPublisher/StatePublisher; the contracts move to port/publishing in S1a (#103)",
-		RemovalCriterion: "S1b: switch to port/publishing once #111 builds and verifies nested modules in CI",
-	},
-	{
-		Importer:         "github.com/pablogore/ego/v4/publisher/pulsar",
-		Import:           "github.com/pablogore/ego/v4",
-		Rule:             "external-adapter-no-runtime",
-		Owner:            "@pablogore",
-		Justification:    "publishers still import package ego for EventPublisher/StatePublisher; the contracts move to port/publishing in S1a (#103)",
-		RemovalCriterion: "S1b: switch to port/publishing once #111 builds and verifies nested modules in CI",
-	},
-	{
-		Importer:         "github.com/pablogore/ego/v4/publisher/websocket",
-		Import:           "github.com/pablogore/ego/v4",
-		Rule:             "external-adapter-no-runtime",
-		Owner:            "@pablogore",
-		Justification:    "publishers still import package ego for EventPublisher/StatePublisher; the contracts move to port/publishing in S1a (#103)",
-		RemovalCriterion: "S1b: switch to port/publishing once #111 builds and verifies nested modules in CI",
-	},
-	{
 		Importer:         "github.com/pablogore/ego/v4/migration",
 		Import:           "github.com/pablogore/ego/v4",
 		Rule:             "application-no-runtime",
