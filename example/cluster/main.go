@@ -128,6 +128,11 @@ func main() {
 		ego.WithLogger(logger),
 		ego.WithOffsetStore(offsetStore),
 		ego.WithTelemetry(tel),
+		// Every node must register the behavior kinds it may host, so it can
+		// decode a spawn a peer places on it (design ego-arch-002-s3 §5.5):
+		// with RoundRobin placement through SpawnOn, a pod that never spawned
+		// an AccountBehavior itself still needs to be able to reconstruct one.
+		ego.WithBehaviorKinds(new(AccountBehavior)),
 		ego.WithProjection(projectionName, &projection.Options{
 			Handler:      projectionHandler,
 			BufferSize:   500,

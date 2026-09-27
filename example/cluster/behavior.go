@@ -37,7 +37,8 @@ import (
 // bank account. It handles CreateAccount, CreditAccount, and DebitAccount
 // commands. This example runs in cluster mode, so it also implements
 // MarshalBinary/UnmarshalBinary (ego.BehaviorKind) so GoAkt can place and
-// relocate it across nodes.
+// relocate it across nodes; main.go registers it with
+// ego.WithBehaviorKinds so every node can decode a spawn a peer places on it.
 type AccountBehavior struct {
 	id string
 }
