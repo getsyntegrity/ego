@@ -65,6 +65,9 @@ existing interfaces in place (design.md §4, option D).
 
 ## Progress and evidence
 
+**Commits.** T1–T5: `2eabd30` (`feat(port): add runtime-neutral behavior contracts in port/behavior`).
+Review nits (comment and documentation only): the follow-up `docs` commit on the same branch.
+
 **RED (T1).** Before `port/behavior` had production files:
 `go test ./port/behavior/` → `github.com/pablogore/ego/v4/port/behavior: no non-test Go files ... FAIL [build failed]`;
 `go vet .` → same error (the root test files import the missing package). After adding only the
@@ -99,7 +102,10 @@ struct and an interface, calls `MarshalBinary` through an `ego.EventSourcedBehav
 `[]ego.EntityKind` into `WithEntityKinds` and `ActorSystem.Inject`, binds `(*ego.Engine).Entity`,
 `DurableStateEntity` and `Saga` to variables of their old function types, builds `ego.SagaAction`/
 `ego.SagaCommand` literals, spawns an entity with `Entity` and sends two commands. `go vet` and
-`go run` succeed against both. The only output difference:
+`go run` succeed against both. Design.md §6 also asks the consumer program to type-assert between
+the old and new interfaces; that is impossible against the base, where the `port/behavior` names do
+not exist, so that direction is covered in-repo by the two-way assertions in
+`behavior_compat_test.go`. The only output difference:
 
 ```
 7c7

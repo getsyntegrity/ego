@@ -32,11 +32,13 @@ import (
 )
 
 // allowedDependencies lists every non-standard-library package that
-// port/behavior may depend on, per ADR ego-arch-001 design.md §3: contracts
-// depend only on the standard library, other contracts, egopb and the protobuf
-// runtime. port/behavior imports the command contract, which in turn imports
-// the tenancy contract. An allowlist, rather than a denylist of GoAkt or
-// OpenTelemetry, also catches a dependency nobody thought to forbid.
+// port/behavior may depend on: the command contract, the tenancy contract that
+// command imports, and the protobuf runtime. It is intentionally narrower than
+// archcheck's contract-allowlist rule (ADR ego-arch-001 design.md §3), which
+// would also admit egopb and other contracts: port/behavior needs none of them,
+// and any new dependency should be a reviewed change to this list. An
+// allowlist, rather than a denylist of GoAkt or OpenTelemetry, also catches a
+// dependency nobody thought to forbid.
 var allowedDependencies = []string{
 	"github.com/pablogore/ego/v4/command",
 	"github.com/pablogore/ego/v4/tenancy",
