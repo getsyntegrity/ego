@@ -406,6 +406,34 @@ func TestEventsJanitorActor(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
+	t.Run("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+
+		eventStore := new(mocks.EventsStore)
+		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		actorSystem, err := goakt.NewActorSystem("TestJanitorMistypedSnapshotSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		pid, err := actorSystem.Spawn(ctx, "retention-mistyped-snapshot", newEventsJanitorActor())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
 	t.Run("marks unhandled messages as unhandled", func(t *testing.T) {
 		ctx := context.TODO()
 

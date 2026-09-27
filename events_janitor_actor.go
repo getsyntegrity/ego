@@ -67,7 +67,11 @@ func newEventsJanitorActor() *eventsJanitorActor {
 	return &eventsJanitorActor{}
 }
 
-// PreStart loads the events store and snapshot store from the actor system extensions.
+// PreStart loads the events store and snapshot store from the actor system
+// extensions. The snapshot store is genuinely optional here: a missing
+// registration is not an error, but a mismatched type registered under its
+// extension ID is (see optionalExtension in extension_lookup.go and
+// issue #99).
 func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
 	a.logger = kitLoggerFrom(ctx.Logger())
 
@@ -77,8 +81,12 @@ func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
 	}
 	a.eventsStore = eventsStoreExt.Underlying()
 
-	if ext := ctx.Extension(extensions.SnapshotStoreExtensionID); ext != nil {
-		a.snapshotStore = ext.(*extensions.SnapshotStoreExt).Underlying()
+	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	if snapshotStoreExt != nil {
+		a.snapshotStore = snapshotStoreExt.Underlying()
 	}
 	return nil
 }
