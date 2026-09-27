@@ -181,6 +181,7 @@ Each rule applies to one layer and checks the direct import edges of every packa
 | `no-module-cycle` | the module table (`go.mod` requirements) | No in-repository module may require, directly or through other in-repository modules, a module that requires it back; every requirement edge on a cycle is reported (ego-arch-001 design §3, ego-arch-006 slice S1) |
 | `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `ego`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
 | `composition-leaf` | root-module packages outside `compose/`, except `main` packages and `example/...` | Must not import `compose` or anything under it (ego-arch-003 design §D8) |
+| `external-adapter-no-composition` | nested modules under `publisher/`, every package including `main` packages and examples inside them | Must not import `compose` or anything under it; the composition root depends on adapters, not the reverse (ego-arch-004 design §D7). The test side is covered by each publisher's `closure_test.go`, because archcheck does not read `_test.go` files |
 
 A failure names the importer, the forbidden import and the rule, for example:
 
@@ -208,6 +209,8 @@ The baseline started with five entries. S1b removed the four publishers importin
 2. Add the rule to `DefaultRules(rootModulePath string)` in `internal/cmd/archcheck/rules/rules.go`, with an ID, a description, the source (ADR section or issue), allowlist or denylist semantics and, for a denylist rule, a `Reason` func naming the specific forbidden prefix it matched.
 3. Add unit tests in `internal/cmd/archcheck/rules/evaluate_test.go`: one graph that breaks the rule and one that satisfies it.
 4. Run `go run ./internal/cmd/archcheck` locally. If existing code violates the new rule and cannot be fixed in the same change, add baseline entries with owner, justification and removal criterion, and update the ADR if the rule is normative.
+
+**Adapter module roots.** `ExternalAdapterLayer` in `layers.go` matches only nested modules under `publisher/`, and both adapter rules (`external-adapter-no-runtime` and `external-adapter-no-composition`) use it. When the first adapter module outside `publisher/` appears (a store or telemetry adapter), add its directory root to that one layer in the same change, so both rules cover it; where such modules live is decided when the first one arrives (ego-arch-004 design §9, O6). Give the new module a `closure_test.go` like the publishers', which rejects GoAkt, the root package and `compose` in its unit-test closure.
 
 A rule whose layer matches no package fails the check, so a stale module path or a half-finished rename cannot pass vacuously. The flip side: when a change legitimately empties a layer (for example, deleting `migration` or moving the publishers out), remove or retarget its rule in the same change, or CI fails.
 

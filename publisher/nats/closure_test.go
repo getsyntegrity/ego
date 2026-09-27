@@ -25,6 +25,7 @@ package nats
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -47,9 +48,36 @@ func hermeticGoEnv() []string {
 	return append(env, "GOWORK=off", "GOFLAGS=")
 }
 
+// rootModule and compositionRoot are the root module's path and the
+// composition root under it.
+const (
+	rootModule      = "github.com/pablogore/ego/v4"
+	compositionRoot = rootModule + "/compose"
+)
+
+// closureViolation returns why dep must not appear in this module's
+// unit-test closure, or "" when it may. It rejects the GoAkt runtime, the
+// root package `ego` (#122) and the composition root, compose and anything
+// under it (ego-arch-004 design §D7): archcheck's
+// external-adapter-no-composition rule never reads _test.go files, so this
+// guard covers the test side.
+func closureViolation(dep string) string {
+	switch {
+	case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
+		return "unit-test closure regressed: GoAkt package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+	case dep == rootModule:
+		return "unit-test closure regressed: root package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+	case dep == compositionRoot || strings.HasPrefix(dep, compositionRoot+"/"):
+		return "adapter depends on the composition root: " + strconv.Quote(dep) + " appeared in `go list -deps -test ./...`; an adapter module must not import compose or anything under it, in production code or tests (ego-arch-004 design §D7); end-to-end tests that need a running App belong in the test/compat module"
+	default:
+		return ""
+	}
+}
+
 // TestUnitTestClosureExcludesRuntimeAndRoot guards the regression tracked by
 // #122: this module's unit-test closure must never again pull in the GoAkt
-// runtime or the root package `ego`. The historical alias/sentinel
+// runtime or the root package `ego`, and, since ego-arch-004 (design §D7),
+// the composition root. The historical alias/sentinel
 // compatibility checks against package `ego` still exist, but they live in
 // the separate, unreleased test/compat module (ADR ego-arch-006, slice S1;
 // docs/ci.md, "Compatibility checks: the test/compat module"), specifically
@@ -65,11 +93,35 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 	}
 
 	for _, dep := range strings.Fields(string(out)) {
-		switch {
-		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-			t.Errorf("unit-test closure regressed: GoAkt package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure", dep)
-		case dep == "github.com/pablogore/ego/v4":
-			t.Errorf("unit-test closure regressed: root package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure", dep)
+		if msg := closureViolation(dep); msg != "" {
+			t.Error(msg)
+		}
+	}
+}
+
+// TestClosureGuardRejectsCompositionRoot pins what the closure guard
+// rejects, without a subprocess: the composition root (compose and
+// anything under it) as well as GoAkt and the root package, matched by
+// whole path segment.
+func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
+	for _, dep := range []string{
+		"github.com/pablogore/ego/v4/compose",
+		"github.com/pablogore/ego/v4/compose/goakt",
+		"github.com/pablogore/ego/v4/compose/internal/lifecycle",
+		"github.com/pablogore/ego/v4",
+		"github.com/tochemey/goakt/v4/actor",
+	} {
+		if closureViolation(dep) == "" {
+			t.Errorf("closureViolation(%q) = \"\", want a rejection", dep)
+		}
+	}
+	for _, dep := range []string{
+		"github.com/pablogore/ego/v4/composer",
+		"github.com/pablogore/ego/v4/port/publishing",
+		"github.com/pablogore/ego/v4/egopb",
+	} {
+		if msg := closureViolation(dep); msg != "" {
+			t.Errorf("closureViolation(%q) = %q, want it allowed", dep, msg)
 		}
 	}
 }

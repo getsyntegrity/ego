@@ -323,6 +323,39 @@ func TestRunCheck_CompositionLeafAllowsMainAndTests(t *testing.T) {
 	}
 }
 
+// TestRunCheck_AdapterImportingCompositionFails reproduces the ego-arch-004
+// exploration spike end to end: a file in the nested publisher/kafka module
+// imports the composition root, and so does a main package inside that
+// module. Both fail external-adapter-no-composition; a main package inside
+// an adapter module is not exempt (ego-arch-004 design §D7).
+func TestRunCheck_AdapterImportingCompositionFails(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "compose", "goakt", "goakt.go"),
+		"package goakt\n\nimport \""+modulePath+"/compose\"\n\n// App stands in for compose/goakt.App.\ntype App struct{ S compose.Spec }\n")
+	writeFile(t, filepath.Join(dir, "publisher", "kafka", "register.go"),
+		"package kafka\n\nimport \""+modulePath+"/compose/goakt\"\n\nvar _ = goakt.App{}\n")
+	writeFile(t, filepath.Join(dir, "publisher", "kafka", "cmd", "demo", "main.go"),
+		"package main\n\nimport \""+modulePath+"/compose\"\n\nfunc main() { _ = compose.Spec{} }\n")
+	var stdout strings.Builder
+	err := runCheck(dir, nil, &stdout)
+	if err == nil {
+		t.Fatalf("runCheck() = nil error, want external-adapter-no-composition to fail; output:\n%s", stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		modulePath + "/publisher/kafka imports " + modulePath + "/compose/goakt",
+		modulePath + "/publisher/kafka/cmd/demo imports " + modulePath + "/compose",
+		"external-adapter-no-composition",
+		"2 violation(s)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not contain %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestLoadModuleTable_ReadsInRepoRequirements builds a root module and two
 // nested modules, one requiring the root and the other nested module (the
 // shape test/compat has, ego-arch-006 slice S1) plus a third-party module,
