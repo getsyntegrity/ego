@@ -167,9 +167,16 @@ func TestLoadNestedModule(t *testing.T) {
 		t.Errorf("root Imports = %v, must not contain the test-only import testing", root.Imports)
 	}
 
+	if root.Name != "nested" {
+		t.Errorf("root Name = %q, want nested (from its package clause)", root.Name)
+	}
+
 	sub := pkgs[1]
 	if sub.ImportPath != "github.com/example/nested/sub" {
 		t.Errorf("sub ImportPath = %q, want github.com/example/nested/sub", sub.ImportPath)
+	}
+	if sub.Name != "sub" {
+		t.Errorf("sub Name = %q, want sub", sub.Name)
 	}
 	if !containsImport(sub.Imports, "fmt") {
 		t.Errorf("sub Imports = %v, want to contain fmt", sub.Imports)

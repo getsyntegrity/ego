@@ -109,6 +109,28 @@ func allowedGraph() Graph {
 			Imports:    []string{root + "/persistence", root + "/tenancy"},
 		},
 		{
+			// The composition package may import contracts
+			// (composition-no-runtime), and the composition root under
+			// compose/ may import it (composition-leaf).
+			ImportPath: root + "/compose",
+			Name:       "compose",
+			Kind:       RootModule,
+			Imports:    []string{root + "/persistence", root + "/port/publishing"},
+		},
+		{
+			ImportPath: root + "/compose/goakt",
+			Name:       "goakt",
+			Kind:       RootModule,
+			Imports:    []string{root, root + "/compose", "github.com/tochemey/goakt/v4"},
+		},
+		{
+			// A main package may import the composition root.
+			ImportPath: root + "/example/eventssourced",
+			Name:       "main",
+			Kind:       RootModule,
+			Imports:    []string{root + "/compose/goakt"},
+		},
+		{
 			ImportPath: root + "/publisher/kafka",
 			Kind:       NestedModule,
 			Imports:    []string{root + "/egopb", "github.com/segmentio/kafka-go"},
@@ -317,7 +339,7 @@ func TestEvaluate_ZeroMatchRulesFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("Evaluate() = nil error, want an error naming every rule that matched zero packages")
 	}
-	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal"} {
+	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal", "composition-no-runtime", "composition-leaf"} {
 		if !strings.Contains(err.Error(), id) {
 			t.Errorf("error %q does not name rule %s", err, id)
 		}
@@ -333,6 +355,7 @@ func TestEvaluate_ContractAllowlistDoesNotNeedPortPackages(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
+		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/egopb"}},
 	}}
 	result, err := Evaluate(graph, DefaultRules(root), nil)
@@ -360,6 +383,7 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
+		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root, root + "/egopb"}},
 	}}
 	baseline := []BaselineEntry{
@@ -382,14 +406,16 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 	if len(result.Stale) != 0 {
 		t.Fatalf("len(Stale) = %d, want 0 (entry was used): %+v", len(result.Stale), result.Stale)
 	}
-	// tenancy, migration and publisher/kafka: 3 distinct packages, each
-	// matched by at least one rule.
-	if result.PackagesChecked != 3 {
-		t.Errorf("PackagesChecked = %d, want 3: %+v", result.PackagesChecked, result.RuleStats)
+	// tenancy, migration, compose and publisher/kafka: 4 distinct
+	// packages, each matched by at least one rule (tenancy and migration by
+	// two: their own layer and composition-leaf), counted once each.
+	if result.PackagesChecked != 4 {
+		t.Errorf("PackagesChecked = %d, want 4: %+v", result.PackagesChecked, result.RuleStats)
 	}
-	// migration -> tenancy (1), publisher/kafka -> root (1, checked by two
-	// rules but counted once) and publisher/kafka -> egopb (1) = 3. tenancy
-	// has no non-stdlib imports.
+	// migration -> tenancy (1, checked by application-no-runtime and
+	// composition-leaf but counted once), publisher/kafka -> root (1,
+	// checked by two rules but counted once) and publisher/kafka -> egopb
+	// (1) = 3. tenancy and compose have no non-stdlib imports.
 	if result.EdgesChecked != 3 {
 		t.Errorf("EdgesChecked = %d, want 3 (deduped): %+v", result.EdgesChecked, result.RuleStats)
 	}
@@ -498,6 +524,12 @@ func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 			ImportPath: root + "/migration",
 			Kind:       RootModule,
 			Imports:    []string{"context", "os", "sync", "encoding/json"},
+		},
+		{
+			ImportPath: root + "/compose",
+			Name:       "compose",
+			Kind:       RootModule,
+			Imports:    []string{"errors", "reflect", "net/http"},
 		},
 		{
 			ImportPath: root + "/publisher/kafka",
