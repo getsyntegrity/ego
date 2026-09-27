@@ -189,7 +189,7 @@ func (c *Config) GoaktOptions() []goakt.Option {
 //
 // ClusterKinds covers the actor types only. The behaviors those actors are
 // spawned with travel as dependencies and need their own registration on
-// every node — see WithEntityKinds.
+// every node — see WithBehaviorKinds.
 func ClusterKinds() []goakt.Actor {
 	return []goakt.Actor{
 		new(EventSourcedActor),
@@ -277,7 +277,7 @@ func WithOffsetStore(offsetStore offsetstore.OffsetStore) Option {
 // In cluster mode every node must register the same projections: the
 // projection runs as a cluster singleton that can be (re)spawned on any node,
 // and the hosting node resolves the handler from its own registration — the
-// same contract WithEntityKinds establishes for entity behaviors.
+// same contract WithBehaviorKinds establishes for entity behaviors.
 func WithProjection(name string, options *projection.Options) Option {
 	return OptionFunc(func(c *Config) {
 		if options == nil {
@@ -357,8 +357,9 @@ type EntityKind = extension.Dependency
 // internal spawn-configuration types, on the node's actor system.
 //
 // Single-node deployments may omit this option; the lazy registration done by
-// Entity, DurableStateEntity, and Saga is sufficient when spawns never leave
-// the local node.
+// SpawnEventSourced, SpawnDurableState, and SpawnSaga (and their deprecated
+// predecessors Entity, DurableStateEntity, and Saga) is sufficient when
+// spawns never leave the local node.
 //
 // WithEntityKinds and WithBehaviorKinds append to the same registration list,
 // so the two can be mixed on one node and across nodes.
