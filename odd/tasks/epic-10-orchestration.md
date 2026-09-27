@@ -160,7 +160,7 @@ history of this file.
 | W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
 | W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @dddcea5 | #137 | merged (ab41d3c) | DefaultShutdownTimeout 30s only when unset (open question with #24) |
 | W1c-4 | #105 IMPL-4 | feat/105-impl-4-compose-goakt @e4f0ce7 | #145 @dd14c52 | merged (f2b5130); follow-up: two-node cluster test through compose/goakt (issue draft pending approval); open for maintainer: misleading PR comment, V7 design line, G1/family shape, no split, cluster test follow-up | D7 observed: PostStop flush written to store, not delivered to publisher (for #24) | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
-| W1c-5 | #105 IMPL-5 | docs/105-impl-5-example | — | in progress (from f2b5130) | example/eventssourced via compose/goakt |
+| W1c-5 | #105 IMPL-5 | docs/105-impl-5-example @70a6a36 | #150 | in review | example/eventssourced via compose/goakt |
 | W1c-6 | #148 RUNTIME-005 + #105 IMPL-6 | — | — | planned (issue created) | needs #147 |
 | W1c-7 | #146 two-node test | — | — | planned | follow-up of #145 decision (e); issue created |
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
