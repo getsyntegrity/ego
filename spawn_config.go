@@ -25,40 +25,27 @@ package ego
 import (
 	"time"
 
+	runtimeport "github.com/pablogore/ego/v4/port/runtime"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine
-// where an entity should be spawned in a clustered environment.
-//
-// This strategy is only relevant when cluster mode is enabled.
-// It affects how entities are distributed across the nodes in the cluster.
-type EntitiesPlacement int
+// where an entity should be spawned in a clustered environment. It is an alias
+// of [runtimeport.EntitiesPlacement], so ego.EntitiesPlacement and
+// runtime.EntitiesPlacement are the same type.
+type EntitiesPlacement = runtimeport.EntitiesPlacement
 
+// The placement strategies, as constants of the same type and value as their
+// port/runtime counterparts.
 const (
-	// RoundRobin distributes entities evenly across nodes
-	// by cycling through the available nodes in a round-robin manner.
-	// This strategy provides balanced load distribution over time.
-	// ⚠️ Note: This strategy is subject to the cluster topology at the time of creation. For a stable cluster topology,
-	// it ensures an even distribution of entities across all nodes.
-	RoundRobin EntitiesPlacement = iota
-
-	// Random selects a node at random from the available pool of nodes.
-	// This strategy is stateless and can help quickly spread entities across the cluster,
-	// but may result in uneven load distribution.
-	Random
-
-	// Local forces the entity to be spawned on the local node,
-	// regardless of the cluster configuration.
-	// Useful when locality is important (e.g., accessing local resources).
-	Local
-
-	// LeastLoad selects the node with the least current load to spawn the entity.
-	// This strategy aims to optimize resource utilization by placing entities
-	// on nodes that are less busy, potentially improving performance and responsiveness.
-	// Note: This strategy may require additional overhead when placing entities,
-	// as it needs to get nodes load metrics depending on the cluster size.
-	LeastLoad
+	// RoundRobin is [runtimeport.RoundRobin].
+	RoundRobin = runtimeport.RoundRobin
+	// Random is [runtimeport.Random].
+	Random = runtimeport.Random
+	// Local is [runtimeport.Local].
+	Local = runtimeport.Local
+	// LeastLoad is [runtimeport.LeastLoad].
+	LeastLoad = runtimeport.LeastLoad
 )
 
 // spawnConfig defines the spawn config
@@ -95,77 +82,78 @@ type spawnConfig struct {
 	tenantID tenancy.TenantID
 }
 
-// newSpawnConfig creates an instance of spawnConfig
+// Keys of the write-side spawn settings. They are unexported types of package
+// ego, so only the GoAkt adapter can name them: these settings travel through
+// runtimeport.WithAdapterSetting and every other runtime ignores them. Whether
+// they belong in the runtime contract is #12's decision
+// (openspec/changes/ego-runtime-001/design.md §D3).
+type (
+	snapshotIntervalKey struct{}
+	retentionPolicyKey  struct{}
+	batchThresholdKey   struct{}
+	batchFlushWindowKey struct{}
+)
+
+// newSpawnConfig resolves opts with runtimeport.ResolveSpawnOptions and builds
+// the GoAkt adapter's private spawnConfig from the result: the five neutral
+// settings from its getters, the four write-side settings from ego's adapter
+// settings. A nil option is skipped.
 func newSpawnConfig(opts ...SpawnOption) *spawnConfig {
+	settings := runtimeport.ResolveSpawnOptions(opts...)
 	config := &spawnConfig{
-		supervisorDirective: RestartDirective,
-		entitiesPlacement:   RoundRobin,
+		passivateAfter:      settings.PassivateAfter(),
+		toRelocate:          settings.Relocation(),
+		supervisorDirective: settings.SupervisorDirective(),
+		entitiesPlacement:   settings.Placement(),
+		tenantID:            settings.Tenant(),
 	}
-	for _, opt := range opts {
-		opt.Apply(config)
+	if v, ok := settings.AdapterSetting(snapshotIntervalKey{}); ok {
+		config.snapshotInterval = v.(uint64)
+	}
+	if v, ok := settings.AdapterSetting(retentionPolicyKey{}); ok {
+		policy := v.(RetentionPolicy)
+		config.retentionPolicy = &policy
+	}
+	if v, ok := settings.AdapterSetting(batchThresholdKey{}); ok {
+		config.batchThreshold = v.(int)
+	}
+	if v, ok := settings.AdapterSetting(batchFlushWindowKey{}); ok {
+		config.batchFlushWindow = v.(time.Duration)
 	}
 	return config
 }
 
-// SpawnOption is the interface that applies to
-type SpawnOption interface {
-	// Apply sets the Option value of a config.
-	Apply(config *spawnConfig)
-}
-
-// ensures that the interface is fully implemented
-var _ SpawnOption = spawnOption(nil)
-
-// spawnOption implements the SpawnOption interface.
-type spawnOption func(config *spawnConfig)
-
-// Apply sets the Option value of a config.
-func (f spawnOption) Apply(c *spawnConfig) {
-	f(c)
-}
+// SpawnOption configures one spawn. It is an alias of
+// [runtimeport.SpawnOption], so ego.SpawnOption and runtime.SpawnOption are
+// the same type: an option built by either package's With* functions is
+// accepted by every spawn method, and another runtime reads it with
+// [runtimeport.ResolveSpawnOptions].
+type SpawnOption = runtimeport.SpawnOption
 
 // WithPassivateAfter sets a custom duration after which an idle entity
 // will be passivated. Passivation allows the entity system to free up
 // resources by stopping entities that have been inactive for the specified
 // duration. If the entity receives a message before this timeout,
-// the passivation timer is reset.
+// the passivation timer is reset. It returns [runtimeport.WithPassivateAfter].
 func WithPassivateAfter(after time.Duration) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.passivateAfter = after
-	})
+	return runtimeport.WithPassivateAfter(after)
 }
 
-// WithRelocation controls whether an entity should be relocated to another node in the cluster
-// when its hosting node shuts down unexpectedly.
-//
-// In cluster mode, entities are relocatable by default to ensure system resilience and high availability.
-// When relocation is enabled, the entity will be automatically redeployed on a healthy node if the original
-// node becomes unavailable. This behavior is ideal for stateless or replicated entities that can resume
-// execution without requiring node-specific context.
-//
-// Setting toRelocate to false disables this default behavior. Use this option when you require strict
-// control over an entity's lifecycle or when the entity depends on node-specific resources, state, or hardware
-// that cannot be replicated or recovered on another node.
-//
-// Parameters:
-//   - toRelocate: If true, the entity is eligible for relocation on node failure.
-//     If false, the entity will not be redeployed after a node shutdown.
-//
-// Returns: SpawnOption: A functional option that updates the entity's relocation configuration.
+// WithRelocation controls whether an entity should be relocated to another
+// node in the cluster when its hosting node shuts down unexpectedly. It
+// returns [runtimeport.WithRelocation], whose documentation states the
+// contract: relocation is disabled unless WithRelocation(true) is passed.
 func WithRelocation(toRelocate bool) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.toRelocate = toRelocate
-	})
+	return runtimeport.WithRelocation(toRelocate)
 }
 
 // WithSupervisorDirective sets the SupervisorDirective that will be applied to the entity
 // when it fails. This controls how the entities' failures are handled (e.g. restart, stop,
 // escalate). If not provided, the default is RestartDirective.
 // Use this to override the default supervision strategy for specific entities.
+// It returns [runtimeport.WithSupervisorDirective].
 func WithSupervisorDirective(directive SupervisorDirective) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.supervisorDirective = directive
-	})
+	return runtimeport.WithSupervisorDirective(directive)
 }
 
 // WithSnapshotInterval sets how often the resulting state is persisted alongside events.
@@ -175,19 +163,19 @@ func WithSupervisorDirective(directive SupervisorDirective) SpawnOption {
 // snapshot point.
 //
 // This reduces storage cost for entities with large state and frequent events.
+// It is a GoAkt adapter setting ([runtimeport.WithAdapterSetting]); other
+// runtimes ignore it.
 func WithSnapshotInterval(every uint64) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.snapshotInterval = every
-	})
+	return runtimeport.WithAdapterSetting(snapshotIntervalKey{}, every)
 }
 
 // WithRetentionPolicy sets the retention policy that controls cleanup of old events
 // and snapshots after a snapshot has been successfully written. This requires a
 // snapshot store and a snapshot interval to be configured.
+// It is a GoAkt adapter setting ([runtimeport.WithAdapterSetting]); other
+// runtimes ignore it.
 func WithRetentionPolicy(policy RetentionPolicy) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.retentionPolicy = &policy
-	})
+	return runtimeport.WithAdapterSetting(retentionPolicyKey{}, policy)
 }
 
 // WithPlacement returns a SpawnOption that sets the placement strategy to be used when spawning an entity
@@ -200,11 +188,10 @@ func WithRetentionPolicy(policy RetentionPolicy) SpawnOption {
 //   - placement: A EntitiesPlacement value specifying how to distribute the entity.
 //
 // Returns:
-//   - SpawnOption that sets the placement strategy in the spawn configuration.
+//   - SpawnOption that sets the placement strategy in the spawn configuration
+//     ([runtimeport.WithPlacement]).
 func WithPlacement(placement EntitiesPlacement) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.entitiesPlacement = placement
-	})
+	return runtimeport.WithPlacement(placement)
 }
 
 // WithBatchThreshold sets the number of events to accumulate before flushing
@@ -220,10 +207,11 @@ func WithPlacement(placement EntitiesPlacement) SpawnOption {
 //
 // Batching should be combined with [WithBatchFlushWindow] to bound the maximum
 // latency for partially filled batches.
+//
+// It is a GoAkt adapter setting ([runtimeport.WithAdapterSetting]); other
+// runtimes ignore it.
 func WithBatchThreshold(threshold int) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.batchThreshold = threshold
-	})
+	return runtimeport.WithAdapterSetting(batchThresholdKey{}, threshold)
 }
 
 // WithBatchFlushWindow sets the maximum duration the actor will wait before
@@ -234,10 +222,11 @@ func WithBatchThreshold(threshold int) SpawnOption {
 // regardless of how many commands have been accumulated.
 //
 // If not specified and batching is enabled, a default window of 5ms is used.
+//
+// It is a GoAkt adapter setting ([runtimeport.WithAdapterSetting]); other
+// runtimes ignore it.
 func WithBatchFlushWindow(window time.Duration) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.batchFlushWindow = window
-	})
+	return runtimeport.WithAdapterSetting(batchFlushWindowKey{}, window)
 }
 
 // WithTenant declares the tenant identity that an entity, durable-state
@@ -261,9 +250,7 @@ func WithBatchFlushWindow(window time.Duration) SpawnOption {
 // the registered resolver does not expose a fixed tenant via
 // tenancy.FixedTenantResolver — see WithSingleTenant's doc comment for the
 // one built-in resolver that does, which is what lets single-tenant
-// deployments omit WithTenant entirely.
+// deployments omit WithTenant entirely. It returns [runtimeport.WithTenant].
 func WithTenant(id tenancy.TenantID) SpawnOption {
-	return spawnOption(func(config *spawnConfig) {
-		config.tenantID = id
-	})
+	return runtimeport.WithTenant(id)
 }

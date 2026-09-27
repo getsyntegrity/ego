@@ -20,23 +20,51 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package ego
+package runtime
 
 import (
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+	"github.com/pablogore/ego/v4/port/behavior"
 )
 
-// SupervisorDirective defines the action a supervisor takes when an entity
-// fails or panics during message processing. It is an alias of
-// [runtimeport.SupervisorDirective], so ego.SupervisorDirective and
-// runtime.SupervisorDirective are the same type.
-type SupervisorDirective = runtimeport.SupervisorDirective
+// SagaStatus represents the current status of a saga.
+type SagaStatus int
 
-// The supervisor directives, as constants of the same type and value as their
-// port/runtime counterparts.
 const (
-	// StopDirective is [runtimeport.StopDirective].
-	StopDirective = runtimeport.StopDirective
-	// RestartDirective is [runtimeport.RestartDirective].
-	RestartDirective = runtimeport.RestartDirective
+	// SagaRunning indicates the saga is actively processing.
+	SagaRunning SagaStatus = iota
+	// SagaCompleted indicates the saga finished successfully.
+	SagaCompleted
+	// SagaCompensating indicates the saga is rolling back.
+	SagaCompensating
+	// SagaFailed indicates the saga failed and compensation also failed.
+	SagaFailed
 )
+
+// String returns the string representation of the saga status.
+func (s SagaStatus) String() string {
+	switch s {
+	case SagaRunning:
+		return "running"
+	case SagaCompleted:
+		return "completed"
+	case SagaCompensating:
+		return "compensating"
+	case SagaFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
+// SagaInfo holds runtime information about a saga.
+//
+// Known gap: the GoAkt adapter (*ego.Engine) never fills Status, so it always
+// reads SagaRunning (#153).
+type SagaInfo struct {
+	// ID is the saga's unique identifier.
+	ID string
+	// Status is the saga's current status.
+	Status SagaStatus
+	// State is the saga's current state (may be nil if not started).
+	State behavior.State
+}

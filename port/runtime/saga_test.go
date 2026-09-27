@@ -20,23 +20,41 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package ego
+package runtime_test
 
 import (
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/pablogore/ego/v4/port/runtime"
 )
 
-// SupervisorDirective defines the action a supervisor takes when an entity
-// fails or panics during message processing. It is an alias of
-// [runtimeport.SupervisorDirective], so ego.SupervisorDirective and
-// runtime.SupervisorDirective are the same type.
-type SupervisorDirective = runtimeport.SupervisorDirective
+func TestSagaStatusString(t *testing.T) {
+	cases := []struct {
+		status runtime.SagaStatus
+		want   string
+	}{
+		{runtime.SagaRunning, "running"},
+		{runtime.SagaCompleted, "completed"},
+		{runtime.SagaCompensating, "compensating"},
+		{runtime.SagaFailed, "failed"},
+		{runtime.SagaStatus(99), "unknown"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, tc.status.String())
+	}
+}
 
-// The supervisor directives, as constants of the same type and value as their
-// port/runtime counterparts.
-const (
-	// StopDirective is [runtimeport.StopDirective].
-	StopDirective = runtimeport.StopDirective
-	// RestartDirective is [runtimeport.RestartDirective].
-	RestartDirective = runtimeport.RestartDirective
-)
+func TestEnumValuesAreUnchanged(t *testing.T) {
+	require.Equal(t, 0, int(runtime.RoundRobin))
+	require.Equal(t, 1, int(runtime.Random))
+	require.Equal(t, 2, int(runtime.Local))
+	require.Equal(t, 3, int(runtime.LeastLoad))
+	require.Equal(t, 0, int(runtime.StopDirective))
+	require.Equal(t, 1, int(runtime.RestartDirective))
+	require.Equal(t, 0, int(runtime.SagaRunning))
+	require.Equal(t, 1, int(runtime.SagaCompleted))
+	require.Equal(t, 2, int(runtime.SagaCompensating))
+	require.Equal(t, 3, int(runtime.SagaFailed))
+}

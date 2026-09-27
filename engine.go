@@ -55,23 +55,24 @@ import (
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
 	behaviorport "github.com/pablogore/ego/v4/port/behavior"
+	runtimeport "github.com/pablogore/ego/v4/port/runtime"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
 var (
 	// ErrEngineNotStarted is returned when the eGo engine has not started
-	ErrEngineNotStarted = errors.New("eGo engine has not started")
+	ErrEngineNotStarted = runtimeport.ErrEngineNotStarted
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
-	ErrUndefinedEntityID = errors.New("eGo entity id is not defined")
+	ErrUndefinedEntityID = runtimeport.ErrUndefinedEntityID
 	// ErrCommandReplyUnmarshalling is returned when the unmarshalling command reply failed
 	ErrCommandReplyUnmarshalling = errors.New("failed to parse command reply")
 	// ErrDurableStateStoreRequired is returned when the eGo engine durable store is not set
-	ErrDurableStateStoreRequired = errors.New("durable state store is required")
+	ErrDurableStateStoreRequired = runtimeport.ErrDurableStateStoreRequired
 	// ErrEventsStoreRequired is returned by Entity and Saga when the engine's
 	// Config has no events store (NewConfig was given a nil
 	// persistence.EventsStore, which is valid for a durable-state-only
 	// deployment). Nothing is spawned.
-	ErrEventsStoreRequired = errors.New("events store is required")
+	ErrEventsStoreRequired = runtimeport.ErrEventsStoreRequired
 	// ErrDuplicatePublisherID is returned by AddEventPublishers and
 	// AddStatePublishers when a publisher's ID is already registered for
 	// that kind, or appears more than once in the same call. The error
@@ -80,7 +81,7 @@ var (
 	ErrDuplicatePublisherID = errors.New("duplicate publisher id")
 	// ErrProjectionNotRegistered is returned by StartProjection when the given
 	// name was never registered on the engine's Config via WithProjection.
-	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with ego.WithProjection")
+	ErrProjectionNotRegistered = runtimeport.ErrProjectionNotRegistered
 	// ErrActorSystemRequired is returned when NewEngine is called with a nil
 	// actor system. The caller must construct and start the actor system
 	// themselves before plugging eGo in.
@@ -115,7 +116,7 @@ var (
 	// isolation TENANT-003 exists to enforce. The caller must either pass
 	// ego.WithTenant(id) at spawn, or register a resolver whose FixedTenant()
 	// reports one (as tenancy.WithSingleTenant's does).
-	ErrSpawnTenantUndetermined = errors.New("eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver")
+	ErrSpawnTenantUndetermined = runtimeport.ErrSpawnTenantUndetermined
 	// ErrSpawnTenantMismatch is returned by Entity, DurableStateEntity, and
 	// Saga in tenant-aware mode when the actor that holds the requested id is
 	// bound to a different tenant than the one this spawn declared (TENANT-003
@@ -124,7 +125,7 @@ var (
 	// visibly instead of returning the other tenant's actor as a success. The
 	// error also matches tenancy.ErrDenied and carries a *tenancy.Error.
 	// Re-spawning a live id under the SAME tenant stays an idempotent success.
-	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
+	ErrSpawnTenantMismatch = runtimeport.ErrSpawnTenantMismatch
 	// ErrSpawnTenantUnverified is returned by Entity, DurableStateEntity, and
 	// Saga in tenant-aware mode when the actor a spawn returned did not
 	// answer the engine's TenantBindingQuery — for a remote PID, the node that
@@ -132,12 +133,12 @@ var (
 	// binding. The spawn fails closed, but unlike ErrSpawnTenantMismatch it
 	// asserts no cross-tenant conflict; retrying the spawn is safe, since a
 	// same-tenant re-spawn is idempotent.
-	ErrSpawnTenantUnverified = errors.New("eGo: the spawned actor's tenant binding could not be verified")
+	ErrSpawnTenantUnverified = runtimeport.ErrSpawnTenantUnverified
 	// ErrNotACommand is returned by Dispatch and SendCommand when the payload
 	// is an engine-internal control message (egopb.TenantBindingQuery) rather
 	// than a command. Rejecting it keeps a caller from asking an actor
 	// whether it belongs to an arbitrary tenant.
-	ErrNotACommand = errors.New("eGo: payload is an engine-internal control message, not a command")
+	ErrNotACommand = runtimeport.ErrNotACommand
 	// ErrEntityTenantScopeMissing is returned by an actor's PreStart when
 	// tenancy is active (extensions.TenancyExtensionID is registered) but no
 	// valid extensions.EntityTenantScope dependency was injected at spawn
@@ -168,7 +169,7 @@ var (
 	// its entity families with WithEntityFamilies and the spawned behavior's
 	// family is not among them. The error names the family. Nothing is
 	// spawned.
-	ErrEntityFamilyNotDeclared = errors.New("eGo: entity family is not declared; declare it with ego.WithEntityFamilies")
+	ErrEntityFamilyNotDeclared = runtimeport.ErrEntityFamilyNotDeclared
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )

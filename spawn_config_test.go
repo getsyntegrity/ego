@@ -34,36 +34,25 @@ func TestSpawnOption(t *testing.T) {
 		config := newSpawnConfig(WithPassivateAfter(time.Second))
 		require.EqualValues(t, time.Second, config.passivateAfter)
 	})
-	t.Run("WithPassivateAfter with Apply", func(t *testing.T) {
-		config := &spawnConfig{}
-		second := time.Second
-		option := WithPassivateAfter(second)
-		option.Apply(config)
-		require.Equal(t, &spawnConfig{passivateAfter: second}, config)
+	t.Run("WithPassivateAfter changes only passivateAfter", func(t *testing.T) {
+		config := newSpawnConfig(WithPassivateAfter(time.Second))
+		require.Equal(t, withDefaults(spawnConfig{passivateAfter: time.Second}), config)
 	})
 	t.Run("WithRelocation", func(t *testing.T) {
-		config := &spawnConfig{}
-		option := WithRelocation(true)
-		option.Apply(config)
-		require.Equal(t, &spawnConfig{toRelocate: true}, config)
+		config := newSpawnConfig(WithRelocation(true))
+		require.Equal(t, withDefaults(spawnConfig{toRelocate: true}), config)
 	})
 	t.Run("WithSupervisorDirective", func(t *testing.T) {
-		config := &spawnConfig{}
-		option := WithSupervisorDirective(StopDirective)
-		option.Apply(config)
-		require.Equal(t, &spawnConfig{supervisorDirective: StopDirective}, config)
+		config := newSpawnConfig(WithSupervisorDirective(StopDirective))
+		require.Equal(t, &spawnConfig{supervisorDirective: StopDirective, entitiesPlacement: RoundRobin}, config)
 	})
 	t.Run("WithEntitiesPlacement", func(t *testing.T) {
-		config := &spawnConfig{}
-		option := WithPlacement(LeastLoad)
-		option.Apply(config)
-		require.Equal(t, &spawnConfig{entitiesPlacement: LeastLoad}, config)
+		config := newSpawnConfig(WithPlacement(LeastLoad))
+		require.Equal(t, &spawnConfig{supervisorDirective: RestartDirective, entitiesPlacement: LeastLoad}, config)
 	})
 	t.Run("WithSnapshotInterval", func(t *testing.T) {
-		config := &spawnConfig{}
-		option := WithSnapshotInterval(10)
-		option.Apply(config)
-		require.EqualValues(t, 10, config.snapshotInterval)
+		config := newSpawnConfig(WithSnapshotInterval(10))
+		require.Equal(t, withDefaults(spawnConfig{snapshotInterval: 10}), config)
 	})
 	t.Run("WithSnapshotInterval zero is default", func(t *testing.T) {
 		config := newSpawnConfig()
@@ -75,9 +64,7 @@ func TestSpawnOption(t *testing.T) {
 			DeleteSnapshotsOnSnapshot: true,
 			EventsRetentionCount:      100,
 		}
-		config := &spawnConfig{}
-		option := WithRetentionPolicy(policy)
-		option.Apply(config)
+		config := newSpawnConfig(WithRetentionPolicy(policy))
 		require.NotNil(t, config.retentionPolicy)
 		require.True(t, config.retentionPolicy.DeleteEventsOnSnapshot)
 		require.True(t, config.retentionPolicy.DeleteSnapshotsOnSnapshot)
@@ -95,4 +82,13 @@ func TestSpawnOption(t *testing.T) {
 		config := newSpawnConfig()
 		require.Equal(t, RoundRobin, config.entitiesPlacement)
 	})
+}
+
+// withDefaults returns c with the defaults newSpawnConfig applies
+// (RestartDirective, RoundRobin) where c leaves them zero; c must not set
+// either field.
+func withDefaults(c spawnConfig) *spawnConfig {
+	c.supervisorDirective = RestartDirective
+	c.entitiesPlacement = RoundRobin
+	return &c
 }

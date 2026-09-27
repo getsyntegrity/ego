@@ -24,9 +24,9 @@ package ego
 
 import (
 	"github.com/tochemey/goakt/v4/extension"
-	"google.golang.org/protobuf/proto"
 
 	behaviorport "github.com/pablogore/ego/v4/port/behavior"
+	runtimeport "github.com/pablogore/ego/v4/port/runtime"
 )
 
 // SagaBehavior defines a long-running business process that coordinates
@@ -70,42 +70,25 @@ func sagaActionIsNoop(a *SagaAction) bool {
 	return a == nil || (len(a.Commands) == 0 && len(a.Events) == 0 && !a.Complete && !a.Compensate)
 }
 
-// SagaStatus represents the current status of a saga.
-type SagaStatus int
+// SagaStatus represents the current status of a saga. It is an alias of
+// [runtimeport.SagaStatus], so ego.SagaStatus and runtime.SagaStatus are the
+// same type, and String is the same method.
+type SagaStatus = runtimeport.SagaStatus
 
+// The saga statuses, as constants of the same type and value as their
+// port/runtime counterparts.
 const (
-	// SagaRunning indicates the saga is actively processing.
-	SagaRunning SagaStatus = iota
-	// SagaCompleted indicates the saga finished successfully.
-	SagaCompleted
-	// SagaCompensating indicates the saga is rolling back.
-	SagaCompensating
-	// SagaFailed indicates the saga failed and compensation also failed.
-	SagaFailed
+	// SagaRunning is [runtimeport.SagaRunning].
+	SagaRunning = runtimeport.SagaRunning
+	// SagaCompleted is [runtimeport.SagaCompleted].
+	SagaCompleted = runtimeport.SagaCompleted
+	// SagaCompensating is [runtimeport.SagaCompensating].
+	SagaCompensating = runtimeport.SagaCompensating
+	// SagaFailed is [runtimeport.SagaFailed].
+	SagaFailed = runtimeport.SagaFailed
 )
 
-// String returns the string representation of the saga status.
-func (s SagaStatus) String() string {
-	switch s {
-	case SagaRunning:
-		return "running"
-	case SagaCompleted:
-		return "completed"
-	case SagaCompensating:
-		return "compensating"
-	case SagaFailed:
-		return "failed"
-	default:
-		return "unknown"
-	}
-}
-
-// SagaInfo holds runtime information about a saga.
-type SagaInfo struct {
-	// ID is the saga's unique identifier.
-	ID string
-	// Status is the saga's current status.
-	Status SagaStatus
-	// State is the saga's current state (may be nil if not started).
-	State proto.Message
-}
+// SagaInfo holds runtime information about a saga. It is an alias of
+// [runtimeport.SagaInfo], so ego.SagaInfo and runtime.SagaInfo are the same
+// type; its State field is a behavior.State, which is proto.Message.
+type SagaInfo = runtimeport.SagaInfo
