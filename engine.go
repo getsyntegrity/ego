@@ -260,10 +260,13 @@ type Engine struct {
 //     (otherwise returns ErrMissingRequiredExtensions with the missing IDs).
 //
 // NewEngine also registers eGo's internal spawn-configuration dependency
-// types and any behavior kinds supplied via WithEntityKinds on the actor
-// system, so that entity spawn requests routed to this node from cluster
-// peers can be deserialized. Every node in a cluster must therefore build
-// its engine with the same WithEntityKinds list.
+// types and any behavior kinds supplied via WithBehaviorKinds or
+// WithEntityKinds on the actor system, so that entity spawn requests routed
+// to this node from cluster peers can be deserialized. Every node in a
+// cluster must therefore build its engine with the same kinds. A kind that
+// is nil, a typed-nil pointer or not a pointer makes NewEngine return a
+// *BehaviorPlacementError wrapping ErrBehaviorNotPointer, in single-node and
+// cluster mode alike, before any kind is registered.
 //
 // The engine does NOT take ownership of the actor system. Engine.Stop will
 // not call sys.Stop; the caller stops the actor system on their own
@@ -302,15 +305,25 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 		return nil, err
 	}
 
+	// GoAkt's type registry names a type through a pointer and panics, while
+	// holding the actor-system lock, on anything else. Check every kind
+	// before registering any of them.
+	for _, kind := range config.behaviorKinds {
+		if !isNonNilPointer(kind) {
+			return nil, &BehaviorPlacementError{Kind: fmt.Sprintf("%T", kind), Err: ErrBehaviorNotPointer}
+		}
+	}
+
 	// Register dependency types on this node so spawn requests placed here by
 	// peers (SpawnOn placement, relocation) can be deserialized even before
 	// this node has spawned such an entity itself. The internal spawn-config
 	// types live in internal/extensions and cannot be registered by
-	// application code; user behavior kinds come from WithEntityKinds.
-	dependencies := append(
-		[]extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig), new(extensions.EntityTenantScope)},
-		config.entityKinds...,
-	)
+	// application code; user behavior kinds come from WithBehaviorKinds and
+	// WithEntityKinds.
+	dependencies := []extension.Dependency{new(extensions.EntityConfig), new(extensions.SagaConfig), new(extensions.EntityTenantScope)}
+	for _, kind := range config.behaviorKinds {
+		dependencies = append(dependencies, kind)
+	}
 	if err := actorSys.Inject(dependencies...); err != nil {
 		return nil, err
 	}
