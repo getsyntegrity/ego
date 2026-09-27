@@ -145,6 +145,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Ordered start/stop with rollback for the composition root** ([#105](https://github.com/getsyntegrity/ego/issues/105), slice IMPL-3 of the ego-arch-003 design, §D6/§D7). The new internal package `compose/internal/lifecycle` runs named steps in order; when one fails, it stops the steps that already started in reverse order, then releases resources no step owns yet, attempting every cleanup call, and returns a `*compose.StartError` naming the failed step, its error and every rollback error. `Stop` undoes every started step in reverse order and joins all errors instead of stopping at the first one; on a sequence that never started it only releases; after `Stop` or a failed `Start` it is a no-op. A sequence is single-use (`New → Starting → Running → Stopping → Stopped`, or `Failed`), and `Start`/`Stop` are serialized. Rollback and `Stop` run under `context.WithoutCancel` of the caller's context bounded by the shutdown timeout (30s when zero — the design's suggested default, still open), so a cancelled caller context does not abort cleanup. The package imports no runtime and is internal to `compose/...`; `compose/goakt` (IMPL-4) is its first user, so nothing changes for callers yet.
 
+### 🗑️ Deprecated
+
+- **The GoAkt-bound behavior contracts and their spawn/registration entry points are deprecated in favor of `port/behavior`** ([#123](https://github.com/getsyntegrity/ego/issues/123), slice S3-5 of the ego-arch-002-s3 design). Every name below keeps its exact signature and behavior — nothing breaks inside v4 — and carries a `Deprecated:` godoc comment. All of them are removed at the major release introduced by [#124](https://github.com/getsyntegrity/ego/issues/124), together with every other alias `#124` collects (`EntityKind` was already going; the S1 publisher aliases are unaffected by this slice).
+
+  | Deprecated | Replacement |
+  |---|---|
+  | `ego.EventSourcedBehavior` | [`behaviorport.EventSourced`](https://pkg.go.dev/github.com/pablogore/ego/v4/port/behavior#EventSourced) + `Engine.SpawnEventSourced` |
+  | `ego.EventSourcedEnvelopeBehavior` | `behaviorport.EventSourcedEnvelope` + `Engine.SpawnEventSourced` |
+  | `ego.DurableStateBehavior` | `behaviorport.DurableState` + `Engine.SpawnDurableState` |
+  | `ego.DurableStateEnvelopeBehavior` | `behaviorport.DurableStateEnvelope` + `Engine.SpawnDurableState` |
+  | `ego.SagaBehavior` | `behaviorport.Saga` + `Engine.SpawnSaga` |
+  | `Engine.Entity` | `Engine.SpawnEventSourced` |
+  | `Engine.DurableStateEntity` | `Engine.SpawnDurableState` |
+  | `Engine.Saga` | `Engine.SpawnSaga` |
+  | `ego.EntityKind` | `ego.BehaviorKind` |
+  | `ego.WithEntityKinds` | `ego.WithBehaviorKinds` |
+
+  `ego.SagaAction` and `ego.SagaCommand` (aliases of `behaviorport.SagaAction`/`SagaCommand` since S3-1) are **not** deprecated: they stay the ordinary names for those two types for the rest of v4.
+
+  The non-cluster examples (`example/eventssourced`, `example/durablestate`, `example/saga`) now implement the `port/behavior` contracts directly, spawn with `Engine.SpawnEventSourced`/`SpawnDurableState`/`SpawnSaga`, and no longer carry `MarshalBinary`/`UnmarshalBinary` — they never needed GoAkt serialization, since none of them runs in cluster mode. `example/cluster` keeps its serialization methods (`ego.BehaviorKind`, required for cluster placement) and switches only its interface assertion and spawn call to the new names. `apidiff` of package `ego` between this slice and `origin/main` reports no changes at all: a `Deprecated:` godoc paragraph is not an API change.
+
 ### 🐛 Bug Fixes
 
 - **`Engine.Stop` no longer leaks publishers and the event stream when a publisher fails to close (#126).** `Stop` marked the engine stopped and then returned on the first `Close` error, skipping the remaining event publishers, every state publisher, the event stream and the actor-system detach; a second `Stop` then returned `nil` at once, so that cleanup never ran. `Stop` now attempts every step and returns the `Close` errors joined with `errors.Join`, each wrapped with the publisher's ID.
