@@ -105,6 +105,14 @@ See the PR description for the command outputs; summary:
 - apidiff `ego` vs `origin/main`: compatible additions only (`EntityFamily`, `EventSourcedFamily`,
   `DurableStateFamily`, `SagaFamily`, `ErrEntityFamilyNotDeclared`, `WithEntityFamilies`,
   `WithEventStream`); `compose`: no change.
+- golangci-lint 2.13.1 (go1.26.6, `--new-from-rev=origin/main`): 0 issues.
+- ciselect `-base 5a5621d` (merge base): mode `full` (root package files changed), 27 of 27 packages;
+  `GO_TEST_RACE=0 scripts/ci/go-test.sh`: exit 0, every package ok.
+- `scripts/ci/verify-module.sh` exit 0 for all 7 nested modules: `benchmark`, `example/cluster`,
+  `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`.
+- Evidence commits: `823b08c` (T1, T2), `c612311` (T3), `53c2727` (T4), plus this document's update.
+- Engram mirror `odd/composition-root-impl-4/tasks`: pending (the writer agent has no Engram access in
+  this run).
 
 ## Next step
 
