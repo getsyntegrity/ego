@@ -38,11 +38,14 @@ the neutral contracts made optional.
   `MarshalBinary`/`UnmarshalBinary` (cluster mode still needs them) and gains a compile-time assertion
   against `ego.BehaviorKind`; its interface assertion switches to `behaviorport.EventSourced`, and the
   one call site (`entityWithRetry`, `main.go`) switches from `ego.EventSourcedBehavior`/`engine.Entity`
-  to `behaviorport.EventSourced`/`engine.SpawnEventSourced`. This example had no `WithEntityKinds` call
-  before this slice (checked: `rg -n "WithEntityKinds|ClusterKinds" example/cluster/main.go` found only
-  `ego.ClusterKinds()`, GoAkt's own actor-kind registry, unrelated), so there is no `WithBehaviorKinds`
-  call to rename — adding a new registration call would be a behavior change, out of scope for a
-  deprecation-and-rename slice.
+  to `behaviorport.EventSourced`/`engine.SpawnEventSourced`. **Review fix (independent review of
+  6585517):** this example had no `WithEntityKinds` call before this slice (checked:
+  `rg -n "WithEntityKinds|ClusterKinds" example/cluster/main.go` found only `ego.ClusterKinds()`,
+  GoAkt's own actor-kind registry, unrelated) — but design §9 S3-5 says "example/cluster switched to
+  `WithBehaviorKinds`", and with `RoundRobin` placement through `SpawnOn` a pod that never spawned an
+  `AccountBehavior` itself still needs to be able to decode one a peer places on it. Missing the
+  registration was a real gap, not an out-of-scope addition: `cfg := ego.NewConfig(...)` now includes
+  `ego.WithBehaviorKinds(new(AccountBehavior))`, and both files' comments now say so.
 - `CHANGELOG.md`: one `### 🗑️ Deprecated` entry (Unreleased) with the old→new table, the removal
   milestone (#124), and the empty `apidiff` result.
 
@@ -146,8 +149,11 @@ this slice edited.
   branch's worktree. `diff` of the two runs' stdout: **identical** (9 lines, ends `OK`).
 - `archcheck`: `8 modules checked, 44 packages checked, 186 edges checked, 1 baselined, 0 violation(s),
   0 stale entries`. Same package count and the same single baselined entry (`migration -> ego`) as
-  S3-4's recorded run; the edge count moved (182 → 186) only because the three migrated examples now
-  import `port/behavior` in addition to `ego` — expected, not a violation.
+  S3-4's recorded run; the edge count moved (182 → 186) only because **all four** migrated examples —
+  `eventssourced`, `durablestate`, `saga`, and `cluster` — now import `port/behavior` in addition to
+  `ego` — expected, not a violation. (Corrected from an earlier draft of this document that said "the
+  three migrated examples"; `example/cluster` also imports `port/behavior` now and counts as the
+  fourth new edge — independent review of `6585517`.)
 
 **T5 (full verification).**
 
@@ -167,10 +173,24 @@ this slice edited.
 - golangci-lint at the root, `--new-from-rev=origin/main --modules-download-mode=mod` (GOROOT
   `/home/pablog/sdk/go1.26.6`, `GOTOOLCHAIN=local`), over `.`, `./port/...`, `./testkit/...`,
   `./example/...` and again over the full `./...`: **0 issues** both times. No test file needed a
-  `//nolint:staticcheck` comment — every internal non-test caller of the deprecated APIs is in
-  `example/*`, which this slice migrated; the remaining callers (the large majority of the existing test
-  suite, which the design says intentionally keeps exercising `Entity`/`WithEntityKinds` as regression
-  coverage) are pre-existing, unmodified lines, so `--new-from-rev` reports nothing for them.
+  `//nolint:staticcheck` comment. **Corrected reasoning (independent review of `6585517`):** an
+  earlier draft of this document attributed that to `--new-from-rev` only reporting new/changed lines.
+  That is not the actual mechanism. The two real reasons, confirmed by a full-tree (no
+  `--new-from-rev`) run that also reports 0 issues: (1) `.golangci.yml`'s `run.tests: false` excludes
+  every `_test.go` file from linting entirely, so the large majority of deprecated-API callers — the
+  existing test suite, which the design says intentionally keeps exercising `Entity`/`WithEntityKinds`
+  as regression coverage — is never linted, regardless of `--new-from-rev`; and (2) staticcheck's
+  SA1019 does not flag a deprecated symbol's use from within the same package that declares it, which
+  covers any remaining in-package (non-test) reference. The only internal non-test, non-same-package
+  callers of the deprecated APIs were in `example/*` (each its own `package main`), which this slice
+  migrates — that is the one case where `--new-from-rev` genuinely matters, since those calls did
+  change.
+
+**Follow-up note (for #124 or a lint-hardening change):** `migration/tenant_adoption_test.go` is in
+package `migration`, a different package from the deprecated symbols' home (`ego`), so the
+same-package SA1019 exemption above does not cover it; it currently escapes only because
+`run.tests: false` excludes it, and lines 182, 481 and 2235 (`ego.EventSourcedBehavior`,
+`engine.Entity` twice) would be flagged the day test linting is ever turned on.
 
 ## Next step
 
