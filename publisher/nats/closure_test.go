@@ -48,14 +48,14 @@ func hermeticGoEnv() []string {
 }
 
 // TestUnitTestClosureExcludesRuntimeAndRoot guards the regression tracked by
-// #122: this module's default (untagged) unit-test closure must never again
-// pull in the GoAkt runtime or the root package `ego`. The historical
-// alias/sentinel compatibility checks against package `ego` still exist —
-// see compat_test.go — but they run behind the `compat` build tag, in a
-// separate CI lane (docs/ci.md, "Compatibility lane"), specifically so this
-// command stays clean. The child `go list` runs under hermeticGoEnv() so a
-// stray root go.work file or an inherited GOFLAGS can never change the
-// result, independently of verify-module.sh's own GOWORK=off.
+// #122: this module's unit-test closure must never again pull in the GoAkt
+// runtime or the root package `ego`. The historical alias/sentinel
+// compatibility checks against package `ego` still exist, but they live in
+// the separate, unreleased test/compat module (ADR ego-arch-006, slice S1;
+// docs/ci.md, "Compatibility checks: the test/compat module"), specifically
+// so this command stays clean. The child `go list` runs under
+// hermeticGoEnv() so a stray root go.work file or an inherited GOFLAGS can
+// never change the result, independently of verify-module.sh's own GOWORK=off.
 func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps", "-test", "./...")
 	cmd.Env = hermeticGoEnv()
@@ -67,9 +67,9 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 	for _, dep := range strings.Fields(string(out)) {
 		switch {
 		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-			t.Errorf("unit-test closure regressed: GoAkt package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong behind the `compat` build tag, not in the default test closure", dep)
+			t.Errorf("unit-test closure regressed: GoAkt package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure", dep)
 		case dep == "github.com/pablogore/ego/v4":
-			t.Errorf("unit-test closure regressed: root package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong behind the `compat` build tag, not in the default test closure", dep)
+			t.Errorf("unit-test closure regressed: root package %q reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure", dep)
 		}
 	}
 }
