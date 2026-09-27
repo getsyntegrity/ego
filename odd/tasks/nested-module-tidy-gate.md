@@ -185,4 +185,6 @@ touches no `.go` file, so neither tool's output can change; not claimed as evide
 
 **Review:** RDD is off (global), so no native review ran; delivery follows ordinary repository policy.
 
-**Next step:** open the PR against `main` with `Refs #122`, label `enhancement`.
+**Next step:** merge decision is the maintainer's. PR opened:
+[getsyntegrity/ego#138](https://github.com/getsyntegrity/ego/pull/138), `Refs #122`, label
+`enhancement`, base `main`, head `0a01836`.
