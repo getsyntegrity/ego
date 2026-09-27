@@ -71,7 +71,7 @@ What actually shipped under `#103`'s number was the `port/publishing` extraction
 
 ## Dependencies and sequencing
 
-- **`#123`** must land before `compose/inmem` can be implemented; it does not block `compose/goakt`, `compose.Spec`, or `compose/internal/lifecycle`, none of which touch behavior contracts.
+- **`#123`** must land before `compose/inmem` can be implemented; it does not block `compose/goakt`, `compose.Spec`, or `compose/internal/lifecycle` architecturally, none of which touch behavior contracts. It does, however, edit the same `engine.go` spawn call sites in `Engine.Entity`, `Engine.DurableStateEntity`, and `Engine.Saga` that IMPL-4's declared-entity-family guard touches (`design.md` §5.2, §6): `#123`'s slice (S3) must land first, and IMPL-4 rebases onto it.
 - **The in-memory runtime prerequisite** (a runtime, not just stores, that can run an `EventSourcedBehavior` without GoAkt) also blocks `compose/inmem`. Recommended owner, per the #125 review: a child issue under `#11` for its `RUNTIME-005` ("deterministic in-memory runtime") rather than a reopened `#103`, which is about contracts. The issue is not created yet; it belongs to the breakdown of `#11`.
 - **A runtime-neutral engine API** also blocks `compose/inmem`: consumers call `Entity`/`SendCommand` on `*ego.Engine`, a GoAkt-backed type. The interface both runtimes implement is the application-facing side of `#11`'s runtime SPI (`RUNTIME-001`/`RUNTIME-002`).
 - **`#126`** (IMPL-1) is independent of everything else here and can land first.
