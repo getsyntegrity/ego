@@ -172,8 +172,8 @@ history of this file.
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
 | W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types @f504e10 | #156 | merged by maintainer as merge commit 75171e3 (second parent f504e10; not rewritten) | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
 | W2a-3 | #147 S4-3 interfaces | feat/147-s4-3-runtime-interfaces @c84e894 | #160 @15555da | merged by maintainer (squash 33ac9fe) | engine_runtime.go assertion + test double; carries S4-2 doc nits |
-| W2a-4 | #147 S4-4 composition + consumer | feat/147-s4-4-app-runtime @05e18ac | #161 @2ebf01b | nits fixed, delta re-review; post-merge: watch main full lane | App.Runtime(), internal/runtimeconsumer, e2e, ego-arch-001 §3–§5 |
-| B-154 | #154 relocation default | docs/154-relocation-default @d94d9e3 | #162 | in review | option (a): doc fix, default stays disabled in v4 (maintainer, 2026-09-27) |
+| W2a-4 | #147 S4-4 composition + consumer | feat/147-s4-4-app-runtime @05e18ac | #161 @2ebf01b | ready to merge (delta approved, CI green); post-merge: watch main full lane | App.Runtime(), internal/runtimeconsumer, e2e, ego-arch-001 §3–§5 |
+| B-154 | #154 relocation default | docs/154-relocation-default @d94d9e3 | #162 | ready to merge (approved, no findings; CI green) | option (a): doc fix, default stays disabled in v4 (maintainer, 2026-09-27) |
 | B-153 | #153 SagaStatus | — | — | planned | after S4-4 merges (saga_actor.go/engine.go) |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 @ff3eced | merged | port/adapter + external-adapter-no-composition |
