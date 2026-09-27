@@ -166,11 +166,11 @@ history of this file.
 | W1c-4 | #105 IMPL-4 | feat/105-impl-4-compose-goakt @e4f0ce7 | #145 @dd14c52 | merged (f2b5130); follow-up: two-node cluster test through compose/goakt (issue draft pending approval); open for maintainer: misleading PR comment, V7 design line, G1/family shape, no split, cluster test follow-up | D7 observed: PostStop flush written to store, not delivered to publisher (for #24) | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
 | W1c-5 | #105 IMPL-5 | docs/105-impl-5-example @70a6a36 | #150 | merged (5a5e548) | |
 | W1c-6 | #148 RUNTIME-005 + #105 IMPL-6 | — | — | planned (issue created) | needs #147 |
-| W1c-7 | #146 two-node test | test/146-compose-two-node @903a037 | #155 | approved with nits (fixing 3); placement verified deterministic; merge needs maintainer authorization |
+| W1c-7 | #146 two-node test | test/146-compose-two-node @903a037 | #155 @07f03e7 | nits fixed (checked), CI pending; placement verified deterministic; merge needs maintainer authorization |
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
 | W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | merged — archcheck baseline empty | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
-| W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types | — | in progress | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
+| W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types @f504e10 | #156 | in review | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary | — | in progress | port/adapter + external-adapter-no-composition |
 | W2b-2 | #106 spec 2 adapter-conformance | — | — | planned | after spec 1 |
