@@ -31,8 +31,8 @@ Two additive `ego` options: `WithEntityFamilies` (the engine refuses to spawn an
 
 Maintainer decisions from the task brief (2026-09-27): the sequencer checks `ctx.Err()` before each start
 step (`compose/internal/lifecycle`); step 2 cleans up its own half-start; a negative `Spec.ShutdownTimeout`
-fails at `New`/`Validate`. The rule's number, **V7**, is this slice's proposal (it continues the design's
-D4a list, since the rule is runtime-neutral); see "Proposals pending maintainer decision".
+fails at `New`/`Validate`. The rule is **V7**, continuing the design's D4a
+list because it is runtime-neutral; the maintainer approved V7 in the design on 2026-09-27 (decision (a)).
 
 ## Why this shape
 
@@ -119,26 +119,30 @@ See the PR description for the command outputs; summary:
 An earlier revision of this document, commit `9d084ab`, and a PR comment presented V7-in-design, the
 G1/G2 shape, the family error shape, no split and the cluster scope as maintainer decisions. They were
 not decided by the maintainer or the orchestrator. That revision's `design.md` edits (V7 listed in §D4a,
-§5.1 marked satisfied) are reverted here. The points are listed below as proposals.
+§5.1 marked satisfied) were reverted in `0db1d82`. The maintainer then decided the points on 2026-09-27; see
+"Maintainer decisions (2026-09-27)". Only the V7 edits return to `design.md`; §5.1 stays unedited, and
+its answer is recorded under N3.
 
-## Proposals pending maintainer decision
+## Maintainer decisions (2026-09-27)
 
-- **V7 in the design:** list V7 (non-negative `ShutdownTimeout`) in `design.md` §D4a, and say V1–V7 in
-  the §4 diagram and §7 row, so the design and the code list the same rules. `design.md` is unchanged in
-  this PR until decided.
-- **G1/G2 shape:** G1 reports two sentinels (`ErrClusterConfigRequired`, `ErrClusterKindsRequired`),
-  because it is about an option, not a `Spec` field; G2 is a `*compose.ValidationError` on `Name`.
-- **Family error shape:** the sentinel `ErrEntityFamilyNotDeclared`, wrapped with the family name, checked
-  with `errors.Is`, like `ErrEventsStoreRequired`. Rejected alternative: a struct error type.
-- **Unknown family bits:** `WithEntityFamilies` masks to the three known bits, so unknown bits are
-  ignored. `EntityFamily(8)` alone declares nothing, so every family spawns, as without the option
-  (`TestWithEntityFamilies_UnknownBitsAreIgnored`). Rejected alternative: rejecting unknown bits at
-  option or `NewEngine` time. That would need a new error path in `NewEngine` for a value only a
-  conversion like `EntityFamily(8)` can produce.
-- **No split:** keep one PR, since independent review followed the diff and CI was green (8/8 at `e4f0ce7`).
-- **Cluster two-node test as follow-up:** this slice checks cluster conditions at `New` (G1), plus one real
-  step-2 failure (`TestStart_ActorSystemStepFailsForReal`). No real cluster is started through
-  `compose/goakt`. A two-node integration test is proposed for a later slice.
+These were proposals in the previous revision; the maintainer decided them on 2026-09-27 for #145.
+
+- **(a) V7 in the design.** `design.md` §D4a lists "**V7** — `ShutdownTimeout` is not negative
+  (maintainer decision 2026-09-27, #145)". The §4 graph labels and the §7 row say V1–V7, so the design and
+  the code list the same rules.
+- **(b) Error shapes, kept as is.**
+  - G1: two sentinel errors, `ErrClusterConfigRequired` and `ErrClusterKindsRequired`, because G1 is
+    about an option, not a `Spec` field.
+  - G2: a `*compose.ValidationError` on `Name`.
+  - Undeclared family: the sentinel `ErrEntityFamilyNotDeclared`, wrapped with the family name and
+    checked with `errors.Is`.
+- **(c) Unknown family bits, kept as is.** `WithEntityFamilies` masks to the three known bits, so
+  unknown bits are ignored (`TestWithEntityFamilies_UnknownBitsAreIgnored`).
+- **(d) One PR, no split.**
+- **(e) Two-node cluster test is an explicit follow-up.** A two-node cluster test through `compose/goakt`
+  is **not in this PR**. It is an explicit follow-up. It will verify what this slice cannot: that a spawn
+  placed on another node rebuilds the behavior there. This PR covers cluster conditions at `New` (G1) and
+  one real step-2 failure (`TestStart_ActorSystemStepFailsForReal`); it starts no real cluster.
 
 ## Review round 1 (independent review at `e4f0ce7`: approve with nits, CI 8/8)
 
@@ -154,7 +158,7 @@ not decided by the maintainer or the orchestrator. That revision's `design.md` e
   - Not verified here: that a spawn placed on another node actually rebuilds the behavior there. That
     needs a real multi-node run, so it is deferred to the cluster two-node test proposed above. It is not
     part of IMPL-5, which migrates only `example/eventssourced`.
-- [x] **N4** Unknown `EntityFamily` bits are masked (proposal above). RED: `unknown bit only` rejected
+- [x] **N4** Unknown `EntityFamily` bits are masked (maintainer decision (c)). RED: `unknown bit only` rejected
   every family; GREEN after masking.
 - [x] **N5** A real step-2 failure: `WithCluster(actor.NewClusterConfig(), &wallet{})` passes `New` and
   fails at `StepStartActorSystem`. GoAkt's `NewActorSystem` rejects it: "discovery provider is not set;
