@@ -27,11 +27,12 @@ import (
 	"fmt"
 	golog "log"
 	"log/slog"
-	"reflect"
 	"strings"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/tochemey/goakt/v4/log"
+
+	"github.com/pablogore/ego/v4/internal/logging"
 )
 
 // eGo logs through kit-logger (github.com/pablogore/kit-logger). Every
@@ -62,30 +63,24 @@ var DiscardLogger kitlog.Logger = kitlog.New(kitlog.Config{Sink: slog.DiscardHan
 // It is a function rather than a variable so that importing eGo never
 // constructs the global logger as a side effect; the lookup happens when a
 // Config or a Migrator is built.
+//
+// The typed-nil detection and the actual resolution live in the runtime-free
+// internal/logging package (#147, ego-arch-001 §3, S4-1), so that migration —
+// which needs the same fallback but must not import package ego — can use it
+// without pulling in the GoAkt runtime. DefaultLogger and ResolveLogger here
+// only delegate, preserving their exact signature and behavior, including
+// the DefaultLogger() identity every WithLogger(nil) caller compares against.
 func DefaultLogger() kitlog.Logger {
-	return kitlog.L()
-}
-
-// isNilLogger returns true when l is nil or a typed-nil (e.g. (*MyLogger)(nil)).
-// A typed-nil interface value is non-nil at the interface level but wraps a nil
-// pointer, which would cause a nil-dereference panic on the first log call.
-func isNilLogger(l kitlog.Logger) bool {
-	if l == nil {
-		return true
-	}
-	v := reflect.ValueOf(l)
-	return v.Kind() == reflect.Pointer && v.IsNil()
+	return logging.DefaultLogger()
 }
 
 // ResolveLogger returns logger when it is usable, and DefaultLogger() when it
 // is nil or a typed-nil pointer. It lets packages outside the root apply the
 // same nil-logger semantics the engine uses, without each of them
-// re-implementing the typed-nil detection.
+// re-implementing the typed-nil detection. See DefaultLogger's doc comment
+// for where the underlying logic now lives.
 func ResolveLogger(logger kitlog.Logger) kitlog.Logger {
-	if isNilLogger(logger) {
-		return DefaultLogger()
-	}
-	return logger
+	return logging.ResolveLogger(logger)
 }
 
 // loggerAdapter presents a kit-logger Logger through GoAkt's log.Logger

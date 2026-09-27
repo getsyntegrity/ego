@@ -43,6 +43,7 @@ flowchart TB
   egopb[["egopb<br/>generated schema<br/>protobuf policy: OPEN"]]
   pbrt(["google.golang.org/protobuf"])
   utils["internal/queue, internal/syncmap"]
+  logging["internal/logging<br/>(S4-1 done, #147)"]
 
   command --> tenancy
   persistence --> tenancy
@@ -66,6 +67,7 @@ flowchart TB
   ego --> egopb
   ego --> ext
   ego --> rutil
+  ego --> logging
   ext --> contracts
   ego --> goakt
   ext --> goakt
@@ -74,10 +76,10 @@ flowchart TB
   pubs -- "since S1b" --> publishing
   pubs --> egopb
 
-  migration["migration<br/>(application)"] --> ego
-  migration --> persistence
+  migration["migration<br/>(application)"] --> persistence
   migration --> tenancy
   migration --> egopb
+  migration -- "since S4-1" --> logging
 ```
 
 Notes on the diagram:
@@ -86,6 +88,7 @@ Notes on the diagram:
 - `ego --> contracts` summarizes the root package's imports of `command`, `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` and `tenancy`. Since S1a (#116), it also imports `port/publishing` to declare the compatibility aliases (`publisher.go`).
 - Test support (`testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`) and examples are omitted for readability; their edges are listed in section 4.
 - Since S1b, the publishers import `port/publishing` and `egopb` instead of package `ego`. S1b landed after #111 made CI build and verify nested modules (section 5), and it removed the four publisher-importing-`ego` edges from `internal/cmd/archcheck/baseline.go`, so the `external-adapter-no-runtime` rule now holds with no exception.
+- Since S4-1 (#147), `migration` no longer imports package `ego` at all: its only production use of `ego` was `ego.ResolveLogger`/`ego.DefaultLogger`, resolving the kit-logger logger it falls back to when none is configured. That logic now lives in `internal/logging`, a small runtime-free internal package that imports only kit-logger and `reflect`; `ego.DefaultLogger` and `ego.ResolveLogger` keep their exact signature and delegate to it, so the public API and the logger identity (`ego.DefaultLogger()` still returns the same instance) are unchanged. This removed the last entry from `internal/cmd/archcheck/baseline.go` (`migration -> ego`, `application-no-runtime`); the baseline is empty and archcheck reports `0 baselined, 0 violation(s), 0 stale entries`.
 
 **Canonical location for a new contract.** A new top-level contract package goes under `port/`, the way `port/publishing` does for S1; a subpackage of an existing contract (for example something added under `persistence/`) stays under that contract's own root instead. The eight contracts that already exist at the repository root (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`) are not moved under `port/` in v4 — moving them would be a breaking import-path change for every consumer, and section 4's source-to-destination map already gives every one of them a "Stay" destination. `port/` is where a contract is *born* from now on, not a relocation target for the ones that already have a stable path.
 
@@ -110,8 +113,8 @@ These rules apply to the root module and, where named, to nested modules. A rule
 **Application** (`migration`):
 
 - MUST NOT import the root package `ego`, `internal/extensions` or `github.com/tochemey/goakt/v4` (enforced by archcheck's `application-no-runtime` rule).
-- MAY import contract packages and `egopb`.
-- `migration` violates this rule today — it imports package `ego` directly to replay through its runtime types (section 4) — so the violation is recorded in `internal/cmd/archcheck/baseline.go` and stays baselined until runtime-neutral contracts exist for what it uses (S3/S4, #103, #11).
+- MAY import contract packages, `egopb`, and root-module `internal/` utilities that carry no runtime, such as `internal/logging`.
+- As of S4-1 (#147), `migration` satisfies this rule with no exception. It used to import package `ego` directly, and its only production use of that import was `ego.ResolveLogger` (the earlier text above claiming it "replays through `ego`'s runtime types" was stale — see #147's problem statement); that logger-resolution logic now lives in `internal/logging` (section 4), which `migration` imports instead. The `migration -> ego` baseline entry is gone; `internal/cmd/archcheck/baseline.go` is now empty.
 
 **External adapters** (publisher modules, future store adapters):
 
@@ -145,7 +148,8 @@ Every current root-module package appears once. "Stay" means the package already
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
 | `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |
 | `egopb` | Schema | — | Stay | Protobuf policy (open) |
-| `migration` | Application | `ego`, `egopb`, `persistence`, `tenancy` | Stay | Revisit after S3/S4 |
+| `migration` | Application | `egopb`, `internal/logging`, `persistence`, `tenancy` | Stay | S4-1 done (#147, `ego` import removed); revisit remaining scope after S4 |
+| `internal/logging` | Utility (used by `ego` and `migration`) | — | Stay | S4-1, #147 |
 | `internal/queue`, `internal/syncmap` | Utility (used by a contract) | — | Stay | Move only with the module that uses them |
 | `internal/runner`, `internal/ticker`, `internal/pause` | Utility (runtime and tests) | — | Stay | — |
 | `internal/cmd/ciselect`, `.../selector` | Tooling | `.../selector` | Stay | Extended by #111 |
