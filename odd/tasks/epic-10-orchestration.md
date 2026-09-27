@@ -83,6 +83,11 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    `BehaviorKind`/`WithBehaviorKinds`, `BehaviorPlacementError`. #123
    criterion 1 is met in v4 by `port/behavior` (old names keep the embed,
    deprecated, until #124). S3-1 implementation dispatched.
+8. (2026-09-27) Approved: (a) #123 criterion 1 reworded — applied
+   07:07 UTC after updatedAt check, only that line changed; (b) add
+   `go mod tidy -diff` as a nested-module CI gate in a separate PR after
+   #130 merges; (c) keep #99 open, narrowed to the root cause, with a
+   comment drafted for approval after W0b2 merges.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -94,6 +99,8 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 | W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | ready to merge (CI pending on a88282c) | @a88282c: names marked confirmed and loader location fixed (delta checked by orchestrator). @4f8e05f approved, CI green. Former carry-over for IMPL-2, now in the design: the composition-leaf loader change is in internal/cmd/archcheck/loader.go (lines 106, 316) plus a package-name field on rules.Package in rules/graph.go, not main.go as the design says. Earlier cross-review: approve with small fixes (walkthrough → SpawnEventSourced, slice spread note, rule Source, S3-3 transitive dep, composition-leaf loader change); fix writer running. @678c8cf: maintainer's a98eb37 (composition-no-runtime rule) + alignment with #128 per decision 6; cross-consistency review running. #128 review finding 2: #125 puts the family guard in public methods and assumes #123 removes the embed; #128 keeps the embed, guards in unexported spawn*, and §12 needs S3-4 before IMPL-4 — reconcile before merge (human decision). Earlier: approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
 | W0b | #99 | fix/99-prestart-assertion-audit @2585811 | writer | #127 | ready to merge | reviewer approved (RED reproduced on main, GREEN 10/10), CI green all 7 jobs. Follow-up W0b2 (same crash class, all four in PreStart) planned after merge since it may reuse optionalExtension; audit left 4 files with the same pattern (projection_actor.go, event_sourced_actor.go, events_janitor_actor.go, durable_state_actor.go) for a follow-up; root cause still unproven; local golangci-lint broken on clean main (Go 1.27 stdlib) |
 | W0b2 | #99 follow-up | — | writer | — | planned | after #127 merges; must land before #123 S3-2 (both touch event_sourced_actor.go, durable_state_actor.go) |
+| W0b3 | #99 narrowing comment | — | orchestrator | — | planned | after W0b2 merges; draft goes to human before posting |
+| W1b2 | #122 tidy -diff gate | — | writer | — | planned | after #130 merges; scripts/ci/verify-module.sh + docs/ci.md (CI hot spot, serialize with #102 selector work) |
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | writer | #129 | ready to merge | reviewer approved (all 33 deletions checked vs GoAkt source; Never windows not shortened; mutations reproduced), CI green all 7 jobs; root pkg 423s → 360s. Writer's "corrupted go1.27.1 toolchain" claim did not reproduce |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
