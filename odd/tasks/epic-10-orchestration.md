@@ -165,7 +165,7 @@ history of this file.
 | W1c-7 | #146 two-node test | — | — | planned | follow-up of #145 decision (e); issue created |
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
 | W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 | in review (baseline empty, archcheck 0/0/0; no attribution in history) | internal/logging; remove migration -> ego |
-| W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @907a157 | #151 | in review (Q1 Deprecated markers on aliases, Q2 WithAdapterSetting; found SagaStatus and relocation-default bugs) | small per-capability interfaces, v4 compatible; aligns with #149 |
+| W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @907a157 | #151 | approved with nits (fixing F1–F9; F1 constraint also sent to #149 F-E); Q1/Q2 open; 2 pre-existing bugs need issues (maintainer) | small per-capability interfaces, v4 compatible; aligns with #149 |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @a5a67bd | #149 @f919a33 | approved (13 fixed; 2 low nits being fixed); ~22 tasks across 5 slices exceeds the 4–5 task cap — flag to maintainer; O1–O7 open | includes nested adapters -> compose dependency rule |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
