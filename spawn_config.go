@@ -140,9 +140,13 @@ func WithPassivateAfter(after time.Duration) SpawnOption {
 }
 
 // WithRelocation controls whether an entity should be relocated to another
-// node in the cluster when its hosting node shuts down unexpectedly. It
-// returns [runtimeport.WithRelocation], whose documentation states the
-// contract: relocation is disabled unless WithRelocation(true) is passed.
+// node in the cluster when its hosting node shuts down unexpectedly.
+//
+// In cluster mode, entities are NOT relocated by default: WithRelocation(false)
+// is the default, and relocation stays disabled unless WithRelocation(true) is
+// passed. WithRelocation(true) makes the entity eligible for relocation to a
+// healthy node when its host node goes down. It returns
+// [runtimeport.WithRelocation], whose documentation states the same contract.
 func WithRelocation(toRelocate bool) SpawnOption {
 	return runtimeport.WithRelocation(toRelocate)
 }
