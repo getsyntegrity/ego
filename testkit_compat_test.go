@@ -22,7 +22,10 @@
 
 package ego
 
-import "github.com/pablogore/ego/v4/testkit"
+import (
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
+	"github.com/pablogore/ego/v4/testkit"
+)
 
 // The testkit declares the behavior subsets it needs rather than importing ego,
 // because ego's own tests import the testkit. Structural compatibility only holds
@@ -30,7 +33,12 @@ import "github.com/pablogore/ego/v4/testkit"
 // them back into a defined type makes the signatures differ, and no behavior the
 // engine accepts would compile against the scenario API. These assertions fail
 // the build the moment that happens.
+//
+// The runtime-neutral contracts in port/behavior must satisfy the same subsets,
+// so a behavior written against them can be driven by the testkit scenarios.
 var (
 	_ testkit.EventSourcedBehavior = (EventSourcedBehavior)(nil)
 	_ testkit.DurableStateBehavior = (DurableStateBehavior)(nil)
+	_ testkit.EventSourcedBehavior = (behaviorport.EventSourced)(nil)
+	_ testkit.DurableStateBehavior = (behaviorport.DurableState)(nil)
 )

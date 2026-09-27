@@ -23,13 +23,10 @@
 package ego
 
 import (
-	"context"
-	"time"
-
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4/command"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 )
 
 // SagaBehavior defines a long-running business process that coordinates
@@ -38,68 +35,36 @@ import (
 //
 // A saga is itself event-sourced: it persists its own events to track
 // which steps have completed, enabling recovery after restarts.
+//
+// It is the runtime-neutral contract [behaviorport.Saga] from package
+// port/behavior plus GoAkt's extension.Dependency, which adds MarshalBinary
+// and UnmarshalBinary so GoAkt can copy the behavior to another cluster node.
+// Its method set is the same as before port/behavior existed; the domain
+// methods and their documentation live on [behaviorport.Saga].
 type SagaBehavior interface {
+	behaviorport.Saga
 	extension.Dependency
-	// ID returns the unique identifier for this saga instance.
-	ID() string
-	// InitialState returns the saga's initial state.
-	InitialState() State
-	// HandleEvent is called when an event from the event stream matches
-	// this saga's interest. It returns the saga's reaction: commands to
-	// send to other entities, events to persist for the saga's own state,
-	// and/or signals to complete or compensate.
-	HandleEvent(ctx context.Context, event Event, state State) (*SagaAction, error)
-	// HandleResult is called when a command sent to an entity returns a result.
-	// This allows the saga to react to entity responses.
-	HandleResult(ctx context.Context, entityID string, result State, sagaState State) (*SagaAction, error)
-	// HandleError is called when a command sent to an entity fails.
-	// The saga can decide to compensate or retry.
-	HandleError(ctx context.Context, entityID string, err error, sagaState State) (*SagaAction, error)
-	// ApplyEvent applies a saga event to update the saga's internal state.
-	// This must be a pure function for replay correctness.
-	ApplyEvent(ctx context.Context, event Event, state State) (State, error)
-	// Compensate is called when the saga needs to roll back completed steps.
-	// It receives the current saga state and returns commands to undo prior work.
-	Compensate(ctx context.Context, state State) ([]SagaCommand, error)
 }
 
-// SagaAction describes what the saga should do next after processing an event or result.
-type SagaAction struct {
-	// Commands to send to other entities.
-	Commands []SagaCommand
-	// Events to persist for this saga's own state.
-	Events []Event
-	// Complete marks the saga as finished successfully.
-	Complete bool
-	// Compensate triggers compensation of all completed steps.
-	Compensate bool
-}
+// SagaAction describes what the saga should do next after processing an event
+// or result. It is an alias of [behaviorport.SagaAction], so ego.SagaAction and
+// behavior.SagaAction are the same type.
+type SagaAction = behaviorport.SagaAction
 
-// isNoop reports whether the action has no observable effect: nothing to
-// persist, no command to dispatch, no completion, no compensation. A saga
+// SagaCommand represents a command to send to another entity. It is an alias
+// of [behaviorport.SagaCommand], so ego.SagaCommand and behavior.SagaCommand
+// are the same type. When its Metadata is left as the zero value, SagaActor
+// derives one from the saga's own root Metadata.
+type SagaCommand = behaviorport.SagaCommand
+
+// sagaActionIsNoop reports whether the action has no observable effect: nothing
+// to persist, no command to dispatch, no completion, no compensation. A saga
 // behavior returns such an action for stream events it recognizes as
 // irrelevant (SG4: this lets the caller skip tenant binding for events the
-// saga was never going to act on).
-func (a *SagaAction) isNoop() bool {
+// saga was never going to act on). It is a function rather than a method
+// because SagaAction is declared in port/behavior.
+func sagaActionIsNoop(a *SagaAction) bool {
 	return a == nil || (len(a.Commands) == 0 && len(a.Events) == 0 && !a.Complete && !a.Compensate)
-}
-
-// SagaCommand represents a command to send to another entity.
-type SagaCommand struct {
-	// EntityID is the target entity's persistence ID.
-	EntityID string
-	// Command is the command to send.
-	Command Command
-	// Timeout is the maximum time to wait for a response.
-	Timeout time.Duration
-	// Metadata is an optional command.Metadata for this dispatch (#60).
-	// When left as the zero value, SagaActor derives one automatically
-	// from the saga's own root Metadata (correlation inherited, causation
-	// set to the saga's root operation — "la operación disparadora").
-	// A behavior that needs finer control (e.g. a custom correlation
-	// scope, a deadline) can call Metadata.Derive itself and set the
-	// result here instead.
-	Metadata command.Metadata
 }
 
 // SagaStatus represents the current status of a saga.
