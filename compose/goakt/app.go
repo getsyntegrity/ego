@@ -39,7 +39,7 @@
 //	if err := app.Start(ctx); err != nil {
 //		// a *compose.StartError names the failed step; rollback already ran
 //	}
-//	err = app.Engine().SpawnEventSourced(ctx, behavior)
+//	err = app.Runtime().SpawnEventSourced(ctx, behavior)
 //
 // Dependencies are injected explicitly (design §D2): the consumer builds
 // every store and publisher and places it in a named Spec field. There is
@@ -71,6 +71,7 @@ import (
 	"github.com/pablogore/ego/v4/compose"
 	"github.com/pablogore/ego/v4/compose/internal/lifecycle"
 	"github.com/pablogore/ego/v4/eventstream"
+	runtimeport "github.com/pablogore/ego/v4/port/runtime"
 )
 
 // The names of App.Start's five steps (design §D6). A failed Start returns
@@ -233,6 +234,21 @@ func (a *App) Stop(ctx context.Context) error {
 // work with ego.ErrEngineNotStarted.
 func (a *App) Engine() *ego.Engine {
 	return a.published.Load()
+}
+
+// Runtime returns the running application through the runtime-neutral
+// contract: code written against it runs unchanged on any runtime's
+// composition root. It returns nil until Start has succeeded and for good
+// after a failed Start; after Stop it returns the stopped runtime, which
+// refuses work with runtimeport.ErrEngineNotStarted. It is the same engine
+// Engine returns.
+func (a *App) Runtime() runtimeport.Runtime {
+	// A nil *ego.Engine stored in the interface would not compare equal to
+	// nil; return an untyped nil instead (ego-runtime-001 §D6).
+	if engine := a.published.Load(); engine != nil {
+		return engine
+	}
+	return nil
 }
 
 // probeStores is step 1: it pings every configured store and names each
