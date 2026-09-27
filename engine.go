@@ -65,6 +65,11 @@ var (
 	ErrCommandReplyUnmarshalling = errors.New("failed to parse command reply")
 	// ErrDurableStateStoreRequired is returned when the eGo engine durable store is not set
 	ErrDurableStateStoreRequired = errors.New("durable state store is required")
+	// ErrEventsStoreRequired is returned by Entity and Saga when the engine's
+	// Config has no events store (NewConfig was given a nil
+	// persistence.EventsStore, which is valid for a durable-state-only
+	// deployment). Nothing is spawned.
+	ErrEventsStoreRequired = errors.New("events store is required")
 	// ErrProjectionNotRegistered is returned by StartProjection when the given
 	// name was never registered on the engine's Config via WithProjection.
 	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with ego.WithProjection")
@@ -408,8 +413,13 @@ func (engine *Engine) Start(_ context.Context) error {
 //   - ctx: Execution context for managing cancellation and timeouts during
 //     publisher shutdown.
 //
+// Every shutdown step is attempted even when a publisher fails to close: a
+// failing publisher never leaves the others, the event stream, or the actor
+// system reference behind, because a second Stop returns nil at once.
+//
 // Returns:
-//   - An error if a publisher fails to close; otherwise, nil.
+//   - The errors of every publisher that failed to close, joined with
+//     errors.Join; otherwise, nil.
 func (engine *Engine) Stop(ctx context.Context) error {
 	if !engine.Started() {
 		return nil
@@ -417,12 +427,14 @@ func (engine *Engine) Stop(ctx context.Context) error {
 
 	engine.started.Store(false)
 
+	var errs []error
+
 	// Shutdown all event publishers
 	for _, stream := range engine.eventsStreams.Values() {
 		stream.done <- Done{}
 		stream.subscriber.Shutdown()
 		if err := stream.publisher.Close(ctx); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("close events publisher %q: %w", stream.publisher.ID(), err))
 		}
 	}
 
@@ -430,7 +442,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 		stream.done <- Done{}
 		stream.subscriber.Shutdown()
 		if err := stream.publisher.Close(ctx); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("close durable state publisher %q: %w", stream.publisher.ID(), err))
 		}
 	}
 
@@ -444,7 +456,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	// fast. We deliberately do NOT call sys.Stop — the actor system belongs
 	// to the caller.
 	engine.actorSystem.Store(nil)
-	return nil
+	return errors.Join(errs...)
 }
 
 // Started returns true when the eGo engine has started
@@ -707,6 +719,10 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 	}
 	actorSystem := ref.sys
 
+	if !engine.hasEventsStore() {
+		return ErrEventsStoreRequired
+	}
+
 	// Decide what carries the behavior to GoAkt, and reject in cluster mode
 	// a behavior GoAkt cannot serialize, before anything is spawned.
 	behaviorDep, placementErr := spawnDependency(actorSystem, behavior)
@@ -754,6 +770,15 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}
 	return verifySpawnedTenant(ctx, pid, tenantScope)
+}
+
+// hasEventsStore reports whether the engine was configured with an events
+// store. Event-sourced entities and sagas persist their events there, and
+// their actors would otherwise call it through a nil interface at PreStart.
+func (engine *Engine) hasEventsStore() bool {
+	engine.mutex.RLock()
+	defer engine.mutex.RUnlock()
+	return engine.eventsStore != nil
 }
 
 // spawnTenantScope determines the per-spawn tenant dependency to inject for
@@ -1371,6 +1396,10 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 		return ErrEngineNotStarted
 	}
 	actorSystem := ref.sys
+
+	if !engine.hasEventsStore() {
+		return ErrEventsStoreRequired
+	}
 
 	// Decide what carries the behavior to GoAkt, and reject in cluster mode
 	// a behavior GoAkt cannot serialize, before anything is spawned.
