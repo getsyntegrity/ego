@@ -515,9 +515,9 @@ func WithEncryptor(encryptor encryption.Encryptor) Option {
 // isNilResolver returns true when r is nil or a typed-nil (e.g.
 // (*MyResolver)(nil), a nil named function, or a nil map/slice/chan value
 // implementing tenancy.TenantResolver). It mirrors isNilLogger
-// (logger.go:72): a typed-nil interface value is non-nil at the interface
-// level but wraps a nil concrete value, which would misfire tenant-aware
-// mode and any resolver call made against it.
+// (internal/logging/logging.go:62): a typed-nil interface value is non-nil
+// at the interface level but wraps a nil concrete value, which would
+// misfire tenant-aware mode and any resolver call made against it.
 //
 // reflect.Value.IsNil panics on kinds that cannot be nil, so it is only
 // called for the nil-capable kinds (Chan, Func, Interface, Map, Pointer,
