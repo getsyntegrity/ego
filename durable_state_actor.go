@@ -41,6 +41,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/runner"
 	"github.com/pablogore/ego/v4/persistence"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
@@ -53,7 +54,7 @@ const statesTopic = "topic.states"
 
 // DurableStateActor is a durable state based actor
 type DurableStateActor struct {
-	behavior        DurableStateBehavior
+	behavior        behaviorport.DurableState
 	stateStore      persistence.StateStore
 	currentState    State
 	cachedStateAny  *anypb.Any // cached marshal of currentState, invalidated on state change
@@ -159,7 +160,7 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency != nil {
-			if behavior, ok := dependency.(DurableStateBehavior); ok {
+			if behavior, ok := behaviorFrom[behaviorport.DurableState](dependency); ok {
 				entity.behavior = behavior
 				break
 			}
@@ -493,11 +494,12 @@ func (entity *DurableStateActor) provablyInSyncAfterConflict(err error) bool {
 
 // dispatchToBehavior invokes entity.behavior against cmd, preferring
 // HandleEnvelope over HandleCommand when both entity.behavior implements
-// DurableStateEnvelopeBehavior and a command.Metadata is available on ctx
+// behaviorport.DurableStateEnvelope (DurableStateEnvelopeBehavior is one)
+// and a command.Metadata is available on ctx
 // (#60, M-3). See EventSourcedActor.dispatchToBehavior for the full
 // rationale — this mirrors it for the durable-state path.
 func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
-	envBehavior, ok := entity.behavior.(DurableStateEnvelopeBehavior)
+	envBehavior, ok := entity.behavior.(behaviorport.DurableStateEnvelope)
 	if !ok {
 		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
 	}

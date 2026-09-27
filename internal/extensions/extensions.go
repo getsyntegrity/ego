@@ -24,6 +24,7 @@ package extensions
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/tochemey/goakt/v4/extension"
@@ -381,6 +382,52 @@ func (x *EntityConfig) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary deserializes the entity config
 func (x *EntityConfig) UnmarshalBinary(data []byte) error {
 	return json.Unmarshal(data, x)
+}
+
+// errLocalOnly is returned by LocalBehavior's serialization methods.
+var errLocalOnly = errors.New("eGo: this behavior has no MarshalBinary/UnmarshalBinary; it runs on its local node only and cannot be serialized")
+
+// LocalBehavior carries a behavior that cannot be serialized to a spawn on
+// the local node, as a GoAkt spawn dependency. It is never registered with
+// ActorSystem.Inject and never serialized: the engine hands one to GoAkt only
+// outside cluster mode, where GoAkt serializes no spawn dependency for
+// spawning or relocation (ego-arch-002-s3 design, §5.3).
+//
+// Its ID is the behavior's ID, so the dependency key GoAkt uses is the same
+// as when the behavior itself is the dependency. Its serialization methods
+// fail by design. Outside cluster mode the only path that still serializes a
+// dependency is a remote dependency query with remoting enabled; that query
+// gets this error back and the local actor is unaffected.
+type LocalBehavior struct {
+	behavior interface{ ID() string }
+}
+
+// enforce compliance with the extension.Dependency interface
+var _ extension.Dependency = (*LocalBehavior)(nil)
+
+// NewLocalBehavior wraps behavior in a local-only spawn dependency.
+func NewLocalBehavior(behavior interface{ ID() string }) *LocalBehavior {
+	return &LocalBehavior{behavior: behavior}
+}
+
+// ID returns the wrapped behavior's ID.
+func (x *LocalBehavior) ID() string {
+	return x.behavior.ID()
+}
+
+// Behavior returns the wrapped behavior value, unchanged.
+func (x *LocalBehavior) Behavior() any {
+	return x.behavior
+}
+
+// MarshalBinary always fails: a LocalBehavior is never serialized.
+func (x *LocalBehavior) MarshalBinary() ([]byte, error) {
+	return nil, errLocalOnly
+}
+
+// UnmarshalBinary always fails: a LocalBehavior is never deserialized.
+func (x *LocalBehavior) UnmarshalBinary([]byte) error {
+	return errLocalOnly
 }
 
 // SagaConfig is a dependency that carries per-saga spawn configuration.

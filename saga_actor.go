@@ -38,6 +38,7 @@ import (
 	"github.com/pablogore/ego/v4/eventstream"
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/persistence"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
@@ -48,7 +49,7 @@ type sagaTimeoutMsg struct{}
 // It subscribes to the event stream, reacts to events via the SagaBehavior,
 // persists its own events, and coordinates commands to other entities.
 type SagaActor struct {
-	behavior      SagaBehavior
+	behavior      behaviorport.Saga
 	eventsStore   persistence.EventsStore
 	eventsStream  eventstream.Stream
 	subscriber    eventstream.Subscriber
@@ -170,7 +171,7 @@ func (s *SagaActor) PreStart(ctx *goakt.Context) error {
 			continue
 		}
 
-		if behavior, ok := dependency.(SagaBehavior); ok {
+		if behavior, ok := behaviorFrom[behaviorport.Saga](dependency); ok {
 			s.behavior = behavior
 		}
 
