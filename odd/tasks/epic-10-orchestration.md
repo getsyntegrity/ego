@@ -171,7 +171,7 @@ history of this file.
 | W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | approved; comment nit fixed (checked); CI pending; merge needs maintainer authorization | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
 | W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types | — | in progress | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
-| W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 | re-review (chained specs 1–3, 5 tasks each) | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
+| W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 | approved with nits (fixing 4 + sync main); merge authorized after CI | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @e6a669e | #142 | merged (658bbae) | approved with nits, CI 8/8; maintainer chose option (c): no reflect/unsafe, per-publisher pre-Start check + identity check in test/compat, ADR note, nits; then review + CI |
