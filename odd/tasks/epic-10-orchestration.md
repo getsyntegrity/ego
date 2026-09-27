@@ -175,7 +175,7 @@ history of this file.
 | W2a-4 | #147 S4-4 composition + consumer | — | — | planned | after S4-3; compose/goakt App.Runtime() |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 @ff3eced | merged | port/adapter + external-adapter-no-composition |
-| W2b-2 | #106 spec 2 adapter-conformance | feat/106-spec2-conformance @2c9aba1 | #158 | nits fixed, delta re-review; merge needs maintainer authorization; carry-over: document "nil or typed-nil is undeclared" in the accessor contract |
+| W2b-2 | #106 spec 2 adapter-conformance | feat/106-spec2-conformance @2c9aba1 | #158 | merged (squash 8eb01d1); merge needs maintainer authorization; carry-over: document "nil or typed-nil is undeclared" in the accessor contract |
 | W2b-3 | #106 spec 3 adapter-composition | — | — | planned | after spec 2 and #147 S4-4; carry-over: source-scan test for single assertion sites; §D6 reflection wording |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
