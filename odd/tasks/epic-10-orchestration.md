@@ -134,7 +134,7 @@ history of this file.
 | W1c-4 | #105 IMPL-4 | — | — | planned | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
-| W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat | — | in progress | from main 9084b80 |
+| W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @0fa4dab | #142 | in review | 16/16 checks moved; reflect+unsafe on unexported `started` field (writer did not stop — reviewer judging); publishers go.mod drop GoAkt/Olric/OTel indirect |
 | W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
 | W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
 | W2b | #106 | — | — | planned | after S3 and #105 IMPL-4 |
