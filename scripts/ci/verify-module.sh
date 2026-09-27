@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify-module.sh builds, vets, lints (against the root .golangci.yml) and,
-# when the module has any *_test.go file, tests one nested Go module: a
-# directory with its own go.mod, outside the root module's `go list ./...`
-# graph and therefore outside internal/cmd/ciselect's own coverage (see
-# docs/ci.md). It verifies the module the way it is checked out today,
-# with its local `replace` directives in effect ("integrated
-# verification" in openspec/changes/ego-arch-001/design.md §8) — release
-# verification against a published root version is
-# scripts/ci/verify-published.sh, a separate, stricter check.
+# verify-module.sh downloads, checks go.mod/go.sum tidiness, builds, vets,
+# lints (against the root .golangci.yml) and, when the module has any
+# *_test.go file, tests one nested Go module: a directory with its own
+# go.mod, outside the root module's `go list ./...` graph and therefore
+# outside internal/cmd/ciselect's own coverage (see docs/ci.md). It
+# verifies the module the way it is checked out today, with its local
+# `replace` directives in effect ("integrated verification" in
+# openspec/changes/ego-arch-001/design.md §8) — release verification
+# against a published root version is scripts/ci/verify-published.sh, a
+# separate, stricter check.
 #
 # When the module has a file gated behind the `compat` build tag, it also
 # vets, lints and tests that file with `-tags compat` (docs/ci.md,
 # "Compatibility lane", #122) — a separate lane for historical checks that
-# must not enter the module's default unit-test closure.
+# must not enter the module's default unit-test closure. `go mod tidy` has
+# no `-tags` flag: it already considers every file in the module,
+# including compat-tagged ones, when computing required modules (verified
+# empirically for #122: `go mod tidy -diff` was empty in every publisher
+# both before and after the `compat` tag was introduced), so the tidiness
+# check below needs no `-tags compat` variant of its own.
 #
 # Usage: verify-module.sh <module-dir>
 #   <module-dir>   repo-relative path to the nested module, e.g.
@@ -31,7 +37,13 @@ set -euo pipefail
 #
 # GOWORK=off is forced throughout so a stray go.work at the repository
 # root can never pull a nested module's build into the root module's own
-# graph.
+# graph. GOFLAGS is cleared throughout for the same reason a stray
+# GOWORK is guarded against: an inherited `GOFLAGS=-mod=vendor` would
+# make `go mod tidy` refuse outright (nested modules keep no vendor/
+# directory, per docs/ci.md) and would silently change the build/vet/test
+# steps too; this job never sets GOFLAGS itself (see docs/ci.md, "The
+# `modules` matrix job"), so clearing it only guards against a caller's
+# ambient environment, local or otherwise.
 
 usage() {
   echo "usage: $0 <module-dir>" >&2
@@ -44,6 +56,7 @@ fi
 
 module_dir=$1
 export GOWORK=off
+export GOFLAGS=
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)
@@ -62,6 +75,20 @@ echo "::group::go mod download ($module_dir)"
 go mod download
 echo "::endgroup::"
 steps+=("go mod download")
+
+echo "::group::go mod tidy -diff ($module_dir)"
+# `-diff` never writes go.mod/go.sum; it prints the pending change as a
+# unified diff and exits non-zero when one exists (#122, acceptance
+# criterion: go.mod/go.sum tidiness is a CI gate, not a manual step).
+if ! tidy_diff=$(go mod tidy -diff); then
+  echo "$tidy_diff"
+  echo "::endgroup::"
+  echo "verify-module.sh: $module_dir's go.mod/go.sum are not tidy." >&2
+  echo "Run 'go mod tidy' inside $module_dir and commit the result; see the diff above for what changes." >&2
+  exit 1
+fi
+echo "::endgroup::"
+steps+=("go mod tidy -diff")
 
 echo "::group::go build ($module_dir)"
 # A module with at least one `package main` (e.g. example/cluster) needs
