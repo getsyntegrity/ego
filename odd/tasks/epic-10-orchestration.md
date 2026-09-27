@@ -57,16 +57,38 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 - Local shell exports a stale `GOROOT=/home/pablog/sdk/go1.26.6`; every go
   command must run as `env -u GOROOT go ...`.
 
+## Human decisions (2026-09-26)
+
+1. Protobuf: `egopb` and `proto.Message` stay a supported public contract
+   in v4; revisit at the next major. Recorded in ego-arch-001 §10 by the
+   #123 design PR.
+2. S3 compatibility: deprecate first, no break inside v4. Every temporary
+   alias and deprecated API (EntityKind, S1 publisher aliases, anything S3
+   adds) lives until the major release introduced by #124 and is removed
+   there. The #123 design must solve cluster mode (behaviors are GoAkt spawn
+   dependencies today), keep `WithEntityKinds` working, include a
+   remote-spawn test, and go to the human before implementation.
+3. #125: merge after the reviewer approves and CI is green; send the PR link
+   and findings to the human first.
+4. W0c: proceed with coverage semantics unchanged. Evidence at 77beda6:
+   ciselect `coverpkg` is byte-identical in `full` (23 packages) and
+   `affected` (leaf change, 3 packages) mode, sha256 `ce183755…`, testkit
+   included. No code change is needed; closing #101 is an issue edit.
+   W0e: send the draft; do not apply.
+5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
+   → #102 extraction. #122, #101 and #112 run alongside without touching the
+   root package.
+
 ## Task board
 
 | ID | Issue | Branch | Agent | PR | State | Blocking reason |
 | --- | --- | --- | --- | --- | --- | --- |
 | W0a | #105 design review | — (read-only) | reviewer | #125 | in progress | — |
 | W0b | #99 | fix/99-prestart-assertion-audit | writer | — | in progress | — |
-| W0c | #101 | — | orchestrator | — | blocked | closing comment needs human approval |
+| W0c | #101 | — | orchestrator | — | blocked | closing comment (with coverpkg evidence) needs human approval to post |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
 | W0e | #10 body | — | orchestrator | — | blocked | epic body edit needs human approval |
-| W1a | #123 (S3) | — | — | — | planned | protobuf policy decision (design.md §10) |
+| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 | design writer | — | in progress | implementation waits for human review of the design |
 | W1b | #122 | — | — | — | planned | none (can start after Wave 0 frees a writer slot) |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
 | W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
