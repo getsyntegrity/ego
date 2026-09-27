@@ -73,12 +73,12 @@ Five pull requests, each about 400 changed lines or fewer, with file ownership i
 | S3-1 | `port/behavior` contracts; `ego` names re-expressed on top of them | First; independent of #105 |
 | S3-2 | Spawn-site bridge in `engine.go`, internal wrapper, typed errors, actors on neutral types | Before #105 IMPL-4 |
 | S3-3 | `Spawn*` entry points (new file) and the two-node remote-spawn test | After S3-2 |
-| S3-4 | `BehaviorKind`/`WithBehaviorKinds`; `NewEngine` check | After S3-2 |
+| S3-4 | `BehaviorKind`/`WithBehaviorKinds`; `NewEngine` check; the mixed-registration two-node subtest | After S3-2 |
 | S3-5 | Deprecations, `CHANGELOG.md`, examples | Last |
 
 ## Archcheck
 
-No new baseline entry and no exception. The `migration -> ego` entry (owned by S4/#11) does not change. `migration` uses package `ego` only for `ego.ResolveLogger` (`migration/migration.go:149`), which is unrelated to behavior contracts.
+No new baseline entry and no exception. The `migration -> ego` entry (owned by S4/#11) does not change. `migration` uses package `ego` only for `ego.ResolveLogger` (`migration/migration.go:149` and `migration/tenant_adoption.go:516`), which is unrelated to behavior contracts.
 
 ## Rollback
 
