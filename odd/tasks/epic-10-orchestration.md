@@ -111,6 +111,10 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    standing authorization after the message fix and green CI. The no-tag
    restriction between S3-2 and S3-4 is lifted. S3-5 runs before IMPL-4
    (shared engine.go/option.go/example files).
+15. (2026-09-27) #102 reopened (manual close was premature: S2/S3 stay in
+   #102 until contracts and publishers extraction is implemented and
+   verified); left unticked in #10. #123 ticked in #10 (only that line
+   changed, updatedAt checked).
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
