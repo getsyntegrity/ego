@@ -124,7 +124,7 @@ history of this file.
 | W1a | #123 design | docs/propose-ego-arch-002-s3 @3f3b725 | #128 | merged (e729b1b) | names and criterion 1 decided; #123 criterion 1 reworded |
 | W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @adc416c | #131 | merged (543da2c) | merged tree vetted against main before merge |
 | W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge @1dfa090 | #139 | merged (9084b80) | apidiff: 3 additions only; value-type RED hang reproduced; spawn* functions ready for IMPL-4 guard |
-| W1a-3 | #123 S3-3 | feat/123-s3-3-spawn-methods @048c216 | #141 | approved with nits (fixing helper cleanup) | engine_spawn.go, new cluster test, engine_test.go helper only |
+| W1a-3 | #123 S3-3 | feat/123-s3-3-spawn-methods @c478929 | #141 | approved; cleanup fix checked; CI pending on c478929 | engine_spawn.go, new cluster test, engine_test.go helper only |
 | W1a-4..5 | #123 S3-4..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last. No release tag between S3-2 and S3-4 (ErrBehaviorNotPointer names WithBehaviorKinds). GoAkt restart clears actor dependencies (pre-existing, affects all behaviors) — note for #11 |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
 | W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | merged (23bc7f4) | all six modules tidy on main; no workflow change |
