@@ -36,8 +36,8 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 
-	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/internal/logging"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 )
@@ -461,8 +461,8 @@ func WithPersistenceIDs(ids ...string) AdoptionOption {
 
 // WithAdoptionLogger sets the kit-logger Logger used during adoption, the
 // same logging seam Migrator uses. When not set, or when the given logger
-// is nil or a typed-nil pointer, TenantAdopter logs through
-// ego.DefaultLogger().
+// is nil or a typed-nil pointer, TenantAdopter logs through kit-logger's
+// process-wide logger — the same default ego.DefaultLogger() returns.
 func WithAdoptionLogger(logger kitlog.Logger) AdoptionOption {
 	return adoptionOptionFunc(func(a *TenantAdopter) { a.logger = logger })
 }
@@ -513,7 +513,7 @@ func NewTenantAdopter(assign TenantAssignment, opts ...AdoptionOption) (*TenantA
 	// Options may have set a nil or typed-nil logger, which would panic on
 	// the first log call. Resolving after the loop covers every option
 	// path, exactly like Migrator's New.
-	a.logger = ego.ResolveLogger(a.logger)
+	a.logger = logging.ResolveLogger(a.logger)
 
 	if a.eventsStore == nil && a.snapshotStore == nil && a.stateStore == nil {
 		return nil, ErrNoStoresConfigured
