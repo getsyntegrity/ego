@@ -276,7 +276,14 @@ func logSummary(t *testing.T, target Target, results []Result) {
 // Capture runs the same checks as Run without failing t, and returns their
 // results with the failure messages in Detail. It exists so a suite's own
 // tests can assert that a check fails against a deliberately broken
-// adapter. The Target factories receive t itself.
+// adapter.
+//
+// The Target factories (New, FailStart) and Stall receive t itself, but
+// Capture calls them on a goroutine of its own, not on t's test goroutine.
+// They may use t.Helper, t.Log, t.Cleanup and t.TempDir, and may report
+// with t.Error, but must not call t.Fatal, t.FailNow, t.Skip or
+// t.SkipNow: the testing package allows those only on the test goroutine.
+// A factory reports failure by returning an error instead.
 func Capture(t *testing.T, target Target) []Result {
 	s := &suite{target: target}
 	if msg := s.validate(); msg != "" {

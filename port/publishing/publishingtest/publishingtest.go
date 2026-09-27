@@ -84,17 +84,18 @@ type StateTarget struct {
 }
 
 // RunEvents runs PT-1…PT-3 against an events publisher, each exercised
-// check as a subtest of t.
-func RunEvents(t *testing.T, target EventsTarget) {
+// check as a subtest of t, and returns one Result per check, so an adopter
+// can assert its exact outcome set as it does with adaptertest.Run.
+func RunEvents(t *testing.T, target EventsTarget) []Result {
 	t.Helper()
-	run(t, eventsSuite(target))
+	return run(t, eventsSuite(target))
 }
 
 // RunState runs PT-1…PT-3 against a durable state publisher, each
-// exercised check as a subtest of t.
-func RunState(t *testing.T, target StateTarget) {
+// exercised check as a subtest of t, and returns one Result per check.
+func RunState(t *testing.T, target StateTarget) []Result {
 	t.Helper()
-	run(t, stateSuite(target))
+	return run(t, stateSuite(target))
 }
 
 // opTimeout bounds every publisher call; a call that has not returned by
@@ -224,18 +225,21 @@ func uniqueID() string {
 	return fmt.Sprintf("publishingtest-%d-%d", time.Now().UnixNano(), sequence.Add(1))
 }
 
-func run[M any](t *testing.T, s suite[M]) {
+func run[M any](t *testing.T, s suite[M]) []Result {
 	t.Helper()
 	if s.newPublisher == nil {
 		t.Fatalf("publishingtest: invalid target: New is nil")
 	}
 	var summary strings.Builder
 	summary.WriteString("publishingtest summary:")
-	for _, c := range checksFor[M]() {
+	checks := checksFor[M]()
+	results := make([]Result, 0, len(checks))
+	for _, c := range checks {
 		if c.notExercised != nil {
 			if reason := c.notExercised(s); reason != "" {
 				t.Logf("%s: not exercised: %s", c.name, reason)
 				fmt.Fprintf(&summary, "\n  %-6s not exercised: %s", c.name, reason)
+				results = append(results, Result{Check: c.name, Outcome: NotExercised, Detail: reason})
 				continue
 			}
 		}
@@ -244,19 +248,22 @@ func run[M any](t *testing.T, s suite[M]) {
 			sub = st
 			c.run(s, st, st)
 		})
-		fmt.Fprintf(&summary, "\n  %-6s %s", c.name, outcomeOf(sub))
+		o := outcomeOf(sub)
+		fmt.Fprintf(&summary, "\n  %-6s %s", c.name, o)
+		results = append(results, Result{Check: c.name, Outcome: o})
 	}
 	t.Log(summary.String())
+	return results
 }
 
-func outcomeOf(t *testing.T) outcome {
+func outcomeOf(t *testing.T) Outcome {
 	switch {
 	case t == nil || t.Failed():
-		return failed
+		return Failed
 	case t.Skipped():
-		return skipped
+		return Skipped
 	default:
-		return passed
+		return Passed
 	}
 }
 
@@ -312,61 +319,78 @@ func isNil(v any) bool {
 	}
 }
 
-// outcome and result are what the package's self-checks capture.
-type outcome int
+// Outcome is the result of one check. It mirrors adaptertest.Outcome,
+// which this package may not import.
+type Outcome int
 
 const (
-	passed outcome = iota + 1
-	failed
-	skipped
-	notExercised
+	// Passed means the check ran and found nothing wrong.
+	Passed Outcome = iota + 1
+	// Failed means the check ran and found a violation, or could not run
+	// because of a broken target.
+	Failed
+	// Skipped means New returned an error matching
+	// adaptertest.ErrUnreachable.
+	Skipped
+	// NotExercised means the suite could not run the check because a hook
+	// is missing. It is never a pass.
+	NotExercised
 )
 
-func (o outcome) String() string {
+// String returns the outcome in words, as the summary prints it.
+func (o Outcome) String() string {
 	switch o {
-	case passed:
+	case Passed:
 		return "passed"
-	case failed:
+	case Failed:
 		return "failed"
-	case skipped:
+	case Skipped:
 		return "skipped"
-	case notExercised:
+	case NotExercised:
 		return "not exercised"
 	default:
 		return fmt.Sprintf("outcome(%d)", int(o))
 	}
 }
 
-type result struct {
-	check   string
-	outcome outcome
-	detail  string
+// Result reports one check.
+type Result struct {
+	// Check is the check's name, for example "PT-1".
+	Check string
+	// Outcome is what happened.
+	Outcome Outcome
+	// Detail says why a check was not exercised and, from the package's
+	// own capture, the failure messages.
+	Detail string
 }
 
-func captureEvents(t *testing.T, target EventsTarget) []result {
+func captureEvents(t *testing.T, target EventsTarget) []Result {
 	return capture(t, eventsSuite(target))
 }
 
-func captureState(t *testing.T, target StateTarget) []result {
+func captureState(t *testing.T, target StateTarget) []Result {
 	return capture(t, stateSuite(target))
 }
 
-// capture runs the checks without failing t, recording each outcome.
-func capture[M any](t *testing.T, s suite[M]) []result {
-	var out []result
+// capture runs the checks without failing t, recording each outcome. The
+// target's New and Received receive t but run on a goroutine of capture's
+// own, not t's test goroutine, so they must not call t.Fatal, t.FailNow,
+// t.Skip or t.SkipNow; they report failure by returning an error.
+func capture[M any](t *testing.T, s suite[M]) []Result {
+	var out []Result
 	for _, c := range checksFor[M]() {
 		if s.newPublisher == nil {
-			out = append(out, result{check: c.name, outcome: failed, detail: "New is nil"})
+			out = append(out, Result{Check: c.name, Outcome: Failed, Detail: "New is nil"})
 			continue
 		}
 		if c.notExercised != nil {
 			if reason := c.notExercised(s); reason != "" {
-				out = append(out, result{check: c.name, outcome: notExercised, detail: reason})
+				out = append(out, Result{Check: c.name, Outcome: NotExercised, Detail: reason})
 				continue
 			}
 		}
 		o, detail := record(func(r tb) { c.run(s, r, t) })
-		out = append(out, result{check: c.name, outcome: o, detail: detail})
+		out = append(out, Result{Check: c.name, Outcome: o, Detail: detail})
 	}
 	return out
 }
@@ -395,7 +419,7 @@ func (r *recorder) Skipf(format string, args ...any) {
 }
 func (r *recorder) Logf(string, ...any) {}
 
-func record(fn func(r tb)) (outcome, string) {
+func record(fn func(r tb)) (Outcome, string) {
 	r := &recorder{}
 	done := make(chan struct{})
 	go func() {
@@ -406,10 +430,10 @@ func record(fn func(r tb)) (outcome, string) {
 	detail := strings.Join(r.messages, "; ")
 	switch {
 	case r.failed:
-		return failed, detail
+		return Failed, detail
 	case r.skipped:
-		return skipped, detail
+		return Skipped, detail
 	default:
-		return passed, detail
+		return Passed, detail
 	}
 }

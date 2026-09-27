@@ -35,8 +35,9 @@ import (
 )
 
 // testServer is an httptest websocket server that records every binary
-// message it receives. Stall makes every connection stop reading, which is
-// how the conformance tests model a backend that stopped answering (AT-4).
+// message it receives. Stall makes every connection stop reading after the
+// next message, which is how the conformance tests model a backend that
+// stopped answering (AT-4).
 // It uses only the standard library and gorilla/websocket, which this
 // module already requires.
 type testServer struct {
@@ -101,8 +102,10 @@ func (s *testServer) URL() string {
 	return "ws" + strings.TrimPrefix(s.srv.URL, "http")
 }
 
-// Stall makes every connection stop reading. It is safe to call more than
-// once.
+// Stall makes every connection stop reading after the next message: the
+// handler checks the stall between messages, so a handler already blocked
+// in ReadMessage reads one more message before it stops. It is safe to call
+// more than once.
 func (s *testServer) Stall(*testing.T) {
 	s.stallOnce.Do(func() { close(s.stalled) })
 }

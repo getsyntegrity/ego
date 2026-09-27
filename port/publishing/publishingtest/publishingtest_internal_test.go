@@ -151,36 +151,36 @@ func stateTarget(build func() *fakeState) StateTarget {
 	}
 }
 
-func byCheck(t *testing.T, results []result) map[string]result {
+func byCheck(t *testing.T, results []Result) map[string]Result {
 	t.Helper()
-	out := map[string]result{}
+	out := map[string]Result{}
 	for _, r := range results {
-		t.Logf("%-28s %-14s %s", r.check, r.outcome, r.detail)
-		out[r.check] = r
+		t.Logf("%-28s %-14s %s", r.Check, r.Outcome, r.Detail)
+		out[r.Check] = r
 	}
 	return out
 }
 
-func requireOutcome(t *testing.T, got map[string]result, check string, want outcome, detail string) {
+func requireOutcome(t *testing.T, got map[string]Result, check string, want Outcome, detail string) {
 	t.Helper()
 	r, ok := got[check]
 	if !ok {
 		t.Fatalf("no result for %s", check)
 	}
-	if r.outcome != want {
-		t.Errorf("%s: outcome %s, want %s (detail %q)", check, r.outcome, want, r.detail)
+	if r.Outcome != want {
+		t.Errorf("%s: outcome %s, want %s (detail %q)", check, r.Outcome, want, r.Detail)
 	}
-	if detail != "" && !strings.Contains(r.detail, detail) {
-		t.Errorf("%s: detail %q does not mention %q", check, r.detail, detail)
+	if detail != "" && !strings.Contains(r.Detail, detail) {
+		t.Errorf("%s: detail %q does not mention %q", check, r.Detail, detail)
 	}
 }
 
-func requireOnlyFailure(t *testing.T, got map[string]result, check, detail string) {
+func requireOnlyFailure(t *testing.T, got map[string]Result, check, detail string) {
 	t.Helper()
-	requireOutcome(t, got, check, failed, detail)
+	requireOutcome(t, got, check, Failed, detail)
 	for name, r := range got {
-		if name != check && r.outcome == failed {
-			t.Errorf("%s also failed (%q); only %s should", name, r.detail, check)
+		if name != check && r.Outcome == Failed {
+			t.Errorf("%s also failed (%q); only %s should", name, r.Detail, check)
 		}
 	}
 }
@@ -189,7 +189,7 @@ func TestRunEvents_CorrectPublisherPasses(t *testing.T) {
 	RunEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{} }))
 	got := byCheck(t, captureEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{} })))
 	for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
-		requireOutcome(t, got, check, passed, "")
+		requireOutcome(t, got, check, Passed, "")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestRunState_CorrectPublisherPasses(t *testing.T) {
 	RunState(t, stateTarget(func() *fakeState { return &fakeState{} }))
 	got := byCheck(t, captureState(t, stateTarget(func() *fakeState { return &fakeState{} })))
 	for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
-		requireOutcome(t, got, check, passed, "")
+		requireOutcome(t, got, check, Passed, "")
 	}
 }
 
@@ -227,7 +227,7 @@ func TestCapture_NoObserverIsNotExercised(t *testing.T) {
 	target := eventsTarget(func() *fakeEvents { return &fakeEvents{} })
 	target.Received = nil
 	got := byCheck(t, captureEvents(t, target))
-	requireOutcome(t, got, "PT-3", notExercised, "no hook")
+	requireOutcome(t, got, "PT-3", NotExercised, "no hook")
 }
 
 // unreachable mirrors adaptertest.ErrUnreachable, which this package
@@ -245,23 +245,23 @@ func TestCapture_OnlyUnreachableSkips(t *testing.T) {
 		return nil, fmt.Errorf("no broker: %w", unreachable{})
 	}}
 	for _, r := range byCheck(t, captureEvents(t, skip)) {
-		if r.outcome != skipped {
-			t.Errorf("%s: outcome %s, want skipped", r.check, r.outcome)
+		if r.Outcome != Skipped {
+			t.Errorf("%s: outcome %s, want skipped", r.Check, r.Outcome)
 		}
 	}
 
 	fail := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return nil, errors.New("bad config") }}
 	for _, r := range byCheck(t, captureEvents(t, fail)) {
-		if r.outcome != failed {
-			t.Errorf("%s: outcome %s, want failed", r.check, r.outcome)
+		if r.Outcome != Failed {
+			t.Errorf("%s: outcome %s, want failed", r.Check, r.Outcome)
 		}
 	}
 
 	var typedNil *fakeEvents
 	nilValue := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return typedNil, nil }}
 	for _, r := range byCheck(t, captureEvents(t, nilValue)) {
-		if r.outcome != failed || !strings.Contains(r.detail, "nil") {
-			t.Errorf("%s: outcome %s (%q), want failed naming nil", r.check, r.outcome, r.detail)
+		if r.Outcome != Failed || !strings.Contains(r.Detail, "nil") {
+			t.Errorf("%s: outcome %s (%q), want failed naming nil", r.Check, r.Outcome, r.Detail)
 		}
 	}
 }

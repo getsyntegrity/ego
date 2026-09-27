@@ -40,9 +40,10 @@ already-closed connection.
 - TDD: strict (user global configuration); runner `go test` (plus `scripts/ci/verify-module.sh` for
   nested modules). Never `-race`, never the workbench.
 - Route: delegated direct (one writer; 2+ non-trivial files).
-- Delivery strategy: `single-pr` (the coordinator asked for one pull request for the spec; about 1,700
-  added lines, most of them the two suites' self-checks and license headers). Five work-unit commits,
-  one per task, each reviewable on its own.
+- Delivery strategy: `single-pr` (the coordinator asked for one pull request for the spec; about 2,800
+  added lines and 37 deleted across 21 files after the review nits (`git diff --shortstat origin/main`),
+  most of them the two suites, their self-checks and license headers). Five work-unit commits, one per
+  task, each reviewable on its own, plus the docs commit and one review-nits commit.
 
 ## Tasks
 
@@ -142,6 +143,27 @@ Full root suite `go test -count=1 ./...` (no `-race`, Go 1.26.6 SDK) on the T5 c
   that checks `Publish` before `Start`; for websocket that check is now PT-1. Spec 3's extension guide
   should update that text (and F-A will do the same for kafka, nats and pulsar).
 
+## Review of #158 (at `3b6a517`): approved with nits, applied
+
+1. websocket AT-4 proves little: `Close` closes the TCP socket without a handshake, so it returns at
+   once whether or not the server is stalled. `conformance_test.go` now says AT-4 is kept as a guard
+   against a future blocking `Close`; `server_test.go` says `Stall` stops reading after the next
+   message (the handler checks the stall between messages).
+2. `publishingtest.RunEvents`/`RunState` now return `[]Result` (exported `Result`, `Outcome` with
+   `Passed`, `Failed`, `Skipped`, `NotExercised`), and the websocket adopter asserts the exact PT set
+   (PT-1…PT-3 passed).
+3. `publishingtest/unreachable_internal_test.go` pins that the real `adaptertest.ErrUnreachable`,
+   wrapped, skips every check (test-only import; the architecture test reads only non-test imports).
+   Mutation disabling the marker check -> this test and `TestCapture_OnlyUnreachableSkips` fail.
+4. `adaptertest.Capture` (and publishingtest's internal capture) document that factories get the
+   caller's `t` on a non-test goroutine and must not call `t.Fatal`/`FailNow`/`Skip`.
+5. This document's size figure corrected.
+
+Rerun: `go test ./port/...` ok; `go vet` clean (port, testkit, websocket); websocket `go test -v`:
+22 PASS, 0 SKIP, 0 FAIL; testkit conformance 0 SKIP; golangci-lint `--new-from-rev=origin/main` 0
+issues. apidiff for `publishingtest` stays "new package" (its added exported names are `Result`,
+`Outcome` and its constants, and the `[]Result` return values).
+
 ## Next step
 
-Open the pull request; then spec 3 (`adapter-composition`).
+Review and merge #158 (the maintainers' decision); then spec 3 (`adapter-composition`).
