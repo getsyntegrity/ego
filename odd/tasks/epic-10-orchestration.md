@@ -123,7 +123,7 @@ history of this file.
 | W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge | — | in progress | from main 0896c42 |
 | W1a-3..5 | #123 S3-3..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
-| W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate | — | in progress | owns scripts/ci/verify-module.sh, docs/ci.md |
+| W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | in review | all six modules tidy on main; no workflow change |
 | W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
 | W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
 | W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @c428425 | #137 | in review | DefaultShutdownTimeout 30s only when unset (open question with #24) |
