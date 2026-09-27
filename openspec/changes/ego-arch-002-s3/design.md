@@ -82,7 +82,7 @@ Constraint 2 rules out the literal reading of #123's first acceptance criterion 
 | Widen `Engine.Entity`'s parameter from the old interface to a smaller one | Incompatible: "`(*Engine).Entity`: changed from `func(Behavior) error` to `func(Neutral) error`" |
 | Add a new neutral interface and a new method; re-express the old interface as `interface{ Neutral; Dep }` | Compatible: two additions, the old interface is unchanged |
 
-Both breaks are real for callers, not tool noise. For example, `func f(b ego.EventSourcedBehavior) { b.MarshalBinary() }` stops compiling, and so does `actorSys.Inject(b)` where `b` has static type `ego.EventSourcedBehavior`. So the neutral contracts get **new names in a new package**, and the old names become deprecated specializations of them. #123's first criterion is met by the new contracts in v4 and by the old names at #124 (§11 asks the human to confirm this reading).
+Both breaks are real for callers, not tool noise. For example, `func f(b ego.EventSourcedBehavior) { b.MarshalBinary() }` stops compiling, and so does `actorSys.Inject(b)` where `b` has static type `ego.EventSourcedBehavior`. So the neutral contracts get **new names in a new package**, and the old names become deprecated specializations of them. #123's first criterion is met by the new contracts in v4 and by the old names at #124 (reading confirmed 2026-09-27, §11).
 
 ## 4. The cluster-mode problem: options
 
@@ -283,7 +283,7 @@ Callers test with `errors.Is(err, ego.ErrBehaviorNotSerializable)` or read the d
 
 `ErrBehaviorNotPointer` has two sources. `NewEngine` returns it for a value-type kind in **any** mode, single-node included, because kind registration always goes through GoAkt's registry. A spawn returns it only in cluster mode, because outside cluster mode a value-type behavior is carried by `LocalBehavior`.
 
-One type, `BehaviorPlacementError`, covers both registration (`NewEngine`, empty `EntityID`) and spawning. The name says "placement" even when the error comes from registration. Other names that describe both uses: `BehaviorKindError`, `BehaviorRuntimeError`, `UnplaceableBehaviorError`. **The final name is pending the human's naming decision (§11, item 2).** Until then, the design uses `BehaviorPlacementError` and documents that it covers registration too.
+One type, `BehaviorPlacementError`, covers both registration (`NewEngine`, empty `EntityID`) and spawning. The name says "placement" even when the error comes from registration. The name `BehaviorPlacementError` was confirmed 2026-09-27 (§11, item 2), and the alternative names were rejected. Its doc comment states that it also covers registration.
 
 ### 5.7 Every place that type-asserts or passes a behavior as `extension.Dependency`
 
@@ -381,8 +381,8 @@ S3-1, S3-3 and S3-4 are additive and can be reverted up to the first release tha
 
 ## 11. Decisions for the human
 
-1. **Reading of #123's first acceptance criterion.** Decision 2 makes it impossible to remove the embed from `ego.EventSourcedBehavior`, `ego.DurableStateBehavior` and `ego.SagaBehavior` inside v4 (§3, apidiff-incompatible). This design proposes that the criterion is met in v4 by `port/behavior.EventSourced`/`DurableState`/`Saga`, with the old names deprecated and removed at #124. Please confirm, and update #123's criterion wording if you agree.
-2. **New names.** `port/behavior`, `Engine.SpawnEventSourced`/`SpawnDurableState`/`SpawnSaga`, `BehaviorKind`/`WithBehaviorKinds`, and `BehaviorPlacementError`, which also covers registration errors (candidates in §5.6: `BehaviorKindError`, `BehaviorRuntimeError`, `UnplaceableBehaviorError`). These can be renamed at no cost until S3-1 and S3-3 merge.
+1. **Reading of #123's first acceptance criterion.** Decision 2 makes it impossible to remove the embed from `ego.EventSourcedBehavior`, `ego.DurableStateBehavior` and `ego.SagaBehavior` inside v4 (§3, apidiff-incompatible). **Decided 2026-09-27:** in v4 the criterion is met by `port/behavior.EventSourced`/`DurableState`/`Saga`. The old names keep the embed, deprecated, until they are removed at #124.
+2. **New names.** **Decided 2026-09-27:** confirmed as proposed: `port/behavior`, `Engine.SpawnEventSourced`/`SpawnDurableState`/`SpawnSaga`, `BehaviorKind`/`WithBehaviorKinds`, and `BehaviorPlacementError` (which also covers registration errors). The alternative error names were rejected.
 
 Recorded, not open: protobuf policy and the deprecation window were decided on 2026-09-26 and are now written in `ego-arch-001/design.md` §10.
 
@@ -391,5 +391,5 @@ Recorded, not open: protobuf policy and the deprecation window were decided on 2
 - **`ego-arch-002-s3-followup`**: wrap GoAkt's remote "dependency type %q not registered" error (`codec.go:101`) in a typed ego error, so a kind missing from a peer's registration is as clear as the errors in §5.6. It needs a remote error round trip, which S3 does not change.
 - **archcheck baseline wording (code change, later slice)**: the `migration -> ego` entry's `Justification` and `RemovalCriterion` in `internal/cmd/archcheck/baseline.go` name "runtime types" and S3, but `migration` only calls `ego.ResolveLogger` (§7). Rewording them must not add entries.
 - **#124**: remove every symbol marked deprecated in §6 and make the neutral names the only ones.
-- **PR #125 / #105 IMPL-4 (alignment, not a gap)**: S3-2 and S3-4 land before IMPL-4 (human decision, 2026-09-27). So `ego.BehaviorKind` already exists when IMPL-4 adds `compose/goakt.WithCluster(cfg, kinds ...ego.BehaviorKind)`, and IMPL-4 never has to adopt the deprecated `EntityKind`. Its walkthrough calls `SpawnEventSourced`, and its family guard goes in the unexported spawn functions from S3-2 (§5.4). #125 is being aligned in parallel. Names stay pending the human's naming confirmation (§11, item 2).
+- **PR #125 / #105 IMPL-4 (alignment, not a gap)**: S3-2 and S3-4 land before IMPL-4 (human decision, 2026-09-27). So `ego.BehaviorKind` already exists when IMPL-4 adds `compose/goakt.WithCluster(cfg, kinds ...ego.BehaviorKind)`, and IMPL-4 never has to adopt the deprecated `EntityKind`. Its walkthrough calls `SpawnEventSourced`, and its family guard goes in the unexported spawn functions from S3-2 (§5.4). #125 is being aligned in parallel. Names confirmed 2026-09-27 (§11, item 2).
 - **#11 (`RUNTIME-003`)**: if a runtime ever has to place behaviors that cannot serialize themselves (for example by factory), that is a placement capability of the runtime SPI, not a behavior contract (§4, option A).

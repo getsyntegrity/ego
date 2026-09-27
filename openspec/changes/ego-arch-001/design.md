@@ -140,7 +140,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `encryption` | Contract | — | Stay | — |
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
 | `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b done (publishers import `port/publishing`) |
-| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/behavior`, proposed in `ego-arch-002-s3/design.md` §5.1 (name pending the human's confirmation, #123) | S3, #123 |
+| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/behavior`, proposed in `ego-arch-002-s3/design.md` §5.1 (name confirmed 2026-09-27, #123) | S3, #123 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
 | `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |

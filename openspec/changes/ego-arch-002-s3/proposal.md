@@ -92,8 +92,8 @@ This change is documentation only. For the slices: S3-1, S3-3 and S3-4 are addit
 
 ## Decisions for the human
 
-1. **Confirm the reading of #123's first criterion.** In v4 it is met by `port/behavior`; the old `ego` names keep the embed until #124, because removing it now is an apidiff-incompatible break (decision 2).
-2. **Confirm or rename the new names**: `port/behavior`, `Spawn*`, `BehaviorKind`/`WithBehaviorKinds`, `BehaviorPlacementError`.
+1. **Reading of #123's first criterion. Decided 2026-09-27.** In v4 it is met by `port/behavior`. The old `ego` names keep the embed, deprecated, until #124, because removing it now is an apidiff-incompatible break (decision 2).
+2. **New names. Decided 2026-09-27.** Confirmed as proposed: `port/behavior`, `Spawn*`, `BehaviorKind`/`WithBehaviorKinds`, `BehaviorPlacementError`. The alternative names were rejected.
 
 ## Success criteria for this docs change
 
