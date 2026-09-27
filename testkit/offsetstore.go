@@ -31,6 +31,7 @@ import (
 
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/offsetstore"
+	"github.com/pablogore/ego/v4/port/adapter"
 )
 
 type OffsetKey struct {
@@ -43,6 +44,12 @@ type OffsetStore struct {
 }
 
 var _ offsetstore.OffsetStore = (*OffsetStore)(nil)
+
+// Describe implements adapter.Describer. It declares no capability:
+// CapReady is implied by the store port, whose interface already has Ping.
+func (x *OffsetStore) Describe() adapter.Descriptor {
+	return adapter.Descriptor{Ports: []adapter.Port{offsetstore.PortOffsetStore}, Name: "testkit-memory"}
+}
 
 func NewOffsetStore() *OffsetStore {
 	return &OffsetStore{

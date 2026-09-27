@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/adapter"
 	"github.com/pablogore/ego/v4/port/publishing"
 )
 
@@ -40,8 +41,12 @@ type EventsPublisher struct {
 	started    *atomic.Bool
 }
 
-// ensure EventsPublisher implements publishing.EventPublisher.
-var _ publishing.EventPublisher = (*EventsPublisher)(nil)
+// ensure EventsPublisher implements publishing.EventPublisher and
+// adapter.Describer.
+var (
+	_ publishing.EventPublisher = (*EventsPublisher)(nil)
+	_ adapter.Describer         = (*EventsPublisher)(nil)
+)
 
 // NewEventsPublisher creates a new instance of EventsPublisher.
 // It requires a configuration instance to create the publisher.
@@ -75,9 +80,24 @@ func (x *EventsPublisher) ID() string {
 	return "ego-websocket"
 }
 
-// Close implements publishing.EventPublisher.
+// Describe implements adapter.Describer: the publisher serves
+// publishing.PortEventPublisher and declares no optional capability. It has no
+// Start, because it dials in its constructor (ego-arch-004 design §9, O5),
+// and no Ping.
+func (x *EventsPublisher) Describe() adapter.Descriptor {
+	return adapter.Descriptor{
+		Ports: []adapter.Port{publishing.PortEventPublisher},
+		Name:  "websocket",
+	}
+}
+
+// Close implements publishing.EventPublisher. It is idempotent: only the
+// first call closes the connection, and every later call returns nil
+// (ego-arch-004 design §D4, rule L2).
 func (x *EventsPublisher) Close(context.Context) error {
-	x.started.Store(false)
+	if !x.started.CompareAndSwap(true, false) {
+		return nil
+	}
 	return x.connection.Close()
 }
 
@@ -106,7 +126,10 @@ type DurableStatePublisher struct {
 }
 
 // enforce compilation error
-var _ publishing.StatePublisher = (*DurableStatePublisher)(nil)
+var (
+	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)
+	_ adapter.Describer         = (*DurableStatePublisher)(nil)
+)
 
 // NewDurableStatePublisher creates a new instance of DurableStatePublisher.
 // It requires a configuration instance to create the publisher.
@@ -140,9 +163,24 @@ func (x *DurableStatePublisher) ID() string {
 	return "ego-websocket"
 }
 
-// Close implements publishing.StatePublisher.
+// Describe implements adapter.Describer: the publisher serves
+// publishing.PortStatePublisher and declares no optional capability. It has no
+// Start, because it dials in its constructor (ego-arch-004 design §9, O5),
+// and no Ping.
+func (x *DurableStatePublisher) Describe() adapter.Descriptor {
+	return adapter.Descriptor{
+		Ports: []adapter.Port{publishing.PortStatePublisher},
+		Name:  "websocket",
+	}
+}
+
+// Close implements publishing.StatePublisher. It is idempotent: only the
+// first call closes the connection, and every later call returns nil
+// (ego-arch-004 design §D4, rule L2).
 func (x *DurableStatePublisher) Close(context.Context) error {
-	x.started.Store(false)
+	if !x.started.CompareAndSwap(true, false) {
+		return nil
+	}
 	return x.connection.Close()
 }
 

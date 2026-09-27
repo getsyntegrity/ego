@@ -31,6 +31,7 @@ import (
 
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/port/adapter"
 )
 
 // durableStoreKey is the structural (scope, persistenceID) pair DurableStore
@@ -51,6 +52,12 @@ type DurableStore struct {
 
 // enforce compilation error
 var _ persistence.StateStore = (*DurableStore)(nil)
+
+// Describe implements adapter.Describer. It declares no capability:
+// CapReady is implied by the store port, whose interface already has Ping.
+func (d *DurableStore) Describe() adapter.Descriptor {
+	return adapter.Descriptor{Ports: []adapter.Port{persistence.PortStateStore}, Name: "testkit-memory"}
+}
 
 // NewDurableStore creates an instance DurableStore
 func NewDurableStore() *DurableStore {

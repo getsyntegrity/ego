@@ -31,6 +31,7 @@ import (
 
 	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/port/adapter"
 )
 
 // EventKey identified an individual event record in the old, per-event
@@ -73,6 +74,12 @@ type EventStore struct {
 }
 
 var _ persistence.EventsStore = (*EventStore)(nil)
+
+// Describe implements adapter.Describer. It declares no capability:
+// CapReady is implied by the store port, whose interface already has Ping.
+func (x *EventStore) Describe() adapter.Descriptor {
+	return adapter.Descriptor{Ports: []adapter.Port{persistence.PortEventsStore}, Name: "testkit-memory"}
+}
 
 func NewEventsStore() *EventStore {
 	return &EventStore{

@@ -34,8 +34,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/persistence/conformance"
+	"github.com/pablogore/ego/v4/port/adapter"
+	"github.com/pablogore/ego/v4/port/adapter/adaptertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -60,6 +63,70 @@ func TestSnapshotStoreConformance(t *testing.T) {
 	conformance.RunSnapshotStoreConformance(t, func(t *testing.T) persistence.SnapshotStore {
 		return NewSnapshotStore()
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Adapter lifecycle: the three stores run port/adapter/adaptertest as
+// Borrowed adapters (ego-arch-004 spec 2, SPI-4), next to the data
+// semantics checked above. They are in memory, so their Connect cannot be
+// made to fail (no Target.FailStart: AT-2 and the failed-acquire case of
+// AT-3 are not exercised) and there is no backend to stall (no
+// Target.Stall: AT-4 is not exercised). Every other check runs, and none
+// is skipped.
+// ---------------------------------------------------------------------------
+
+var wantStoreAdapterOutcomes = map[string]adaptertest.Outcome{
+	"AT-1":                              adaptertest.Passed,
+	"AT-2":                              adaptertest.NotExercised,
+	"AT-3/release twice":                adaptertest.Passed,
+	"AT-3/release without acquire":      adaptertest.Passed,
+	"AT-3/release after failed acquire": adaptertest.NotExercised,
+	"AT-4":                              adaptertest.NotExercised,
+	"AT-5":                              adaptertest.Passed,
+}
+
+func TestStoresAdapterConformance(t *testing.T) {
+	cases := []struct {
+		name string
+		port adapter.Port
+		new  func() any
+	}{
+		{"EventStore", persistence.PortEventsStore, func() any { return NewEventsStore() }},
+		{"DurableStore", persistence.PortStateStore, func() any { return NewDurableStore() }},
+		{"OffsetStore", offsetstore.PortOffsetStore, func() any { return NewOffsetStore() }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := adaptertest.Run(t, adaptertest.Target{
+				Port:      tc.port,
+				Ownership: adaptertest.Borrowed,
+				New:       func(*testing.T) (any, error) { return tc.new(), nil },
+			})
+			require.Len(t, results, len(wantStoreAdapterOutcomes))
+			for _, r := range results {
+				require.Contains(t, wantStoreAdapterOutcomes, r.Check)
+				require.Equal(t, wantStoreAdapterOutcomes[r.Check], r.Outcome, "%s: %s", r.Check, r.Detail)
+			}
+		})
+	}
+}
+
+// The descriptors declare no capability: CapReady is implied by the store
+// ports, and the stores have no Start.
+func TestStoreDescriptors(t *testing.T) {
+	cases := map[string]struct {
+		value any
+		port  adapter.Port
+	}{
+		"EventStore":   {NewEventsStore(), persistence.PortEventsStore},
+		"DurableStore": {NewDurableStore(), persistence.PortStateStore},
+		"OffsetStore":  {NewOffsetStore(), offsetstore.PortOffsetStore},
+	}
+	for name, tc := range cases {
+		d, ok := adapter.Describe(tc.value)
+		require.True(t, ok, "%s is undeclared", name)
+		require.Equal(t, adapter.Descriptor{Ports: []adapter.Port{tc.port}, Name: "testkit-memory"}, d, name)
+	}
 }
 
 // ---------------------------------------------------------------------------

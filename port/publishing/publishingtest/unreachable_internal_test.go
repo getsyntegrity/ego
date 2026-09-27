@@ -20,29 +20,37 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package websocket
+package publishingtest
 
 import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/adapter/adaptertest"
 	"github.com/pablogore/ego/v4/port/publishing"
 )
 
-// The publishers implement the contracts from port/publishing directly, with
-// no dependency on package `ego` or the GoAkt runtime it pulls in. The
-// historical compatibility check against the `ego` aliases (ADR
-// ego-arch-001, S1 criterion 3) still exists, but it lives in the separate,
-// unreleased test/compat module (ADR ego-arch-006, slice S1; docs/ci.md,
-// "Compatibility checks: the test/compat module"), precisely so that this
-// module's tests never need to import `ego` (#122).
-//
-// The check that Publish on a closed publisher returns
-// publishing.ErrPublisherNotStarted used to live here. It is now PT-1 of
-// port/publishing/publishingtest, run in conformance_test.go against a
-// publisher that really was connected and closed. Together with
-// test/compat's TestEgoSentinelIsThePublishingSentinel, which checks that
-// ego.ErrPublisherNotStarted is this same error value, it still proves the
-// historical check that the error also matches ego.ErrPublisherNotStarted
-// (ADR ego-arch-006, §6 S1).
-var (
-	_ publishing.EventPublisher = (*EventsPublisher)(nil)
-	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)
-)
+// This package recognizes adaptertest.ErrUnreachable by its method
+// instead of importing it. This test, which may import adaptertest
+// (TestPublishingtestDependsOnlyOnStdlibPublishingAndEgopb checks only the
+// package's non-test imports), pins that the real sentinel, wrapped the
+// way adopters wrap it, makes every check skip.
+func TestCapture_RealAdaptertestErrUnreachableSkips(t *testing.T) {
+	target := EventsTarget{
+		New: func(*testing.T) (publishing.EventPublisher, error) {
+			return nil, fmt.Errorf("no broker at localhost:9092: %w", adaptertest.ErrUnreachable)
+		},
+		Received: func(context.Context, *testing.T, *egopb.Event) error { return nil },
+	}
+	results := captureEvents(t, target)
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+	for _, r := range results {
+		if r.Outcome != Skipped {
+			t.Errorf("%s: outcome %s (%q), want skipped", r.Check, r.Outcome, r.Detail)
+		}
+	}
+}
