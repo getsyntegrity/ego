@@ -22,24 +22,21 @@
 
 package ego
 
-// SupervisorDirective defines the supervisor directive
-//
-// It represents the action that a supervisor can take when an entity fails or panics
-// during message processing. Each directive corresponds to a specific recovery behavior:
-//
-//   - StopDirective: Instructs the supervisor to stop the failing actor.
-//     allowing it to continue processing messages (typically used for recoverable errors).
-//   - RestartDirective: Instructs the supervisor to restart the failing actor, reinitializing its state.
-type SupervisorDirective int
+import (
+	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+)
 
+// SupervisorDirective defines the action a supervisor takes when an entity
+// fails or panics during message processing. It is an alias of
+// [runtimeport.SupervisorDirective], so ego.SupervisorDirective and
+// runtime.SupervisorDirective are the same type.
+type SupervisorDirective = runtimeport.SupervisorDirective
+
+// The supervisor directives, as constants of the same type and value as their
+// port/runtime counterparts.
 const (
-	// StopDirective indicates that when an entity fails, the supervisor should immediately stop
-	// the entity. This directive is typically used when a failure is deemed irrecoverable
-	// or when the entity's state cannot be safely resumed.
-	StopDirective SupervisorDirective = iota
-
-	// RestartDirective indicates that when an entity fails, the supervisor should restart the entity.
-	// Restarting involves stopping the current instance and creating a new one, effectively resetting
-	// the entity's internal state.
-	RestartDirective
+	// StopDirective is [runtimeport.StopDirective].
+	StopDirective = runtimeport.StopDirective
+	// RestartDirective is [runtimeport.RestartDirective].
+	RestartDirective = runtimeport.RestartDirective
 )
