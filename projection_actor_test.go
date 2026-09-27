@@ -534,6 +534,154 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
+
+	t.Run("returns an error instead of panicking when the event adapters extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+		logger := newLoggerAdapter(DiscardLogger)
+
+		projectionName := "db-writer"
+
+		eventsStore := mockseventstore.NewEventsStore(t)
+		eventsStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		offsetStore := mocksoffsetstore.NewOffsetStore(t)
+		offsetStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		handler := projection.NewDiscardHandler()
+
+		actorSystem, err := goakt.NewActorSystem("TestProjectionMistypedEventAdaptersSystem",
+			goakt.WithLogger(logger),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventsStore),
+				extensions.NewOffsetStore(offsetStore),
+				extensions.NewProjectionExtension(map[string]*projection.Options{
+					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
+				}),
+				&mistypedExtension{id: extensions.EventAdaptersExtensionID}),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NotNil(t, actorSystem)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := NewProjectionActor()
+		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the events stream extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+		logger := newLoggerAdapter(DiscardLogger)
+
+		projectionName := "db-writer"
+
+		eventsStore := mockseventstore.NewEventsStore(t)
+		eventsStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		offsetStore := mocksoffsetstore.NewOffsetStore(t)
+		offsetStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		handler := projection.NewDiscardHandler()
+
+		actorSystem, err := goakt.NewActorSystem("TestProjectionMistypedEventsStreamSystem",
+			goakt.WithLogger(logger),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventsStore),
+				extensions.NewOffsetStore(offsetStore),
+				extensions.NewProjectionExtension(map[string]*projection.Options{
+					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
+				}),
+				&mistypedExtension{id: extensions.EventsStreamExtensionID}),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NotNil(t, actorSystem)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := NewProjectionActor()
+		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the encryptor extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+		logger := newLoggerAdapter(DiscardLogger)
+
+		projectionName := "db-writer"
+
+		eventsStore := mockseventstore.NewEventsStore(t)
+		eventsStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		offsetStore := mocksoffsetstore.NewOffsetStore(t)
+		offsetStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		handler := projection.NewDiscardHandler()
+
+		actorSystem, err := goakt.NewActorSystem("TestProjectionMistypedEncryptorSystem",
+			goakt.WithLogger(logger),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventsStore),
+				extensions.NewOffsetStore(offsetStore),
+				extensions.NewProjectionExtension(map[string]*projection.Options{
+					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
+				}),
+				&mistypedExtension{id: extensions.EncryptorExtensionID}),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NotNil(t, actorSystem)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := NewProjectionActor()
+		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+		logger := newLoggerAdapter(DiscardLogger)
+
+		projectionName := "db-writer"
+
+		eventsStore := mockseventstore.NewEventsStore(t)
+		eventsStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		offsetStore := mocksoffsetstore.NewOffsetStore(t)
+		offsetStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
+
+		handler := projection.NewDiscardHandler()
+
+		actorSystem, err := goakt.NewActorSystem("TestProjectionMistypedTelemetrySystem",
+			goakt.WithLogger(logger),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventsStore),
+				extensions.NewOffsetStore(offsetStore),
+				extensions.NewProjectionExtension(map[string]*projection.Options{
+					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
+				}),
+				&mistypedExtension{id: extensions.TelemetryExtensionID}),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NotNil(t, actorSystem)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := NewProjectionActor()
+		pid, err := actorSystem.Spawn(ctx, projectionName, actor, goakt.WithLongLived())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
 }
 
 func TestProjectionActorRunnerFailure(t *testing.T) {
