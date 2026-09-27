@@ -75,6 +75,10 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    `affected` (leaf change, 3 packages) mode, sha256 `ce183755…`, testkit
    included. No code change is needed; closing #101 is an issue edit.
    W0e: send the draft; do not apply.
+6. (2026-09-27) Order: #123 S3-2 and S3-4 both land before #105 IMPL-4;
+   #125 is aligned with #128 before merge (guard in unexported spawn
+   functions, #123 adds `port/behavior` instead of removing the embed,
+   `WithCluster` takes `BehaviorKind`). Names still pending.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -83,7 +87,7 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 
 | ID | Issue | Branch | Agent | PR | State | Blocking reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | blocked | #128 review finding 2: #125 puts the family guard in public methods and assumes #123 removes the embed; #128 keeps the embed, guards in unexported spawn*, and §12 needs S3-4 before IMPL-4 — reconcile before merge (human decision). Earlier: approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
+| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | in progress | aligning with #128 per decision 6 (writer running), then re-review. #128 review finding 2: #125 puts the family guard in public methods and assumes #123 removes the embed; #128 keeps the embed, guards in unexported spawn*, and §12 needs S3-4 before IMPL-4 — reconcile before merge (human decision). Earlier: approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
 | W0b | #99 | fix/99-prestart-assertion-audit @2585811 | writer | #127 | in review | reviewer running; audit left 4 files with the same pattern (projection_actor.go, event_sourced_actor.go, events_janitor_actor.go, durable_state_actor.go) for a follow-up; root cause still unproven; local golangci-lint broken on clean main (Go 1.27 stdlib) |
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
