@@ -1101,17 +1101,21 @@ func newTestCluster(t *testing.T, nodeOpts ...[]Option) *testCluster {
 		return true
 	}, 30*time.Second, 500*time.Millisecond, "the nodes never formed a cluster")
 
+	// Registered before the start loop so that, if one engine fails to
+	// build or start, the engines already started are still stopped.
+	t.Cleanup(func() {
+		for _, engine := range cluster.engines {
+			if engine != nil {
+				_ = engine.Stop(context.Background())
+			}
+		}
+	})
 	for i, sys := range cluster.systems {
 		engine, err := NewEngine(sys, configs[i])
 		require.NoError(t, err)
-		require.NoError(t, engine.Start(ctx))
 		cluster.engines[i] = engine
+		require.NoError(t, engine.Start(ctx))
 	}
-	t.Cleanup(func() {
-		for _, engine := range cluster.engines {
-			_ = engine.Stop(context.Background())
-		}
-	})
 
 	return cluster
 }
