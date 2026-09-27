@@ -41,7 +41,6 @@ import (
 	"github.com/pablogore/ego/v4/eventstream"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
 	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/pause"
 	mocks "github.com/pablogore/ego/v4/mocks/persistence"
 	"github.com/pablogore/ego/v4/persistence"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
@@ -380,7 +379,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		reply, err := goakt.Ask(ctx, pid, new(egopb.GetStateCommand), 3*time.Second)
 		require.NoError(t, err)
@@ -487,12 +485,10 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		// Manually send sagaTimeoutMsg twice: first triggers compensation (status → Compensating),
 		// second should be a no-op because status is no longer SagaRunning.
 		require.NoError(t, goakt.Tell(ctx, pid, &sagaTimeoutMsg{}))
-		pause.For(500 * time.Millisecond)
 
 		// Drain first compensation signal
 		select {
@@ -503,14 +499,15 @@ func TestSagaActor(t *testing.T) {
 
 		// Second sagaTimeoutMsg – must not call Compensate again
 		require.NoError(t, goakt.Tell(ctx, pid, &sagaTimeoutMsg{}))
-		pause.For(500 * time.Millisecond)
 
-		select {
-		case <-compensateCalled:
-			t.Fatal("Compensate was called again but saga is no longer running")
-		default:
-			// correct: no second call
-		}
+		require.Never(t, func() bool {
+			select {
+			case <-compensateCalled:
+				return true
+			default:
+				return false
+			}
+		}, 500*time.Millisecond, 20*time.Millisecond, "Compensate was called again but saga is no longer running")
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -545,14 +542,13 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		// Send an unknown message type – the actor should call ctx.Unhandled() without panicking.
 		require.NoError(t, goakt.Tell(ctx, pid, new(emptypb.Empty)))
-		pause.For(500 * time.Millisecond)
 
-		// The actor is still alive
-		require.True(t, pid.IsRunning())
+		// The actor is still alive: poll for the duration instead of a blind
+		// sleep so a delayed crash is still caught.
+		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -594,18 +590,18 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		// Publish a non-*egopb.Event payload
 		stream.Publish(eventsTopic, new(emptypb.Empty))
-		pause.For(500 * time.Millisecond)
 
-		select {
-		case <-handleEventCalled:
-			t.Fatal("HandleEvent should not be called for non-Event payload")
-		default:
-			// correct
-		}
+		require.Never(t, func() bool {
+			select {
+			case <-handleEventCalled:
+				return true
+			default:
+				return false
+			}
+		}, 500*time.Millisecond, 20*time.Millisecond, "HandleEvent should not be called for non-Event payload")
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -647,7 +643,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: sagaID})
 		ownEvent := &egopb.Event{
@@ -657,14 +652,15 @@ func TestSagaActor(t *testing.T) {
 		}
 		topic := eventsTopic
 		stream.Publish(topic, ownEvent)
-		pause.For(500 * time.Millisecond)
 
-		select {
-		case <-handleEventCalled:
-			t.Fatal("HandleEvent should not be called for own saga events")
-		default:
-			// correct
-		}
+		require.Never(t, func() bool {
+			select {
+			case <-handleEventCalled:
+				return true
+			default:
+				return false
+			}
+		}, 500*time.Millisecond, 20*time.Millisecond, "HandleEvent should not be called for own saga events")
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -708,7 +704,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		domainEvent := &egopb.Event{
@@ -720,16 +715,17 @@ func TestSagaActor(t *testing.T) {
 
 		// First event: triggers Complete → saga status becomes SagaCompleted
 		stream.Publish(topic, domainEvent)
-		pause.For(500 * time.Millisecond)
+		require.Eventually(t, func() bool { return callCount.Load() >= 1 }, 2*time.Second, 10*time.Millisecond,
+			"HandleEvent was not called for the first event")
 
 		countAfterFirst := callCount.Load()
 
 		// Subsequent events should be ignored
 		stream.Publish(topic, domainEvent)
 		stream.Publish(topic, domainEvent)
-		pause.For(500 * time.Millisecond)
 
-		assert.Equal(t, countAfterFirst, callCount.Load(), "HandleEvent should not be called after saga completes")
+		assert.Never(t, func() bool { return callCount.Load() != countAfterFirst }, 500*time.Millisecond, 20*time.Millisecond,
+			"HandleEvent should not be called after saga completes")
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -774,7 +770,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 
@@ -785,7 +780,6 @@ func TestSagaActor(t *testing.T) {
 			Event:          &anypb.Any{TypeUrl: "type.googleapis.com/nonexistent.Type", Value: []byte("bad")},
 		}
 		stream.Publish(topic, badEvent)
-		pause.For(300 * time.Millisecond)
 
 		// Second event: valid → HandleEvent is called, proving the saga continues
 		goodEventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -850,14 +844,12 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 
 		stream.Publish(topic, event)
-		pause.For(300 * time.Millisecond)
 		stream.Publish(topic, event)
 
 		select {
@@ -906,7 +898,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -919,8 +910,7 @@ func TestSagaActor(t *testing.T) {
 			t.Fatal("HandleEvent was not called")
 		}
 		// Actor must still be alive
-		pause.For(300 * time.Millisecond)
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -960,16 +950,14 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
-		pause.For(500 * time.Millisecond)
 
 		// Actor is still alive but status is Completed
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1018,7 +1006,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1030,11 +1017,15 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("HandleEvent was not called")
 		}
-		pause.For(300 * time.Millisecond)
+
+		// ApplyEvent runs after HandleEvent returns, within the same actor
+		// message turn, so wait for the actual condition instead of guessing
+		// a settle time.
+		require.Eventually(t, func() bool { return applyCallCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond,
+			"ApplyEvent was not called")
 
 		// Actor must still be alive despite the error
 		require.True(t, pid.IsRunning())
-		assert.Positive(t, applyCallCount.Load())
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1044,10 +1035,18 @@ func TestSagaActor(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
+		writeEventsCalled := make(chan struct{}, 1)
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
+		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
+			Run(func(context.Context, persistence.Scope, []*egopb.Event, persistence.WritePrecondition) {
+				select {
+				case writeEventsCalled <- struct{}{}:
+				default:
+				}
+			}).
+			Return(assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -1062,14 +1061,9 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		handled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
 			id: sagaID,
 			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
-				select {
-				case handled <- struct{}{}:
-				default:
-				}
 				return &SagaAction{Events: []Event{event}}, nil
 			},
 		}
@@ -1080,7 +1074,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1088,11 +1081,10 @@ func TestSagaActor(t *testing.T) {
 		stream.Publish(topic, event)
 
 		select {
-		case <-handled:
+		case <-writeEventsCalled:
 		case <-time.After(2 * time.Second):
-			t.Fatal("HandleEvent was not called")
+			t.Fatal("WriteEvents was not called")
 		}
-		pause.For(300 * time.Millisecond)
 
 		require.True(t, pid.IsRunning())
 		eventStore.AssertExpectations(t)
@@ -1144,7 +1136,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1157,8 +1148,11 @@ func TestSagaActor(t *testing.T) {
 			t.Fatal("ApplyEvent was not called")
 		}
 
-		// State should have been updated
-		pause.For(300 * time.Millisecond)
+		// State should have been updated. No extra wait is needed here: Ask
+		// is dispatched through the same actor mailbox that is still
+		// finishing the event turn that sent the applied signal above, so it
+		// is only serviced once that turn (including the state update) is
+		// complete.
 		reply, err := goakt.Ask(ctx, pid, new(egopb.GetStateCommand), 3*time.Second)
 		require.NoError(t, err)
 		commandReply := reply.(*egopb.CommandReply)
@@ -1206,15 +1200,13 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
-		pause.For(500 * time.Millisecond)
 
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1259,15 +1251,15 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
-		pause.For(2 * time.Second)
 
-		require.True(t, pid.IsRunning())
+		// The SendSync timeout is 500ms; wait through that plus margin,
+		// polling for a crash instead of guessing a fixed settle time.
+		require.Never(t, func() bool { return !pid.IsRunning() }, 2*time.Second, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1309,7 +1301,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: compensationReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		compensated := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1337,15 +1328,17 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
-		pause.For(2 * time.Second)
 
-		require.True(t, pid.IsRunning())
+		// compensate() (saga_actor.go) marks SagaCompleted directly on a
+		// successful SendSync; it never calls ApplyEvent, so `compensated`
+		// (wired for a different code path) cannot be awaited here. Poll
+		// survival over the same window the original blind sleep used.
+		require.Never(t, func() bool { return !pid.IsRunning() }, 2*time.Second, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1395,7 +1388,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1456,7 +1448,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1468,8 +1459,7 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("HandleError was not called")
 		}
-		pause.For(300 * time.Millisecond)
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1502,7 +1492,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: new(emptypb.Empty)},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		commandSent := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1524,7 +1513,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1536,10 +1524,9 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("command was not sent")
 		}
-		pause.For(500 * time.Millisecond)
 
 		// Actor must still be running even though reply was unexpected
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1577,7 +1564,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: errorReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1602,7 +1588,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1650,7 +1635,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: errorReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		handleErrorCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1675,7 +1659,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1687,8 +1670,7 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("HandleError was not called")
 		}
-		pause.For(300 * time.Millisecond)
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1730,7 +1712,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: successReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		handleResultCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1755,7 +1736,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1767,8 +1747,7 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("HandleResult was not called")
 		}
-		pause.For(300 * time.Millisecond)
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1809,7 +1788,6 @@ func TestSagaActor(t *testing.T) {
 			&simpleReplyActor{reply: successReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		handleResultCalled := make(chan struct{}, 1)
 		behavior := &callbackSagaBehavior{
@@ -1834,7 +1812,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1846,8 +1823,7 @@ func TestSagaActor(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("HandleResult was not called")
 		}
-		pause.For(300 * time.Millisecond)
-		require.True(t, pid.IsRunning())
+		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -1898,7 +1874,6 @@ func TestSagaActor(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
@@ -1983,7 +1958,6 @@ func TestSagaFailsClosed(t *testing.T) {
 		_, err = actorSystem.Spawn(ctx, targetID, newEventSourcedActor(),
 			goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
-		pause.For(500 * time.Millisecond)
 
 		// Post-EGO-TENANT-002/PR3, SagaActor reconstructs a TenantContext from
 		// each incoming event's own tenant metadata (SG2) and rejects the
@@ -2015,16 +1989,13 @@ func TestSagaFailsClosed(t *testing.T) {
 			goakt.WithDependencies(behavior, sagaCfg, extensions.NewEntityTenantScope("acme")))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
-		pause.For(time.Second)
 
 		topic := eventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
 
-		pause.For(2 * time.Second)
-
-		assert.Zero(t, handleEventCalls.Load(),
+		require.Never(t, func() bool { return handleEventCalls.Load() != 0 }, 2*time.Second, 20*time.Millisecond,
 			"HandleEvent must never run for an event with no tenant metadata in tenant-aware mode")
 
 		assert.Zero(t, targetProbe.invocationCount(),
