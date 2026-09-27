@@ -55,14 +55,15 @@ never `-race`).
 
 ## Tasks
 
-- [ ] T1 `test/compat` module with the alias and sentinel assertions for all four publishers
+- [x] T1 `test/compat` module with the alias and sentinel assertions for all four publishers
   (route: inline, writer agent; RED: assertions shown failing against a mutated alias).
-- [ ] T2 Delete the four `compat_test.go`, tidy the publishers, drop the compat lane in
-  `verify-module.sh`, update the publishers' comments (route: inline).
-- [ ] T3 archcheck module table, `no-module-cycle`, generalized `no-cross-module-internal`
-  (route: inline; RED: fixtures fail before the rules exist).
-- [ ] T4 `docs/ci.md` and `CHANGELOG.md`: `test/compat` listed as unreleased, measured selection
-  recorded (route: inline).
+  Commit `985ce6c`.
+- [x] T2 Delete the four `compat_test.go`, tidy the publishers, drop the compat lane in
+  `verify-module.sh`, update the publishers' comments (route: inline). Commit `85aac0e`.
+- [x] T3 archcheck module table, `no-module-cycle`, generalized `no-cross-module-internal`
+  (route: inline; RED: fixtures fail before the rules exist). Commit `c4272bd`.
+- [x] T4 `docs/ci.md` and `CHANGELOG.md`: `test/compat` listed as unreleased, measured selection
+  recorded (route: inline). Commit: the docs commit on this branch.
 
 ## Acceptance criteria and checks
 
@@ -76,8 +77,45 @@ never `-race`).
 
 ## Progress and evidence
 
-(filled in as tasks close)
+Toolchain: `env -u GOROOT` gives Go 1.27.1 for build and test. golangci-lint 2.13.1 is built with
+go1.26.6 and fails type-checking against the 1.27.1 standard library, so every `verify-module.sh`
+run and the root lint used the fallback `GOROOT=/home/pablog/sdk/go1.26.6 GOTOOLCHAIN=local`.
+
+- **Assertion mapping (T1).** Per publisher P in kafka, nats, pulsar, websocket, the old
+  `publisher/P/compat_test.go` held `_ ego.EventPublisher = (*EventsPublisher)(nil)`,
+  `_ ego.StatePublisher = (*DurableStatePublisher)(nil)` and
+  `TestPublishBeforeStartMatchesEgoSentinel` (events and state). `test/compat/publisher_compat_test.go`
+  holds `_ ego.EventPublisher = (*P.EventsPublisher)(nil)`, `_ ego.StatePublisher =
+  (*P.DurableStatePublisher)(nil)` and subtests `P/events`, `P/state` of
+  `TestPublishBeforeStartMatchesEgoSentinel`: 8 compile-time plus 8 runtime assertions, 16 of 16.
+- **RED (T1).** Temporarily set `ego.ErrPublisherNotStarted = errors.New(...)` in `publisher.go`:
+  all 8 subtests FAIL. Temporarily widened `ego.EventPublisher`/`StatePublisher` with an extra method:
+  `go vet`/`go test` report 8 "does not implement" errors, one per assertion. `publisher.go`
+  restored with `git checkout` both times (never committed). GREEN: 8/8 subtests pass.
+- **T2.** Publisher closure tests (`TestUnitTestClosureExcludesRuntimeAndRoot`) and contract tests
+  pass. `go mod tidy` was required by the tidy gate: it dropped the indirect GoAkt, Olric and OTel
+  lines from each publisher's `go.mod`/`go.sum` (S3 still owns dropping the root requirement).
+- **RED (T3).** New `rules/modules_test.go`: with only the `Module`/`Graph.Modules` types added, 9
+  tests fail (unknown rule `no-module-cycle`; no violation for nested-to-nested and root-to-nested
+  `internal/` imports; no error for a package outside every module). e2e tests failed to compile
+  (`loadModuleTable` undefined). GREEN: `go test ./internal/cmd/archcheck/...` ok, also with
+  `GOFLAGS=-mod=vendor`.
+- **archcheck summary.** Before: `37 packages checked, 157 edges checked, 1 baselined, 0
+  violation(s), 0 stale entries`. After: `8 modules checked, 44 packages checked, 182 edges checked,
+  1 baselined, 0 violation(s), 0 stale entries`. No baseline entry added.
+- **verify-module.sh.** Pass for `publisher/kafka`, `nats`, `pulsar`, `websocket`, `test/compat`,
+  `benchmark`, `example/cluster` (tidy, build, vet, lint, test).
+- **ciselect `-base origin/main`.** `port/publishing/publishing.go`: root `affected`, all seven
+  modules, `test/compat ← .`. `publisher/kafka/kafka.go`: `publisher/kafka`, `test/compat`
+  (`test/compat ← publisher/kafka`). `migration/migration.go`, `compose/spec.go`, `docs/ci.md`:
+  `test/compat` not selected. Deviation from the design text: the design expected the chain
+  `test/compat ← publisher/… ← .` for a `port/publishing` change; the walk records the shorter
+  `test/compat ← .` because `test/compat` imports package `ego` directly. Selection is identical.
+- **CI discovery.** `modules.json` comes from discovery; `test/compat` appears in it with no
+  workflow edit. No workflow or branch-protection change needed.
+- **Pending.** CI measurement on a draft PR (design §6 S1 "CI measurement") needs maintainer
+  authorization and was not done. Native review (RDD) not run by the writer.
 
 ## Next step
 
-T1.
+Open the PR; CI on the PR is the authoritative lint and race run.
