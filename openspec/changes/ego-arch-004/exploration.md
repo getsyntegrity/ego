@@ -44,6 +44,13 @@ Three facts stand out.
 
 **Publishers start in their constructor.** `kafka.NewEventsPublisher` opens a producer and sets `started` to `true` before returning (`kafka.go:58-70`); the other three do the same (`nats.go:106`, `pulsar.go:97`, `websocket.go:60-69`, which dials the URL). There is no separate Start, so "constructed" and "running" are the same state, and `ErrPublisherNotStarted` (`port/publishing/publishing.go:42`) in practice means "closed". Close also has one inconsistency: Kafka derives a 3-second context in `Close` and throws it away (`kafka.go:76`: `_, cancel := context.WithTimeout(ctx, 3*time.Second)`), so the producer's `Close` is not bounded by the caller's deadline.
 
+**Closing twice is not safe everywhere.** `compose/goakt` can reach a publisher's `Close` from more than one path (§4 below), so a second close must be harmless. Two publishers are not:
+
+- The websocket publisher's `Close` sets `started` to false and closes the connection again on every call (`publisher/websocket/websocket.go:79-82`, `:144-147`). A second call closes an already closed connection and returns whatever error the connection reports.
+- The NATS publisher calls `Drain` on every `Close`, then `Close` on the connection (`publisher/nats/nats.go:119-125`, `:235-241`). A second call drains an already closed connection, and `Drain` returns an error for that case, which `Close` passes on.
+
+Kafka (`kafka.go:73-81`) and Pulsar (`pulsar.go:135-140`) also close their clients unconditionally. Whether their client libraries tolerate a second close was not verified here. The conformance suite proposed in the design (AT-3) is what would establish it.
+
 **Stores are probed with a method that may connect them.** The store contracts document `Ping` as "verifies a connection ... is still alive, establishing a connection if necessary" (`persistence/events_store.go:109-112`). `testkit.EventStore.Ping` does exactly that: it calls `Connect` when disconnected (`testkit/eventstore.go:273-276`). ego-arch-003 §D5 says the composition root "only pings" stores and never connects them; in practice a ping may open a connection that the consumer still owns and must close. That is consistent with D5, but nothing states it.
 
 ## 3. How core code detects optional behavior today
@@ -60,6 +67,8 @@ Three facts stand out.
 | `extension_lookup.go:59`, `:93` | `ext.(T)` on GoAkt extensions | whether the registered extension has the expected type; internal to the GoAkt adapter, hardened to return an error instead of panicking (#100) |
 
 Two related assertions exist on behaviors rather than adapters: `event_sourced_actor.go:773` and `durable_state_actor.go:502` check `behaviorport.EventSourcedEnvelope` / `DurableStateEnvelope`, the optional envelope interfaces `port/behavior` declares (ego-arch-002-s3 §5.1). They follow the same pattern: the optional interface is declared in the contract package, and the runtime asserts it where it needs it.
+
+One kind of site is deliberately left out of this inventory: `errors.As(err, &conflictErr)` on `*persistence.ConflictError` (`event_sourced_actor.go:832`, `durable_state_actor.go:488`). That classifies an *error* a store returned, following the store contract's documented error type (`persistence/events_store.go:105-107`). It does not ask what the store *can do*, so it is error classification, not capability detection, and the SPI leaves it alone.
 
 The pattern is consistent: an optional interface lives in the contract package, and whoever needs it asserts it at the point of use. The problem is not that assertions exist but that the answer to "what can this adapter do?" is spread across call sites, is invisible before the first call, and cannot be checked when the dependency graph is built.
 
@@ -130,7 +139,7 @@ Three consequences follow:
 
 1. The SPI has to be additive in v4. Adding a method to an existing interface such as `publishing.EventPublisher` would break every implementation outside the repository, and ego-arch-001 §10 decided "no break inside v4". Capabilities must therefore be *optional* interfaces plus an inspectable declaration, not new required methods.
 2. The existing pattern (optional interface in the contract package, asserted by the user) is sound; what is missing is a single place to inspect it, a declaration that composition can validate before anything starts, and conformance tests that keep the declaration honest.
-3. Identity has to separate "what kind of adapter is this" (for errors, inspection and capability checks) from "which instance is this" (today's publisher `ID()`), because today's IDs collide by type.
+3. Identity has to separate "what type of adapter is this" (for errors, inspection and capability checks) from "which instance is this" (today's publisher `ID()`), because today's IDs collide by type.
 4. Lifecycle already has a composition-level contract (#105). What is missing is the adapter-level half: what `Start`, `Close` and `Ping` must guarantee so that rollback actually releases resources.
 5. A shared conformance suite must be standard-library-only and live beside the contracts it tests, so publishers can run it without the root package, GoAkt or `testify`.
 6. Adapters should not depend on the composition root; enforcing that needs its own archcheck rule on the adapter layer, because `composition-leaf` is scoped to the root module by design.

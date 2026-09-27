@@ -6,7 +6,7 @@
 | Date | 2026-09-27 |
 | Phase | `sdd-design` |
 | Tracker | [`#106`](https://github.com/getsyntegrity/ego/issues/106), parent [`#10`](https://github.com/getsyntegrity/ego/issues/10) |
-| Inputs | [`exploration.md`](./exploration.md), [`proposal.md`](./proposal.md); ego-arch-001 [`design.md`](../ego-arch-001/design.md) §2, §3, §10; ego-arch-003 [`design.md`](../ego-arch-003/design.md) §D2, §D5–§D8, §9; ego-arch-006 [`design.md`](../ego-arch-006/design.md) §3 D1, D7, D8, §6 |
+| Inputs | [`exploration.md`](./exploration.md), [`proposal.md`](./proposal.md); ego-arch-001 [`design.md`](../ego-arch-001/design.md) §2, §3, §10; ego-arch-003 [`design.md`](../ego-arch-003/design.md) §D2, §D5–§D8, §9; ego-arch-006 [`design.md`](../ego-arch-006/design.md) §3 D1, D7, D8, §6; issues [`#146`](https://github.com/getsyntegrity/ego/issues/146), [`#147`](https://github.com/getsyntegrity/ego/issues/147), [`#148`](https://github.com/getsyntegrity/ego/issues/148) |
 | Baseline | `main` at `f2b5130148086d95a4d6362971b85e800b0ce155` |
 
 ## 1. Summary and vocabulary
@@ -36,6 +36,8 @@ Terms used below:
 | Adapter/SPI versioning and compatibility ranges (COMPAT-005) | #37 | Keeps `Descriptor` extensible so #37 can add a field additively |
 | Observability contract (telemetry is still `*ego.Telemetry`, `telemetry.go:32-37`) | #31 | Out of scope; telemetry stays a borrowed value, not a port |
 
+**How this vocabulary fits #147 and #148.** [#147](https://github.com/getsyntegrity/ego/issues/147) (RUNTIME-001/002, maintainer decisions recorded in the issue on 2026-09-27) defines `port/runtime` as small interfaces, one per capability, plus a composite interface. [#148](https://github.com/getsyntegrity/ego/issues/148) (the in-memory runtime and `compose/inmem`) requires that an operation a runtime does not support return an explicit typed error, not panic. Those two rules are the *consumer* side of a capability: which interfaces a runtime value implements, and what a caller gets when it calls something unsupported. This design is the *provider* side: what an adapter declares, so the composition root can check it before anything starts. They compose rather than compete. A runtime adapter can carry a `Descriptor` whose capabilities name the `port/runtime` interfaces it implements, and V8b (§D6) then checks that declaration against its method set exactly as it does for a store or a publisher. #148's typed "unsupported" error stays the call-time answer for anything that cannot be known statically. #147 itself says the provider side of the runtime follows #106's model; this design does not define any runtime interface. See follow-up F-E.
+
 ## 3. Decisions
 
 These are the decisions this design proposes. They become accepted when the pull request that carries them is approved; nothing here is recorded as a maintainer decision yet. Genuinely open choices are listed separately in §9.
@@ -60,7 +62,7 @@ type Capability string
 // Descriptor is what an adapter says about itself. It is a value, so it can be
 // logged, compared and extended with new fields without breaking anyone.
 type Descriptor struct {
-	Port         Port         // which contract this value implements
+	Ports        []Port       // every contract this value implements; one type often serves several
 	Name         string       // implementation name, e.g. "kafka", "testkit-memory"
 	Capabilities []Capability // optional behaviors it declares; order irrelevant
 }
@@ -76,22 +78,29 @@ type Starter interface{ Start(ctx context.Context) error }
 type Pinger interface{ Ping(ctx context.Context) error }
 
 // Describe returns v's Descriptor and true, or the zero Descriptor and false
-// when v does not implement Describer. It is the one type assertion on
-// Describer in the code base.
+// when v does not implement Describer.
 func Describe(v any) (Descriptor, bool)
 
-// Declares reports whether d lists c.
+// StarterOf and PingerOf return v as a Starter / Pinger and true, or nil and
+// false when v does not implement it.
+func StarterOf(v any) (Starter, bool)
+func PingerOf(v any) (Pinger, bool)
+
+// Declares reports whether d lists c; Serves reports whether d lists p.
 func (d Descriptor) Declares(c Capability) bool
+func (d Descriptor) Serves(p Port) bool
 ```
 
-`Starter` and `Pinger` are lifecycle capabilities. They get constants `adapter.CapStart` and `adapter.CapReady` so a descriptor can declare them like any other capability.
+`Starter` and `Pinger` are lifecycle capabilities. They get constants `adapter.CapStart` and `adapter.CapReady` so a descriptor can declare them like any other capability. **`port/adapter` owns the only type assertions on `Describer`, `Starter` and `Pinger`** (in `Describe`, `StarterOf` and `PingerOf`). V8b, `compose/goakt` step 4 and `adaptertest` all go through these three functions and never assert the interfaces themselves.
+
+`Ports` is a list because one Go type often implements several contracts. For example, a Postgres store type may be both an `EventsStore` and a `SnapshotStore`, and the same value can then sit in two slots.
 
 ### D2 — Identity
 
 An adapter's identity has two parts, kept separate on purpose because today they are conflated (exploration §2):
 
-- **Kind of adapter:** `Descriptor.Port` plus `Descriptor.Name`, for example `{Port: "publishing.EventPublisher", Name: "kafka"}`. It is what error messages, logs and capability validation use. `Port` must match the slot the adapter is placed in (§D6).
-- **Instance:** the existing `ID()` for publishers, unchanged. V6 keeps requiring it to be unique per kind. Stores, encryptors and resolvers have no instance identity and do not need one: each sits in a single-value slot, and the slot's field name already identifies it.
+- **Adapter type:** `Descriptor.Ports` plus `Descriptor.Name`, for example `{Ports: ["publishing.EventPublisher"], Name: "kafka"}`. Error messages, logs and capability validation use it. The slot's port must be one of `Ports` (§D6). (This document says "adapter type" for this pair and keeps "kind" for the two publisher kinds, events and state, as ego-arch-003 does.)
+- **Instance:** the existing `ID()` for publishers, unchanged. V6 keeps requiring it to be unique per publisher kind (events, state). Stores, encryptors and resolvers have no instance identity and do not need one: each sits in a single-value slot, and the slot's field name already identifies it.
 
 An adapter that does not implement `Describer` is **undeclared**. It keeps working exactly as today. Inspection reports it as `(Descriptor{}, false)`, and the composition root names it by its slot, as `compose/goakt` already does (`compose/goakt/app.go:246-257`).
 
@@ -103,7 +112,7 @@ The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `
 
 | Class | Meaning | How it is expressed |
 |---|---|---|
-| Mandatory | Every implementation of the port has it | The port interface's own method set; the compiler enforces it. Example: `Ping` on every store (`persistence/events_store.go:112`) |
+| Mandatory | Every implementation of the port has it | The port interface's own method set; the compiler enforces it. Example: `Ping` on every store (`persistence/events_store.go:112`). A mandatory capability is **implied by the port**: it is never declared, and V8b ignores it. So `CapReady` is implied for every store port and optional for publishers |
 | Optional, supported | This implementation has it | Declared in `Descriptor.Capabilities` **and** implemented through the optional interface the owning contract package declares |
 | Unsupported | This implementation does not have it | Not declared and not implemented |
 
@@ -112,14 +121,23 @@ The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `
 ```go
 package tenancy
 
+// CapFixedTenant means "implements FixedTenantResolver". It says the resolver
+// can be asked for a fixed tenant, not that it has one: FixedTenant may still
+// report (zero, false) at run time (tenancy/resolver.go:100-111).
 const CapFixedTenant = "tenancy.fixed-tenant" // untyped; converts to adapter.Capability
 
+// AsFixedTenantResolver returns r as a FixedTenantResolver and true when r
+// implements it. It is the only type assertion on FixedTenantResolver.
+func AsFixedTenantResolver(r TenantResolver) (FixedTenantResolver, bool)
+
 // FixedTenantOf returns r's fixed tenant when r implements FixedTenantResolver
-// and reports one. It is the only place that asserts FixedTenantResolver.
+// and reports one. It calls AsFixedTenantResolver; it asserts nothing itself.
 func FixedTenantOf(r TenantResolver) (TenantID, bool)
 ```
 
-`engine.go:883` then calls `tenancy.FixedTenantOf(engine.tenantResolver)` instead of asserting the interface itself. The behavior does not change; the assertion moves into the contract that defines it, where every future caller will find it. That is the concrete meaning of "no scattered type assertions": at most one assertion per capability, in its owning contract package, plus `adapter.Describe`.
+**What the capability means.** The contract already allows a multi-tenant resolver to implement `FixedTenantResolver` and return `(zero TenantID, false)` (`tenancy/resolver.go:100-111`). So `CapFixedTenant` is defined as the *interface* ("can be asked"), which is static and can be checked at composition time, not as the *answer* ("has a fixed tenant"), which only the call can tell. V8b checks that the declaration matches the interface through `tenancy.AsFixedTenantResolver`. The engine asks for the answer through `tenancy.FixedTenantOf`.
+
+`engine.go:883` then calls `tenancy.FixedTenantOf(engine.tenantResolver)` instead of asserting the interface itself. The behavior does not change; the assertion moves into the contract that defines it, where every future caller will find it. That is the concrete meaning of "no scattered type assertions": exactly one assertion per optional interface, in the package that owns it (`tenancy.AsFixedTenantResolver`; `adapter.Describe`, `StarterOf`, `PingerOf`). Every other site calls those functions.
 
 **Why both a declaration and a method.** The method is what the code calls; the declaration is what can be inspected and validated before anything runs. Either one alone fails a criterion: a method alone is invisible until the first call (today's state), and a declaration alone can claim something the adapter cannot do. Keeping both means they can disagree, so two checks keep them honest: V8 at composition time (§D6) and the conformance suite in the adapter's own tests (§D8).
 
@@ -140,7 +158,7 @@ The composition-level rules stay those of ego-arch-003 §D5–§D7. This decisio
 | L5 | owned adapters | After `Close`, operations fail with the port's documented error (`publishing.ErrPublisherNotStarted` for publishers) and never block | Today's publisher contract (`publisher/kafka/publisher_contract_test.go:56-68`), generalized | PT-1 |
 | L6 | new adapters | A constructor should do no I/O; I/O belongs in `Start` | Lets `New` stay I/O-free end to end (ego-arch-003 §D4a) and makes rollback of a failed dial the composition root's job, not the consumer's. Existing publishers dial in their constructor (`kafka.go:58-70`); changing that is open decision O5 | review |
 
-**Where Start and Ready happen in the composition root.** Inside the existing step 4, "attach publishers" (`compose/goakt/app.go:174`, `:355-369`). For each publisher, in `Spec` order, step 4 calls `Start` when the publisher implements `Starter`, then `Ping` when it implements `Pinger`, then attaches the whole kind as it does today. Borrowed stores keep being pinged in step 1. No new step is added, so `StartError.Step` values and the D6 table keep their meaning; the step's error names the publisher by `ID()` and, when declared, by `Descriptor.Name`.
+**Where Start and Ready happen in the composition root.** Inside the existing step 4, "attach publishers" (`compose/goakt/app.go:174`, `:355-369`). For each publisher, in `Spec` order, step 4 calls `Start` when `adapter.StarterOf` finds one, then `Ping` when `adapter.PingerOf` finds one, then attaches each publisher kind as it does today. The start-and-probe loop lives in a runtime-free helper, `compose/internal/adapters` (covered by `composition-no-runtime` like `compose/internal/lifecycle`), so `compose/inmem` (#148) reuses it unchanged instead of copying it. Borrowed stores keep being pinged in step 1. No new step is added, so `StartError.Step` values and the D6 table keep their meaning; the step's error names the publisher by `ID()` and, when declared, by `Descriptor.Name`.
 
 **Partial failure.** If publisher *k* fails `Start` or `Ping`, step 4 fails, the lifecycle undoes steps 3 down to 1, and `releasePublishers` closes every publisher that was not attached, started or not. L1 guarantees publisher *k* cleaned up after itself, and L2 makes closing the others safe whether or not they were started. The ownership rule for the consumer stays the one ego-arch-003 §D5 states: once `New` succeeded, call `Stop` and never close a publisher yourself.
 
@@ -156,11 +174,13 @@ ego-arch-003 §9 left this to #106. The recommendation is to keep it internal. A
 
 `compose.Spec.Validate` gains one rule, reported as a `*compose.ValidationError` with `Rule: "V8"` like the others (`compose/errors.go:30-50`):
 
-- **V8a** — an adapter that declares a descriptor must declare the port of the slot it sits in. A value placed in `Spec.StateStore` whose descriptor says `persistence.EventsStore` is a wiring mistake.
-- **V8b** — for every capability an adapter declares, it implements the matching optional interface, and for every lifecycle interface it implements (`Starter`, `Pinger`), it declares the matching capability. A mismatch is reported with the capability name.
+- **V8a** — an adapter that declares a descriptor must list the port of the slot it sits in among its `Ports` (a membership check, `Descriptor.Serves`). A value placed in `Spec.StateStore` whose descriptor lists only `persistence.EventsStore` is a wiring mistake. A value that lists both `EventsStore` and `SnapshotStore` is valid in either slot.
+- **V8b** — declaration and implementation agree **in both directions** for every optional capability `compose` knows for that slot's port: declared ⇒ implemented, and implemented ⇒ declared. In this change that is `CapStart` and `CapReady` for publishers, checked through `adapter.StarterOf`/`PingerOf`, and `CapFixedTenant` for the tenant resolver, checked through `tenancy.AsFixedTenantResolver`. So a declared resolver that implements `FixedTenantResolver` without declaring it fails V8b; it does not pass silently. Capabilities implied by the port (`CapReady` on stores) are skipped. A declared capability that `compose` does not know (one added later by another issue) is accepted here and checked by the adapter's own conformance tests (AT-1). A mismatch names the slot, the adapter type and the capability.
 - **V8c** — a slot's required capabilities are met. **In v4 no slot requires an optional capability**, so V8c starts empty. It exists so #11 (runtime negotiation) and #24 (for example, a drain policy that needs publishers able to flush) can add a requirement as a table entry with a test, instead of a type assertion at the point of use.
 
-V8 runs only on adapters that declare a descriptor, so every `Spec` that validates today still validates. It is static: it inspects values the consumer already placed in named fields, with no I/O and no reflection beyond the existing typed-nil check (ego-arch-003 §D2 allows exactly that one use).
+V8 runs only on adapters that declare a descriptor, so every `Spec` that validates today still validates. That is deliberate for v4 compatibility: an undeclared resolver that implements `FixedTenantResolver` keeps working as today and is reported by inspection as undeclared. O7 asks whether #124 makes declaring mandatory.
+
+**Ordering.** V8 runs after V5 and V6 and skips every slot value they already rejected (a typed nil, a nil publisher). Calling `Describe` on a typed-nil pointer can dereference nil and panic, and one problem should produce one error. It is static: it inspects values the consumer already placed in named fields, with no I/O and no reflection beyond the existing typed-nil check (ego-arch-003 §D2 allows exactly that one use).
 
 `compose` imports `port/adapter` for V8. That is a contract import, which `composition-no-runtime` allows (`internal/cmd/archcheck/rules/rules.go:202-214`).
 
@@ -207,21 +227,43 @@ Two new packages, both standard-library-only so they pass `contract-allowlist` a
 
 | Package | Tests | Used by |
 |---|---|---|
-| `port/adapter/adaptertest` | Lifecycle and descriptor rules any adapter must meet: **AT-1** a declared descriptor is stable across calls and its `Port` is the one the caller expects; declared capabilities and implemented interfaces agree (V8b, in the adapter's own tests). **AT-2** `Start` failure releases resources (L1), driven by an optional failure hook the caller supplies. **AT-3** `Close` twice, `Close` without `Start`, `Close` after a failed `Start` (L2). **AT-4** `Close`/`Disconnect` return within a short deadline (L3). **AT-5** `Ping` after `Start` succeeds for a reachable adapter (L4) | any adapter: publishers, stores, future adapters |
+| `port/adapter/adaptertest` | Lifecycle and descriptor rules any adapter must meet: **AT-1** a declared descriptor is stable across calls and its `Ports` include the one the caller expects; declared capabilities and implemented interfaces agree in both directions (V8b, in the adapter's own tests). **AT-2** a failed acquire (`Start`, or `Connect` for a borrowed adapter) releases resources (L1). It is driven by a failure hook the caller supplies. **AT-3** release twice, release without acquire, and release after a failed acquire (L2). **AT-4** release returns within a short deadline while the backend is stalled (L3). It is driven by a caller-supplied `Stall` hook; without the hook AT-4 cannot fail, so it is reported as not exercised (§D8 "Hooks"). **AT-5** `Ping` after acquire succeeds for a reachable adapter (L4) | any adapter: publishers, stores, future adapters |
 | `port/publishing/publishingtest` | Publisher-specific rules: **PT-1** `Publish` after `Close` returns `publishing.ErrPublisherNotStarted` (L5, generalizing today's four `publisher_contract_test.go` copies); **PT-2** `ID()` is non-empty and stable; **PT-3** a published event reaches the caller-supplied observer | the four publishers |
 
 Stores keep `persistence/conformance` for their data semantics. It is canonical (EGO-TENANT-003), and #106 says not to redesign existing persistence contracts without evidence. They add `adaptertest` for lifecycle only.
 
-**How the suites are called.** Same shape as `persistence/conformance`: the adapter's own test passes a factory that returns a fresh value per check. When the factory reports the backing service is unreachable, the check is **skipped** with a message, never passed (the rule of `persistence/conformance/check.go:79-81`).
+**How the suites are called.** Same shape as `persistence/conformance`: the adapter's own test passes a factory that returns a fresh value per check.
+
+**Skip only on a declared "unreachable".** A check is skipped only when the factory returns an error matching the sentinel `adaptertest.ErrUnreachable` (`errors.Is`). Any other factory error fails the check. This narrows the rule of `persistence/conformance/check.go:79-81`, which skips on *any* `Connect` error, so a misconfigured adapter can no longer hide behind a skip. The two CI adopters (listed below) must run **unskipped**: the slice checks that their `-v` output has no `SKIP` for a conformance subtest.
+
+**Target: what the suite needs to know.** Owned and borrowed adapters are acquired and released by different methods (publishers: `Start` if present, then `Close`; stores: `Connect`, then `Disconnect`), so the caller says which one it is:
+
+```go
+type Target struct {
+	Port      adapter.Port                  // the slot port under test; must be in Descriptor.Ports
+	Ownership Ownership                     // Owned: acquire = Start (if StarterOf), release = Close
+	                                        // Borrowed: acquire = Connect, release = Disconnect
+	New       func(t *testing.T) (any, error) // fresh value; wrap ErrUnreachable to skip
+	FailStart func(t *testing.T) (any, error) // optional: a value whose acquire fails (AT-2)
+	Stall     func(t *testing.T)              // optional: make the backend stop answering (AT-4)
+}
+```
+
+`adaptertest` finds `Close`, `Connect` and `Disconnect` through small structural interfaces it owns, and finds `Start`/`Ping` through `adapter.StarterOf`/`PingerOf`.
+
+**Hooks.** `FailStart` and `Stall` exist because a suite cannot make a real backend fail or hang by itself. Without `FailStart`, AT-2 is not exercised; without `Stall`, AT-4 is not exercised. Each is logged as "not exercised: no hook", never as passed. The websocket adopter supplies both, through an `httptest` handler that refuses the upgrade (`FailStart`) or stops reading (`Stall`). The in-memory `testkit` stores have no backend that can stall, so AT-4 is not exercised for them; the conformance summary lists that explicitly.
 
 ```go
 // in publisher/websocket's own tests
 func TestConformance(t *testing.T) {
-	srv := httptest.NewServer(echoHandler) // stdlib; allowed in an adapter module's tests
+	srv := httptest.NewServer(handler) // stdlib; allowed in an adapter module's tests
 	defer srv.Close()
 	adaptertest.Run(t, adaptertest.Target{
-		Port: publishing.PortEventPublisher,
-		New:  func(t *testing.T) (any, error) { return websocket.NewEventsPublisher(&websocket.Config{URL: wsURL(srv)}) },
+		Port:      publishing.PortEventPublisher,
+		Ownership: adaptertest.Owned,
+		New:       func(t *testing.T) (any, error) { return websocket.NewEventsPublisher(&websocket.Config{URL: wsURL(srv)}) },
+		FailStart: refuseUpgrade(srv),
+		Stall:     stopReading(srv),
 	})
 	publishingtest.RunEvents(t, /* same factory, plus an observer on srv */)
 }
@@ -229,10 +271,10 @@ func TestConformance(t *testing.T) {
 
 **The two adopters #106 requires** (slice SPI-4):
 
-- **A publisher:** `publisher/websocket`. It is the only publisher whose tests can build a real instance in CI with the standard library alone (an `httptest` server), since the others need a broker. Kafka, NATS and Pulsar adopt in follow-up F-A and skip where no broker is reachable.
+- **A publisher:** `publisher/websocket`. It is the only publisher whose tests can build a real instance in CI with the standard library alone (an `httptest` server), since the others need a broker. Kafka, NATS and Pulsar adopt in follow-up F-A, skipping through `ErrUnreachable` where no broker is reachable. Today the websocket publisher breaks L2 (exploration §2), so SPI-4 fixes its `Close` first.
 - **A store:** the `testkit` in-memory `EventStore`, `DurableStore` and `OffsetStore`, which already run `persistence/conformance` (`testkit/conformance_test.go:47-59`) and add `adaptertest`.
 
-Neither needs a special case in core. The composition root probes stores through `adapter.Pinger` instead of its private `pinger` (`compose/goakt/app.go:241`), starts publishers through `adapter.Starter`, and validates both through V8.
+Neither needs a special case in core. The composition root probes stores through `adapter.PingerOf` instead of its private `pinger` (`compose/goakt/app.go:241`), starts publishers through `adapter.StarterOf`, and validates both through V8.
 
 **How nested modules run the suites without the root runtime.** `adaptertest` imports only the standard library and `port/adapter`; `publishingtest` imports only the standard library, `port/publishing` and `egopb`, and deliberately not `port/adapter`, so it can move into the ego-arch-006 contracts module with `port/publishing` without creating a module cycle. A publisher's test closure therefore gains no GoAkt package and not the root package `ego`, so `TestUnitTestClosureExcludesRuntimeAndRoot` stays green. Today the publishers resolve these packages through their existing requirement on the root module (`publisher/kafka/go.mod:7`, `:50`). After ego-arch-006 S3 they require only the contracts module; `port/publishing/publishingtest` moves with `port/publishing` automatically, but `port/adapter` and `port/adapter/adaptertest` are not in that module under the approved D7 (i). That is open decision O2.
 
@@ -246,7 +288,7 @@ Everything is additive in v4, per ego-arch-001 §10.
 |---|---|---|
 | `port/adapter`, `port/adapter/adaptertest`, `port/publishing/publishingtest` | new | additions only |
 | every existing contract interface (`port/publishing`, `persistence`, `offsetstore`, `encryption`, `tenancy`) | no method added to any interface | no incompatible change |
-| `tenancy`, `persistence`, `offsetstore`, `port/publishing` (port-name constants only) | adds untyped constants; `tenancy` also adds `FixedTenantOf` | additions only; no new import |
+| `tenancy`, `persistence`, `offsetstore`, `port/publishing` (port-name constants only) | adds untyped constants; `tenancy` also adds `AsFixedTenantResolver` and `FixedTenantOf` | additions only; no new import |
 | `compose` | adds rule V8 inside `Validate` | no exported change; behavior changes only for adapters that declare a descriptor, which none do before this change |
 | `compose/goakt` | step 4 calls `Start`/`Ping` when implemented | no exported change |
 | `ego` | `engine.go:883` calls `tenancy.FixedTenantOf` | no exported change |
@@ -263,12 +305,12 @@ Slice SPI-5 writes `docs/adapters.md` from this outline. Its promise: a new adap
 1. **Pick the port.** Find the contract package (`persistence`, `offsetstore`, `port/publishing`, `encryption`, `tenancy`). If none fits, the adapter needs a new contract under `port/`, which is an ADR change, not an adapter.
 2. **Create the module.** Put it in its own directory with its own `go.mod`, under the family's adapter root (`publisher/` today; see O6). Import only contract packages and `egopb`; never `ego`, GoAkt or `compose/...` (archcheck rules `external-adapter-no-runtime`, `external-adapter-no-composition`). Copy `closure_test.go` from an existing publisher.
 3. **Implement the port,** plus a `var _ port.Interface = (*T)(nil)` assertion.
-4. **Declare the descriptor.** Implement `Describe()` with the port, a name and every optional capability you implement. Declare exactly what you implement: V8 and `adaptertest` both fail on a mismatch.
+4. **Declare the descriptor.** Implement `Describe()` with every port the type implements, a name, and every optional capability you implement; leave out capabilities the port already implies. Declare exactly what you implement: V8 and `adaptertest` both fail on a mismatch in either direction.
 5. **Lifecycle.** Owned adapter: do I/O in `Start`, clean up after a failed `Start`, make `Close` idempotent and deadline-bound. Borrowed adapter: `Connect`/`Disconnect`/`Ping` as the port documents; the composition root never connects or closes it.
-6. **Run the conformance suites** from your tests: `adaptertest` always, plus the port's own suite (`publishingtest`, `persistence/conformance`). Skip, never pass, when the backing service is unreachable.
+6. **Run the conformance suites** from your tests: `adaptertest` always, plus the port's own suite (`publishingtest`, `persistence/conformance`). Fill `Target` (ownership, and the `FailStart`/`Stall` hooks if you can). Return `adaptertest.ErrUnreachable` only when the backing service is genuinely absent; any other error fails.
 7. **Wire it.** Show the consumer's `compose.Spec` field and the ownership rule (publishers: never close after `New`; stores: connect before `New`, disconnect after `Stop`).
 8. **CI.** Nothing to register: `ciselect` discovers the module from its `go.mod`. List it in `docs/ci.md` if it is released.
-9. **Checklist** for the pull request: archcheck green, closure test green, conformance green or skipped with a reason, apidiff additions only.
+9. **Checklist** for the pull request: archcheck green, closure test green, conformance green (skipped only through `ErrUnreachable`, with the reason), apidiff additions only.
 
 ## 5. Slices
 
@@ -277,45 +319,45 @@ Each row is one pull request with at most five tasks. The authored-line counts a
 ### SPI-1 — `port/adapter` contract package
 
 - **Owns:** `port/adapter/**` (new); one new file per contract package holding its untyped port-name constants (`port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go`).
-- **Tasks:** 1. `Port`, `Capability`, `Descriptor` (with `Declares`), `Describer`, `Starter`, `Pinger`, `CapStart`, `CapReady`, `Describe`. 2. Unit tests (RED first): `Describe` on declared and undeclared values; `Declares`; typed-nil input. 3. `port_adapter_architecture_test.go` with an empty non-stdlib allowlist, modeled on `port/publishing/publishing_architecture_test.go`. 4. Untyped port-name constants in the three contract packages, with a test that none of them imports `port/adapter`. 5. Package doc naming this ADR and the one-assertion rule.
+- **Tasks:** 1. `Port`, `Capability`, `Descriptor` (with `Ports`, `Declares`, `Serves`), `Describer`, `Starter`, `Pinger`, `CapStart`, `CapReady`, `Describe`, `StarterOf`, `PingerOf`. 2. Unit tests (RED first): the three accessors on values that do and do not implement each interface; `Declares`/`Serves`; typed-nil input. 3. `port_adapter_architecture_test.go` with an empty non-stdlib allowlist, modeled on `port/publishing/publishing_architecture_test.go`. 4. Untyped port-name constants in the three contract packages, with a test that none of them imports `port/adapter`. 5. Package doc naming this ADR and the one-assertion rule.
 - **Checks:** `go test ./port/adapter/...`; `go run ./internal/cmd/archcheck`; apidiff (additions only).
 - **Depends on:** nothing.
 
 ### SPI-2 — archcheck: `external-adapter-no-composition`
 
-- **Owns:** `internal/cmd/archcheck/rules/rules.go`, `internal/cmd/archcheck/rules/*_test.go`, `docs/ci.md` (rule table), `publisher/*/closure_test.go`.
-- **Tasks:** 1. RED: a graph where a `publisher/` package imports `compose`, one importing `compose/goakt`, one importing `compose/internal/lifecycle` (expect this rule and `no-cross-module-internal`), and a root `main` package importing `compose` that stays allowed. 2. Add the rule (§D7). 3. Extend the four closure tests to reject `<root>/compose` and its subpackages. 4. `docs/ci.md` rule table and the "Adding a layer" note on adapter roots.
+- **Owns:** `internal/cmd/archcheck/rules/rules.go`, `internal/cmd/archcheck/rules/*_test.go`, `docs/ci.md` (rule table), `publisher/*/closure_test.go` (all four, including websocket's; SPI-4 does not edit these files), `openspec/changes/ego-arch-001/design.md` (one sentence in §3).
+- **Tasks:** 1. RED: a graph where a `publisher/` package imports `compose`, one importing `compose/goakt`, one importing `compose/internal/lifecycle` (expect this rule and `no-cross-module-internal`), and a root `main` package importing `compose` that stays allowed. 2. Add the rule (§D7). 3. Extend the four closure tests to reject `<root>/compose` and its subpackages. 4. `docs/ci.md` rule table and the "Adding a layer" note on adapter roots. 5. Amend ego-arch-001 `design.md:118`, which says archcheck does not enforce the "only contracts and `egopb`" part and that it is "enforced in review": after this rule, the `compose` part is enforced by archcheck, and the rest stays review-only unless O1 (c) is chosen.
 - **Checks:** `go test ./internal/cmd/archcheck/...`; archcheck on `main` stays at 0 violations with no new baseline entry; the exploration §6 spike reproduced as a failing graph test.
 - **Depends on:** nothing. It can land first.
 
 ### SPI-3 — Conformance packages
 
 - **Owns:** `port/adapter/adaptertest/**`, `port/publishing/publishingtest/**` (new).
-- **Tasks:** 1. `adaptertest` AT-1…AT-5 with a `Target` factory and skip-on-unreachable. 2. `publishingtest` PT-1…PT-3. 3. Self-checks in the style of `persistence/conformance`'s capture mode: a deliberately broken fake (non-idempotent `Close`, a `Close` that ignores the deadline, a descriptor that lies) must make each check fail. 4. Architecture tests keeping both packages standard-library-only.
+- **Tasks:** 1. `adaptertest` AT-1…AT-5 with `Target` (ownership, `FailStart`, `Stall`), the `ErrUnreachable` sentinel as the only skip, and "not exercised" reporting for missing hooks. 2. `publishingtest` PT-1…PT-3. 3. Self-checks in the style of `persistence/conformance`'s capture mode: a deliberately broken fake (non-idempotent `Close`, a `Close` that ignores the deadline, a descriptor that lies) must make each check fail. 4. Architecture tests keeping both packages standard-library-only.
 - **Checks:** `go test ./port/...`; archcheck; apidiff additions only.
 - **Depends on:** SPI-1.
 
 ### SPI-4 — Two adopters (a publisher and a store)
 
-- **Owns:** `publisher/websocket/**`, `testkit/eventstore.go`, `testkit/durablestore.go`, `testkit/offsetstore.go` and their tests.
-- **Tasks:** 1. `websocket.EventsPublisher`/`DurableStatePublisher` implement `Describe`. 2. Their tests run `adaptertest` and `publishingtest` against an `httptest` server; the existing `publisher_contract_test.go` check folds into PT-1. 3. `testkit` stores implement `Describe` (declaring `CapReady`) and run `adaptertest` next to `persistence/conformance`. 4. Record per publisher that `go list -deps -test ./...` still has no GoAkt and no root package.
-- **Checks:** `scripts/ci/verify-module.sh publisher/websocket`; root lane for `testkit`; apidiff.
+- **Owns:** `publisher/websocket/**` except `closure_test.go` (owned by SPI-2), `testkit/eventstore.go`, `testkit/durablestore.go`, `testkit/offsetstore.go` and their tests.
+- **Tasks:** 1. Make websocket `Close` idempotent (L2): RED with a double `Close` on a value built against `httptest`, then guard it (for example with the existing `started` flag or a `sync.Once`) so a second call returns nil (`websocket.go:79-82`, `:144-147`). 2. `websocket.EventsPublisher`/`DurableStatePublisher` implement `Describe`. 3. Their tests run `adaptertest` (with `FailStart` and `Stall`) and `publishingtest` against an `httptest` server; the existing `publisher_contract_test.go` check folds into PT-1. 4. `testkit` stores implement `Describe` with no capabilities (`CapReady` is implied by the store ports) and run `adaptertest` as `Borrowed` next to `persistence/conformance`. 5. Record per publisher that `go list -deps -test ./...` still has no GoAkt and no root package.
+- **Checks:** `scripts/ci/verify-module.sh publisher/websocket`; root lane for `testkit`; `go test -v -run Conformance` output has no `SKIP` for either adopter; apidiff.
 - **Depends on:** SPI-3. **If ego-arch-006 S3 has landed first,** the websocket half is blocked on O2 (placing `port/adapter` in the contracts module); the `testkit` half is not.
 
 ### SPI-5 — Composition uses the SPI, and the guide
 
-- **Owns:** `compose/spec.go`, `compose/spec_test.go`, `compose/goakt/app.go`, `compose/goakt/app_test.go`, `tenancy/resolver.go` (accessor), `engine.go` (the one line at `:883`), `docs/adapters.md` (new).
-- **Tasks:** 1. V8a/V8b in `Spec.Validate`, with V8c as an empty requirement table (RED first). 2. `compose/goakt` step 4 starts and probes `Starter`/`Pinger` publishers; injected failure at publisher *k* leaves every publisher closed and names the publisher. 3. `probeStores` uses `adapter.Pinger`. 4. `tenancy.CapFixedTenant`, `tenancy.FixedTenantOf`; `engine.go:883` calls it. 5. `docs/adapters.md` from §4.
+- **Owns:** `compose/spec.go`, `compose/spec_test.go`, `compose/internal/adapters/**` (new), `compose/goakt/app.go`, `compose/goakt/app_test.go`, `tenancy/resolver.go` (accessors), `engine.go` (the one line at `:883`), `docs/adapters.md` (new).
+- **Tasks:** 1. V8a/V8b in `Spec.Validate`, after V5/V6 and skipping values they rejected, with V8c as an empty requirement table (RED first, including an undeclared-but-implemented `FixedTenantResolver` on a declared resolver). 2. `compose/internal/adapters`: the start-and-probe helper; `compose/goakt` step 4 uses it; injected failure at publisher *k* leaves every publisher closed and names the publisher. 3. `probeStores` uses `adapter.PingerOf`. 4. `tenancy.CapFixedTenant`, `tenancy.AsFixedTenantResolver`, `tenancy.FixedTenantOf`; `engine.go:883` calls `FixedTenantOf`. 5. `docs/adapters.md` from §4.
 - **Checks:** `go test ./compose/... ./tenancy/...`; the root lane for the `engine.go` change (the full root package suite, which the selector runs for any root-package file); archcheck; apidiff.
 - **Depends on:** SPI-1; SPI-4 for the adopter used in the guide's example.
 
 ### Named follow-ups (outside this change)
 
-- **F-A** Kafka, NATS and Pulsar adopt `Describe` and the suites (skipped without a broker; Pulsar through its existing testcontainers setup). Fixes `kafka.go:76` under L3.
+- **F-A** Kafka, NATS and Pulsar adopt `Describe` and the suites (skipped through `ErrUnreachable` without a broker; Pulsar through its existing testcontainers setup). Fixes `kafka.go:76` under L3 and makes each `Close` idempotent under L2: NATS calls `Drain` again on an already closed connection (`nats.go:119-125`, `:235-241`), and a second Close for Kafka and Pulsar is unverified (exploration §2).
 - **F-B** `port/adapter` and `adaptertest` in the ego-arch-006 contracts module, if O2 chooses (a).
 - **F-C** Publisher instance IDs, if O3 chooses (a).
 - **F-D** `external-adapter-contracts-only` allowlist, if O1 chooses (c) later.
-- **F-E** Runtime capabilities for #11 RUNTIME-006, using the same `Descriptor`.
+- **F-E** Provider-side runtime capabilities for #11 RUNTIME-006: a runtime adapter's `Descriptor` names the `port/runtime` per-capability interfaces from #147 that it implements, and V8b checks them. #148's typed "unsupported" error stays the call-time answer (§2).
 - **F-F** Observability port for telemetry and logging (#31), after which the `kit-logger` assertions can move behind it.
 
 ## 6. Dependencies and sequencing
@@ -323,7 +365,17 @@ Each row is one pull request with at most five tasks. The authored-line counts a
 - **Nothing blocks SPI-1, SPI-2 or SPI-3.** They touch only new packages, archcheck and tests.
 - **ego-arch-006 S2/S3 (#102) and F4.** At the baseline, publishers still require the root module, so SPI-4 works as designed. If S3 lands first, the publisher half of SPI-4 waits for O2. This design does not decide S2's contents; D7 (i) was approved on 2026-09-27 (ego-arch-006 §3) and changing it is the maintainers' call.
 - **ego-arch-006 D1 (module path migration).** Direction approved 2026-09-27, execution pending confirmation (ego-arch-006 §3). The new packages have no special path handling; the single D1 pull request renames them with everything else. Avoid running a slice and the D1 pull request in parallel on the same files.
-- **#123 and #105 IMPL-5/IMPL-6.** No dependency. SPI-5 edits `compose/goakt/app.go` step 4 and `probeStores`, which IMPL-5 (example migration) does not touch.
+- **#123 and #105 IMPL-5/IMPL-6.** No dependency. SPI-5 edits `compose/goakt/app.go` step 4 and `probeStores`, which IMPL-5 (example migration) does not touch. #148 (`compose/inmem`, IMPL-6) reuses `compose/internal/adapters` from SPI-5; if #148 lands first, SPI-5 extracts the helper from both composition roots instead.
+- **Hot-spot files shared with other open work.** No slice waits for these issues, but the same files change, so each pull request rebases on whichever lands first:
+
+  | File | This change | Other work |
+  |---|---|---|
+  | `engine.go` | SPI-5: one line at `:883` | #147 S4-3 (`*ego.Engine` implements `port/runtime`; may add methods and a compile-time assertion) |
+  | `compose/goakt/app.go` | SPI-5: step 4 and `probeStores` | #147 S4-4 (adds a neutral runtime accessor to `App`); #146 (two-node test through `compose/goakt`; mostly new test files, but it may touch `WithCluster` wiring) |
+  | `compose/goakt/app_test.go` | SPI-5: step-4 failure tests | #146 and #147 S4-4 add tests beside them |
+  | `publisher/*/closure_test.go` | SPI-2 only (SPI-4 does not edit them) | — |
+
+  The `engine.go` and `app.go` edits in SPI-5 are small and local, so the recommended order is to let #147 S4-3/S4-4 land first and rebase SPI-5 onto them.
 - **#24.** See §7. No slice waits for #24.
 
 ## 7. Interactions with #24 (lifecycle epic)
@@ -344,7 +396,7 @@ Each row is one pull request with at most five tasks. The authored-line counts a
 | #106 criterion | Where | Proof |
 |---|---|---|
 | Public SPI does not depend on concrete implementations | SPI-1 | `port/adapter` architecture test (stdlib only) and `contract-allowlist` |
-| Capabilities are explicit and inspectable without scattered type assertions | SPI-1, SPI-5 | `adapter.Describe` and one accessor per capability in its owning contract; `engine.go:883` moved behind `tenancy.FixedTenantOf`; V8 |
+| Capabilities are explicit and inspectable without scattered type assertions | SPI-1, SPI-5 | `adapter.Describe`/`StarterOf`/`PingerOf` and one assertion per optional interface in its owning contract (`tenancy.AsFixedTenantResolver`); `engine.go:883` moved behind `tenancy.FixedTenantOf`; V8 |
 | Lifecycle and ownership are documented | §D4, SPI-5 guide | L1–L6 and the ego-arch-003 §D5 table, linked from `docs/adapters.md` |
 | Partial failures clean up started resources | SPI-3, SPI-5 | AT-2/AT-3; step-4 injected-failure test in `compose/goakt` |
 | A minimal reusable conformance suite exists | SPI-3 | `adaptertest`, `publishingtest`, with self-checks |

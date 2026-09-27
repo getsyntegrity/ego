@@ -9,7 +9,7 @@
 | Baseline | `main` at `f2b5130148086d95a4d6362971b85e800b0ce155` |
 | Evidence | [`exploration.md`](./exploration.md) (adapter inventory, assertion sites, what #105 owns, composition-root spike); [`design.md`](./design.md) (decisions D1–D9, conformance suite, guide outline, slices, open decisions) |
 | Builds on | ego-arch-001 §2, §3, §10; ego-arch-003 §D2, §D5–§D8 (#105); ego-arch-006 §3 D1, D7, D8 (#102) |
-| Related | [`#11`](https://github.com/getsyntegrity/ego/issues/11) runtime SPI; [`#24`](https://github.com/getsyntegrity/ego/issues/24) lifecycle; [`#37`](https://github.com/getsyntegrity/ego/issues/37) compatibility; [`#38`](https://github.com/getsyntegrity/ego/issues/38) CI; [`#31`](https://github.com/getsyntegrity/ego/issues/31) observability |
+| Related | [`#11`](https://github.com/getsyntegrity/ego/issues/11) runtime SPI; [`#24`](https://github.com/getsyntegrity/ego/issues/24) lifecycle; [`#37`](https://github.com/getsyntegrity/ego/issues/37) compatibility; [`#38`](https://github.com/getsyntegrity/ego/issues/38) CI; [`#31`](https://github.com/getsyntegrity/ego/issues/31) observability; [`#147`](https://github.com/getsyntegrity/ego/issues/147) `port/runtime`; [`#148`](https://github.com/getsyntegrity/ego/issues/148) in-memory runtime and `compose/inmem`; [`#146`](https://github.com/getsyntegrity/ego/issues/146) two-node test |
 | Human gates | O1–O7 (design §9); O1 answers the #106 follow-up comment |
 
 ## Problem
@@ -25,11 +25,12 @@ Ego's adapters (stores, publishers, the encryptor, the tenant resolver) each imp
 
 This change is documentation only. It proposes:
 
-- **A small SPI package, `port/adapter`.** It holds a `Descriptor` (which port an adapter implements, a name for its implementation, and the optional capabilities it declares), the optional lifecycle interfaces `Starter` and `Pinger`, and one inspection function, `adapter.Describe`. It imports only the standard library (design §D1).
-- **Capabilities that are declared and implemented.** A capability is an optional interface in the contract package that owns the port, plus a string constant, plus one accessor that is the only place the interface is asserted. An adapter declares the capability in its descriptor and implements the interface; a new static rule, V8 in `compose.Spec.Validate`, rejects a descriptor that disagrees with the method set, before anything starts. Undeclared adapters keep working exactly as today (design §D3, §D6).
+- **A small SPI package, `port/adapter`.** It holds a `Descriptor` (the ports an adapter implements, since one type may serve several; a name for its implementation; and the optional capabilities it declares), the optional lifecycle interfaces `Starter` and `Pinger`, and the only functions that assert them: `adapter.Describe`, `StarterOf` and `PingerOf`. It imports only the standard library (design §D1).
+- **Capabilities that are declared and implemented.** A capability is an optional interface in the contract package that owns the port, plus a string constant, plus one accessor that is the only place the interface is asserted (`tenancy.AsFixedTenantResolver` for the one capability core uses today). An adapter declares the capability in its descriptor and implements the interface. A new static rule, V8 in `compose.Spec.Validate`, rejects a declared adapter whose declaration and method set disagree in either direction, before anything starts. Capabilities the port already makes mandatory, such as `Ping` on stores, are implied and never declared. Undeclared adapters keep working exactly as today (design §D3, §D6).
 - **An adapter lifecycle contract, L1–L6.** A failed `Start` releases what it acquired; `Close` is idempotent, safe before `Start` and after a failed `Start`, and bounded by the caller's deadline; `Ping` is the readiness probe. The composition root starts and probes owned publishers inside its existing step 4, so #105's step names, rollback and ownership table stay as they are (design §D4).
 - **A rule that adapters must not import the composition root:** `external-adapter-no-composition` in archcheck, on the existing adapter layer, fail-closed, plus the same check in each publisher's closure test (design §D7). This is the recommendation for O1, not a decision.
-- **A reusable conformance suite,** standard-library-only so publishers can run it without the runtime: `port/adapter/adaptertest` for lifecycle and descriptor rules, `port/publishing/publishingtest` for publishers. Stores keep `persistence/conformance` for data semantics (design §D8).
+- **A reusable conformance suite,** standard-library-only so publishers can run it without the runtime: `port/adapter/adaptertest` for lifecycle and descriptor rules, `port/publishing/publishingtest` for publishers. A check is skipped only when the factory returns `adaptertest.ErrUnreachable`, and caller-supplied hooks drive the failure and stall cases. Stores keep `persistence/conformance` for data semantics (design §D8).
+- **An idempotent websocket `Close`.** Today the websocket and NATS publishers already break the "idempotent Close" rule (exploration §2). SPI-4 fixes websocket; NATS goes to follow-up F-A.
 - **Two adopters that prove the model without special cases in core:** `publisher/websocket` (testable in CI with an `httptest` server) and the `testkit` in-memory stores (design §D8, slice SPI-4).
 - **An extension guide,** `docs/adapters.md`, outlined in design §4.
 
@@ -66,8 +67,8 @@ Decisions D1–D9 in `design.md`; the conformance suite design; the guide outlin
 All additive (design §D9):
 
 - New packages `port/adapter`, `port/adapter/adaptertest`, `port/publishing/publishingtest`.
-- New untyped constants in `port/publishing`, `persistence`, `offsetstore` and `tenancy`, and `tenancy.FixedTenantOf`. No existing contract package imports `port/adapter`.
-- New `Describe` methods on `testkit` stores and on `publisher/websocket` types.
+- New untyped constants in `port/publishing`, `persistence`, `offsetstore` and `tenancy`, plus `tenancy.AsFixedTenantResolver` and `tenancy.FixedTenantOf`. No existing contract package imports `port/adapter`.
+- New `Describe` methods on `testkit` stores and on `publisher/websocket` types; websocket `Close` becomes idempotent (a second call returns nil instead of the connection error).
 - Behavior: `compose.Spec.Validate` rule V8 applies only to adapters that declare a descriptor; `compose/goakt` step 4 starts and probes publishers that implement `Starter`/`Pinger`. No existing signature changes and nothing is deprecated.
 
 ## Rollback
