@@ -123,14 +123,14 @@ history of this file.
 | W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge | — | in progress | from main 0896c42 |
 | W1a-3..5 | #123 S3-3..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
-| W1b2 | #122 tidy -diff gate | — | — | planned | after #133 merges (docs/ci.md, CI serialization) |
+| W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate | — | in progress | owns scripts/ci/verify-module.sh, docs/ci.md |
 | W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
-| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | ready to merge (V5 §D4a line, docs/ci.md rows, main merged in cleanly; CI green) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
-| W1c-3 | #105 IMPL-3 | — | — | planned | after IMPL-2 |
+| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
+| W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle | — | in progress | compose/internal/lifecycle |
 | W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
-| W3-S1 | #102 S1 test/compat | — | — | planned | after #133 merges |
+| W3-S1 | #102 S1 test/compat | — | — | planned | after the tidy gate (shares verify-module.sh, docs/ci.md); writer cap 3 |
 | W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
 | W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
 | W2b | #106 | — | — | planned | after S3 and #105 IMPL-4 |
