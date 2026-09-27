@@ -77,9 +77,24 @@ that for S4-4's consumer (`internal/runtimeconsumer`), which needs a production 
 - **Closure negative control**: a temporary `port/runtime/zz_mutation_test.go` importing package `ego`
   made `TestRuntimeTestClosureExcludesGoAktAndRoot` fail (`must not depend on GoAkt package
   "github.com/tochemey/goakt/v4/extension"`); file removed.
-- Evidence (apidiff, archcheck, lint, ciselect, root suite, nested modules): see the PR and the
-  evidence update below.
-
+- Base after rebase: `origin/main` `8eb01d1` (#158 merged while this slice was in progress; no
+  conflicts). Work-unit commit: `feat(runtime): add per-capability runtime interfaces (#147, S4-3)`.
+- **apidiff** vs `8eb01d1`: `ego` no changes (empty report); `port/runtime` compatible only:
+  `Entities`, `Events`, `Projections`, `Runtime`, `Sagas` added.
+- **Consumer program** (S4-2's, copied to `/tmp/s43-consumer`, which binds the `Engine` methods to
+  function variables of their base types): build and vet clean against base and head, 28 lines of
+  output, byte-identical (sha256 `471c8153…9622` both sides, the same as S4-2's).
+- **archcheck**: `8 modules checked, 50 packages checked, 205 edges checked, 0 baselined, 0
+  violation(s), 0 stale entries`. No baseline entry added.
+- **golangci-lint** `--new-from-rev=origin/main ./...` (go1.26.6 SDK, after `go mod vendor`; `vendor/`
+  removed after): 0 issues.
+- **ciselect** `-base 8eb01d1`: mode `full` (`engine_runtime.go` changed, shared root package); every
+  nested module selected.
+- **Full root suite** (`go test -count=1 ./...`, no `-race`): 28 ok, the rest without test files,
+  exit 0 (includes `compose/goakt`'s two-node test of #146).
+- **Nested modules**: `scripts/ci/verify-module.sh` OK for `benchmark`, `example/cluster`,
+  `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`
+  (go1.26.6 SDK, `GO_TEST_RACE` unset).
 ## Next step
 
 Open the PR. S4-4 (`App.Runtime()`, `internal/runtimeconsumer`, end-to-end test) follows after merge.
