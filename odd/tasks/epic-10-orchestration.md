@@ -113,23 +113,23 @@ history of this file.
 | --- | --- | --- | --- | --- | --- |
 | W0a | #105 design | docs/propose-ego-arch-003 @a88282c | #125 | merged (69f78f6) | IMPL-2 carry-over (loader.go + rules.Package name field) is in the design |
 | W0b | #99 fix | fix/99-prestart-assertion-audit @2585811 | #127 | merged (ffc5cd8) | root cause still unproven |
-| W0b2 | #99 follow-up | fix/99-prestart-audit-followup @bf11ea8 | #136 | ready to merge | approved; CI green 7/7 after rerun of example/cluster (golangci-lint download HTTP 500) | 4 PreStart files; must land before S3-2; draft #99 narrowing comment comes with it |
-| W0b3 | #99 narrowing comment | — | — | planned | after W0b2 merges; human approves text |
+| W0b2 | #99 follow-up | fix/99-prestart-audit-followup @bf11ea8 | #136 | merged (0896c42) | approved; CI green 7/7 after rerun of example/cluster (golangci-lint download HTTP 500) | 4 PreStart files; must land before S3-2; draft #99 narrowing comment comes with it |
+| W0b3 | #99 narrowing comment | — | — | done | posted as approved (issuecomment-5856624928) |
 | W0c | #101 | — | — | done | closed 2026-09-27 with evidence comment |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | #129 | merged (3b80ad3) | root pkg 423s → 360s |
 | W0e | #10 body | — | — | done | applied after updatedAt check |
 | W1a | #123 design | docs/propose-ego-arch-002-s3 @3f3b725 | #128 | merged (e729b1b) | names and criterion 1 decided; #123 criterion 1 reworded |
 | W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @adc416c | #131 | merged (543da2c) | merged tree vetted against main before merge |
-| W1a-2 | #123 S3-2 | — | — | planned | after W0b2 merges (actor files) |
+| W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge | — | in progress | from main 0896c42 |
 | W1a-3..5 | #123 S3-3..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
 | W1b2 | #122 tidy -diff gate | — | — | planned | after #133 merges (docs/ci.md, CI serialization) |
 | W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
-| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 | approved with nits, CI green | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
+| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 | fixing (V5 §D4a line, docs/ci.md rows, sync with main) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
 | W1c-3 | #105 IMPL-3 | — | — | planned | after IMPL-2 |
 | W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
-| W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | ready to merge (CI green) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
-| W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | ready to merge (reviewed, nits fixed, CI green 7/7) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
+| W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
+| W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | — | — | planned | after #133 merges |
 | W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
 | W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
