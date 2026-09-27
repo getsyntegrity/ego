@@ -98,10 +98,11 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 | W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | writer | #129 | ready to merge | reviewer approved (all 33 deletions checked vs GoAkt source; Never windows not shortened; mutations reproduced), CI green all 7 jobs; root pkg 423s → 360s. Writer's "corrupted go1.27.1 toolchain" claim did not reproduce |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
 | W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @db6910c — READY TO MERGE (cross-review approved at c36e866; db6910c only marks decisions 1–2 as decided, checked) (reviewer approved at 20142c2; last 2-line nit delta checked by orchestrator) | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
-| W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior | writer | — | in progress | owns port/behavior/*, behavior.go, saga.go, saga_actor.go (one call site), testkit_compat_test.go |
+| W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @2eabd30 | writer | #131 | in review | apidiff = documented false positive only; consumer program same on main and branch; archcheck 16/72/1/0/0; full suite + 6 nested modules green locally; ~900 lines (advisory); reviewer running |
+| W1a-2 | #123 S3-2 | — | — | — | planned | after #131 and W0b2 merge (engine.go spawn sites + actor files) |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b (review fixes) | writer | #130 | in review | compat tag lane in verify-module.sh; GoAkt/root gone from unit-test closure in 4 publishers; reviewer running; also edits ego-arch-001 design.md (outside ownership, overlaps #128) |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
-| W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
+| W1d | #102 explore/ADR | docs/propose-ego-arch-006 | design writer | — | in progress | module path + first version are human gates before extraction |
 | W2a | S4 runtime SPI (#11) | — | — | — | planned | issue draft needs human approval |
 | W2b | #106 | — | — | — | planned | #105 design + S3 merged |
 | W3 | #102 modules | — | — | — | planned | #102 ADR approved; module path/version decisions |
