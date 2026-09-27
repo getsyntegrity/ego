@@ -166,10 +166,11 @@ history of this file.
 | W1c-4 | #105 IMPL-4 | feat/105-impl-4-compose-goakt @e4f0ce7 | #145 @dd14c52 | merged (f2b5130); follow-up: two-node cluster test through compose/goakt (issue draft pending approval); open for maintainer: misleading PR comment, V7 design line, G1/family shape, no split, cluster test follow-up | D7 observed: PostStop flush written to store, not delivered to publisher (for #24) | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
 | W1c-5 | #105 IMPL-5 | docs/105-impl-5-example @70a6a36 | #150 | merged (5a5e548) | |
 | W1c-6 | #148 RUNTIME-005 + #105 IMPL-6 | — | — | planned (issue created) | needs #147 |
-| W1c-7 | #146 two-node test | — | — | planned | follow-up of #145 decision (e); issue created |
+| W1c-7 | #146 two-node test | test/146-compose-two-node | — | in progress | new test file in compose/goakt only |
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
-| W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 | approved, CI 8/8; fixing option.go:517 comment nit; merge needs maintainer authorization | internal/logging; remove migration -> ego |
+| W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | approved; comment nit fixed (checked); CI pending; merge needs maintainer authorization | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
+| W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types | — | in progress | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 | #149 | recording decisions | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
