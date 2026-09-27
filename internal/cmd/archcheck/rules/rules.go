@@ -225,6 +225,26 @@ func DefaultRules(rootModulePath string) []Rule {
 				return "imports " + importPath + ", part of the composition root (" + rootModulePath + "/compose); only packages under compose/, main packages, examples and tests may depend on it"
 			},
 		},
+		{
+			// Unlike composition-leaf, no main package or example inside an
+			// adapter module is exempt: the harm is to that module's own
+			// go.mod, which they damage just as much. Tests are covered by
+			// each publisher's closure test, since loaders never read
+			// _test.go files. The layer is shared with
+			// external-adapter-no-runtime, so it fails closed through
+			// Evaluate's zero-match check if the publishers move.
+			ID:          "external-adapter-no-composition",
+			Description: "nested adapter modules under publisher/ must not import the composition root (compose or anything under it), including from main packages and examples inside the module",
+			Source:      "ego-arch-004/design.md §D7",
+			Layer:       ExternalAdapterLayer(rootModulePath),
+			Semantics:   Denylist,
+			Forbids: func(importPath string) bool {
+				return isCompositionImport(rootModulePath, importPath)
+			},
+			Reason: func(importPath string) string {
+				return "imports " + importPath + ", part of the composition root (" + rootModulePath + "/compose); an adapter module may import only contract packages and egopb from this repository (ego-arch-001 design §3), and the composition root depends on adapters, not the reverse"
+			},
+		},
 	}
 }
 

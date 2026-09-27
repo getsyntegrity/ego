@@ -391,7 +391,7 @@ func TestEvaluate_ZeroMatchRulesFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("Evaluate() = nil error, want an error naming every rule that matched zero packages")
 	}
-	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal", "no-module-cycle", "composition-no-runtime", "composition-leaf"} {
+	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal", "no-module-cycle", "composition-no-runtime", "composition-leaf", "external-adapter-no-composition"} {
 		if !strings.Contains(err.Error(), id) {
 			t.Errorf("error %q does not name rule %s", err, id)
 		}
