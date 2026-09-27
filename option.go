@@ -434,11 +434,15 @@ const (
 	SagaFamily
 )
 
+// knownEntityFamilies is every family bit the engine knows; other bits are
+// ignored by WithEntityFamilies.
+const knownEntityFamilies = EventSourcedFamily | DurableStateFamily | SagaFamily
+
 // String names the families in f, joined with "|" in declaration order,
 // for example "EventSourced|Saga". A value with no known family bit, or
 // with an unknown bit, prints as EntityFamily(n).
 func (f EntityFamily) String() string {
-	if f == 0 || f&^(EventSourcedFamily|DurableStateFamily|SagaFamily) != 0 {
+	if f == 0 || f&^knownEntityFamilies != 0 {
 		return fmt.Sprintf("EntityFamily(%d)", uint8(f))
 	}
 	var names []string
@@ -464,13 +468,14 @@ func (f EntityFamily) String() string {
 // ErrEntityFamilyNotDeclared, naming the family, before anything is spawned.
 //
 // The option is repeatable; the declared set is the union of every call.
-// Without it, or when no family bit is ever passed, nothing is declared and
-// every family spawns as before, so existing configurations are unchanged.
+// Bits other than the three families above are ignored. Without the option,
+// or when no known family bit is ever passed, nothing is declared and every
+// family spawns as before, so existing configurations are unchanged.
 // compose/goakt passes a Spec's declared families through this option.
 func WithEntityFamilies(families ...EntityFamily) Option {
 	return OptionFunc(func(c *Config) {
 		for _, family := range families {
-			c.entityFamilies |= family
+			c.entityFamilies |= family & knownEntityFamilies
 		}
 	})
 }

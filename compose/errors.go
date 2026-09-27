@@ -28,11 +28,13 @@ import "fmt"
 // problem it finds with errors.Join, so a caller sees all of them at once;
 // each one names the rule it broke and the offending Spec field.
 type ValidationError struct {
-	// Rule is the validation rule that failed: "V1" through "V7" for
+	// Rule is the validation rule that failed: "V1" through "V6" for
 	// Spec.Validate, as defined in openspec/changes/ego-arch-003/design.md
-	// §D4a (V7, a non-negative ShutdownTimeout, was added in IMPL-4), or a
-	// runtime-specific rule a composition root checks on top of them, such
-	// as compose/goakt's "G1" and "G2".
+	// §D4a, plus "V7" (a non-negative ShutdownTimeout, added in IMPL-4), or
+	// a runtime-specific rule about a Spec field that a composition root
+	// checks on top of them, such as compose/goakt's "G2" on Name.
+	// compose/goakt reports G1, which is about an option rather than a
+	// Spec field, through its own sentinel errors instead.
 	Rule string
 	// Field names the offending Spec field, indexed or keyed when the
 	// problem is one element of a slice or map, for example "EventsStore",

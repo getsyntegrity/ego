@@ -321,6 +321,38 @@ func TestStart_ProbeFailureNamesTheStore(t *testing.T) {
 	}
 }
 
+// TestStart_ActorSystemStepFailsForReal uses a real step-2 failure, no hook:
+// a cluster configuration with kinds but no discovery provider and no
+// remoting passes New (G1 holds) and is rejected by GoAkt inside step 2. The
+// step closes the event stream it allocated, and every publisher is closed
+// exactly once. No real cluster is started.
+func TestStart_ActorSystemStepFailsForReal(t *testing.T) {
+	f := newFixture(t, "cluster-misconfigured")
+	app := mustNew(t, f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
+	var stream *countingStream
+	app.hooks.newEventStream = func() eventstream.Stream {
+		stream = &countingStream{Stream: eventstream.New()}
+		return stream
+	}
+
+	err := app.Start(context.Background())
+
+	var se *compose.StartError
+	if !errors.As(err, &se) || se.Step != StepStartActorSystem || se.Rollback != nil {
+		t.Fatalf("Start = %v, want a StartError for %q with a clean rollback", err, StepStartActorSystem)
+	}
+	t.Logf("step 2 failed with: %v", se.Err)
+	if stream == nil || stream.closed.Load() == 0 {
+		t.Fatal("step 2 must close the event stream it allocated")
+	}
+	if app.sys != nil && app.sys.Running() {
+		t.Fatal("no actor system may be left running")
+	}
+	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
+		t.Fatalf("publisher closes = (%d, %d), want each closed exactly once", f.evPub.closed.Load(), f.stPub.closed.Load())
+	}
+}
+
 // TestStart_CancelledContextStartsNothing: with a context already done,
 // the lifecycle's ctx.Err() check fails the first step before it runs
 // (maintainer decision 1), and the publishers are still released.

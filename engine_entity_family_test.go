@@ -154,6 +154,33 @@ func TestWithEntityFamilies_NotDeclaredAllowsEveryFamily(t *testing.T) {
 	}
 }
 
+// TestWithEntityFamilies_UnknownBitsAreIgnored masks a declaration to the
+// three known families: an unknown bit alone declares nothing (every family
+// spawns, as without the option), and an unknown bit next to a known one
+// declares only the known one.
+func TestWithEntityFamilies_UnknownBitsAreIgnored(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unknown bit only", func(t *testing.T) {
+		engine := familyTestEngine(t, "family-unknown-only", WithEntityFamilies(EntityFamily(8)))
+		for _, c := range everySpawnEntryPoint() {
+			require.NoError(t, c.spawn(ctx, engine, "unknown-"+uuid.NewString()), c.name)
+		}
+	})
+
+	t.Run("unknown bit next to a known one", func(t *testing.T) {
+		engine := familyTestEngine(t, "family-unknown-mixed", WithEntityFamilies(EventSourcedFamily|EntityFamily(8)))
+		for _, c := range everySpawnEntryPoint() {
+			err := c.spawn(ctx, engine, "mixed-"+uuid.NewString())
+			if c.family == EventSourcedFamily {
+				require.NoError(t, err, c.name)
+				continue
+			}
+			require.ErrorIs(t, err, ErrEntityFamilyNotDeclared, c.name)
+		}
+	})
+}
+
 func TestEntityFamily_String(t *testing.T) {
 	assert.Equal(t, "EventSourced", EventSourcedFamily.String())
 	assert.Equal(t, "DurableState", DurableStateFamily.String())
