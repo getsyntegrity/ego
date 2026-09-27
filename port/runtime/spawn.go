@@ -196,11 +196,13 @@ func WithPassivateAfter(after time.Duration) SpawnOption {
 // WithRelocation controls whether an entity should be relocated to another node in the cluster
 // when its hosting node shuts down unexpectedly.
 //
-// Relocation is disabled unless WithRelocation(true) is passed. When it is
-// enabled, the entity is redeployed on a healthy node if the original node
-// becomes unavailable, which suits entities that can resume without
-// node-specific context. RUNTIME-003 owns the contract of this setting,
-// including whether its default should change (#154).
+// In cluster mode, entities are NOT relocated by default: WithRelocation(false)
+// is the default, and relocation is disabled unless WithRelocation(true) is
+// passed (#154 settled this for v4: keep today's behavior, fix the docs). When
+// it is enabled, the entity is eligible for relocation to a healthy node if
+// its host node goes down, which suits entities that can resume without
+// node-specific context. Whether the default itself should change is left to
+// RUNTIME-003 or a later major version.
 //
 // Parameters:
 //   - toRelocate: If true, the entity is eligible for relocation on node failure.
