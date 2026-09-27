@@ -43,6 +43,8 @@ import (
 // Otherwise SpawnEventSourced returns a *BehaviorPlacementError wrapping
 // ErrBehaviorNotSerializable or ErrBehaviorNotPointer, before anything is
 // spawned. A nil behavior is rejected the same way in every mode.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) SpawnEventSourced(ctx context.Context, b behaviorport.EventSourced, opts ...SpawnOption) error {
 	return engine.spawnEventSourced(ctx, b, opts...)
 }
@@ -70,6 +72,8 @@ func (engine *Engine) SpawnDurableState(ctx context.Context, b behaviorport.Dura
 // Placement in cluster mode follows the same rules as SpawnEventSourced: a
 // behavior GoAkt cannot serialize is rejected with a *BehaviorPlacementError
 // before anything is spawned.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) SpawnSaga(ctx context.Context, b behaviorport.Saga, timeout time.Duration, opts ...SpawnOption) error {
 	return engine.spawnSaga(ctx, b, timeout, opts...)
 }

@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,17 @@ var (
 	ErrCommandReplyUnmarshalling = errors.New("failed to parse command reply")
 	// ErrDurableStateStoreRequired is returned when the eGo engine durable store is not set
 	ErrDurableStateStoreRequired = errors.New("durable state store is required")
+	// ErrEventsStoreRequired is returned by Entity and Saga when the engine's
+	// Config has no events store (NewConfig was given a nil
+	// persistence.EventsStore, which is valid for a durable-state-only
+	// deployment). Nothing is spawned.
+	ErrEventsStoreRequired = errors.New("events store is required")
+	// ErrDuplicatePublisherID is returned by AddEventPublishers and
+	// AddStatePublishers when a publisher's ID is already registered for
+	// that kind, or appears more than once in the same call. The error
+	// names the duplicate IDs. The whole call is rejected: no publisher
+	// from it is registered, subscribed or started.
+	ErrDuplicatePublisherID = errors.New("duplicate publisher id")
 	// ErrProjectionNotRegistered is returned by StartProjection when the given
 	// name was never registered on the engine's Config via WithProjection.
 	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with ego.WithProjection")
@@ -408,8 +420,13 @@ func (engine *Engine) Start(_ context.Context) error {
 //   - ctx: Execution context for managing cancellation and timeouts during
 //     publisher shutdown.
 //
+// Every shutdown step is attempted even when a publisher fails to close: a
+// failing publisher never leaves the others, the event stream, or the actor
+// system reference behind, because a second Stop returns nil at once.
+//
 // Returns:
-//   - An error if a publisher fails to close; otherwise, nil.
+//   - The errors of every publisher that failed to close, joined with
+//     errors.Join; otherwise, nil.
 func (engine *Engine) Stop(ctx context.Context) error {
 	if !engine.Started() {
 		return nil
@@ -417,12 +434,14 @@ func (engine *Engine) Stop(ctx context.Context) error {
 
 	engine.started.Store(false)
 
+	var errs []error
+
 	// Shutdown all event publishers
 	for _, stream := range engine.eventsStreams.Values() {
 		stream.done <- Done{}
 		stream.subscriber.Shutdown()
 		if err := stream.publisher.Close(ctx); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("close events publisher %q: %w", stream.publisher.ID(), err))
 		}
 	}
 
@@ -430,7 +449,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 		stream.done <- Done{}
 		stream.subscriber.Shutdown()
 		if err := stream.publisher.Close(ctx); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("close durable state publisher %q: %w", stream.publisher.ID(), err))
 		}
 	}
 
@@ -444,7 +463,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	// fast. We deliberately do NOT call sys.Stop — the actor system belongs
 	// to the caller.
 	engine.actorSystem.Store(nil)
-	return nil
+	return errors.Join(errs...)
 }
 
 // Started returns true when the eGo engine has started
@@ -689,6 +708,8 @@ func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
 // Returns an error if the entity fails to initialize or encounters an issue during execution.
 // In cluster mode a behavior that GoAkt cannot serialize is rejected before
 // anything is spawned, with a *BehaviorPlacementError.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior, opts ...SpawnOption) error {
 	return engine.spawnEventSourced(ctx, behavior, opts...)
 }
@@ -706,6 +727,10 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 		return ErrEngineNotStarted
 	}
 	actorSystem := ref.sys
+
+	if !engine.hasEventsStore() {
+		return ErrEventsStoreRequired
+	}
 
 	// Decide what carries the behavior to GoAkt, and reject in cluster mode
 	// a behavior GoAkt cannot serialize, before anything is spawned.
@@ -754,6 +779,15 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}
 	return verifySpawnedTenant(ctx, pid, tenantScope)
+}
+
+// hasEventsStore reports whether the engine was configured with an events
+// store. Event-sourced entities and sagas persist their events there, and
+// their actors would otherwise call it through a nil interface at PreStart.
+func (engine *Engine) hasEventsStore() bool {
+	engine.mutex.RLock()
+	defer engine.mutex.RUnlock()
+	return engine.eventsStore != nil
 }
 
 // spawnTenantScope determines the per-spawn tenant dependency to inject for
@@ -1256,6 +1290,33 @@ func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, err
 	return command.NewMetadata(op)
 }
 
+// duplicatePublisherIDs checks a batch of publisher IDs of one kind before
+// any of them is registered. It returns an error wrapping
+// ErrDuplicatePublisherID that names, in batch order and once each, every ID
+// already registered (as reported by registered) or repeated in the batch;
+// otherwise nil.
+func duplicatePublisherIDs(ids []string, registered func(id string) bool) error {
+	seen := make(map[string]struct{}, len(ids))
+	reported := make(map[string]struct{})
+	var duplicates []string
+	for _, id := range ids {
+		_, repeated := seen[id]
+		seen[id] = struct{}{}
+		if !repeated && !registered(id) {
+			continue
+		}
+		if _, done := reported[id]; done {
+			continue
+		}
+		reported[id] = struct{}{}
+		duplicates = append(duplicates, strconv.Quote(id))
+	}
+	if len(duplicates) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrDuplicatePublisherID, strings.Join(duplicates, ", "))
+}
+
 // AddEventPublishers registers one or more event publishers with the eGo engine.
 // This function subscribes the publishers to the event stream, allowing them to receive events.
 //
@@ -1264,7 +1325,10 @@ func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, err
 // Parameters:
 //   - publishers: A list of event publishers to be added to the engine.
 //
-// Returns an error if the engine has not started.
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
 func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
@@ -1272,6 +1336,17 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.eventsStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
@@ -1305,7 +1380,10 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 // Parameters:
 //   - publishers: A list of state publishers to be added to the engine.
 //
-// Returns an error if the engine has not started.
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
 func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
@@ -1313,6 +1391,17 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.statesStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
@@ -1355,6 +1444,8 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 // Returns an error if the saga fails to initialize. In cluster mode a
 // behavior that GoAkt cannot serialize is rejected before anything is
 // spawned, with a *BehaviorPlacementError.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration, opts ...SpawnOption) error {
 	return engine.spawnSaga(ctx, behavior, timeout, opts...)
 }
@@ -1371,6 +1462,10 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 		return ErrEngineNotStarted
 	}
 	actorSystem := ref.sys
+
+	if !engine.hasEventsStore() {
+		return ErrEventsStoreRequired
+	}
 
 	// Decide what carries the behavior to GoAkt, and reject in cluster mode
 	// a behavior GoAkt cannot serialize, before anything is spawned.
