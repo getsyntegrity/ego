@@ -501,26 +501,36 @@ yet.
 ### `scripts/ci/verify-module.sh`: what runs for one selected module
 
 For each module `fromJSON(modules.json)` names, `scripts/ci/verify-module.sh
-<module-dir>` runs, with `GOWORK=off` so a stray root `go.work` can never
-pull the module into the root module's own build:
+<module-dir>` runs, with `GOWORK=off` and `GOFLAGS=` (both cleared/forced
+so a stray root `go.work` or an inherited `GOFLAGS=-mod=vendor` can never
+change what the module builds against):
 
 1. `go mod download`
-2. `go build ./...` (into a scratch directory when the module has a
+2. `go mod tidy -diff` — fails the job with the printed diff when the
+   module's `go.mod`/`go.sum` do not already match what `go mod tidy`
+   would write (#122 follow-up: this was an acceptance criterion of #122
+   itself but was never actually wired into CI until this check). `go mod
+   tidy` has no `-tags` flag, so it already considers every file in the
+   module, including one gated behind the `compat` build tag (step 6
+   below) — no separate `-tags compat` tidiness pass is needed; see "What
+   did *not* change: `go.mod`, `go.sum`, the module graph" below for the
+   empirical confirmation.
+3. `go build ./...` (into a scratch directory when the module has a
    `main` package, so a verification run never leaves a stray binary in
    the module's own working tree)
-3. `go vet ./...`
-4. `golangci-lint run` against the **root** `.golangci.yml` — nested
+4. `go vet ./...`
+5. `golangci-lint run` against the **root** `.golangci.yml` — nested
    modules have no lint config of their own — with
    `--modules-download-mode=mod`, overriding the root config's
    `modules-download-mode: vendor`, since nested modules do not check in
    a `vendor/` directory
-5. `go test ./...` only when the module has at least one `*_test.go`
+6. `go test ./...` only when the module has at least one `*_test.go`
    file; a module with none (no nested module today) reports "no tests"
    in the job summary instead of running `go test` against nothing.
    `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
    sets; a local run leaves it off by default, per this repository's own
    rule against running the race detector locally.
-6. When the module has any file gated behind the `compat` build tag,
+7. When the module has any file gated behind the `compat` build tag,
    `go vet -tags compat ./...`, `golangci-lint run --build-tags compat`
    and (only when the module has tests) `go test -tags compat ./...` run
    too, right after their untagged equivalents — the compatibility lane;
@@ -528,8 +538,9 @@ pull the module into the root module's own build:
    file skips this step entirely.
 
 Any of these steps failing fails the module's own job, and therefore the
-whole check — a Kafka build error, a Kafka lint finding or a Kafka test
-failure now blocks the PR the same way a root-package failure always did.
+whole check — a Kafka build error, an untidy Kafka `go.mod`/`go.sum`, a
+Kafka lint finding or a Kafka test failure now blocks the PR the same way
+a root-package failure always did.
 
 ### The `modules` matrix job
 
