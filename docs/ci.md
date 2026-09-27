@@ -27,9 +27,13 @@ race detector.
    `golangci-lint` — unchanged.
 2. **Determine changed files**: `git diff --name-only --no-renames
    "$BASE_SHA...$HEAD_SHA"` between the PR's base and head commits, written
-   to `$RUNNER_TEMP/changed.txt`.
+   to `$RUNNER_TEMP/changed.txt`, and `git merge-base "$BASE_SHA"
+   "$HEAD_SHA"` (the revision that three-dot diff starts from), written to
+   `$RUNNER_TEMP/base.txt`.
 3. **Select packages**: `go run ./internal/cmd/ciselect -changed
-   "$RUNNER_TEMP/changed.txt" -out-dir "$RUNNER_TEMP/ci"`. If that command
+   "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")"
+   -out-dir "$RUNNER_TEMP/ci"` (`-base` is explained in "Module selection
+   rules" below). If that command
    fails for any reason (a `go list` error, an unreadable file, a bug in
    the selector itself), the workflow logs a `::warning::` and re-runs with
    `-all -reason "selector failed; full-suite fallback"` instead — if
@@ -337,6 +341,14 @@ are ignored. Every `go` subprocess `ciselect` starts runs with
 `GOWORK=off`, so a `go.work` can never satisfy an import a `go.mod` does
 not declare.
 
+`ciselect` also parses every module's own `.go` files with `go/parser` in
+imports-only mode (#111's approach: tests included, build constraints
+ignored, `testdata/` and nested modules' files skipped) and keeps the
+imports that belong to *another* in-repository module. That import set
+never creates an edge; it **filters** one (step 5). Parsing matters here:
+`go list` resolves build tags, so it would miss a `//go:build compat`
+importer such as the publishers' #130 compatibility tests.
+
 **Algorithm**, in order:
 
 1. **Global check.** If any changed path is global, every module is
@@ -355,26 +367,62 @@ not declare.
    package-level fast lane keeps working. Any file in a nested module
    marks that whole module changed ("changed files in `<dir>`"); a nested
    module is always verified whole with `./...`.
-3. **Boundary change.** A changed nested `go.mod` (added, edited or
-   deleted) also marks its **parent** module (the module that would own
-   the directory without that `go.mod`) as fully changed, with the reason
-   "module boundary changed: `<dir>/go.mod`". When the parent is the root,
-   the root lane runs `full`. The selector only sees paths, not whether a
-   file was added or edited, so an edit counts too.
+3. **Boundary change.** A nested `go.mod` that was **added or deleted**
+   marks its **parent** module (the module that would own the directory
+   without that `go.mod`) as fully changed, with the reason "module
+   boundary changed: `<dir>/go.mod`". When the parent is the root, the
+   root lane runs `full`: carving a directory out of the root can break
+   root packages that imported it. An **edited** nested `go.mod` (present
+   before and after) has no boundary effect: it marks its own module
+   changed with a **changed manifest**.
+
+   Telling an edit from an add or a delete needs the base revision, which
+   the new optional `-base <rev>` flag supplies. For each changed nested
+   `go.mod`, `ciselect` checks the working tree (head) and
+   `git cat-file -e <rev>:<path>` (base). `pull_request.yml` computes
+   `git merge-base "$BASE_SHA" "$HEAD_SHA"` next to the changed-file list
+   and passes it as `-base`. It must be the merge-base, not the base
+   branch tip, because the changed-file list is a three-dot diff
+   (`$BASE_SHA...$HEAD_SHA`) taken from the merge-base: a `go.mod` that
+   landed on `main` after the branch point would otherwise make the pull
+   request's own add look like an edit. The test
+   `TestGoModPresence_MergeBaseMatchesThreeDotDiff` builds exactly that
+   history. Without `-base` (local runs; `build.yml` uses `-all`), every
+   changed nested `go.mod` is treated as a boundary change: the
+   conservative behavior. An unknown or option-like `-base` makes
+   `ciselect` fail, and the `-all` fallback, which never reads `-base`,
+   takes over.
 4. **Changed set.** Every nested module marked changed, plus the root when
-   its lane is not `none`.
-5. **Reverse-transitive closure.** A breadth-first walk over the reversed
-   edges, in sorted order so the output is deterministic, selects every
-   module that transitively requires a changed one, and records the first
-   chain that reached it, for example `benchmark ← .` or
-   `it ← adapter/a ← port`.
-6. **Root lane through a dependency.** When the root is reached because a
-   module it requires changed, the root lane is seeded with the root
-   packages whose `Imports`, `TestImports` or `XTestImports` name a package
-   of that module, and the usual package closure runs from there. If that
-   module's `go.mod` or `go.sum` changed, or no root package imports it,
-   the root lane runs `full`. (Nothing in the root requires a nested
-   module today, so this only matters once a contracts module exists.)
+   its lane is not `none`. A nested module's affected packages are all of
+   its packages; the root's are the packages its lane selected.
+5. **Reverse-transitive closure with the import filter.** A breadth-first
+   walk over the reversed edges, in sorted order so the output is
+   deterministic. A module M that requires a reached module D is selected:
+   - **unfiltered** when D's `go.mod` or `go.sum` changed, D is the parent
+     of a boundary change, or D is the root with lane `full`;
+   - **otherwise only if** M's parsed imports name one of D's affected
+     packages.
+
+   Why the filter is sound: if D's `go.mod` and `go.sum` did not change, D
+   contributes the same build list to M as before, so a change in D can
+   only reach M through package code that M imports. For the root, this is
+   exactly #111's rule: a root change selects a nested module only if the
+   module imports an affected root package. The walk records the first
+   chain that reached each module, for example `publisher/kafka ← .` or
+   `it ← adapter/a ← port`. A module requiring a reached module that the
+   filter rejected says so in the plan: "not affected: requires `<dir>` but
+   imports none of its affected packages".
+6. **Root lane through a dependency.** When the root is reached through a
+   module it requires (the edge passed the filter), the root lane is
+   seeded with the root packages whose `Imports`, `TestImports` or
+   `XTestImports` (from `go list`) name a package of that module, and the
+   usual package closure runs from there. If that module's `go.mod` or
+   `go.sum` changed, or no root package in the `go list` graph imports it
+   (its only importer sits behind a build tag), the root lane runs `full`.
+   Seeding can widen the root lane, which can widen the walk from the
+   root, so the two repeat until the root lane is stable. (Nothing in the
+   root requires a nested module today, so this only matters once a
+   contracts module exists.)
 7. **Fail closed.** An unreadable `go.mod`, a `go mod edit` error, a
    `replace` that points an in-repository requirement at some other
    directory, or a local `replace` whose target is inside the repository
@@ -385,29 +433,27 @@ not declare.
    fallback itself: every discovered module is selected by directory, and
    that module's own verification job reports the breakage.
 
-**What changed for real changes.** Requirements are coarser than imports:
-a module is selected when it requires an affected module, whether or not
-it imports the affected package. That is the safe direction, and it is
-what the design asks for (§5.1, §7 "Selector trust"). Running the
-selector on `main` at `77beda6` before and after this change, over the
-change set of the design's exploration (§6):
+**What changed for real changes.** Almost nothing today, which is the
+point: the graph is in place for the first nested-to-nested edge (#102
+S1). Running the selector on `main` at `77beda6` before and after this
+change, over the change set of the design's exploration (§6), with
+`-base origin/main` as the workflow runs it:
 
 | Changed path | Root lane before → after | Nested modules before → after |
 |---|---|---|
 | `publisher/kafka/kafka.go` | `none` → `none` | 1 → 1 |
+| `publisher/kafka/go.mod` (edit) | `none` → `none` | 1 → 1 |
 | `docs/ci.md`, `odd/tasks/x.md` | `none` → `none` | 0 → 0 |
+| `internal/cmd/archcheck/main.go`, `migration/migration.go` | `affected` (1) → `affected` (1) | 0 → 0 |
 | `internal/ticker/ticker.go`, `port/publishing/publishing.go` | `affected` (3) → `affected` (3) | 6 → 6 |
+| `internal/pause/pause.go`, `mocks/ego/…`, `encryption/…`, `persistence/…` | unchanged | 6 → 6 |
 | `engine.go`, `egopb/ego.pb.go`, `newmod/go.mod` + `newmod/x.go` | `full` → `full` | 6 → 6 |
-| `go.work` | `affected` (2) → `full` (global) | 6 → 6 |
-| `internal/cmd/archcheck/main.go`, `migration/migration.go` | `affected` (1) → `affected` (1) | **0 → 6** |
-| `publisher/kafka/go.mod` | `none` → **`full`** (boundary) | **1 → 6** |
+| `go.work` | `affected` (2) → **`full` (global)** | 6 → 6 |
 
-The last two rows are more expensive than before. A root change that no
-nested module imports now selects every module that requires the root
-(all six), and an edit to a nested `go.mod`, such as a dependency bump in
-a publisher, now runs the full root lane. Both follow directly from the
-design's rules (§5.2 steps 3 to 5). The coverage denominator (`coverpkg`)
-is identical in every row and in `-all`.
+Only `go.work` differs. Without `-base`, the `publisher/kafka/go.mod`
+edit is treated as a boundary change and runs the full root lane with all
+six modules. The coverage denominator (`coverpkg`) is identical in every
+row and in `-all`.
 
 ### `modules.json` and the job summary
 

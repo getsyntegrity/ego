@@ -18,20 +18,26 @@ subprocess). An in-repository requirement resolved through a local
 `replace` is an edge; one pinned to a published version is reported, not
 followed. A change selects the modules containing it plus every module
 that transitively requires one of them, with the chain that reached each.
-Global paths force the full gate, a nested `go.mod` change fully changes
-its parent module, and a module the root requires seeds the root package
-lane. `modules.json` keeps its shape; `plan.json` and a summary table are
-new.
+An edge is followed only if the consumer imports an affected package,
+unless the required module's manifest changed or it is fully changed (the
+import filter). Global paths force the full gate. An added or deleted
+nested `go.mod` fully changes its parent module; `-base` tells those apart
+from an edit. A module the root requires seeds the root package lane.
+`modules.json` keeps its shape; `plan.json` and a summary table are new.
 
 Why: it is slice S0 of the ego-arch-006 design (PR #132, §5 and §6 S0),
 the prerequisite for every later module slice, and it needs none of the
 maintainer decisions D1 to D8.
 
-Rejected alternative: keeping import-based edges for the root-to-nested
-case to preserve today's cheaper selection for tooling-only root changes.
-The design rejects import-only edges (§5.1, §8) because they miss
-requirement-only effects; the cost is recorded below as a decision for the
-maintainers rather than silently worked around.
+Rejected alternatives:
+
+- Import-only edges, which is today's model. They miss requirement-only
+  effects, so imports only filter an edge, and only when that is sound
+  (design §5.1).
+- Unfiltered requirement edges, which was this PR's first pass. They
+  selected all six modules for tooling-only root changes and ran the full
+  root lane for every publisher `go.mod` bump. The maintainers rejected
+  that cost (R1 and R2 below).
 
 ## Constraints
 
@@ -40,28 +46,38 @@ maintainers rather than silently worked around.
   GOTOOLCHAIN=auto); also run with go1.26.6, `GOTOOLCHAIN=local`.
 - No `-race` locally, no workbench.
 - No new Go module, no module path change, no committed `go.work`, no
-  workflow change, no edit to `scripts/ci/verify-module.sh`.
+  edit to `scripts/ci/verify-module.sh`. The only workflow change is the
+  `-base` merge-base pass-through in `pull_request.yml` (design §6 S0,
+  amended at 1d8838a).
 - RDD: not run by this writer; delivery follows ordinary repository policy.
 
 ## Tasks
 
+The task list follows the amended design §6 S0 (ADR PR #132 at 1d8838a).
+Route for every task: this agent, as the delegated writer.
+
 - [x] T1 `ModuleInfo` discovery through `go mod edit -json`, `GOWORK=off`
-      on every `go` subprocess, fail closed on unreadable `go.mod` or a
-      mismatched `replace`; `-all` degrades to directory-only discovery.
-      Check: `modules_test.go` (discovery, broken go.mod, wrong replace,
-      GOWORK, run-level fail-closed). Route: inline writer (this agent is
-      the delegated writer).
+      on every `go` subprocess, fail closed on unreadable `go.mod`, a
+      mismatched `replace` or a `replace` into an undiscovered repository
+      directory; `testdata/` skipped; `-all` degrades to directory-only
+      discovery. Check: `modules_test.go`.
 - [x] T2 Closure, ownership, boundary-change and global-path rules in
       `selector`, driven by the design §5.5 fixtures, RED first.
       Check: `selector/modulegraph_test.go`.
-- [x] T3 Root-lane seeding through dependency modules; `plan.json`; the
-      summary "module | selected | why" table.
-      Check: seeding, fallback and summary tests; `TestWriteOutputs_PlanAndModulesJSON`.
-- [x] T4 `docs/ci.md` (selection rules, global list, `plan.json`, the why
-      table, before/after table) and `CHANGELOG.md`. Check: readback.
-- [ ] T5 CI measurement with two throwaway draft PRs (design §6 S0).
-      Pending: the design requires the maintainers' authorization to open
-      them; not done by this slice's writer.
+- [x] T3 The import filter (parser-based `Imports`, tests included, build
+      tags ignored); root-lane seeding through dependency modules;
+      `plan.json`; the summary table. Check: filter, seeding and summary
+      tests; `TestWriteOutputs_PlanAndModulesJSON`.
+- [x] T4 The `-base <rev>` flag (add or delete versus edit of a nested
+      `go.mod`) and the `pull_request.yml` change, which passes the
+      merge-base. Check: `TestGoModPresence_*`, the `WithBase` fixtures,
+      and `TestRun_BaseFailsClosedButAllIgnoresIt`.
+- [x] T5 `docs/ci.md` (selection rules, global list, `-base`, `plan.json`,
+      the why table, before/after table) and `CHANGELOG.md`. Check: readback.
+
+Outside this list: the design's S0 CI measurement (two throwaway draft
+PRs) is still pending, because opening them needs the maintainers'
+authorization.
 
 ## Acceptance
 
@@ -90,23 +106,23 @@ green before the change (regression guards): docs-only, `odd/tasks/x.md`,
 **GREEN.** `go test -count=1 ./internal/cmd/ciselect/...`: both packages
 `ok` on go1.27.1 and go1.26.6. gofmt clean; `go vet` clean.
 
-**Changed expectations in existing tests** (the design changes these
-behaviors on purpose):
+**Changed expectations in existing tests, current state.** These are
+behaviors the design changes on purpose. With R1 in place, the #111 test
+`TestSelect_Modules_RootLeafChangeNotImportedByAnyModuleSelectsNone…` is
+back to its original expectation.
 
-- `TestSelect_Modules_RootLeafChange...`: a root leaf change now selects
-  the modules that require the root (was: none, because no module
-  imported the package). Design §5.1: requirements, not imports, are edges.
-- `TestSelect_Modules_RootChangeSelectsModuleRequiringRoot`: reason is now
-  the chain `publisher/kafka ← .` (was `imports affected root package …`).
-- `TestSelect_Modules_AllSelectsEveryModule`: reason
+- `TestSelect_Modules_RootChangeSelectsModuleRequiringRoot`: the reason is
+  now the chain `publisher/kafka ← .` (was `imports affected root package …`).
+- `TestSelect_Modules_AllSelectsEveryModule`: the reason is
   `global: -all requested` (was `full gate: -all requested`).
 - `TestSelect_Modules_RootGoModChangeSelectsModulesRequiringRoot`: the root
-  `go.mod` is not global (design §5.3); only modules requiring the root.
-- `TestModuleDiscovery_FindsNestedModulesAndTheirRootImports` became
-  `TestModuleDiscovery_FindsNestedModules`: the `go/parser` import scan
-  (`discoverModuleImports`) is gone, replaced by `go.mod` requirements.
+  `go.mod` is not global (design §5.3), so only modules requiring the root
+  are selected.
+- `TestModuleDiscovery_FindsNestedModulesAndTheirRootImports` became the
+  requirement-graph and import tests in `modules_test.go`.
 
-**Real repository, before (main `77beda6`) and after**:
+**Real repository, before (main `77beda6`) and after, with
+`-base origin/main`**:
 
 | Changed path | Root lane before → after | Modules before → after |
 |---|---|---|
@@ -115,11 +131,16 @@ behaviors on purpose):
 | (c) `publisher/kafka/kafka.go` | none → none | 1 → 1 |
 | (d) `go.work` | affected 2 → full 23 (global) | 6 → 6 |
 | (e) `docs/ci.md` | none → none | 0 → 0 |
-| `internal/cmd/archcheck/main.go` | affected 1 → affected 1 | 0 → 6 |
-| `migration/migration.go` | affected 1 → affected 1 | 0 → 6 |
-| `publisher/kafka/go.mod` | none → full 23 | 1 → 6 |
+| `migration/migration.go` | affected 1 → affected 1 | 0 → 0 |
+| `internal/cmd/archcheck/main.go` | affected 1 → affected 1 | 0 → 0 |
+| `publisher/kafka/go.mod` (edit) | none → none | 1 → 1 |
+| the other exploration §6 rows | unchanged | unchanged |
 
-`coverpkg` sha256 prefix `ce183755` in every row and in `-all`.
+Only `go.work` differs. Without `-base`, the kafka `go.mod` edit is
+conservative: `full 23`, 6 modules. `coverpkg` sha256 prefix `ce183755`
+in every row, with and without `-base`, and in `-all`.
+
+The first-pass numbers below (before R1 and R2) are kept as history.
 
 **Other checks.** archcheck: `15 packages checked, 70 edges checked, 1
 baselined, 0 violation(s), 0 stale entries`. Full root suite
@@ -150,25 +171,64 @@ After the fix, both test packages pass on go1.27.1 and go1.26.6, lint
 reports 0 issues (go1.26.6), and the real-repository outputs (a) to (h) are
 unchanged, with coverpkg `ce183755` throughout.
 
-## Needs a maintainer decision
+## R1 and R2 (maintainer decision 2026-09-27, ADR amended at 1d8838a)
 
-1. **The design's S0 check is wrong for two change classes.** §6 S0 says
-   the output on the exploration change set "only differs for `go.work`".
-   Following §5.2 literally, a root change that no nested module imports
-   (`internal/cmd/archcheck`, `migration`) now selects all six modules,
-   because they all require the root. This reverses #111's accepted
-   choice ("root-only leaf changes keep the fast lane" for modules).
-2. **A nested `go.mod` edit now runs the full root lane.** §5.2 step 3
-   says "added, edited or deleted", and the selector cannot tell an edit
-   from an add from paths alone. A publisher dependency bump, which
-   Renovate can open, costs the full root suite (about 8.5 minutes) plus
-   all modules, instead of one module job.
+The first pass followed the original §5.2 literally and flagged two cost
+regressions. The maintainers decided to fix both inside this PR, and the
+design was amended to match.
 
-Either can be narrowed later (for example, only treat a `go.mod` as a
-boundary change when its directory is not already a discovered module on
-the base commit), but that needs the base tree and is a design change.
+- **R1, the import filter.** Every module now carries parser-based
+  `Imports` (#111's `discoverModuleImports`, generalized to any
+  in-repository module, skipping `testdata/` and nested modules' files). A
+  requirement edge M → D is followed unfiltered only when D's `go.mod` or
+  `go.sum` changed, D is the parent of a boundary change, or D is the root
+  with lane `full`. Otherwise M is selected only if its imports name an
+  affected package of D. Root seeding counts only dependencies whose edge
+  passed the filter, and the closure and seeding repeat until the root
+  lane is stable.
+- **R2, `-base`.** A changed nested `go.mod` is a boundary change only if
+  it exists at exactly one of base and head. An edit marks the module
+  changed with a changed manifest. Without `-base`, or for a `go.mod`
+  missing from the presence map, the behavior stays conservative.
+  `pull_request.yml` writes `git merge-base "$BASE_SHA" "$HEAD_SHA"` to
+  `$RUNNER_TEMP/base.txt` in the step that already has both variables, and
+  the select step passes `-base "$(cat …)"`. It must be the merge-base
+  (review input), because the changed list is a three-dot diff.
+  `TestGoModPresence_MergeBaseMatchesThreeDotDiff` shows the base branch
+  tip would misclassify a pull request's add as an edit. An option-like
+  `-base` (leading `-`) is rejected; the `-all` fallback never reads
+  `-base`.
+
+**RED** (type-only stubs, old logic): 11 behavioral failures, for example
+`TestModuleGraph_ImportFilterSkipsConsumerNotImportingAffectedPackage:
+modules = [{adapter/b …}], want none`,
+`TestModuleGraph_WithBase_GoModEditHasNoBoundaryEffect: root Mode = full,
+want none`, `TestModuleGraph_SharedContract: it chain = "it ← port", want
+"it ← adapter/a ← port"`,
+`TestSelect_Modules_RootLeafChangeNotImportedByAnyModule…: Modules =
+[publisher/kafka]`, `TestGoModPresence_EditAddDelete: goModPresence() =
+map[]`, and `TestModuleDiscovery_RootImportsSkipNestedModulesAndTestdata:
+Imports:[]`. Later, the option-like base guard:
+`TestGoModPresence_UnknownBaseFails: … exit status 1, want an option-like
+base rejected`.
+
+**GREEN**: both packages `ok` on go1.27.1 and go1.26.6. Lint reports 0
+issues after the option guard; the two `exec.Command` lines carry
+justified `//nolint:gosec` comments, following `retry.go`.
+
+**Checks after R1 and R2:**
+
+- archcheck is unchanged (0 violations, 0 stale entries).
+- The full root suite (`GOWORK=off go test -count=1 -timeout 30m ./...`,
+  no `-race`) passed: 20 packages ok, 0 failures, 427 s.
+- `verify-module.sh` passed on all six modules (test results partly
+  cached from the first pass).
+- A local replay of the two workflow lines (`git diff … > changed.txt`,
+  `git merge-base … > base.txt`, then `ciselect -base "$(cat base.txt)"`)
+  on this branch gave `base.txt` = `77beda6`, and the run is global
+  because `internal/cmd/ciselect/` changed.
 
 ## Next step
 
-Maintainers review the PR and decide items 1 and 2; authorize (or not) the
-two draft measurement PRs of T5.
+Maintainers review the PR, and authorize (or not) the two draft
+measurement PRs for the S0 CI measurement.
