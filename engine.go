@@ -162,6 +162,13 @@ var (
 	// nil such as (*T)(nil) registers T, while an untyped nil or a value type
 	// is rejected.
 	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	// ErrEntityFamilyNotDeclared is returned by SpawnEventSourced,
+	// SpawnDurableState and SpawnSaga, and by their deprecated predecessors
+	// Entity, DurableStateEntity and Saga, when the engine's Config declares
+	// its entity families with WithEntityFamilies and the spawned behavior's
+	// family is not among them. The error names the family. Nothing is
+	// spawned.
+	ErrEntityFamilyNotDeclared = errors.New("eGo: entity family is not declared; declare it with ego.WithEntityFamilies")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
@@ -247,6 +254,11 @@ type Engine struct {
 	// already validated there is at most one (ErrAmbiguousTenantResolver).
 	// Not yet consumed: resolve-and-attach at SendCommand lands separately.
 	tenantResolver tenancy.TenantResolver
+
+	// entityFamilies is the set declared with WithEntityFamilies; zero means
+	// nothing was declared and every family may be spawned. Set once by
+	// NewEngine and never changed.
+	entityFamilies EntityFamily
 }
 
 // NewEngine plugs eGo into an already-constructed and started goakt.ActorSystem.
@@ -348,6 +360,7 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 		telemetry:      config.telemetry,
 		encryptor:      config.encryptor,
 		tenantResolver: config.tenantResolver,
+		entityFamilies: config.entityFamilies,
 		eventsStreams:  syncmap.New[string, *eventsStream](),
 		statesStreams:  syncmap.New[string, *statesStream](),
 	}
@@ -746,6 +759,10 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 		return ErrEngineNotStarted
 	}
 
+	if err := engine.requireFamily(EventSourcedFamily); err != nil {
+		return err
+	}
+
 	ref := engine.actorSystem.Load()
 	if ref == nil {
 		return ErrEngineNotStarted
@@ -803,6 +820,18 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}
 	return verifySpawnedTenant(ctx, pid, tenantScope)
+}
+
+// requireFamily returns an error wrapping ErrEntityFamilyNotDeclared, naming
+// family, when the engine declares its entity families (WithEntityFamilies)
+// and family is not among them. It is called by the three unexported spawn
+// functions, so the deprecated and the runtime-neutral entry points share
+// one copy of the guard (ego-arch-003 design §D3).
+func (engine *Engine) requireFamily(family EntityFamily) error {
+	if engine.entityFamilies == 0 || engine.entityFamilies&family != 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s (declared: %s)", ErrEntityFamilyNotDeclared, family, engine.entityFamilies)
 }
 
 // hasEventsStore reports whether the engine was configured with an events
@@ -1009,6 +1038,10 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 func (engine *Engine) spawnDurableState(ctx context.Context, behavior behaviorport.DurableState, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
+	}
+
+	if err := engine.requireFamily(DurableStateFamily); err != nil {
+		return err
 	}
 
 	ref := engine.actorSystem.Load()
@@ -1485,6 +1518,10 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga, timeout time.Duration, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
+	}
+
+	if err := engine.requireFamily(SagaFamily); err != nil {
+		return err
 	}
 
 	ref := engine.actorSystem.Load()
