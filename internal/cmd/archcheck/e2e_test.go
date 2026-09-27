@@ -322,3 +322,86 @@ func TestRunCheck_CompositionLeafAllowsMainAndTests(t *testing.T) {
 		t.Fatalf("runCheck() = %v, want nil; output:\n%s", err, stdout.String())
 	}
 }
+
+// TestLoadModuleTable_ReadsInRepoRequirements builds a root module and two
+// nested modules, one requiring the root and the other nested module (the
+// shape test/compat has, ego-arch-006 slice S1) plus a third-party module,
+// and checks that loadModuleTable lists every module with only its
+// in-repository requirements.
+func TestLoadModuleTable_ReadsInRepoRequirements(t *testing.T) {
+	requireGo(t)
+
+	dir := t.TempDir()
+	const modulePath = "github.com/example/tablefixture"
+	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "adapter", "go.mod"),
+		"module "+modulePath+"/adapter\n\ngo 1.21\n\nrequire "+modulePath+" v0.0.0\n\nreplace "+modulePath+" => ../\n")
+	writeFile(t, filepath.Join(dir, "test", "it", "go.mod"),
+		"module "+modulePath+"/test/it\n\ngo 1.21\n\nrequire (\n\t"+modulePath+" v0.0.0\n\t"+modulePath+"/adapter v0.0.0\n\tgithub.com/google/uuid v1.6.0\n)\n")
+
+	modules, err := loadModuleTable(dir)
+	if err != nil {
+		t.Fatalf("loadModuleTable: %v", err)
+	}
+	byPath := make(map[string]rules.Module, len(modules))
+	for _, m := range modules {
+		byPath[m.Path] = m
+	}
+	if len(modules) != 3 {
+		t.Fatalf("modules = %+v, want the root and two nested modules", modules)
+	}
+	if got := byPath[modulePath].Requires; len(got) != 0 {
+		t.Errorf("root Requires = %v, want none", got)
+	}
+	if got := byPath[modulePath+"/adapter"].Requires; len(got) != 1 || got[0] != modulePath {
+		t.Errorf("adapter Requires = %v, want [%s]", got, modulePath)
+	}
+	got := byPath[modulePath+"/test/it"].Requires
+	if len(got) != 2 || got[0] != modulePath || got[1] != modulePath+"/adapter" {
+		t.Errorf("test/it Requires = %v, want the root and adapter only (no third-party module)", got)
+	}
+}
+
+// TestRunCheck_ModuleCycleFails: the root requiring a nested module that
+// requires the root back is the cycle ego-arch-001 §3 forbids, and runCheck
+// must fail on it (no-module-cycle, ego-arch-006 slice S1).
+func TestRunCheck_ModuleCycleFails(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module "+modulePath+"\n\ngo 1.21\n\nrequire "+modulePath+"/publisher/kafka v0.0.0\n\nreplace "+modulePath+"/publisher/kafka => ./publisher/kafka\n")
+	writeFile(t, filepath.Join(dir, "publisher", "kafka", "go.mod"),
+		"module "+modulePath+"/publisher/kafka\n\ngo 1.21\n\nrequire "+modulePath+" v0.0.0\n\nreplace "+modulePath+" => ../../\n")
+	var stdout strings.Builder
+	err := runCheck(dir, nil, &stdout)
+	if err == nil {
+		t.Fatalf("runCheck() = nil error, want no-module-cycle to fail; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "no-module-cycle") {
+		t.Errorf("stdout = %q, want it to name no-module-cycle", stdout.String())
+	}
+}
+
+// TestRunCheck_NestedToNestedInternalFails: a nested module importing
+// another nested module's internal/ package fails no-cross-module-internal,
+// which before ego-arch-006 slice S1 only covered imports of the root's
+// internal/ packages.
+func TestRunCheck_NestedToNestedInternalFails(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "publisher", "kafka", "internal", "codec", "codec.go"),
+		"package codec\n\n// Name is a plain value.\nconst Name = \"codec\"\n")
+	writeFile(t, filepath.Join(dir, "test", "it", "go.mod"), "module "+modulePath+"/test/it\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "test", "it", "it.go"),
+		"package it\n\nimport \""+modulePath+"/publisher/kafka/internal/codec\"\n\nvar _ = codec.Name\n")
+	var stdout strings.Builder
+	err := runCheck(dir, nil, &stdout)
+	if err == nil {
+		t.Fatalf("runCheck() = nil error, want no-cross-module-internal to fail; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "no-cross-module-internal") {
+		t.Errorf("stdout = %q, want it to name no-cross-module-internal", stdout.String())
+	}
+}

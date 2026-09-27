@@ -23,9 +23,11 @@
 // Command archcheck enforces the layer dependency rules of
 // openspec/changes/ego-arch-001/design.md §3 (ego-arch-001 ADR, slice S2):
 // it loads the repository's import graph — the root module via `go list`,
-// every nested module (publisher/*, benchmark, example/cluster) via
-// go/parser — and checks every production import edge against the rule
-// table in internal/cmd/archcheck/rules. A violation not covered by the
+// every nested module (publisher/*, benchmark, example/cluster,
+// test/compat) via go/parser — plus the module table (every module's path
+// and in-repository go.mod requirements, via `go mod edit -json`), and
+// checks every production import edge and every in-repository requirement
+// edge against the rule table in internal/cmd/archcheck/rules. A violation not covered by the
 // repository baseline (baseline.go) fails the check; a baseline entry that
 // no longer matches a real violation fails it too, so the baseline can
 // only shrink. See odd/tasks/arch-boundary-check.md for the full design.
@@ -85,7 +87,12 @@ func runCheck(repoRoot string, baseline []rules.BaselineEntry, stdout io.Writer)
 		return fmt.Errorf("loading nested modules: %w", err)
 	}
 
-	graph := rules.Graph{Packages: append(rootPkgs, nestedPkgs...)}
+	modules, err := loadModuleTable(repoRoot)
+	if err != nil {
+		return fmt.Errorf("loading module table: %w", err)
+	}
+
+	graph := rules.Graph{Packages: append(rootPkgs, nestedPkgs...), Modules: modules}
 	ruleset := rules.DefaultRules(modulePath)
 
 	result, err := rules.Evaluate(graph, ruleset, baseline)
@@ -98,8 +105,8 @@ func runCheck(repoRoot string, baseline []rules.BaselineEntry, stdout io.Writer)
 	}
 
 	baselined := len(baseline) - len(result.Stale)
-	fmt.Fprintf(stdout, "archcheck: %d packages checked, %d edges checked, %d baselined, %d violation(s), %d stale entries\n",
-		result.PackagesChecked, result.EdgesChecked, baselined, len(result.Violations), len(result.Stale))
+	fmt.Fprintf(stdout, "archcheck: %d modules checked, %d packages checked, %d edges checked, %d baselined, %d violation(s), %d stale entries\n",
+		result.ModulesChecked, result.PackagesChecked, result.EdgesChecked, baselined, len(result.Violations), len(result.Stale))
 
 	if len(result.Violations) > 0 || len(result.Stale) > 0 {
 		return fmt.Errorf("%d violation(s), %d stale baseline entries", len(result.Violations), len(result.Stale))

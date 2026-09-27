@@ -49,6 +49,26 @@ func rulesFor(t *testing.T, ids ...string) []Rule {
 	return out
 }
 
+// repoModules is the module table matching the fixture graphs below: the
+// root module and the nested modules they use, each requiring the root.
+// The module-aware rules (no-cross-module-internal, no-module-cycle) match
+// nothing without a module table, so a fixture evaluated against them, or
+// against the full DefaultRules, carries this one.
+func repoModules() []Module {
+	return []Module{
+		{Path: root},
+		{Path: root + "/publisher/kafka", Requires: []string{root}},
+		{Path: root + "/benchmark", Requires: []string{root}},
+		{Path: root + "/example/cluster", Requires: []string{root}},
+	}
+}
+
+// withRepoModules returns g with repoModules as its module table.
+func withRepoModules(g Graph) Graph {
+	g.Modules = repoModules()
+	return g
+}
+
 // ruleStat looks up one rule's stat from a Result's RuleStats by ID.
 func ruleStat(stats []RuleStat, id string) (RuleStat, bool) {
 	for _, s := range stats {
@@ -75,7 +95,7 @@ func forbiddenGraph() Graph {
 // specific persistence/conformance carve-out, and must produce zero
 // violations.
 func allowedGraph() Graph {
-	return Graph{Packages: []Package{
+	return withRepoModules(Graph{Packages: []Package{
 		{
 			ImportPath: root + "/tenancy",
 			Kind:       RootModule,
@@ -140,7 +160,7 @@ func allowedGraph() Graph {
 			Kind:       NestedModule,
 			Imports:    []string{root + "/persistence"},
 		},
-	}}
+	}})
 }
 
 func TestEvaluate_ForbiddenImportInContractPackageFails(t *testing.T) {
@@ -339,7 +359,7 @@ func TestEvaluate_ZeroMatchRulesFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("Evaluate() = nil error, want an error naming every rule that matched zero packages")
 	}
-	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal", "composition-no-runtime", "composition-leaf"} {
+	for _, id := range []string{"contract-allowlist", "application-no-runtime", "external-adapter-no-runtime", "no-cross-module-internal", "no-module-cycle", "composition-no-runtime", "composition-leaf"} {
 		if !strings.Contains(err.Error(), id) {
 			t.Errorf("error %q does not name rule %s", err, id)
 		}
@@ -358,7 +378,7 @@ func TestEvaluate_ContractAllowlistDoesNotNeedPortPackages(t *testing.T) {
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/egopb"}},
 	}}
-	result, err := Evaluate(graph, DefaultRules(root), nil)
+	result, err := Evaluate(withRepoModules(graph), DefaultRules(root), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error even though every rule matched something: %v", err)
 	}
@@ -396,7 +416,7 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 			RemovalCriterion: "never; test only",
 		},
 	}
-	result, err := Evaluate(graph, DefaultRules(root), baseline)
+	result, err := Evaluate(withRepoModules(graph), DefaultRules(root), baseline)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -480,7 +500,7 @@ func TestEvaluate_ViolationReasonNamesForbiddenPrefix(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			result, err := Evaluate(c.graph, rulesFor(t, c.ruleID), nil)
+			result, err := Evaluate(withRepoModules(c.graph), rulesFor(t, c.ruleID), nil)
 			if err != nil {
 				t.Fatalf("Evaluate returned error: %v", err)
 			}
@@ -537,7 +557,7 @@ func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 			Imports:    []string{"fmt", "net/http"},
 		},
 	}}
-	result, err := Evaluate(graph, DefaultRules(root), nil)
+	result, err := Evaluate(withRepoModules(graph), DefaultRules(root), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
@@ -730,7 +750,7 @@ func TestNoCrossModuleInternal_ForbidsRootInternal(t *testing.T) {
 			Imports:    []string{root + "/internal/queue"},
 		},
 	}}
-	result, err := Evaluate(graph, rulesFor(t, "no-cross-module-internal"), nil)
+	result, err := Evaluate(withRepoModules(graph), rulesFor(t, "no-cross-module-internal"), nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}

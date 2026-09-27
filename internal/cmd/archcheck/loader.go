@@ -333,6 +333,86 @@ func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 	return pkgs, nil
 }
 
+// goModEditJSON mirrors the subset of `go mod edit -json` output
+// readGoModRequirements needs.
+type goModEditJSON struct {
+	Module struct {
+		Path string
+	}
+	Require []struct {
+		Path string
+	}
+}
+
+// readGoModRequirements reads the module path and every required module
+// path from moduleDir's go.mod with `go mod edit -json`, the same offline
+// reader internal/cmd/ciselect uses (openspec/changes/ego-arch-006/design.md
+// §5.1): no network, no build, and exact go.mod semantics without a
+// golang.org/x/mod dependency. GOWORK=off keeps a stray go.work out of it.
+func readGoModRequirements(moduleDir string) (modulePath string, requires []string, err error) {
+	cmd := exec.Command("go", "mod", "edit", "-json")
+	cmd.Dir = moduleDir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("go mod edit -json in %s: %w: %s", moduleDir, err, stderr.String())
+	}
+	var parsed goModEditJSON
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", nil, fmt.Errorf("decoding go mod edit -json in %s: %w", moduleDir, err)
+	}
+	for _, r := range parsed.Require {
+		requires = append(requires, r.Path)
+	}
+	return parsed.Module.Path, requires, nil
+}
+
+// loadModuleTable returns every in-repository module, the root first and
+// then each nested module discoverNestedModuleDirs finds, with its
+// requirements narrowed to other in-repository modules. The module-aware
+// rules (no-module-cycle, no-cross-module-internal) read it; see
+// rules.Graph.Modules.
+func loadModuleTable(repoRoot string) ([]rules.Module, error) {
+	dirs, err := discoverNestedModuleDirs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("discovering nested modules: %w", err)
+	}
+	dirs = append([]string{repoRoot}, dirs...)
+
+	type raw struct {
+		path     string
+		requires []string
+	}
+	raws := make([]raw, 0, len(dirs))
+	inRepo := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		path, requires, err := readGoModRequirements(dir)
+		if err != nil {
+			return nil, err
+		}
+		if path == "" {
+			return nil, fmt.Errorf("%s: go.mod declares no module path", dir)
+		}
+		raws = append(raws, raw{path: path, requires: requires})
+		inRepo[path] = true
+	}
+
+	modules := make([]rules.Module, 0, len(raws))
+	for _, r := range raws {
+		var requires []string
+		for _, req := range r.requires {
+			if inRepo[req] {
+				requires = append(requires, req)
+			}
+		}
+		sort.Strings(requires)
+		modules = append(modules, rules.Module{Path: r.path, Requires: requires})
+	}
+	return modules, nil
+}
+
 // loadNestedModules discovers and loads every nested module under
 // repoRoot.
 func loadNestedModules(repoRoot string) ([]rules.Package, error) {

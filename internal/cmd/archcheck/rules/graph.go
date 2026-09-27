@@ -43,7 +43,7 @@ const (
 	// (github.com/pablogore/ego/v4).
 	RootModule ModuleKind = iota
 	// NestedModule is any module with its own go.mod under the repository
-	// (publisher/*, benchmark, example/cluster).
+	// (publisher/*, benchmark, example/cluster, test/compat).
 	NestedModule
 )
 
@@ -84,10 +84,29 @@ type Package struct {
 	Imports []string
 }
 
+// Module is one Go module of the repository, root or nested, as its go.mod
+// declares it. The loader (internal/cmd/archcheck) reads it with
+// `go mod edit -json`.
+type Module struct {
+	// Path is the module path from the go.mod "module" directive.
+	Path string
+	// Requires are the module paths of the other in-repository modules this
+	// module's go.mod requires, whether or not a replace points them at the
+	// working tree. Third-party requirements are left out.
+	Requires []string
+}
+
 // Graph is the whole import graph Evaluate checks: every package considered
-// in a single archcheck run, root module and nested modules together.
+// in a single archcheck run, root module and nested modules together, plus
+// the table of modules those packages belong to.
 type Graph struct {
 	Packages []Package
+	// Modules is every in-repository module, root included. The
+	// module-aware rules (no-cross-module-internal, no-module-cycle) need
+	// it: a package belongs to the module with the longest path that
+	// prefixes its import path. When it is empty, those rules match
+	// nothing, and Evaluate's zero-match check rejects the run.
+	Modules []Module
 }
 
 // IsStdlib reports whether importPath is a standard-library import: an

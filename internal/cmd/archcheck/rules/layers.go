@@ -28,7 +28,8 @@ import "strings"
 // rules (design.md §3 names four: contracts, the application package
 // `migration`, external adapter modules and "every nested module";
 // ego-arch-003/design.md §D8 adds the composition packages and the
-// packages that must not import them).
+// packages that must not import them; ego-arch-006 slice S1 widens "every
+// nested module" to every module and adds the module graph itself).
 type Layer struct {
 	// Name identifies the layer in reports, e.g. "contract packages".
 	Name string
@@ -129,13 +130,24 @@ func ExternalAdapterLayer(rootModulePath string) Layer {
 	}
 }
 
-// AnyNestedModuleLayer is "every nested module" in design.md §3: it backs
-// the no-cross-module-internal rule, which applies to every nested module,
-// not only publisher/*.
-var AnyNestedModuleLayer = Layer{
-	Name: "every nested module",
-	Match: func(pkg Package) bool {
-		return pkg.Kind == NestedModule
+// AnyModuleLayer is every package of every in-repository module, root and
+// nested. It backs no-cross-module-internal, which design.md §3 first
+// applied to "every nested module" importing the root's internal/ packages
+// and ego-arch-006 (slice S1) generalized to any pair of modules.
+var AnyModuleLayer = Layer{
+	Name: "every module (root and nested)",
+	Match: func(Package) bool {
+		return true
+	},
+}
+
+// ModuleGraphLayer names what no-module-cycle checks: the in-repository
+// module graph itself, not packages. Evaluate never calls its Match; a
+// rule with CheckModules is evaluated over Graph.Modules instead.
+var ModuleGraphLayer = Layer{
+	Name: "every in-repository module (go.mod requirements)",
+	Match: func(Package) bool {
+		return false
 	},
 }
 

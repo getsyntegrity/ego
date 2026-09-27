@@ -89,6 +89,22 @@ type Rule struct {
 	// not a closed set, so a transitive path (e.g. expvar -> net/http) is
 	// possible and is not enforced.
 	StdlibDenylist []string
+	// ForbidsEdge, when set, replaces Forbids and Reason for a rule that
+	// must know which module each side of an import edge belongs to
+	// (no-cross-module-internal). modules resolves an import path to its
+	// owning in-repository module (see ModuleIndex). It returns whether the
+	// edge is forbidden and, when it is, why. A rule with ForbidsEdge
+	// matches no package when the graph has no module table, so Evaluate's
+	// zero-match check rejects such a run instead of passing vacuously.
+	ForbidsEdge func(modules ModuleIndex, importer, importPath string) (forbidden bool, reason string)
+	// CheckModules, when set, makes this a module-graph rule instead of an
+	// import-edge rule (no-module-cycle): Evaluate calls it once with the
+	// graph's module table and ignores Layer.Match, Forbids and
+	// StdlibDenylist. Each Violation it returns names a requiring module as
+	// Importer and a required module as Import, so the baseline covers it
+	// like any import edge. The rule's RuleStat counts modules, not
+	// packages.
+	CheckModules func(modules []Module) []Violation
 }
 
 // allowedContractImport reports whether importPath is one of the targets
@@ -109,7 +125,8 @@ func allowedContractImport(rootModulePath, importPath string) bool {
 
 // DefaultRules returns the repository's current rule table (design.md §3,
 // plus composition-no-runtime and composition-leaf from
-// ego-arch-003/design.md §D8),
+// ego-arch-003/design.md §D8, and no-module-cycle and the generalized
+// no-cross-module-internal from ego-arch-006/design.md §6 S1),
 // for the root Go module at rootModulePath. Callers read rootModulePath
 // from the root go.mod
 // (parseGoModModulePath in internal/cmd/archcheck) rather than assuming a
@@ -168,16 +185,19 @@ func DefaultRules(rootModulePath string) []Rule {
 		},
 		{
 			ID:          "no-cross-module-internal",
-			Description: "a nested module must not import the root module's internal/ packages",
-			Source:      "design.md §3",
-			Layer:       AnyNestedModuleLayer,
+			Description: "a package must not import an internal/ package that belongs to a different in-repository module, root or nested, in either direction",
+			Source:      "design.md §3; ego-arch-006/design.md §6 S1",
+			Layer:       AnyModuleLayer,
 			Semantics:   Denylist,
-			Forbids: func(importPath string) bool {
-				return hasPathOrSubpath(importPath, rootModulePath+"/internal")
-			},
-			Reason: func(importPath string) string {
-				return "imports " + importPath + ", which crosses the root module's internal/ boundary (" + rootModulePath + "/internal)"
-			},
+			ForbidsEdge: crossModuleInternal,
+		},
+		{
+			ID:           "no-module-cycle",
+			Description:  "no in-repository module may require, directly or through other in-repository modules, a module that requires it back",
+			Source:       "design.md §3; ego-arch-006/design.md §5.2, §6 S1",
+			Layer:        ModuleGraphLayer,
+			Semantics:    Denylist,
+			CheckModules: moduleCycleViolations,
 		},
 		{
 			ID:          "composition-no-runtime",
