@@ -26,7 +26,9 @@ import "strings"
 
 // Layer groups the packages that share one set of dependency-direction
 // rules (design.md §3 names four: contracts, the application package
-// `migration`, external adapter modules and "every nested module").
+// `migration`, external adapter modules and "every nested module";
+// ego-arch-003/design.md §D8 adds the composition packages and the
+// packages that must not import them).
 type Layer struct {
 	// Name identifies the layer in reports, e.g. "contract packages".
 	Name string
@@ -135,4 +137,58 @@ var AnyNestedModuleLayer = Layer{
 	Match: func(pkg Package) bool {
 		return pkg.Kind == NestedModule
 	},
+}
+
+// isCompositionImport reports whether importPath is the composition
+// package or anything under it (compose, compose/goakt,
+// compose/internal/lifecycle, ...), matched by whole path segment.
+func isCompositionImport(rootModulePath, importPath string) bool {
+	return hasPathOrSubpath(importPath, rootModulePath+"/compose")
+}
+
+// CompositionLayer returns the layer ego-arch-003 design.md §D8 names for
+// the runtime-neutral half of the composition root: the root-module
+// package compose and everything under compose/internal/ (the lifecycle
+// sequencer). It deliberately excludes runtime-specific composition roots
+// such as compose/goakt, which may import the runtime they wire. It is a
+// layer of its own, not part of ApplicationLayer: compose is the
+// composition root, not the Application layer of ego-arch-001 §3.
+func CompositionLayer(rootModulePath string) Layer {
+	return Layer{
+		Name: "runtime-neutral composition packages (compose, compose/internal/...)",
+		Match: func(pkg Package) bool {
+			if pkg.Kind != RootModule {
+				return false
+			}
+			return pkg.ImportPath == rootModulePath+"/compose" ||
+				hasPathOrSubpath(pkg.ImportPath, rootModulePath+"/compose/internal")
+		},
+	}
+}
+
+// CompositionLeafLayer returns the layer the composition-leaf rule applies
+// to (ego-arch-003 design.md §D8): every root-module production package
+// that is not under compose/, is not a main package, and is not under
+// example/. Those are the composition root's legitimate consumers, and so
+// are test files and the benchmark module, which never reach this layer:
+// loaders record production imports only, and benchmark is a nested
+// module. A package whose name is unknown (empty) counts as not main, so
+// the layer fails closed.
+func CompositionLeafLayer(rootModulePath string) Layer {
+	return Layer{
+		Name: "root-module production packages outside compose/ (except main packages and examples)",
+		Match: func(pkg Package) bool {
+			if pkg.Kind != RootModule || pkg.Name == "main" {
+				return false
+			}
+			if !hasPathOrSubpath(pkg.ImportPath, rootModulePath) {
+				// Not a package of this root module at all.
+				return false
+			}
+			if isCompositionImport(rootModulePath, pkg.ImportPath) {
+				return false
+			}
+			return !hasPathOrSubpath(pkg.ImportPath, rootModulePath+"/example")
+		},
+	}
 }

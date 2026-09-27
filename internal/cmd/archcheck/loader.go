@@ -57,6 +57,7 @@ func skipDirName(name string) bool {
 // only production imports are ever checked (see loadRootModule).
 type rawListPackage struct {
 	ImportPath string
+	Name       string
 	Imports    []string
 	Error      *struct {
 		Err string
@@ -105,6 +106,7 @@ func loadRootModule(repoRoot string) ([]rules.Package, error) {
 		}
 		pkgs = append(pkgs, rules.Package{
 			ImportPath: raw.ImportPath,
+			Name:       raw.Name,
 			Kind:       rules.RootModule,
 			Imports:    raw.Imports,
 		})
@@ -254,6 +256,7 @@ func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 	}
 
 	importsByDir := make(map[string]map[string]bool)
+	nameByDir := make(map[string]string)
 	fset := token.NewFileSet()
 
 	walkErr := filepath.WalkDir(moduleDir, func(path string, d fs.DirEntry, err error) error {
@@ -289,6 +292,12 @@ func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 		if importsByDir[rel] == nil {
 			importsByDir[rel] = make(map[string]bool)
 		}
+		// WalkDir visits files in lexical order, so the first file's
+		// package clause names the package deterministically; build
+		// constraints are ignored here, as for imports.
+		if _, named := nameByDir[rel]; !named {
+			nameByDir[rel] = file.Name.Name
+		}
 		for _, imp := range file.Imports {
 			impPath, unquoteErr := strconv.Unquote(imp.Path.Value)
 			if unquoteErr != nil {
@@ -315,6 +324,7 @@ func loadNestedModule(moduleDir string) ([]rules.Package, error) {
 		sort.Strings(list)
 		pkgs = append(pkgs, rules.Package{
 			ImportPath: importPath,
+			Name:       nameByDir[rel],
 			Kind:       rules.NestedModule,
 			Imports:    list,
 		})

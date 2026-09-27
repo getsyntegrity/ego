@@ -115,6 +115,12 @@ import "testing"
 
 func TestNothing(t *testing.T) {}
 `)
+	writeFile(t, filepath.Join(dir, "cmd", "tool", "main.go"), `package main
+
+import "`+modulePath+`/adapter"
+
+func main() { _ = adapter.Adapter{} }
+`)
 
 	pkgs, err := loadRootModule(dir)
 	if err != nil {
@@ -142,6 +148,16 @@ func TestNothing(t *testing.T) {}
 	if containsImport(adapterPkg.Imports, "testing") {
 		t.Errorf("adapter Imports = %v, must not contain the test-only import testing", adapterPkg.Imports)
 	}
+	if adapterPkg.Name != "adapter" {
+		t.Errorf("adapter Name = %q, want adapter", adapterPkg.Name)
+	}
+	toolPkg, ok := byPath[modulePath+"/cmd/tool"]
+	if !ok {
+		t.Fatalf("cmd/tool package not found in %+v", pkgs)
+	}
+	if toolPkg.Name != "main" {
+		t.Errorf("cmd/tool Name = %q, want main", toolPkg.Name)
+	}
 }
 
 // TestLoadRootModule_LoadErrorFailsClosed proves loadRootModule fails
@@ -164,8 +180,9 @@ func TestLoadRootModule_LoadErrorFailsClosed(t *testing.T) {
 }
 
 // writeRunFixture builds a tiny repository fixture under t.TempDir(): a
-// root module with one contract package (tenancy) and one application
-// package (migration) that imports it, plus a nested adapter module
+// root module with its root package, one contract package (tenancy), one
+// application package (migration) that imports it and the composition
+// package (compose), plus a nested adapter module
 // (publisher/kafka) that either stays clean or imports the root module
 // path directly — the one edge external-adapter-no-runtime forbids — so a
 // single builder produces both a clean graph and a violating one for
@@ -175,7 +192,10 @@ func writeRunFixture(t *testing.T, withViolation bool) (dir, modulePath string) 
 	dir = t.TempDir()
 	modulePath = "github.com/example/archcheckfixture"
 	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "root.go"), "package archcheckfixture\n\n// Runtime stands in for the root package ego.\ntype Runtime struct{}\n")
 	writeFile(t, filepath.Join(dir, "tenancy", "tenancy.go"), "package tenancy\n\n// Marker is a contract type.\ntype Marker struct{}\n")
+	writeFile(t, filepath.Join(dir, "compose", "compose.go"),
+		"package compose\n\nimport \""+modulePath+"/tenancy\"\n\n// Spec stands in for compose.Spec.\ntype Spec struct{ Resolver tenancy.Marker }\n")
 	writeFile(t, filepath.Join(dir, "migration", "migration.go"),
 		"package migration\n\nimport \""+modulePath+"/tenancy\"\n\nvar _ = tenancy.Marker{}\n")
 	writeFile(t, filepath.Join(dir, "publisher", "kafka", "go.mod"), "module "+modulePath+"/publisher/kafka\n\ngo 1.21\n")
@@ -245,5 +265,60 @@ func TestRunCheck_StaleBaselineEntryFails(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "no longer matches a violation") {
 		t.Errorf("stdout = %q, want it to name the stale entry", stdout.String())
+	}
+}
+
+// TestRunCheck_CompositionNoRuntimeViolationFails: compose importing the
+// root package (ego's stand-in) fails the check under
+// composition-no-runtime (ego-arch-003 design §D8).
+func TestRunCheck_CompositionNoRuntimeViolationFails(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "compose", "compose.go"),
+		"package compose\n\nimport \""+modulePath+"\"\n\n// Spec leaks the runtime.\ntype Spec struct{ R archcheckfixture.Runtime }\n")
+	var stdout strings.Builder
+	err := runCheck(dir, nil, &stdout)
+	if err == nil {
+		t.Fatalf("runCheck() = nil error, want composition-no-runtime to fail; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "composition-no-runtime") {
+		t.Errorf("stdout = %q, want it to name composition-no-runtime", stdout.String())
+	}
+}
+
+// TestRunCheck_CompositionLeafViolationFails: a production package that is
+// neither under compose/ nor main must not import compose.
+func TestRunCheck_CompositionLeafViolationFails(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "helper", "helper.go"),
+		"package helper\n\nimport \""+modulePath+"/compose\"\n\nvar _ = compose.Spec{}\n")
+	var stdout strings.Builder
+	err := runCheck(dir, nil, &stdout)
+	if err == nil {
+		t.Fatalf("runCheck() = nil error, want composition-leaf to fail; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "composition-leaf") {
+		t.Errorf("stdout = %q, want it to name composition-leaf", stdout.String())
+	}
+}
+
+// TestRunCheck_CompositionLeafAllowsMainAndTests: a main package and a
+// non-main package's test file may import compose; only production imports
+// reach the graph, and main packages are exempt.
+func TestRunCheck_CompositionLeafAllowsMainAndTests(t *testing.T) {
+	requireGo(t)
+
+	dir, modulePath := writeRunFixture(t, false)
+	writeFile(t, filepath.Join(dir, "cmd", "app", "main.go"),
+		"package main\n\nimport \""+modulePath+"/compose\"\n\nfunc main() { _ = compose.Spec{} }\n")
+	writeFile(t, filepath.Join(dir, "helper", "helper.go"), "package helper\n\n// Name is a plain value.\nconst Name = \"helper\"\n")
+	writeFile(t, filepath.Join(dir, "helper", "helper_test.go"),
+		"package helper\n\nimport (\n\t\"testing\"\n\n\t\""+modulePath+"/compose\"\n)\n\nfunc TestSpec(t *testing.T) { _ = compose.Spec{} }\n")
+	var stdout strings.Builder
+	if err := runCheck(dir, nil, &stdout); err != nil {
+		t.Fatalf("runCheck() = %v, want nil; output:\n%s", err, stdout.String())
 	}
 }

@@ -70,6 +70,12 @@ type Package struct {
 	// "github.com/pablogore/ego/v4/tenancy" or
 	// "github.com/pablogore/ego/v4/publisher/kafka".
 	ImportPath string
+	// Name is the package's own name as declared by its package clause,
+	// e.g. "tenancy" or "main". The composition-leaf rule uses it to tell a
+	// main package (a program, free to wire the composition root) from a
+	// library package. Empty when a loader could not tell, which every rule
+	// treats as "not main", so an unknown name fails closed.
+	Name string
 	// Kind is which module ImportPath belongs to.
 	Kind ModuleKind
 	// Imports are the import paths this package's production (non-test)

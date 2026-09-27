@@ -50,7 +50,8 @@ func (k Kind) String() string {
 	}
 }
 
-// Rule is one dependency-direction rule from design.md §3. A Rule applies
+// Rule is one dependency-direction rule from design.md §3 (or, for the
+// composition rules, ego-arch-003/design.md §D8). A Rule applies
 // to every package Layer.Match selects, and forbids every non-stdlib
 // import Forbids reports true for; Evaluate filters out stdlib imports
 // before calling Forbids, so Forbids is never asked about one.
@@ -106,7 +107,9 @@ func allowedContractImport(rootModulePath, importPath string) bool {
 	return hasPathOrSubpath(importPath, "google.golang.org/protobuf")
 }
 
-// DefaultRules returns the repository's current rule table (design.md §3),
+// DefaultRules returns the repository's current rule table (design.md §3,
+// plus composition-no-runtime and composition-leaf from
+// ego-arch-003/design.md §D8),
 // for the root Go module at rootModulePath. Callers read rootModulePath
 // from the root go.mod
 // (parseGoModModulePath in internal/cmd/archcheck) rather than assuming a
@@ -138,23 +141,10 @@ func DefaultRules(rootModulePath string) []Rule {
 			Layer:       ApplicationLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {
-				if importPath == rootModulePath {
-					return true
-				}
-				if hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions") {
-					return true
-				}
-				return hasPathOrSubpath(importPath, "github.com/tochemey/goakt/v4")
+				return forbidsRuntime(rootModulePath, importPath)
 			},
 			Reason: func(importPath string) string {
-				switch {
-				case importPath == rootModulePath:
-					return "imports the root package " + rootModulePath + " directly, not a runtime-neutral contract"
-				case hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions"):
-					return "imports " + rootModulePath + "/internal/extensions, the GoAkt runtime adapter's internal package"
-				default:
-					return "imports the GoAkt runtime (github.com/tochemey/goakt/v4)"
-				}
+				return runtimeReason(rootModulePath, importPath)
 			},
 		},
 		{
@@ -189,6 +179,59 @@ func DefaultRules(rootModulePath string) []Rule {
 				return "imports " + importPath + ", which crosses the root module's internal/ boundary (" + rootModulePath + "/internal)"
 			},
 		},
+		{
+			ID:          "composition-no-runtime",
+			Description: "the runtime-neutral composition packages (compose and compose/internal/...) must not import the root package ego, internal/extensions or the GoAkt runtime",
+			Source:      "ego-arch-003/design.md §D8",
+			Layer:       CompositionLayer(rootModulePath),
+			Semantics:   Denylist,
+			Forbids: func(importPath string) bool {
+				return forbidsRuntime(rootModulePath, importPath)
+			},
+			Reason: func(importPath string) string {
+				return runtimeReason(rootModulePath, importPath)
+			},
+		},
+		{
+			ID:          "composition-leaf",
+			Description: "only packages under compose/, main packages, examples and tests may import the composition root (compose and anything under it)",
+			Source:      "ego-arch-003/design.md §D8",
+			Layer:       CompositionLeafLayer(rootModulePath),
+			Semantics:   Denylist,
+			Forbids: func(importPath string) bool {
+				return isCompositionImport(rootModulePath, importPath)
+			},
+			Reason: func(importPath string) string {
+				return "imports " + importPath + ", part of the composition root (" + rootModulePath + "/compose); only packages under compose/, main packages, examples and tests may depend on it"
+			},
+		},
+	}
+}
+
+// forbidsRuntime is the denylist application-no-runtime and
+// composition-no-runtime share: the root package ego itself,
+// internal/extensions (the GoAkt adapter's internals) and the GoAkt
+// runtime. The two rules keep separate layers; sharing the denylist does
+// not widen either layer.
+func forbidsRuntime(rootModulePath, importPath string) bool {
+	if importPath == rootModulePath {
+		return true
+	}
+	if hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions") {
+		return true
+	}
+	return hasPathOrSubpath(importPath, "github.com/tochemey/goakt/v4")
+}
+
+// runtimeReason names which forbidsRuntime prefix importPath matched.
+func runtimeReason(rootModulePath, importPath string) string {
+	switch {
+	case importPath == rootModulePath:
+		return "imports the root package " + rootModulePath + " directly, not a runtime-neutral contract"
+	case hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions"):
+		return "imports " + rootModulePath + "/internal/extensions, the GoAkt runtime adapter's internal package"
+	default:
+		return "imports the GoAkt runtime (github.com/tochemey/goakt/v4)"
 	}
 }
 
