@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	goakt "github.com/tochemey/goakt/v4/actor"
 
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
 	"github.com/pablogore/ego/v4/testkit"
@@ -137,5 +138,66 @@ func TestEngineMultiNodeNeutralBehaviors(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("%T", valueTypeEventSourcedBehavior{}), placement.Kind)
 		assert.Equal(t, id, placement.EntityID)
 		requireNotSpawned(t, id)
+	})
+
+	t.Run("old and new registration interoperate", func(t *testing.T) {
+		// A second cluster, because the nodes register their kinds
+		// differently: node 1 with the old WithEntityKinds, node 2 with the
+		// new WithBehaviorKinds (#123, S3-4). Each direction spawns a
+		// different behavior type, so the receiving node can only decode it
+		// with the kind its own option registered, never with the lazy
+		// Inject the calling node does at spawn time. A spawn that lands on
+		// the peer proves the registry key and bytes are the same for both
+		// options.
+		mixedOpts := func(kinds Option) []Option {
+			stateStore := testkit.NewDurableStore()
+			require.NoError(t, stateStore.Connect(ctx))
+			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+			return []Option{kinds, WithStateStore(stateStore)}
+		}
+		mixed := newTestCluster(t,
+			mixedOpts(WithEntityKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
+			mixedOpts(WithBehaviorKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
+		)
+
+		// hostedByPeer spawns eight entities from one node and counts those
+		// the peer hosts; every spawn must answer a command.
+		hostedByPeer := func(t *testing.T, from *Engine, peer goakt.ActorSystem, spawn func(id string) error) int {
+			t.Helper()
+			hosted := 0
+			for range 8 {
+				id := uuid.NewString()
+				require.NoError(t, spawn(id))
+
+				state, _, err := from.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+				require.NoError(t, err)
+				account, ok := state.(*testpb.Account)
+				require.True(t, ok)
+				assert.EqualValues(t, 100, account.GetAccountBalance())
+
+				pid, err := peer.ActorOf(ctx, id)
+				require.NoError(t, err)
+				if pid.IsLocal() {
+					hosted++
+				}
+			}
+			return hosted
+		}
+
+		t.Run("WithEntityKinds node spawns onto WithBehaviorKinds node", func(t *testing.T) {
+			engine := mixed.engines[0]
+			hosted := hostedByPeer(t, engine, mixed.systems[1], func(id string) error {
+				return engine.SpawnEventSourced(ctx, NewAccountEventSourcedBehavior(id))
+			})
+			assert.Positive(t, hosted, "at least one entity must be hosted by the WithBehaviorKinds node")
+		})
+
+		t.Run("WithBehaviorKinds node spawns onto WithEntityKinds node", func(t *testing.T) {
+			engine := mixed.engines[1]
+			hosted := hostedByPeer(t, engine, mixed.systems[0], func(id string) error {
+				return engine.SpawnDurableState(ctx, NewAccountDurableStateBehavior(id))
+			})
+			assert.Positive(t, hosted, "at least one entity must be hosted by the WithEntityKinds node")
+		})
 	})
 }

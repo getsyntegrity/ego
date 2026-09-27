@@ -23,6 +23,7 @@
 package ego
 
 import (
+	"encoding"
 	"reflect"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
@@ -56,7 +57,7 @@ type Config struct {
 	eventAdapters []eventadapter.EventAdapter
 	telemetry     *Telemetry
 	encryptor     encryption.Encryptor
-	entityKinds   []EntityKind
+	behaviorKinds []BehaviorKind
 
 	// tenantResolver is the effective tenancy.TenantResolver, if any. Its
 	// non-nil-ness IS tenant-aware mode (design.md D1) — there is no
@@ -356,9 +357,51 @@ type EntityKind = extension.Dependency
 // Single-node deployments may omit this option; the lazy registration done by
 // Entity, DurableStateEntity, and Saga is sufficient when spawns never leave
 // the local node.
+//
+// WithEntityKinds and WithBehaviorKinds append to the same registration list,
+// so the two can be mixed on one node and across nodes.
 func WithEntityKinds(kinds ...EntityKind) Option {
 	return OptionFunc(func(c *Config) {
-		c.entityKinds = append(c.entityKinds, kinds...)
+		// A []EntityKind cannot be appended to a []BehaviorKind in one call:
+		// the element types differ, even though each value is assignable.
+		for _, kind := range kinds {
+			c.behaviorKinds = append(c.behaviorKinds, kind)
+		}
+	})
+}
+
+// BehaviorKind is a behavior type a node registers so that, in cluster mode,
+// it can reconstruct behaviors that peers place on it. It has the same method
+// set as EntityKind, spelled with the standard library only: any EntityKind
+// value is a BehaviorKind and any BehaviorKind value is an EntityKind.
+//
+// A BehaviorKind value must be a pointer, because the runtime's type registry
+// names a type through a pointer. Its MarshalBinary and
+// UnmarshalBinary carry the behavior's state between nodes.
+type BehaviorKind interface {
+	// ID returns the behavior's identifier.
+	ID() string
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
+}
+
+// WithBehaviorKinds pre-registers the behavior types this node can host, so
+// spawn requests that peers place on it can be deserialized on arrival. It is
+// the successor of WithEntityKinds, takes the same values, and appends to the
+// same registration list, so the two options can be mixed.
+//
+// Pass one pointer per behavior type (a zero value such as
+// new(AccountBehavior) is fine, and so is a typed-nil pointer; only its
+// concrete type is registered). NewEngine registers every kind on the node's
+// actor system and returns a *BehaviorPlacementError wrapping
+// ErrBehaviorNotPointer, before registering anything, when a kind is an
+// untyped nil or not a pointer.
+//
+// In cluster mode every node must list every kind it may receive. Single-node
+// deployments may omit this option.
+func WithBehaviorKinds(kinds ...BehaviorKind) Option {
+	return OptionFunc(func(c *Config) {
+		c.behaviorKinds = append(c.behaviorKinds, kinds...)
 	})
 }
 
