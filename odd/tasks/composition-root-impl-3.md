@@ -82,6 +82,32 @@ specify it; each step already receives the caller's `ctx` and fails on its own w
   ./compose/...`): 0 issues. CI is authoritative.
 - Go: `go1.27.1` from `PATH` with `GOROOT` unset.
 
+## Review round 1 (PR #137, approve with nits)
+
+- [x] **R1** `New` rejects a negative `ShutdownTimeout` instead of mapping it to the default
+  (`TestNew_RejectsNegativeShutdownTimeout`, RED then GREEN).
+- [x] **R2** `Sequence` godoc: a `Stop` arriving during a blocked `Start` waits on the mutex, unbounded by
+  the shutdown timeout (cancel the start context to unblock it); a step calling `Start`/`Stop` on its own
+  sequence deadlocks.
+- [x] **R3** A panicking step now rolls back, runs `Release` and marks the sequence `Failed` before the panic
+  continues (a deferred check, no `recover`); cleanup errors on that path are dropped
+  (`TestStart_PanickingStepRollsBackReleasesAndFails`, RED then GREEN, no timing). A panic inside an
+  undo step during a normal rollback is not handled (the failure branch marks itself settled first so
+  cleanup never runs twice).
+- [x] **R4** `ShutdownTimeout` godoc: it bounds the whole cleanup (every undo plus `Release`), not each step.
+- Not done, by decision: no `ctx.Err()` check between start steps (maintainer decision pending).
+
+## Carried to IMPL-4 or a follow-up
+
+- `compose.Spec.Validate` does not reject a negative `ShutdownTimeout`, while its godoc says zero means
+  the default. `lifecycle.New` now rejects it, so IMPL-4 fails late (at `New` of the sequence) unless it
+  adds a Spec rule or checks it itself. Candidate: a Spec rule in IMPL-4 or a follow-up; not added here
+  because it is `compose`'s public surface.
+- IMPL-4 step 2 (create and start the actor system, allocate the event stream) must clean up after
+  itself when it half-starts (for example actor system created but `Start` failed, or started but a later
+  part of the step failed): the sequencer never stops the step that failed. Add that half-start case to
+  IMPL-4's per-step failure tests.
+
 ## Next step
 
 IMPL-4 (`compose/goakt`) builds its five `App.Start` steps and the publisher `Release` on this

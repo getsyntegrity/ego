@@ -130,6 +130,55 @@ func TestNew_RejectsIncompleteSteps(t *testing.T) {
 	}
 }
 
+func TestNew_RejectsNegativeShutdownTimeout(t *testing.T) {
+	noop := func(context.Context) error { return nil }
+	steps := []Step{{Name: "runtime", Start: noop}}
+
+	_, err := New(Config{Steps: steps, ShutdownTimeout: -time.Second})
+	if err == nil {
+		t.Fatal("New accepted a negative shutdown timeout; only zero means the default")
+	}
+	if !strings.Contains(err.Error(), "ShutdownTimeout") {
+		t.Errorf("error %q does not name ShutdownTimeout", err)
+	}
+	if _, err := New(Config{Steps: steps}); err != nil {
+		t.Fatalf("New rejected a zero shutdown timeout, which means the default: %v", err)
+	}
+}
+
+func TestStart_PanickingStepRollsBackReleasesAndFails(t *testing.T) {
+	rec := newRecorder()
+	cfg := rec.config(names[:3]...)
+	cfg.Steps[1].Start = func(context.Context) error {
+		rec.record("start runtime")
+		panic("runtime exploded")
+	}
+	seq := mustNew(t, cfg)
+
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		_ = seq.Start(context.Background())
+		return nil
+	}()
+
+	if recovered != "runtime exploded" {
+		t.Fatalf("recovered %v, want the step's panic re-raised unchanged", recovered)
+	}
+	want := []string{"start probe", "start runtime", "stop probe", "release"}
+	if got := rec.calls(); !slices.Equal(got, want) {
+		t.Fatalf("calls = %v, want %v (rollback and Release before the panic propagates)", got, want)
+	}
+	if got := seq.State(); got != StateFailed {
+		t.Fatalf("State = %v, want StateFailed", got)
+	}
+	if err := seq.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop after a panicking Start = %v, want nil", err)
+	}
+	if got := rec.callsFrom(len(want)); len(got) != 0 {
+		t.Fatalf("Stop after a panicking Start made calls %v", got)
+	}
+}
+
 func TestStart_RunsStepsInOrder(t *testing.T) {
 	rec := newRecorder()
 	seq := mustNew(t, rec.config(names...))

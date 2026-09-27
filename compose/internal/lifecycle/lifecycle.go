@@ -76,8 +76,10 @@ type Config struct {
 	// undos of a failed Start, and on Stop of a sequence that never
 	// started. It is optional.
 	Release func(ctx context.Context) error
-	// ShutdownTimeout bounds rollback and Stop; zero means
-	// DefaultShutdownTimeout.
+	// ShutdownTimeout bounds the whole cleanup of one rollback or one Stop
+	// — every undo step plus Release, together — not each step on its
+	// own: all of them share one context with this deadline. Zero means
+	// DefaultShutdownTimeout; a negative value is rejected by New.
 	ShutdownTimeout time.Duration
 }
 
@@ -124,6 +126,13 @@ func (st State) String() string {
 // fails. Start and Stop are serialized by a mutex, so concurrent callers
 // cannot interleave them; State can be read at any time, including from
 // inside a step.
+//
+// Two consequences of that mutex. A Stop that arrives while Start is still
+// running a step waits for Start to return, and that wait is not bounded by
+// the shutdown timeout, which only starts once Stop holds the mutex; a
+// signal-driven Stop is therefore unblocked by canceling the context passed
+// to Start, so the running step returns. And a step that calls Start or
+// Stop on its own sequence deadlocks.
 type Sequence struct {
 	mu      sync.Mutex // serializes Start and Stop
 	state   atomic.Int32
@@ -145,7 +154,10 @@ func New(cfg Config) (*Sequence, error) {
 		}
 	}
 	timeout := cfg.ShutdownTimeout
-	if timeout <= 0 {
+	if timeout < 0 {
+		return nil, fmt.Errorf("lifecycle: ShutdownTimeout must not be negative, got %s (zero means the default)", timeout)
+	}
+	if timeout == 0 {
 		timeout = DefaultShutdownTimeout
 	}
 	return &Sequence{
@@ -173,6 +185,12 @@ func (s *Sequence) setState(st State) {
 // *compose.StartError whose Step is the failed step's name, whose Err is
 // that step's error and whose Rollback joins every cleanup error (nil when
 // cleanup was clean); the sequence ends in StateFailed.
+//
+// When a step panics, Start rolls back the same way — stopping the steps
+// that already started, then Release — and marks the sequence StateFailed
+// before the panic continues unchanged, so the resources are released and a
+// later Stop is a no-op. Cleanup errors in that case are dropped: there is
+// no StartError to carry them.
 func (s *Sequence) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,14 +200,27 @@ func (s *Sequence) Start(ctx context.Context) error {
 	}
 	s.setState(StateStarting)
 
+	// settled is set on every normal return; if it is still false when
+	// this runs, a step panicked. The deferred call does not recover, so
+	// the panic propagates once cleanup is done.
+	settled := false
+	defer func() {
+		if !settled {
+			_ = s.cleanup(ctx, true)
+			s.setState(StateFailed)
+		}
+	}()
+
 	for _, step := range s.steps {
 		if err := step.Start(ctx); err != nil {
+			settled = true // cleanup below runs once; the deferred one must not repeat it
 			rollback := s.cleanup(ctx, true)
 			s.setState(StateFailed)
 			return &compose.StartError{Step: step.Name, Err: err, Rollback: rollback}
 		}
 		s.started++
 	}
+	settled = true
 	s.setState(StateRunning)
 	return nil
 }
