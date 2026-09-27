@@ -96,7 +96,7 @@ Notes on the diagram:
 
 These rules apply to the root module and, where named, to nested modules. A rule check (slice S2, `internal/cmd/archcheck`, done — #117) enforces them, but not by walking a full transitive dependency closure. It checks direct production import edges: the root module's own graph from `go list -e -json ./...`, and each nested module's imports parsed directly with `go/parser` (imports only, no build and no network — see docs/ci.md, "Architecture boundary check", for the tool's exact mechanics and its rule table). Direct edges are enough for the rules below because contracts use a closed allowlist, and every package that allowlist admits is itself already runtime-free; a transitive path from a contract to GoAkt would therefore need a new *direct* edge first, and that edge is exactly what the check sees. This is also how "MUST NOT import any package whose dependency closure contains GoAkt" is enforced for contracts, without literally computing a closure. One thing it does not cover: S1 criterion 4 below (that a publisher's transitive `go list -deps` output excludes GoAkt after S1b) is a transitive, nested-module check. It was observed on the S1b pull request; archcheck still does not re-run it (it checks direct edges, not closures), but #122 added `TestUnitTestClosureExcludesRuntimeAndRoot` to each publisher module, a normal test that shells out to `go list -deps -test ./...` and fails if GoAkt or the root package reappears, so it now runs on every `go test ./...` in #111's module job (`scripts/ci/verify-module.sh`) — a stricter version of criterion 4 that also covers the test closure, not just production.
 
-**Contracts** (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, and every package under `port/`):
+**Contracts** (`tenancy`, `command`, `persistence`, `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, and every package under `port/`, including `port/publishing`, `port/behavior` and, since S4 (#147), the runtime SPI `port/runtime`):
 
 - MUST depend only on the standard library, other contract packages, `egopb`, the protobuf runtime library, root-module `internal/` utilities that carry no runtime (`internal/queue`, `internal/syncmap`), and small runtime-neutral libraries named in this document. Today that list is `github.com/google/uuid` and `go.uber.org/atomic`, both imported by `eventstream`. Adding a third-party dependency to a contract requires updating this list in review.
 - MUST NOT import `github.com/tochemey/goakt/v4` or any package whose dependency closure contains it.
@@ -109,6 +109,7 @@ These rules apply to the root module and, where named, to nested modules. A rule
 
 - MAY import contracts, `egopb`, GoAkt and OpenTelemetry.
 - MUST keep a compatibility alias in package `ego` for every exported symbol that moves out of it during v4, with no rename.
+- Implements the runtime SPI: since S4 (#147) `*ego.Engine` satisfies `port/runtime.Runtime` (a compile-time assertion in `engine_runtime.go`), and `compose/goakt.App.Runtime()` hands it out through that interface. Consumer code that needs a runtime SHOULD depend on `port/runtime`, not on `*ego.Engine`.
 
 **Application** (`migration`):
 
@@ -144,14 +145,16 @@ Every current root-module package appears once. "Stay" means the package already
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
 | `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b done (publishers import `port/publishing`) |
 | `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/behavior`, proposed in `ego-arch-002-s3/design.md` §5.1 (name confirmed 2026-09-27, #123) | S3, #123 |
-| `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
+| `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; implements `port/runtime.Runtime` since S4. Moving it into a GoAkt adapter package is #124's; the per-group inventory and destinations are `ego-runtime-001/design.md` §D10 | S4 done (#147); move: #124 |
+| `port/runtime` | Contract (runtime SPI) | `command`, `eventstream`, `port/behavior`, `tenancy` | Stay (root module until ego-arch-006 F1) | S4-2/S4-3 done (#147) |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
-| `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |
+| `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | #124 |
 | `egopb` | Schema | — | Stay | Protobuf policy (open) |
 | `migration` | Application | `egopb`, `internal/logging`, `persistence`, `tenancy` | Stay | S4-1 done (#147, `ego` import removed); revisit remaining scope after S4 |
 | `internal/logging` | Utility (used by `ego` and `migration`) | — | Stay | S4-1, #147 |
 | `internal/queue`, `internal/syncmap` | Utility (used by a contract) | — | Stay | Move only with the module that uses them |
 | `internal/runner`, `internal/ticker`, `internal/pause` | Utility (runtime and tests) | — | Stay | — |
+| `internal/runtimeconsumer` | Test evidence (no archcheck layer; its `go list -deps` closure test keeps package `ego` and GoAkt out) | `port/behavior`, `port/runtime`, `test/data/testpb` | Stay; driven by `compose/goakt`'s end-to-end test | S4-4 done (#147) |
 | `internal/cmd/ciselect`, `.../selector` | Tooling | `.../selector` | Stay | Extended by #111 |
 | `internal/cmd/archcheck` | Tooling | `.../rules` | Stay | S2 done, #117 |
 | `testkit` | Test support (public) | `egopb`, `encryption`, `offsetstore`, `persistence` | Stay | — |
@@ -232,6 +235,9 @@ Once a release exposes `port/publishing`, it is public API for the rest of v4. F
 **S3 — neutral behavior contracts** (#103). Remove `extension.Dependency` from `EventSourcedBehavior`, `DurableStateBehavior` and `SagaBehavior`, or add neutral definitions with a documented bridge. #103 owns the signatures and the compatibility plan.
 
 **S4 — runtime adapter separation** (#11). Shape the runtime SPI, then move GoAkt-specific engine and actor code behind it. #11 owns the SPI; this ADR only fixes the dependency direction.
+
+- **The SPI is done** (#147, `openspec/changes/ego-runtime-001/design.md`). S4-1 removed the last archcheck baseline entry (`migration` imports `internal/logging`, not `ego`). S4-2 added the contract package `port/runtime` with the neutral types, spawn options and errors, and left aliases in `ego`. S4-3 added the capability interfaces (`Entities`, `Sagas`, `Projections`, `Events`) and the composite `Runtime`, which `*ego.Engine` implements unchanged, plus a GoAkt-free test double. S4-4 added `compose/goakt.App.Runtime()` and `internal/runtimeconsumer`, a consumer whose production closure contains neither `ego` nor GoAkt and which drives a real application end to end through that accessor. No v4 API broke; archcheck has no baseline entry.
+- **What remains for #124** (the major release that separates the adapter): move the GoAkt-bound groups out of package `ego` into a GoAkt adapter package and later module, as ego-runtime-001 §D10 lists them with their destinations — engine construction (`NewEngine`, `Config`), the escape hatches (`Engine.ActorSystem`, `Config.GoaktOptions`, `ClusterKinds`), the actors, the adapter-only errors, `internal/extensions` and the other internals; remove the S4 aliases so the `port/runtime` names are the only ones; remove the deprecated GoAkt-typed API; and remove or retype `compose/goakt.App.Engine()`. An in-memory runtime (#148) is the next implementation of `port/runtime`.
 
 ## 6. When a boundary deserves its own `go.mod`
 
