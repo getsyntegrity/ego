@@ -168,7 +168,7 @@ history of this file.
 | W1c-6 | #148 RUNTIME-005 + #105 IMPL-6 | — | — | planned (issue created) | needs #147 |
 | W1c-7 | #146 two-node test | test/146-compose-two-node @903a037 | #155 | in review (Closes #146; placement determinism via aligner spawns under review) |
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
-| W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | approved; comment nit fixed (checked); CI pending; merge needs maintainer authorization | internal/logging; remove migration -> ego |
+| W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | merged — archcheck baseline empty | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
 | W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types | — | in progress | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
