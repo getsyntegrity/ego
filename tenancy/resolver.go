@@ -115,6 +115,51 @@ type FixedTenantResolver interface {
 // capability described above.
 var _ FixedTenantResolver = singleTenantResolver{}
 
+// CapFixedTenant is the adapter capability "implements FixedTenantResolver"
+// (ego-arch-004 design §D3). A tenant resolver that declares an
+// adapter.Descriptor lists it exactly when it implements
+// FixedTenantResolver; compose.Spec.Validate (rule V8) and the adapter
+// conformance suite check both directions.
+//
+// It says the resolver can be asked for a fixed tenant, not that it has
+// one: FixedTenant may still report (zero TenantID, false) at run time, as
+// a multi-tenant resolver that implements the interface does. Ask for the
+// answer with FixedTenantOf.
+//
+// It is an untyped string constant on purpose: it converts to
+// adapter.Capability where it is used, so this package never imports
+// port/adapter.
+const CapFixedTenant = "tenancy.fixed-tenant"
+
+// AsFixedTenantResolver returns r as a FixedTenantResolver and true when r
+// implements it, or nil and false otherwise, including for a nil r. It is
+// the only type assertion on FixedTenantResolver: every other caller —
+// the engine, composition-time validation — goes through it or through
+// FixedTenantOf, so the rule for what counts as "implements" lives in one
+// place. It never calls Resolve or FixedTenant.
+func AsFixedTenantResolver(r TenantResolver) (FixedTenantResolver, bool) {
+	fixed, ok := r.(FixedTenantResolver)
+	return fixed, ok
+}
+
+// FixedTenantOf returns r's fixed tenant and true when r implements
+// FixedTenantResolver and reports one. It returns the zero TenantID and
+// false when r is nil, does not implement FixedTenantResolver, or
+// implements it and reports no fixed tenant. It calls
+// AsFixedTenantResolver and asserts nothing itself, and it never calls
+// Resolve.
+func FixedTenantOf(r TenantResolver) (TenantID, bool) {
+	fixed, ok := AsFixedTenantResolver(r)
+	if !ok {
+		return "", false
+	}
+	id, has := fixed.FixedTenant()
+	if !has {
+		return "", false
+	}
+	return id, true
+}
+
 // FixedTenant implements FixedTenantResolver. A singleTenantResolver is
 // always built from a valid, tenant-scoped TenantContext (WithSingleTenant
 // fails construction otherwise), so this always reports true.
