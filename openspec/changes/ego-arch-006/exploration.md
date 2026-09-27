@@ -106,7 +106,7 @@ Two conclusions:
 
 **Consequences.**
 
-- The four publishers have never been consumable from the proxy, and the tags `release.yml` would create cannot fix that. This is a defect in the release scheme, not in #102, but #102 inherits it: **any new nested module that keeps the `github.com/pablogore/ego/v4/<dir>` path in directory `<dir>` has the same problem.**
+- At the baseline commit, none of the four publishers can be consumed from the proxy, and the tags `release.yml` would create cannot fix that. Earlier commits were not probed; their `go.mod` files declare the same paths in the same directories. This is a defect in the release scheme, not in #102, but #102 inherits it: **any new nested module that keeps the `github.com/pablogore/ego/v4/<dir>` path in directory `<dir>` has the same problem.**
 - It matters most for a module that the **root** requires. If the root required, say, a contracts module that consumers cannot resolve, the root module itself would stop being consumable.
 - It does not matter for a module that is never consumed (`benchmark`, `example/cluster`, or a new integration-test module), because nothing outside the repository ever resolves it.
 
@@ -161,7 +161,7 @@ All runs are `pull_request.yml` unless marked `build`, after #111 merged (the `m
 | `scripts/ci` plus publishers (#130) | [36288686950](https://github.com/getsyntegrity/ego/actions/runs/36288686950) | 672 s | `full`, 23 of 23 | 539 s (499 s) | 6 jobs, 28–112 s |
 | `build` on `main` (full gate) | [36283476574](https://github.com/getsyntegrity/ego/actions/runs/36283476574) | 654 s | `full` | 529 s (499 s) | 6 jobs, 24–98 s |
 
-**A contract-only change has no post-#111 run to cite.** The local selector (section 6) shows that one selects the root package `ego` and all six modules. The root package's own tests take about 97% of root test time (docs/ci.md, "Baseline", run 35868911889), so such a change should cost about the same as a root change. That is an expectation, not a measurement; slice S0 in the design records a real one.
+**A contract-only change has no post-#111 run to cite.** The local selector (section 6) shows that one selects the root package `ego` and all six modules. The root package's own tests took 97% of root test time in the docs/ci.md baseline (run 35868911889, which ran with `-race -p 1` before #108 removed `-p 1`), so such a change should cost about the same as a root change. That is an expectation, not a measurement; slice S0 in the design records a real one.
 
 What the numbers say:
 
@@ -194,5 +194,7 @@ So a committed `go.work` needs `GOWORK=off` in every CI step that is not explici
 1. **Keep one module and improve selection only.** This is the cheapest option and it keeps the root package lane. But it cannot remove GoAkt from the publishers' requirement lists (section 4.2), and it leaves #102's "boundaries are real modules" criterion unmet.
 2. **Many modules now, one per boundary, at the current paths.** Rejected. Each would inherit the section 5 defect, and a contracts module required by the root would make the root itself unconsumable.
 3. **Selector first, then a small, ordered set of modules that each pass ego-arch-001 §6, with the path and layout questions decided by the maintainers before the first module the root requires.** Recommended; see the proposal and design.
+
+In option 3, the contracts module can contain only packages whose imports stay inside it. `port/publishing` imports only `egopb`, so the two can move together. `port/behavior` (PR #131) imports `command`, which imports `tenancy`, so it cannot move without them (design D7).
 
 Option 3 is the only one that satisfies #102's acceptance criteria and ego-arch-001 §6 at the same time. The one tension between them, #102's "architectural boundaries must also be compilation boundaries" against §6's "faster compilation alone does not qualify", is resolved by the measurement: the boundary that pays (contracts plus schema, below the root) pays through the module graph, not through compile time. The design records this reading as a decision for the maintainers to confirm.
