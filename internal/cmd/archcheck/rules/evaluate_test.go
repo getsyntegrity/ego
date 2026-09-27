@@ -293,6 +293,38 @@ func TestValidateBaseline_MissingFieldsRejected(t *testing.T) {
 	}
 }
 
+// TestValidateBaseline_EmptyBaselineIsValid proves ValidateBaseline accepts
+// an empty baseline: with no entries to check, there is nothing to reject.
+// This is the shape the repository's own baseline.go now has as of S4-1
+// (#147): repoBaseline holds zero entries once the last one (migration ->
+// ego) was removed.
+func TestValidateBaseline_EmptyBaselineIsValid(t *testing.T) {
+	if err := ValidateBaseline([]BaselineEntry{}, DefaultRules(root)); err != nil {
+		t.Fatalf("ValidateBaseline(empty) = %v, want nil", err)
+	}
+	if err := ValidateBaseline(nil, DefaultRules(root)); err != nil {
+		t.Fatalf("ValidateBaseline(nil) = %v, want nil", err)
+	}
+}
+
+// TestEvaluate_EmptyBaselineOnCleanGraphReportsZero proves Evaluate accepts
+// an empty baseline on a clean graph and reports zero violations and zero
+// stale entries — the exact summary archcheck now prints on the real
+// repository after S4-1 (#147): "0 baselined, 0 violation(s), 0 stale
+// entries".
+func TestEvaluate_EmptyBaselineOnCleanGraphReportsZero(t *testing.T) {
+	result, err := Evaluate(allowedGraph(), DefaultRules(root), []BaselineEntry{})
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if len(result.Violations) != 0 {
+		t.Fatalf("len(Violations) = %d, want 0: %+v", len(result.Violations), result.Violations)
+	}
+	if len(result.Stale) != 0 {
+		t.Fatalf("len(Stale) = %d, want 0: %+v", len(result.Stale), result.Stale)
+	}
+}
+
 func TestValidateBaseline_DuplicateEntryRejected(t *testing.T) {
 	entry := BaselineEntry{
 		Importer:         root + "/publisher/kafka",
