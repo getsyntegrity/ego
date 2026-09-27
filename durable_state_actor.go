@@ -166,10 +166,13 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 		}
 	}
 
-	if ext := ctx.Extension(extensions.TelemetryExtensionID); ext != nil {
-		telExt := ext.(*extensions.TelemetryExtension)
-		entity.tracer = telExt.Tracer()
-		entity.metrics = newMetrics(telExt.Meter())
+	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	if err != nil {
+		return err
+	}
+	if telemetryExt != nil {
+		entity.tracer = telemetryExt.Tracer()
+		entity.metrics = newMetrics(telemetryExt.Meter())
 	}
 
 	if err := runner.
