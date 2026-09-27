@@ -52,6 +52,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/syncmap"
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
@@ -132,9 +133,53 @@ var (
 	// the condition that would let it silently read or write Unscoped()
 	// records across tenants.
 	ErrEntityTenantScopeMissing = errors.New("eGo: tenant-aware actor spawned without a bound tenant scope")
+	// ErrBehaviorNotSerializable is the cause carried by a
+	// *BehaviorPlacementError when a behavior without MarshalBinary and
+	// UnmarshalBinary is spawned in cluster mode. In cluster mode GoAkt
+	// serializes every spawn's dependencies, so it can place the behavior on,
+	// or relocate it to, another node. Outside cluster mode such a behavior
+	// runs on the local node.
+	ErrBehaviorNotSerializable = errors.New("eGo: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
+	// ErrBehaviorNotPointer is the cause carried by a *BehaviorPlacementError
+	// when a behavior that GoAkt must register or serialize is not a non-nil
+	// pointer. GoAkt's type registry names a type through a pointer and
+	// panics on anything else.
+	ErrBehaviorNotPointer = errors.New("eGo: a behavior kind registered with WithBehaviorKinds or WithEntityKinds, or spawned in cluster mode, must be a non-nil pointer")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
+
+// BehaviorPlacementError reports why a behavior cannot be placed by the GoAkt
+// runtime: spawned in cluster mode, where GoAkt serializes it, or registered
+// as a kind with GoAkt's type registry. Despite the name, it covers
+// registration as well as spawning. EntityID is empty for a registration
+// error and for a nil or typed-nil behavior, which has no readable ID.
+//
+// Err is ErrBehaviorNotSerializable or ErrBehaviorNotPointer, so callers can
+// test the cause with errors.Is and read the details with errors.As. The
+// engine returns this error before it spawns anything.
+type BehaviorPlacementError struct {
+	// Kind is the Go type of the behavior, for example "*main.AccountBehavior".
+	Kind string
+	// EntityID is the spawn's entity or saga ID; empty for a registration
+	// error or a nil behavior.
+	EntityID string
+	// Err is the cause: ErrBehaviorNotSerializable or ErrBehaviorNotPointer.
+	Err error
+}
+
+// Error names the behavior's type, the entity or saga ID when there is one,
+// and the cause.
+func (e *BehaviorPlacementError) Error() string {
+	if e.EntityID == "" {
+		// Kind registration, or a nil behavior with no readable ID.
+		return fmt.Sprintf("eGo: cannot register or place behavior %s: %v", e.Kind, e.Err)
+	}
+	return fmt.Sprintf("eGo: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
+}
+
+// Unwrap returns the cause, ErrBehaviorNotSerializable or ErrBehaviorNotPointer.
+func (e *BehaviorPlacementError) Unwrap() error { return e.Err }
 
 // Done is a signal that an operation has completed
 type Done struct{}
@@ -642,7 +687,16 @@ func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
 //   - opts: Additional spawning options to configure entity behavior.
 //
 // Returns an error if the entity fails to initialize or encounters an issue during execution.
+// In cluster mode a behavior that GoAkt cannot serialize is rejected before
+// anything is spawned, with a *BehaviorPlacementError.
 func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior, opts ...SpawnOption) error {
+	return engine.spawnEventSourced(ctx, behavior, opts...)
+}
+
+// spawnEventSourced spawns an event-sourced entity for behavior. It is the
+// single spawn path behind Entity; guards that every event-sourced spawn
+// must enforce belong here.
+func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorport.EventSourced, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
 	}
@@ -653,13 +707,12 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	}
 	actorSystem := ref.sys
 
-	// Register the behavior type on the local node as a fallback for kinds
-	// missing from WithEntityKinds. This only covers spawns placed locally:
-	// in cluster mode the spawn may land on a peer, which can only
-	// deserialize the behavior if it was registered there via WithEntityKinds.
-	// Inject only errors when the actor system is not started, which the
-	// Started check above already rules out.
-	_ = actorSystem.Inject(behavior)
+	// Decide what carries the behavior to GoAkt, and reject in cluster mode
+	// a behavior GoAkt cannot serialize, before anything is spawned.
+	behaviorDep, placementErr := spawnDependency(actorSystem, behavior)
+	if placementErr != nil {
+		return placementErr
+	}
 
 	config := newSpawnConfig(opts...)
 
@@ -689,7 +742,7 @@ func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior,
 	entityConfig.BatchFlushWindow = config.batchFlushWindow
 	_ = actorSystem.Inject(entityConfig)
 
-	deps := []extension.Dependency{behavior, entityConfig}
+	deps := []extension.Dependency{behaviorDep, entityConfig}
 	if tenantScope != nil {
 		_ = actorSystem.Inject(tenantScope)
 		deps = append(deps, tenantScope)
@@ -883,7 +936,16 @@ func (engine *Engine) EntityExists(ctx context.Context, entityID string) (bool, 
 //   - opts: Additional spawning options to configure entity behavior.
 //
 // Returns an error if the entity fails to initialize or encounters an issue during execution.
+// In cluster mode a behavior that GoAkt cannot serialize is rejected before
+// anything is spawned, with a *BehaviorPlacementError.
 func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableStateBehavior, opts ...SpawnOption) error {
+	return engine.spawnDurableState(ctx, behavior, opts...)
+}
+
+// spawnDurableState spawns a durable-state entity for behavior. It is the
+// single spawn path behind DurableStateEntity; guards that every
+// durable-state spawn must enforce belong here.
+func (engine *Engine) spawnDurableState(ctx context.Context, behavior behaviorport.DurableState, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
 	}
@@ -902,13 +964,12 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 		return ErrDurableStateStoreRequired
 	}
 
-	// Register the behavior type on the local node as a fallback for kinds
-	// missing from WithEntityKinds. This only covers spawns placed locally:
-	// in cluster mode the spawn may land on a peer, which can only
-	// deserialize the behavior if it was registered there via WithEntityKinds.
-	// Inject only errors when the actor system is not started, which the
-	// Started check above already rules out.
-	_ = actorSystem.Inject(behavior)
+	// Decide what carries the behavior to GoAkt, and reject in cluster mode
+	// a behavior GoAkt cannot serialize, before anything is spawned.
+	behaviorDep, placementErr := spawnDependency(actorSystem, behavior)
+	if placementErr != nil {
+		return placementErr
+	}
 
 	config := newSpawnConfig(opts...)
 
@@ -922,7 +983,7 @@ func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableSt
 	}
 
 	sOptions := buildSpawnOptionsFromConfig(config)
-	deps := []extension.Dependency{behavior}
+	deps := []extension.Dependency{behaviorDep}
 	if tenantScope != nil {
 		_ = actorSystem.Inject(tenantScope)
 		deps = append(deps, tenantScope)
@@ -1291,8 +1352,16 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 //     other SpawnOption is not applicable to a saga spawn and is ignored, a
 //     saga already fixes its own supervision/placement/relocation behavior.
 //
-// Returns an error if the saga fails to initialize.
+// Returns an error if the saga fails to initialize. In cluster mode a
+// behavior that GoAkt cannot serialize is rejected before anything is
+// spawned, with a *BehaviorPlacementError.
 func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration, opts ...SpawnOption) error {
+	return engine.spawnSaga(ctx, behavior, timeout, opts...)
+}
+
+// spawnSaga spawns a saga for behavior. It is the single spawn path behind
+// Saga; guards that every saga spawn must enforce belong here.
+func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga, timeout time.Duration, opts ...SpawnOption) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
 	}
@@ -1303,11 +1372,14 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 	}
 	actorSystem := ref.sys
 
-	// Register the behavior type on the local node as a fallback for kinds
-	// missing from WithEntityKinds; relocation to a peer requires the type to
-	// be registered there via WithEntityKinds. Inject only errors when the
-	// actor system is not started, which the Started check above rules out.
-	_ = actorSystem.Inject(behavior)
+	// Decide what carries the behavior to GoAkt, and reject in cluster mode
+	// a behavior GoAkt cannot serialize, before anything is spawned.
+	// Relocation to a peer requires the type to be registered there via
+	// WithEntityKinds.
+	behaviorDep, placementErr := spawnDependency(actorSystem, behavior)
+	if placementErr != nil {
+		return placementErr
+	}
 
 	config := newSpawnConfig(opts...)
 
@@ -1323,7 +1395,7 @@ func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout t
 	_ = actorSystem.Inject(sagaCfg)
 	actor := newSagaActor()
 
-	deps := []extension.Dependency{behavior, sagaCfg}
+	deps := []extension.Dependency{behaviorDep, sagaCfg}
 	if tenantScope != nil {
 		_ = actorSystem.Inject(tenantScope)
 		deps = append(deps, tenantScope)

@@ -28,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tochemey/goakt/v4/extension"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
@@ -194,4 +195,26 @@ func TestTelemetryExtension(t *testing.T) {
 	assert.Equal(t, TelemetryExtensionID, ext.ID())
 	assert.Equal(t, tracer, ext.Tracer())
 	assert.Equal(t, meter, ext.Meter())
+}
+
+// localBehaviorProbe is a behavior with only an ID, standing in for a
+// domain-only behavior that has no serialization methods.
+type localBehaviorProbe struct{ id string }
+
+func (p localBehaviorProbe) ID() string { return p.id }
+
+func TestLocalBehavior(t *testing.T) {
+	probe := localBehaviorProbe{id: "entity-1"}
+	local := NewLocalBehavior(probe)
+
+	var dep extension.Dependency = local
+	assert.Equal(t, "entity-1", dep.ID(), "the dependency key must stay the behavior's ID")
+	assert.Equal(t, probe, local.Behavior())
+
+	// A LocalBehavior is never serialized: a GoAkt remote dependency query
+	// against an actor carrying one gets this error back instead of bytes.
+	data, err := local.MarshalBinary()
+	require.ErrorIs(t, err, errLocalOnly)
+	assert.Nil(t, data)
+	require.ErrorIs(t, local.UnmarshalBinary([]byte("x")), errLocalOnly)
 }

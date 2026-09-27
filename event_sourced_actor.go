@@ -45,6 +45,7 @@ import (
 	"github.com/pablogore/ego/v4/internal/extensions"
 	"github.com/pablogore/ego/v4/internal/runner"
 	"github.com/pablogore/ego/v4/persistence"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/tenancy"
 )
 
@@ -122,7 +123,7 @@ type batchEntry struct {
 // Snapshots and retention cleanup are handled asynchronously by dedicated child
 // actors and never add latency to command processing.
 type EventSourcedActor struct {
-	behavior         EventSourcedBehavior
+	behavior         behaviorport.EventSourced
 	eventsStore      persistence.EventsStore
 	snapshotStore    persistence.SnapshotStore
 	currentState     State
@@ -427,7 +428,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 			continue
 		}
 
-		if behavior, ok := dependency.(EventSourcedBehavior); ok {
+		if behavior, ok := behaviorFrom[behaviorport.EventSourced](dependency); ok {
 			entity.behavior = behavior
 		}
 
@@ -756,9 +757,10 @@ func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
 
 // dispatchToBehavior invokes entity.behavior against cmd, preferring
 // HandleEnvelope over HandleCommand when both entity.behavior implements
-// EventSourcedEnvelopeBehavior and a command.Metadata is available on
-// goCtx (#60, M-3). goCtx must already be unwrapped from the receiving
-// ReceiveContext via ctx.Context(): on a local dispatch this is the same
+// behaviorport.EventSourcedEnvelope (EventSourcedEnvelopeBehavior is one)
+// and a command.Metadata is available on goCtx (#60, M-3). goCtx must
+// already be unwrapped from the receiving ReceiveContext via
+// ctx.Context(): on a local dispatch this is the same
 // context.Context Engine.Dispatch attached a command.Carrier to (see
 // command_context.go), so metadataFromContext rematerializes it here
 // without any wire-format change. Any behavior that does not implement the
@@ -768,7 +770,7 @@ func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
 // non-batched (processCommandAndReply) and batched (processAndBatch) paths
 // so both dispatch identically.
 func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd Command, priorState State) ([]Event, error) {
-	envBehavior, ok := entity.behavior.(EventSourcedEnvelopeBehavior)
+	envBehavior, ok := entity.behavior.(behaviorport.EventSourcedEnvelope)
 	if !ok {
 		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
 	}
