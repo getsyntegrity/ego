@@ -143,4 +143,4 @@ Three consequences follow:
 4. Lifecycle already has a composition-level contract (#105). What is missing is the adapter-level half: what `Start`, `Close` and `Ping` must guarantee so that rollback actually releases resources.
 5. A shared conformance suite must be standard-library-only and live beside the contracts it tests, so publishers can run it without the root package, GoAkt or `testify`.
 6. Adapters should not depend on the composition root; enforcing that needs its own archcheck rule on the adapter layer, because `composition-leaf` is scoped to the root module by design.
-7. Placing new SPI packages where publishers can import them after ego-arch-006 S3 touches an approved decision (D7 (i)). That is an open decision for the maintainers, not something this change can settle.
+7. Placing new SPI packages where publishers can import them after ego-arch-006 S3 touches an approved decision (D7 (i)). That was a decision for the maintainers, not something this change could settle; they made it on 2026-09-27 (O2, design §9).

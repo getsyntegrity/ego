@@ -40,7 +40,7 @@ Terms used below:
 
 ## 3. Decisions
 
-These are the decisions this design proposes. They become accepted when the pull request that carries them is approved; nothing here is recorded as a maintainer decision yet. Genuinely open choices are listed separately in §9.
+These are the decisions this design proposes; they become accepted when the pull request that carries them is approved. The choices that needed the maintainers (O1–O7, and the chain of specs) were made on 2026-09-27 and are recorded in §9.
 
 ### D1 — Where the SPI lives
 
@@ -104,7 +104,7 @@ An adapter's identity has two parts, kept separate on purpose because today they
 
 An adapter that does not implement `Describer` is **undeclared**. It keeps working exactly as today. Inspection reports it as `(Descriptor{}, false)`, and the composition root names it by its slot, as `compose/goakt` already does (`compose/goakt/app.go:246-257`).
 
-The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `kafka.go:84-86`) is a real limitation, but fixing it changes publisher configuration, not the SPI; it is open decision O3.
+The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `kafka.go:84-86`) is a real limitation, but fixing it changes publisher configuration, not the SPI; decision O3 (§9) adds an optional `ID` to each publisher `Config` (follow-up F-C).
 
 ### D3 — Capabilities: declared, implemented, inspected in one place
 
@@ -116,7 +116,7 @@ The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `
 | Optional, supported | This implementation has it | Declared in `Descriptor.Capabilities` **and** implemented through the optional interface the owning contract package declares |
 | Unsupported | This implementation does not have it | Not declared and not implemented |
 
-**Where a port and a capability are defined.** In the contract package that owns the port. Each contract package declares its port names (for example `publishing.PortEventPublisher`, `persistence.PortEventsStore`), and each optional capability as a constant next to its optional interface, plus one accessor. These are **untyped string constants**, which convert to `adapter.Port` and `adapter.Capability` where they are used, so no existing contract package has to import `port/adapter`. That matters twice: contracts stay independent of each other, and moving `port/publishing` into the ego-arch-006 contracts module cannot create a module cycle through `port/adapter` (which stays in the root module unless O2 says otherwise). For the one adapter capability core uses today:
+**Where a port and a capability are defined.** In the contract package that owns the port. Each contract package declares its port names (for example `publishing.PortEventPublisher`, `persistence.PortEventsStore`), and each optional capability as a constant next to its optional interface, plus one accessor. These are **untyped string constants**, which convert to `adapter.Port` and `adapter.Capability` where they are used, so no existing contract package has to import `port/adapter`. That matters twice: contracts stay independent of each other, and moving `port/publishing` into the ego-arch-006 contracts module cannot create a module cycle through `port/adapter`, whichever module `port/adapter` sits in (under decision O2 it joins the contracts module in ego-arch-006 S2). For the one adapter capability core uses today:
 
 ```go
 package tenancy
@@ -156,7 +156,7 @@ The composition-level rules stay those of ego-arch-003 §D5–§D7. This decisio
 | L3 | owned and borrowed (`Close`, `Disconnect`) | Return by the caller's context deadline | Cleanup runs under one context bounded by `ShutdownTimeout` for all steps together (`lifecycle.go:79-83`, `:272-293`); one adapter that ignores it consumes everyone's budget. `kafka.go:76` is the counter-example today | AT-4 |
 | L4 | adapters implementing `Pinger` | `Ping` answers "ready to serve now". It may establish a connection, as the store contracts document (`persistence/events_store.go:109-112`); a connection it opens on a borrowed adapter stays the consumer's to close | Keeps ego-arch-003 §D5 ("App only pings them") literally true while admitting what `testkit/eventstore.go:273-276` does | AT-5 |
 | L5 | owned adapters | After `Close`, operations fail with the port's documented error (`publishing.ErrPublisherNotStarted` for publishers) and never block | Today's publisher contract (`publisher/kafka/publisher_contract_test.go:56-68`), generalized | PT-1 |
-| L6 | new adapters | A constructor should do no I/O; I/O belongs in `Start` | Lets `New` stay I/O-free end to end (ego-arch-003 §D4a) and makes rollback of a failed dial the composition root's job, not the consumer's. Existing publishers dial in their constructor (`kafka.go:58-70`); changing that is open decision O5 | review |
+| L6 | new adapters | A constructor should do no I/O; I/O belongs in `Start` | Lets `New` stay I/O-free end to end (ego-arch-003 §D4a) and makes rollback of a failed dial the composition root's job, not the consumer's. Existing publishers dial in their constructor (`kafka.go:58-70`); O5 (maintainer decision, 2026-09-27) keeps them; the rule applies to new adapters | review |
 
 **Where Start and Ready happen in the composition root.** Inside the existing step 4, "attach publishers" (`compose/goakt/app.go:174`, `:355-369`). For each publisher, in `Spec` order, step 4 calls `Start` when `adapter.StarterOf` finds one, then `Ping` when `adapter.PingerOf` finds one, then attaches each publisher kind as it does today. The start-and-probe loop lives in a runtime-free helper, `compose/internal/adapters` (covered by `composition-no-runtime` like `compose/internal/lifecycle`), so `compose/inmem` (#148) reuses it unchanged instead of copying it. Borrowed stores keep being pinged in step 1. No new step is added, so `StartError.Step` values and the D6 table keep their meaning; the step's error names the publisher by `ID()` and, when declared, by `Descriptor.Name`.
 
@@ -166,9 +166,9 @@ The composition-level rules stay those of ego-arch-003 §D5–§D7. This decisio
 
 **Restart.** An adapter is not required to support `Start` after `Close`. The `App` is single-use (`lifecycle.go:124-129`); restart semantics belong to #24 (LIFE-008).
 
-### D5 — `compose/internal/lifecycle` stays internal (recommended; open decision O4)
+### D5 — `compose/internal/lifecycle` stays internal (maintainer decision O4, 2026-09-27)
 
-ego-arch-003 §9 left this to #106. The recommendation is to keep it internal. Adapters implement `Start`, `Close` and `Ping`; they never sequence other components, so they need the contract in §D4, not the sequencer. Making the sequencer public would create an API with one kind of caller (composition roots, all under `compose/`), and #24's LIFE-001 state machine may still reshape it.
+ego-arch-003 §9 left this to #106. The maintainers decided on 2026-09-27 to keep it internal (O4). Adapters implement `Start`, `Close` and `Ping`; they never sequence other components, so they need the contract in §D4, not the sequencer. Making the sequencer public would create an API with one kind of caller (composition roots, all under `compose/`), and #24's LIFE-001 state machine may still reshape it.
 
 ### D6 — Validation at composition: rule V8
 
@@ -186,7 +186,7 @@ V8 runs only on adapters that declare a descriptor, so every `Spec` that validat
 
 ### D7 — Adapters must not depend on the composition root
 
-**Recommendation (open decision O1): no.** A nested adapter module must not import `compose` or anything under `compose/`, in production code or in tests.
+**Decision (maintainer decision O1, 2026-09-27): no.** A nested adapter module must not import `compose` or anything under `compose/`, in production code or in tests.
 
 Why:
 
@@ -219,7 +219,7 @@ Why:
 - `composition-leaf` covers root-module production packages (`layers.go:189-206`); this rule covers nested adapter modules. The layers do not overlap, and both use the same predicate, so together they say: only packages under `compose/`, root-module `main` packages, examples, tests, and unreleased consumer modules (`benchmark`, `example/cluster`, `test/compat`) may import the composition root.
 - `no-cross-module-internal` (`modules.go:86-100`) already rejects an adapter importing `compose/internal/...`, and Go's own `internal` rule rejects it too. For that path, both archcheck rules report the same edge. That duplication is accepted: each report names a different broken constraint, and no baseline entry is needed because no such import exists.
 - `external-adapter-no-runtime` is not widened. Its ID and description say "runtime", and a violation must name the rule it actually broke.
-- **New adapter families.** `ExternalAdapterLayer` matches only `publisher/`. When the first adapter module outside it appears (a store or telemetry adapter), its directory root is added to that one layer, and both adapter rules follow. Where such modules live is open decision O6.
+- **New adapter families.** `ExternalAdapterLayer` matches only `publisher/`. When the first adapter module outside it appears (a store or telemetry adapter), its directory root is added to that one layer, and both adapter rules follow. Where such modules live is decided when the first one arrives (O6).
 
 ### D8 — Conformance suite
 
@@ -254,7 +254,7 @@ type Target struct {
 
 `adaptertest` finds `Close`, `Connect` and `Disconnect` through small structural interfaces it owns, and finds `Start`/`Ping` through `adapter.StarterOf`/`PingerOf`.
 
-**Hooks.** `FailStart` and `Stall` exist because a suite cannot make a real backend fail or hang by itself. Without `FailStart`, AT-2 is not exercised; without `Stall`, AT-4 is not exercised. Each is logged as "not exercised: no hook", never as passed. `FailStart` only makes sense for an adapter whose acquire is separate from its constructor (a `Starter`, or a borrowed adapter with `Connect`). A publisher that dials in its constructor, as all four do today and O5 keeps, has no value left after a failed dial, so for it AT-2 and the "release after a failed acquire" case of AT-3 are reported as "not exercised: acquire happens in the constructor", the same way a missing hook is. The websocket adopter therefore supplies only `Stall`, through an `httptest` handler that stops reading; its AT-2 becomes exercisable once it gains a `Start` (O5 (b) or F-A). The in-memory `testkit` stores have no backend that can stall, so AT-4 is not exercised for them; the conformance summary lists that explicitly.
+**Hooks.** `FailStart` and `Stall` exist because a suite cannot make a real backend fail or hang by itself. Without `FailStart`, AT-2 is not exercised; without `Stall`, AT-4 is not exercised. Each is logged as "not exercised: no hook", never as passed. `FailStart` only makes sense for an adapter whose acquire is separate from its constructor (a `Starter`, or a borrowed adapter with `Connect`). A publisher that dials in its constructor, as all four do today and O5 keeps, has no value left after a failed dial, so for it AT-2 and the "release after a failed acquire" case of AT-3 are reported as "not exercised: acquire happens in the constructor", the same way a missing hook is. The websocket adopter therefore supplies only `Stall`, through an `httptest` handler that stops reading; its AT-2 would only become exercisable if it gained a `Start`, which O5 does not plan. The in-memory `testkit` stores have no backend that can stall, so AT-4 is not exercised for them; the conformance summary lists that explicitly.
 
 **Capability checks beyond `CapStart`/`CapReady`.** `adaptertest` imports only the standard library and `port/adapter`, so it cannot check `tenancy.CapFixedTenant` or any capability added later by itself. The adapter's own test supplies an implements-check per such capability in `Target.Capabilities`, built from the owning package's accessor (`tenancy.AsFixedTenantResolver` for `CapFixedTenant`). AT-1 then checks both directions for every capability in that map. A declared capability that is neither `CapStart`, `CapReady` nor in the map fails AT-1 with "no check supplied", so a new capability cannot pass unchecked. At composition time the same capability is checked by V8b in `compose`, which does import `tenancy`.
 
@@ -280,7 +280,7 @@ func TestConformance(t *testing.T) {
 
 Neither needs a special case in core. The composition root probes stores through `adapter.PingerOf` instead of its private `pinger` (`compose/goakt/app.go:241`), starts publishers through `adapter.StarterOf`, and validates both through V8.
 
-**How nested modules run the suites without the root runtime.** `adaptertest` imports only the standard library and `port/adapter`; `publishingtest` imports only the standard library, `port/publishing` and `egopb`, and deliberately not `port/adapter`, so it can move into the ego-arch-006 contracts module with `port/publishing` without creating a module cycle. A publisher's test closure therefore gains no GoAkt package and not the root package `ego`, so `TestUnitTestClosureExcludesRuntimeAndRoot` stays green. Today the publishers resolve these packages through their existing requirement on the root module (`publisher/kafka/go.mod:7`, `:50`). After ego-arch-006 S3 they require only the contracts module; `port/publishing/publishingtest` moves with `port/publishing` automatically, but `port/adapter` and `port/adapter/adaptertest` are not in that module under the approved D7 (i). That is open decision O2.
+**How nested modules run the suites without the root runtime.** `adaptertest` imports only the standard library and `port/adapter`; `publishingtest` imports only the standard library, `port/publishing` and `egopb`, and deliberately not `port/adapter`, so it can move into the ego-arch-006 contracts module with `port/publishing` without creating a module cycle. A publisher's test closure therefore gains no GoAkt package and not the root package `ego`, so `TestUnitTestClosureExcludesRuntimeAndRoot` stays green. Today the publishers resolve these packages through their existing requirement on the root module (`publisher/kafka/go.mod:7`, `:50`). After ego-arch-006 S3 they require only the contracts module; `port/publishing/publishingtest` moves with `port/publishing` automatically, and under maintainer decision O2 (§9) `port/adapter` and `port/adapter/adaptertest` join that module in ego-arch-006 S2, amending D7 (i).
 
 A nested *store* module (none exists yet) that wants `persistence/conformance` must still require the root module, because `persistence` and `testkit` stay there until ego-arch-006 F1/F2. That is already recorded in ego-arch-006 §2.2 and is not changed here.
 
@@ -296,7 +296,7 @@ Everything is additive in v4, per ego-arch-001 §10.
 | `compose` | adds rule V8 inside `Validate` | no exported change; behavior changes only for adapters that declare a descriptor, which none do before this change |
 | `compose/goakt` | step 4 calls `Start`/`Ping` when implemented | no exported change |
 | `ego` | `engine.go:883` calls `tenancy.FixedTenantOf` | no exported change |
-| `testkit`, `publisher/websocket` | add `Describe` methods (and `Start` only if O5 chooses it) | additions only |
+| `testkit`, `publisher/websocket` | add `Describe` methods (no `Start`: O5 keeps constructor dialing) | additions only |
 
 **No deprecation is needed in v4.** Nothing is replaced; the optional interfaces keep working for undeclared adapters. Whether the next major (#124) makes `Describe` a required method on each port is a question for #124 and #37, recorded in §9 and not decided here.
 
@@ -307,7 +307,7 @@ Everything is additive in v4, per ego-arch-001 §10.
 Slice SPI-5 writes `docs/adapters.md` from this outline. Its promise: a new adapter is added without editing any file outside its own module, except one line in archcheck when it opens a new adapter family.
 
 1. **Pick the port.** Find the contract package (`persistence`, `offsetstore`, `port/publishing`, `encryption`, `tenancy`). If none fits, the adapter needs a new contract under `port/`, which is an ADR change, not an adapter.
-2. **Create the module.** Put it in its own directory with its own `go.mod`, under the family's adapter root (`publisher/` today; see O6). Import only contract packages and `egopb`; never `ego`, GoAkt or `compose/...` (archcheck rules `external-adapter-no-runtime`, `external-adapter-no-composition`). Copy `closure_test.go` from an existing publisher.
+2. **Create the module.** Put it in its own directory with its own `go.mod`, under the family's adapter root (`publisher/` today; for a new family the root is decided when its first module arrives, O6). Import only contract packages and `egopb`; never `ego`, GoAkt or `compose/...` (archcheck rules `external-adapter-no-runtime`, `external-adapter-no-composition`). Copy `closure_test.go` from an existing publisher.
 3. **Implement the port,** plus a `var _ port.Interface = (*T)(nil)` assertion.
 4. **Declare the descriptor.** Implement `Describe()` with every port the type implements, a name, and every optional capability you implement; leave out capabilities the port already implies. Declare exactly what you implement: V8 and `adaptertest` both fail on a mismatch in either direction.
 5. **Lifecycle.** Owned adapter: do I/O in `Start`, clean up after a failed `Start`, make `Close` idempotent and deadline-bound. Borrowed adapter: `Connect`/`Disconnect`/`Ping` as the port documents; the composition root never connects or closes it.
@@ -316,58 +316,33 @@ Slice SPI-5 writes `docs/adapters.md` from this outline. Its promise: a new adap
 8. **CI.** Nothing to register: `ciselect` discovers the module from its `go.mod`. List it in `docs/ci.md` if it is released.
 9. **Checklist** for the pull request: archcheck green, closure test green, conformance green (skipped only through `ErrUnreachable`, with the reason), apidiff additions only.
 
-## 5. Slices
+## 5. Chain of specs
 
-Each row is one pull request with at most five tasks. The authored-line counts are not estimated here; ~400 changed lines per slice is a planning heuristic, not a cap.
+Per the maintainer decision of 2026-09-27 (decision A in §9), no spec carries more than five atomic tasks. The work is split into a chain of three specs. This change directory stays the umbrella: exploration, proposal and this design hold the SPI model, the decisions and the whole picture.
 
-### SPI-1 — `port/adapter` contract package
+**Layout.** The three specs live in `openspec/changes/ego-arch-004/specs/<name>/spec.md`. They reuse the `specs/` subfolder convention that `ego-store-001`, `ego-tenant-002`, `ego-tenant-003` and `ego-write-004` already use. This is the lightest option: no separate change directories (`ego-arch-004a/b/c`) and no copied proposal. Unlike those changes, each spec file also carries its own tasks, checks, file ownership, dependencies and a "next in the chain" link, instead of a shared `tasks.md`, so every spec can be picked up and verified on its own. **The spec files are the authoritative task lists; this section only summarizes them.**
 
-- **Owns:** `port/adapter/**` (new); one new file per contract package holding its untyped port-name constants (`port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go`).
-- **Tasks:** 1. `Port`, `Capability`, `Descriptor` (with `Ports`, `Declares`, `Serves`), `Describer`, `Starter`, `Pinger`, `CapStart`, `CapReady`, `Describe`, `StarterOf`, `PingerOf`. 2. Unit tests (RED first): the three accessors on values that do and do not implement each interface; `Declares`/`Serves`; typed-nil input. 3. `port_adapter_architecture_test.go` with an empty non-stdlib allowlist, modeled on `port/publishing/publishing_architecture_test.go`. 4. Untyped port-name constants in the three contract packages, with a test that none of them imports `port/adapter`. 5. Package doc naming this ADR and the one-assertion rule.
-- **Checks:** `go test ./port/adapter/...`; `go run ./internal/cmd/archcheck`; apidiff (additions only).
-- **Depends on:** nothing.
+| Order | Spec | Slices (pull requests) | Tasks | Depends on | Next |
+|---|---|---|---|---|---|
+| 1 | [`specs/adapter-spi-boundary/spec.md`](./specs/adapter-spi-boundary/spec.md): `port/adapter`, untyped port-name constants, archcheck `external-adapter-no-composition`, publisher closure tests, the `ego-arch-001/design.md:118` amendment | SPI-1, SPI-2 | 5 | nothing | spec 2 |
+| 2 | [`specs/adapter-conformance/spec.md`](./specs/adapter-conformance/spec.md): `adaptertest`, `publishingtest`, idempotent websocket `Close`, websocket and `testkit` adopters | SPI-3, SPI-4 | 5 | spec 1; if ego-arch-006 S3 lands first, the websocket half waits for S2 to carry `port/adapter` (O2) | spec 3 |
+| 3 | [`specs/adapter-composition/spec.md`](./specs/adapter-composition/spec.md): V8, the step-4 start-and-probe helper in `compose/internal/adapters`, `adapter.PingerOf` in `probeStores`, `tenancy.AsFixedTenantResolver`/`FixedTenantOf`, `docs/adapters.md` | SPI-5 | 5 | specs 1 and 2; rebase after #147 S4-3/S4-4 (§6) | none; follow-ups below |
 
-### SPI-2 — archcheck: `external-adapter-no-composition`
-
-- **Owns:** `internal/cmd/archcheck/rules/rules.go`, `internal/cmd/archcheck/rules/*_test.go`, `docs/ci.md` (rule table), `publisher/*/closure_test.go` (all four, including websocket's; SPI-4 does not edit these files), `openspec/changes/ego-arch-001/design.md` (one sentence in §3).
-- **Tasks:** 1. RED: a graph where a `publisher/` package imports `compose`, one importing `compose/goakt`, one importing `compose/internal/lifecycle` (expect this rule and `no-cross-module-internal`), and a root `main` package importing `compose` that stays allowed. 2. Add the rule (§D7). 3. Extend the four closure tests to reject `<root>/compose` and its subpackages. 4. `docs/ci.md` rule table and the "Adding a layer" note on adapter roots. 5. Amend ego-arch-001 `design.md:118`, which says archcheck does not enforce the "only contracts and `egopb`" part and that it is "enforced in review": after this rule, the `compose` part is enforced by archcheck, and the rest stays review-only unless O1 (c) is chosen.
-- **Checks:** `go test ./internal/cmd/archcheck/...`; archcheck on `main` stays at 0 violations with no new baseline entry; the exploration §6 spike reproduced as a failing graph test.
-- **Depends on:** nothing. It can land first.
-
-### SPI-3 — Conformance packages
-
-- **Owns:** `port/adapter/adaptertest/**`, `port/publishing/publishingtest/**` (new).
-- **Tasks:** 1. `adaptertest` AT-1…AT-5 with `Target` (ownership, `FailStart`, `Stall`, `Capabilities`), the `ErrUnreachable` sentinel as the only skip, and "not exercised" reporting for missing hooks. 2. `publishingtest` PT-1…PT-3. 3. Self-checks in the style of `persistence/conformance`'s capture mode: a deliberately broken fake (non-idempotent `Close`, a `Close` that ignores the deadline, a descriptor that lies) must make each check fail. 4. Architecture tests keeping both packages standard-library-only.
-- **Checks:** `go test ./port/...`; archcheck; apidiff additions only.
-- **Depends on:** SPI-1.
-
-### SPI-4 — Two adopters (a publisher and a store)
-
-- **Owns:** `publisher/websocket/**` except `closure_test.go` (owned by SPI-2), `testkit/eventstore.go`, `testkit/durablestore.go`, `testkit/offsetstore.go` and their tests.
-- **Tasks:** 1. Make websocket `Close` idempotent (L2): RED with a double `Close` on a value built against `httptest`, then guard it (for example with the existing `started` flag or a `sync.Once`) so a second call returns nil (`websocket.go:79-82`, `:144-147`). 2. `websocket.EventsPublisher`/`DurableStatePublisher` implement `Describe`. 3. Their tests run `adaptertest` (with `Stall`; AT-2 and the failed-acquire case of AT-3 are reported "not exercised" because websocket dials in its constructor) and `publishingtest` against an `httptest` server; the existing `publisher_contract_test.go` check folds into PT-1. 4. `testkit` stores implement `Describe` with no capabilities (`CapReady` is implied by the store ports) and run `adaptertest` as `Borrowed` next to `persistence/conformance`. 5. Record per publisher that `go list -deps -test ./...` still has no GoAkt and no root package.
-- **Checks:** `scripts/ci/verify-module.sh publisher/websocket`; root lane for `testkit`; `go test -v -run Conformance` output has no `SKIP` for either adopter; apidiff.
-- **Depends on:** SPI-3. **If ego-arch-006 S3 has landed first,** the websocket half is blocked on O2 (placing `port/adapter` in the contracts module); the `testkit` half is not.
-
-### SPI-5 — Composition uses the SPI, and the guide
-
-- **Owns:** `compose/spec.go`, `compose/spec_test.go`, `compose/internal/adapters/**` (new), `compose/goakt/app.go`, `compose/goakt/app_test.go`, `tenancy/resolver.go` (accessors), `engine.go` (the one line at `:883`), `docs/adapters.md` (new).
-- **Tasks:** 1. V8a/V8b in `Spec.Validate`, after V5/V6 and skipping values they rejected, with V8c as an empty requirement table (RED first, including an undeclared-but-implemented `FixedTenantResolver` on a declared resolver). 2. `compose/internal/adapters`: the start-and-probe helper; `compose/goakt` step 4 uses it; injected failure at publisher *k* leaves every publisher closed and names the publisher. 3. `probeStores` uses `adapter.PingerOf`. 4. `tenancy.CapFixedTenant`, `tenancy.AsFixedTenantResolver`, `tenancy.FixedTenantOf`; `engine.go:883` calls `FixedTenantOf`. 5. `docs/adapters.md` from §4.
-- **Checks:** `go test ./compose/... ./tenancy/...`; the root lane for the `engine.go` change (the full root package suite, which the selector runs for any root-package file); archcheck; apidiff.
-- **Depends on:** SPI-1; SPI-4 for the adopter used in the guide's example.
+The slice names SPI-1 to SPI-5 used elsewhere in this document refer to the pull requests inside these specs. File ownership never overlaps between specs: in particular, spec 1 owns all four `publisher/*/closure_test.go` files, and spec 2 does not edit them. The ~400 changed lines per pull request is a planning heuristic, not a cap.
 
 ### Named follow-ups (outside this change)
 
 - **F-A** Kafka, NATS and Pulsar adopt `Describe` and the suites (skipped through `ErrUnreachable` without a broker; Pulsar through its existing testcontainers setup). Fixes `kafka.go:76` under L3 and makes each `Close` idempotent under L2: NATS calls `Drain` again on an already closed connection (`nats.go:119-125`, `:235-241`), and a second Close for Kafka and Pulsar is unverified (exploration §2).
-- **F-B** `port/adapter` and `adaptertest` in the ego-arch-006 contracts module, if O2 chooses (a).
-- **F-C** Publisher instance IDs, if O3 chooses (a).
-- **F-D** `external-adapter-contracts-only` allowlist, if O1 chooses (c) later.
+- **F-B** `port/adapter` and `adaptertest` move into the ego-arch-006 contracts module in its slice S2 (decision O2; recorded amendment of ego-arch-006 D7 (i), §9).
+- **F-C** An optional `ID` in each publisher `Config`, defaulting to today's constant (decision O3). A good fit to land together with F-A, one publisher at a time.
+- **F-D** (not scheduled) an `external-adapter-contracts-only` allowlist that would enforce all of ego-arch-001 §3, only if the maintainers later ask for it; O1 chose the dedicated denylist rule.
 - **F-E** Provider-side runtime capabilities for #11 RUNTIME-006: a runtime adapter's `Descriptor` declares which `port/runtime` capabilities from #147 it supports. These capabilities are declaration-only: because the composite interface in [PR #151](https://github.com/getsyntegrity/ego/pull/151) makes every runtime implement every capability interface, V8b must not apply the implemented ⇒ declared direction to the runtime port. #148's typed "unsupported" error stays the call-time answer (§2).
 - **F-F** Observability port for telemetry and logging (#31), after which the `kit-logger` assertions can move behind it.
 
 ## 6. Dependencies and sequencing
 
 - **Nothing blocks SPI-1, SPI-2 or SPI-3.** They touch only new packages, archcheck and tests.
-- **ego-arch-006 S2/S3 (#102) and F4.** At the baseline, publishers still require the root module, so SPI-4 works as designed. If S3 lands first, the publisher half of SPI-4 waits for O2. This design does not decide S2's contents; D7 (i) was approved on 2026-09-27 (ego-arch-006 §3) and changing it is the maintainers' call.
+- **ego-arch-006 S2/S3 (#102) and F4.** At the baseline, publishers still require the root module, so SPI-4 works as designed. Under maintainer decision O2 (§9), ego-arch-006 S2 also carries `port/adapter` and `adaptertest`, which amends its approved D7 (i). If S3 lands before S2 carries them, the publisher half of SPI-4 waits for that.
 - **ego-arch-006 D1 (module path migration).** Direction approved 2026-09-27, execution pending confirmation (ego-arch-006 §3). The new packages have no special path handling; the single D1 pull request renames them with everything else. Avoid running a slice and the D1 pull request in parallel on the same files.
 - **#123 and #105 IMPL-5/IMPL-6.** No dependency. SPI-5 edits `compose/goakt/app.go` step 4 and `probeStores`, which IMPL-5 (example migration) does not touch. #148 (`compose/inmem`, IMPL-6) reuses `compose/internal/adapters` from SPI-5; if #148 lands first, SPI-5 extracts the helper from both composition roots instead.
 - **Hot-spot files shared with other open work.** No slice waits for these issues, but the same files change, so each pull request rebases on whichever lands first:
@@ -408,19 +383,25 @@ Each row is one pull request with at most five tasks. The authored-line counts a
 | The guide explains how to add an adapter without modifying core | SPI-5 | `docs/adapters.md` |
 | (comment) Adapters and the composition root | SPI-2 | `external-adapter-no-composition` plus the closure-test extension |
 
-## 9. Open decisions for the maintainers
+## 9. Maintainer decisions (2026-09-27)
 
-None of these is decided by this design. Each has a recommendation.
+The maintainers made these decisions on 2026-09-27 on PR #149. They replace the open-decision list this section held before. The options that were considered are kept below each decision, so the reasoning stays reviewable.
 
-| # | Decision | Options | Recommendation |
+**A — Chained specs.** No spec may exceed 4–5 atomic tasks. `ego-arch-004` stays the umbrella (exploration, proposal, design). The chain is spec 1 = SPI-1 + SPI-2, spec 2 = SPI-3 + SPI-4, spec 3 = SPI-5. Each spec lists its own tasks, checks, dependencies, file ownership and next spec. §5 describes the layout chosen.
+
+**B — The former open decisions.** O1–O6 were approved as recommended; O7 was deferred.
+
+| # | Question | Decision | Options that were considered |
 |---|---|---|---|
-| O1 | May nested adapter modules import `compose` or `compose/...`? | (a) No, enforced by the dedicated denylist rule `external-adapter-no-composition` (§D7). (b) Allow neutral `compose`, forbid `compose/goakt` and `compose/internal/...`. (c) No, enforced by widening the adapter rule into an allowlist, `external-adapter-contracts-only`, which accepts only contract packages, `egopb` and non-GoAkt third-party imports. That makes all of ego-arch-001 §3 enforceable (it also catches `testkit`, `migration`, `internal/...`) but amends that section's "enforced in review" note. (d) Allow and document | **(a)** now; (c) as follow-up F-D if the maintainers want the whole §3 statement enforced. (b) still breaks the publishers after ego-arch-006 S3 (exploration §6) |
-| O2 | Where `port/adapter` and `adaptertest` live once publishers require only the contracts module (ego-arch-006 S3) | (a) Add them to the contracts module in S2. Both are stdlib-only, so no cycle is possible; this amends the approved D7 (i). (b) A separate SPI module; fails ego-arch-006 §6(2) on its own. (c) Publishers adopt the SPI only after F1 | **(a)** |
-| O3 | Publisher instance identity: every `ID()` is a type-wide constant (`kafka.go:84-86`), so two publishers of one type collide under V6 | (a) Add an optional `ID` to each publisher `Config`, defaulting to today's constant (additive). (b) Leave it and document one publisher per type. (c) Derive the ID from the topic or URL | **(a)**, as follow-up F-C |
-| O4 | Promote `compose/internal/lifecycle` to a public package (left to #106 by ego-arch-003 §9) | (a) Keep internal. (b) Promote now | **(a)** (§D5) |
-| O5 | Constructors that do I/O (all four publishers dial in `New*`) | (a) Keep them; new adapters should defer I/O to `Start` (L6). (b) Add lazy constructors plus `Start` to the existing publishers, and deprecate the dialing ones until #124 | **(a)**; revisit with F-A |
-| O6 | Directory convention for future adapter modules outside `publisher/` | (a) One root per family (`publisher/`, `store/`, …), each added to `ExternalAdapterLayer` when its first module appears. (b) A single `adapter/<family>/<name>` root. (c) Decide when the first non-publisher adapter arrives | **(c)**, with (a) as the default; any choice is a one-line layer change |
-| O7 | Whether the next major (#124) makes `Describe` a required method of each port | (a) Yes, in the #124 major. (b) Keep it optional | Defer to #124 and #37 (COMPAT-005); no recommendation until adoption is measured |
+| O1 | May nested adapter modules import `compose` or `compose/...`? | **No**, enforced by the dedicated denylist rule `external-adapter-no-composition` (§D7, spec 1). The allowlist variant stays a possible later follow-up (F-D), not scheduled | (b) allow neutral `compose` only, which still breaks the publishers after ego-arch-006 S3 (exploration §6); (c) the allowlist `external-adapter-contracts-only` that enforces all of ego-arch-001 §3; (d) allow and document |
+| O2 | Where `port/adapter` and `adaptertest` live once publishers require only the contracts module | **In the contracts module, added in ego-arch-006 S2.** Both packages are standard-library-only, so no module cycle is possible | (b) a separate SPI module, which fails ego-arch-006 §6(2); (c) publishers adopt only after F1 |
+| O3 | Publisher instance identity (every `ID()` is a type-wide constant, `kafka.go:84-86`) | **An optional `ID` in each publisher `Config`, defaulting to today's constant** (additive), as follow-up F-C | (b) one publisher per type, documented; (c) derive the ID from the topic or URL |
+| O4 | Promote `compose/internal/lifecycle` (left to #106 by ego-arch-003 §9) | **Keep it internal** (§D5) | (b) promote now |
+| O5 | Constructors that do I/O (all four publishers dial in `New*`) | **Keep the existing constructor-dialing publishers; new adapters do their I/O in `Start`** (L6) | (b) lazy constructors plus `Start`, deprecating the dialing ones until #124 |
+| O6 | Directory convention for adapter modules outside `publisher/` | **Decide when the first non-publisher adapter module arrives.** Adding its root to `ExternalAdapterLayer` is a one-line change | (a) one root per family; (b) a single `adapter/<family>/<name>` root |
+| O7 | Should the #124 major make `Describe` a required method of each port? | **Deferred to #124 and #37** (COMPAT-005) | (a) yes, at #124; (b) keep it optional |
+
+**Recorded amendment to ego-arch-006.** Decision O2 amends ego-arch-006's approved D7 (i). The ego-arch-006 contracts module (slice S2) now holds `egopb`, `port/publishing` **and** `port/adapter` with `port/adapter/adaptertest`, instead of `egopb` and `port/publishing` alone. `port/publishing/publishingtest` goes with `port/publishing` in any case. The amendment keeps ego-arch-006's invariant that nothing in the contracts module imports the root: all four packages import only the standard library, `egopb` or each other. The owner of ego-arch-006 S2 applies it when that slice is planned; this pull request does not edit ego-arch-006's files.
 
 ## 10. Alternatives rejected
 
