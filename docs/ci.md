@@ -437,7 +437,8 @@ importer such as the publishers' #130 compatibility tests.
 point: the graph is in place for the first nested-to-nested edge (#102
 S1). Running the selector on `main` at `77beda6` before and after this
 change, over the change set of the design's exploration (§6), with
-`-base origin/main` as the workflow runs it:
+`-base origin/main`. At `77beda6` that is also the merge-base, which is
+what the workflow passes:
 
 | Changed path | Root lane before → after | Nested modules before → after |
 |---|---|---|

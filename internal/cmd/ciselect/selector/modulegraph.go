@@ -257,6 +257,10 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 		}
 		st.root = next
 	}
+	// Recompute the closure against the final root lane, so chains can
+	// never lag one iteration behind it, even if the defensive bound were
+	// hit. On every normal exit this reproduces the same chains.
+	chains = st.closure(start)
 	root := st.root
 
 	rootReason := strings.Join(root.Reasons, "; ")
