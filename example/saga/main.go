@@ -62,7 +62,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -77,6 +76,7 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -127,11 +127,11 @@ func main() {
 	sourceBehavior := NewAccountBehavior(sourceAccountID)
 	destBehavior := NewAccountBehavior(destAccountID)
 
-	if err := engine.Entity(ctx, sourceBehavior); err != nil {
+	if err := engine.SpawnEventSourced(ctx, sourceBehavior); err != nil {
 		logger.Error("failed to create source account entity", "error", err)
 		os.Exit(1)
 	}
-	if err := engine.Entity(ctx, destBehavior); err != nil {
+	if err := engine.SpawnEventSourced(ctx, destBehavior); err != nil {
 		logger.Error("failed to create destination account entity", "error", err)
 		os.Exit(1)
 	}
@@ -173,7 +173,7 @@ func main() {
 
 	// Start the saga with a 30-second timeout.
 	// If the saga does not complete within this duration, compensation is triggered automatically.
-	if err := engine.Saga(ctx, sagaBehavior, 30*time.Second); err != nil {
+	if err := engine.SpawnSaga(ctx, sagaBehavior, 30*time.Second); err != nil {
 		logger.Error("failed to start saga", "error", err)
 		os.Exit(1)
 	}
@@ -239,12 +239,14 @@ func main() {
 // Handles CreateAccount, CreditAccount, and DebitAccount commands.
 // ---------------------------------------------------------------------------
 
-// AccountBehavior implements ego.EventSourcedBehavior for a bank account.
+// AccountBehavior implements behaviorport.EventSourced (port/behavior) for a
+// bank account. It has no GoAkt serialization methods: this example does not
+// run in cluster mode, so it never needs to be serialized by GoAkt.
 type AccountBehavior struct {
 	id string
 }
 
-var _ ego.EventSourcedBehavior = (*AccountBehavior)(nil)
+var _ behaviorport.EventSourced = (*AccountBehavior)(nil)
 
 // NewAccountBehavior creates a new AccountBehavior with the given persistence ID.
 func NewAccountBehavior(id string) *AccountBehavior {
@@ -322,24 +324,6 @@ func (a *AccountBehavior) HandleEvent(_ context.Context, event ego.Event, priorS
 	}
 }
 
-func (a *AccountBehavior) MarshalBinary() ([]byte, error) {
-	data := struct {
-		ID string `json:"id"`
-	}{ID: a.id}
-	return json.Marshal(data)
-}
-
-func (a *AccountBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	a.id = aux.ID
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // FundTransferSaga — Saga that orchestrates a fund transfer between accounts.
 //
@@ -354,7 +338,9 @@ func (a *AccountBehavior) UnmarshalBinary(data []byte) error {
 //     to refund the debited amount.
 // ---------------------------------------------------------------------------
 
-// FundTransferSaga implements ego.SagaBehavior for a fund transfer.
+// FundTransferSaga implements behaviorport.Saga (port/behavior) for a fund
+// transfer. It has no GoAkt serialization methods: this example does not run
+// in cluster mode, so it never needs to be serialized by GoAkt.
 type FundTransferSaga struct {
 	transferID    string
 	sourceID      string
@@ -363,7 +349,7 @@ type FundTransferSaga struct {
 	logger        kitlog.Logger
 }
 
-var _ ego.SagaBehavior = (*FundTransferSaga)(nil)
+var _ behaviorport.Saga = (*FundTransferSaga)(nil)
 
 // NewFundTransferSaga creates a new saga instance.
 func NewFundTransferSaga(transferID, sourceID, destinationID string, amount float64, logger kitlog.Logger) *FundTransferSaga {
@@ -497,36 +483,4 @@ func (s *FundTransferSaga) Compensate(_ context.Context, state ego.State) ([]ego
 	}
 
 	return commands, nil
-}
-
-func (s *FundTransferSaga) MarshalBinary() ([]byte, error) {
-	data := struct {
-		TransferID    string  `json:"transfer_id"`
-		SourceID      string  `json:"source_id"`
-		DestinationID string  `json:"destination_id"`
-		Amount        float64 `json:"amount"`
-	}{
-		TransferID:    s.transferID,
-		SourceID:      s.sourceID,
-		DestinationID: s.destinationID,
-		Amount:        s.amount,
-	}
-	return json.Marshal(data)
-}
-
-func (s *FundTransferSaga) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		TransferID    string  `json:"transfer_id"`
-		SourceID      string  `json:"source_id"`
-		DestinationID string  `json:"destination_id"`
-		Amount        float64 `json:"amount"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	s.transferID = aux.TransferID
-	s.sourceID = aux.SourceID
-	s.destinationID = aux.DestinationID
-	s.amount = aux.Amount
-	return nil
 }

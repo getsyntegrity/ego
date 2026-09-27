@@ -55,6 +55,7 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/projection"
 )
 
@@ -382,14 +383,15 @@ func envInt(key string, defaultVal int) int {
 	return n
 }
 
-// entityWithRetry calls engine.Entity and retries up to 5 times on transient
-// cluster errors (e.g. olric state query timeouts under concurrent load on the
-// projection-leader pod). ErrActorAlreadyExists is always treated as success.
-func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior ego.EventSourcedBehavior) error {
+// entityWithRetry calls engine.SpawnEventSourced and retries up to 5 times on
+// transient cluster errors (e.g. olric state query timeouts under concurrent
+// load on the projection-leader pod). ErrActorAlreadyExists is always treated
+// as success.
+func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior behaviorport.EventSourced) error {
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := range maxAttempts {
-		err := engine.Entity(ctx, behavior)
+		err := engine.SpawnEventSourced(ctx, behavior)
 		if err == nil || errors.Is(err, gerrors.ErrActorAlreadyExists) {
 			return nil
 		}
