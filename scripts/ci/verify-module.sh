@@ -11,6 +11,11 @@ set -euo pipefail
 # verification against a published root version is
 # scripts/ci/verify-published.sh, a separate, stricter check.
 #
+# When the module has a file gated behind the `compat` build tag, it also
+# vets, lints and tests that file with `-tags compat` (docs/ci.md,
+# "Compatibility lane", #122) — a separate lane for historical checks that
+# must not enter the module's default unit-test closure.
+#
 # Usage: verify-module.sh <module-dir>
 #   <module-dir>   repo-relative path to the nested module, e.g.
 #                  "publisher/kafka" or "example/cluster".
@@ -87,6 +92,28 @@ golangci-lint run --modules-download-mode=mod --config "$repo_root/.golangci.yml
 echo "::endgroup::"
 steps+=("golangci-lint run")
 
+# Compatibility lane (#122): a nested module may keep a historical
+# check — today, the four publishers' ego-alias/sentinel assertions in
+# compat_test.go (ADR ego-arch-001, S1 criterion 3) — behind the `compat`
+# build tag, specifically so it never enters the default unit-test closure
+# verified below: `go list -deps -test ./...` with no -tags must never see
+# the GoAkt runtime or the root package `ego` again (docs/ci.md,
+# "Compatibility lane"). Detecting the tag by content, rather than
+# hard-coding module or file names, means any future compat-tagged file
+# gains this lane the moment it exists, with no script edit.
+compat_tagged=$(grep -rl '^//go:build compat$' --include='*.go' . 2>/dev/null || true)
+if [ -n "$compat_tagged" ]; then
+  echo "::group::go vet -tags compat ($module_dir)"
+  go vet -tags compat ./...
+  echo "::endgroup::"
+  steps+=("go vet -tags compat ./... (compatibility lane, #122)")
+
+  echo "::group::golangci-lint -tags compat ($module_dir)"
+  golangci-lint run --modules-download-mode=mod --build-tags compat --config "$repo_root/.golangci.yml" ./...
+  echo "::endgroup::"
+  steps+=("golangci-lint run -tags compat (compatibility lane, #122)")
+fi
+
 tests_note=""
 if [ -n "$(find . -name '*_test.go' -print -quit)" ]; then
   race_flags=()
@@ -99,6 +126,14 @@ if [ -n "$(find . -name '*_test.go' -print -quit)" ]; then
   go test ${race_flags[@]+"${race_flags[@]}"} ./...
   echo "::endgroup::"
   steps+=("go test ./...")
+
+  if [ -n "$compat_tagged" ]; then
+    echo "::group::go test -tags compat ($module_dir)"
+    # shellcheck disable=SC2068
+    go test -tags compat ${race_flags[@]+"${race_flags[@]}"} ./...
+    echo "::endgroup::"
+    steps+=("go test -tags compat ./... (compatibility lane, #122)")
+  fi
 else
   tests_note="no tests"
 fi

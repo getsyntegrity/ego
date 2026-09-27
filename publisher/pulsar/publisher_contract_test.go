@@ -20,20 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build compat
-
-// This file verifies the historical S1 compatibility aliases in package
-// `ego` (ADR ego-arch-001, S1 criterion 3: `EventPublisher`,
-// `StatePublisher` and `ErrPublisherNotStarted`), which #121 decided to keep
-// until #124 rather than deprecate now. It is gated behind the `compat`
-// build tag so it never enters this module's default unit-test closure —
-// `go list -deps -test ./...` with no -tags — which would otherwise pull the
-// GoAkt runtime back in through package `ego` (#122). CI runs it in a
-// separate lane: `go test -tags=compat ./...`, described in docs/ci.md,
-// "Compatibility lane". The publishing-only equivalent of these checks lives
-// in publisher_contract_test.go, in the default closure.
-
-package kafka
+package pulsar
 
 import (
 	"context"
@@ -42,23 +29,27 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/publishing"
 )
 
-// The publishers still satisfy the compatibility aliases in package ego
-// (ADR ego-arch-001, S1 criterion 3), which existing consumers may still
-// name them through.
+// The publishers implement the contracts from port/publishing directly, with
+// no dependency on package `ego` or the GoAkt runtime it pulls in. The
+// historical compatibility check against the `ego` aliases (ADR
+// ego-arch-001, S1 criterion 3) still exists, but it runs in a separate lane
+// behind the `compat` build tag — see compat_test.go and docs/ci.md,
+// "Compatibility lane" — precisely so that this file, part of the default
+// unit-test closure, never needs to import `ego` (#122).
 var (
-	_ ego.EventPublisher = (*EventsPublisher)(nil)
-	_ ego.StatePublisher = (*DurableStatePublisher)(nil)
+	_ publishing.EventPublisher = (*EventsPublisher)(nil)
+	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)
 )
 
-// TestPublishBeforeStartMatchesEgoSentinel checks that the error a stopped
-// publisher returns still matches the historical ego.ErrPublisherNotStarted
-// alias. The publishers are built without a broker connection: Publish
-// rejects the call before touching the client.
-func TestPublishBeforeStartMatchesEgoSentinel(t *testing.T) {
+// TestPublishBeforeStartMatchesPublishingSentinel checks that the error a
+// stopped publisher returns matches publishing.ErrPublisherNotStarted. The
+// publishers are built without a broker connection: Publish rejects the call
+// before touching the client.
+func TestPublishBeforeStartMatchesPublishingSentinel(t *testing.T) {
 	ctx := context.Background()
 	errs := map[string]error{
 		"events": (&EventsPublisher{started: atomic.NewBool(false)}).Publish(ctx, &egopb.Event{}),
@@ -66,8 +57,8 @@ func TestPublishBeforeStartMatchesEgoSentinel(t *testing.T) {
 	}
 
 	for name, err := range errs {
-		if !errors.Is(err, ego.ErrPublisherNotStarted) {
-			t.Errorf("%s: errors.Is(%v, ego.ErrPublisherNotStarted) = false", name, err)
+		if !errors.Is(err, publishing.ErrPublisherNotStarted) {
+			t.Errorf("%s: errors.Is(%v, publishing.ErrPublisherNotStarted) = false", name, err)
 		}
 	}
 }
