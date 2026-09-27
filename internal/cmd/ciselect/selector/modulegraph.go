@@ -196,8 +196,12 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 	}
 
 	// 2-3. Ownership and module boundary changes.
+	st := walkState{
+		mg:              mg,
+		manifestChanged: map[string]bool{},
+		fullyChanged:    map[string]bool{},
+	}
 	changedReasons := map[string][]string{} // nested dir -> reasons
-	manifestChanged := map[string]bool{}    // dir whose go.mod/go.sum changed
 	for _, c := range changed {
 		sp := normalizeChangedPath(c)
 		owner := mg.ownerOf(sp)
@@ -206,38 +210,54 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 		}
 		base, dir := path.Base(sp), path.Dir(sp)
 		if (base == "go.mod" || base == "go.sum") && dir == owner {
-			manifestChanged[owner] = true
+			st.manifestChanged[owner] = true
 		}
-		if base == "go.mod" && dir != rootDir {
+		if base == "go.mod" && dir != rootDir && isBoundaryChange(opts.GoMods, sp) {
 			reason := fmt.Sprintf("module boundary changed: %s", sp)
 			if parent := mg.ownerExcluding(dir, dir); parent == rootDir {
 				in.forceFull = append(in.forceFull, reason)
 			} else {
 				addReason(changedReasons, parent, reason)
+				st.fullyChanged[parent] = true
 			}
 		}
 	}
 
-	root := selectRoot(g, changed, opts, in)
+	st.root = selectRoot(g, changed, opts, in)
 	_, hasRoot := mg.byDir[rootDir]
 
-	// 4-5. Changed set and reverse-transitive closure.
+	// 4. Changed set.
 	var start []string
 	for d := range changedReasons {
 		start = append(start, d)
 	}
-	if hasRoot && root.Mode != ModeNone {
+	if hasRoot && st.root.Mode != ModeNone {
 		start = append(start, rootDir)
 	}
 	sort.Slice(start, func(i, j int) bool { return lessDir(start[i], start[j]) })
-	chains := mg.closure(start)
 
-	// 6. Root-lane seeding through a module the root requires.
-	if _, reached := chains[rootDir]; reached && hasRoot {
-		if seeded, ok := mg.seedRoot(g, chains, manifestChanged, in); ok {
-			root = selectRoot(g, changed, opts, seeded)
+	// 5-6. Closure with the import filter, and root-lane seeding through a
+	// module the root requires. Seeding can widen the root lane, which can
+	// widen the closure from the root, so repeat until the root lane is
+	// stable. Both only grow, so this ends; the bound is defensive.
+	var chains map[string][]string
+	for i := 0; i <= len(mg.dirs); i++ {
+		chains = st.closure(start)
+		if _, reached := chains[rootDir]; !reached || !hasRoot {
+			break
 		}
+		seeded, ok := st.seedRoot(g, chains, in)
+		if !ok {
+			break
+		}
+		next := selectRoot(g, changed, opts, seeded)
+		if next.Mode == st.root.Mode && len(next.Selected) == len(st.root.Selected) {
+			st.root = next
+			break
+		}
+		st.root = next
 	}
+	root := st.root
 
 	rootReason := strings.Join(root.Reasons, "; ")
 	for _, d := range mg.dirs {
@@ -256,6 +276,11 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 			}
 		} else {
 			p.Reason = unselectedReason(m, mg, chains)
+			if p.Reason == notAffected {
+				if d := st.filteredDep(m, chains); d != "" {
+					p.Reason = fmt.Sprintf("not affected: requires %s but imports none of its affected packages", d)
+				}
+			}
 		}
 		root.Plan = append(root.Plan, p)
 	}
@@ -263,10 +288,76 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 	return root
 }
 
+// notAffected is the reason of a module nothing reached.
+const notAffected = "not affected"
+
+// isBoundaryChange reports whether the changed nested go.mod at sp is a
+// module boundary change: added or deleted (present at exactly one of base
+// and head). Without base information (goMods nil, or sp not in it) every
+// changed nested go.mod is a boundary change, the conservative fallback.
+func isBoundaryChange(goMods map[string]GoModPresence, sp string) bool {
+	if goMods == nil {
+		return true
+	}
+	p, ok := goMods[sp]
+	if !ok {
+		return true
+	}
+	return !p.AtBase || !p.AtHead
+}
+
+// walkState is what the closure needs to decide each requirement edge.
+type walkState struct {
+	mg moduleGraph
+	// root is the current root lane decision.
+	root Result
+	// manifestChanged marks modules whose go.mod or go.sum changed.
+	manifestChanged map[string]bool
+	// fullyChanged marks nested modules that are the parent of a module
+	// boundary change.
+	fullyChanged map[string]bool
+}
+
+// unfiltered reports whether every module requiring d follows it, without
+// the import filter: d's manifest changed, d is fully changed, or d is the
+// root with lane full (§5.1 "When the import filter is sound").
+func (st walkState) unfiltered(d string) bool {
+	return st.manifestChanged[d] || st.fullyChanged[d] || (d == rootDir && st.root.Mode == ModeFull)
+}
+
+// edge reports whether consumer m is reached from the reached module d it
+// requires: unfiltered, or m imports one of d's affected packages. Every
+// package of a nested module counts as affected; the root's affected
+// packages are its lane's Selected set.
+func (st walkState) edge(m ModuleInfo, d string) bool {
+	if st.unfiltered(d) {
+		return true
+	}
+	if d == rootDir {
+		selected := make(map[string]bool, len(st.root.Selected))
+		for _, p := range st.root.Selected {
+			selected[p] = true
+		}
+		for _, imp := range m.Imports {
+			if selected[imp] {
+				return true
+			}
+		}
+		return false
+	}
+	for _, imp := range m.Imports {
+		if owner, ok := st.mg.moduleOfImport(imp); ok && owner == d {
+			return true
+		}
+	}
+	return false
+}
+
 // closure walks the reversed Deps edges breadth-first from start (already
-// sorted), visiting dependents in sorted order, and returns the first chain
-// that reached each module: the module itself, then back to a start one.
-func (mg moduleGraph) closure(start []string) map[string][]string {
+// sorted), visiting dependents in sorted order and following an edge only
+// when st.edge allows it, and returns the first chain that reached each
+// module: the module itself, then back to a start one.
+func (st walkState) closure(start []string) map[string][]string {
 	chains := make(map[string][]string, len(start))
 	queue := make([]string, 0, len(start))
 	for _, d := range start {
@@ -279,8 +370,11 @@ func (mg moduleGraph) closure(start []string) map[string][]string {
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		for _, dep := range mg.dependents[cur] {
+		for _, dep := range st.mg.dependents[cur] {
 			if _, seen := chains[dep]; seen {
+				continue
+			}
+			if !st.edge(st.mg.byDir[dep], cur) {
 				continue
 			}
 			chains[dep] = append([]string{dep}, chains[cur]...)
@@ -290,17 +384,38 @@ func (mg moduleGraph) closure(start []string) map[string][]string {
 	return chains
 }
 
+// filteredDep returns the directory of the first (sorted) reached module m
+// requires whose edge the import filter rejected, or "".
+func (st walkState) filteredDep(m ModuleInfo, chains map[string][]string) string {
+	var deps []string
+	for _, dep := range m.Deps {
+		if d, ok := st.mg.dirOfPath[dep]; ok {
+			if _, reached := chains[d]; reached {
+				deps = append(deps, d)
+			}
+		}
+	}
+	sort.Slice(deps, func(i, j int) bool { return lessDir(deps[i], deps[j]) })
+	if len(deps) == 0 {
+		return ""
+	}
+	return deps[0]
+}
+
 // seedRoot returns the root lane inputs for a root reached through modules
 // it requires: the root packages that import a reached dependency become
 // seeds of the package-level lane; a dependency whose go.mod or go.sum
-// changed, or that no root package imports, forces the root lane to full.
-// ok is false when the root requires no reached module (it only changed
-// itself).
-func (mg moduleGraph) seedRoot(g Graph, chains map[string][]string, manifestChanged map[string]bool, in rootInputs) (rootInputs, bool) {
+// changed, or that no root package in the go list graph imports (its only
+// importer sits behind a build tag), forces the root lane to full. Only
+// dependencies whose edge to the root passes the import filter count. ok
+// is false when no such dependency exists (the root only changed itself).
+func (st walkState) seedRoot(g Graph, chains map[string][]string, in rootInputs) (rootInputs, bool) {
+	mg := st.mg
+	manifestChanged := st.manifestChanged
 	var reachedDeps []string
 	for _, dep := range mg.byDir[rootDir].Deps {
 		if d, ok := mg.dirOfPath[dep]; ok && d != rootDir {
-			if _, reached := chains[d]; reached {
+			if _, reached := chains[d]; reached && st.edge(mg.byDir[rootDir], d) {
 				reachedDeps = append(reachedDeps, d)
 			}
 		}
@@ -370,7 +485,7 @@ func unselectedReason(m ModuleInfo, mg moduleGraph, chains map[string][]string) 
 			}
 		}
 	}
-	return "not affected"
+	return notAffected
 }
 
 // nestedSelections returns the selected nested (non-root) modules of plan,

@@ -30,37 +30,39 @@ import (
 // The fixtures in this file are the fixture repository of the
 // ego-arch-006 design (§5.5): an in-memory module graph, no filesystem.
 //
-//	Dir        Path                      Deps (local replace)   Pinned
-//	.          example.com/r             example.com/r/port     -
-//	port       example.com/r/port        -                      -
-//	adapter/a  example.com/r/adapter/a   example.com/r/port     -
-//	adapter/b  example.com/r/adapter/b   example.com/r          -
-//	it         example.com/r/it          example.com/r/adapter/a -
-//	tools      example.com/r/tools       -                      -
-//	pinned     example.com/r/pinned      -                      example.com/r/port@v0.3.0
-//	adapter/c  example.com/r/adapter/c   example.com/r/port     - (only in the "new module" case)
+//	Dir        Path                     Deps (local replace)      Pinned                     Imports (parser)
+//	.          example.com/r            example.com/r/port        -                          example.com/r/port, example.com/r/port/sub
+//	port       example.com/r/port       -                         -                          -
+//	adapter/a  example.com/r/adapter/a  example.com/r/port        -                          example.com/r/port
+//	adapter/b  example.com/r/adapter/b  example.com/r             -                          example.com/r
+//	it         example.com/r/it         example.com/r/adapter/a,  -                          example.com/r/adapter/a
+//	                                    example.com/r/port
+//	tools      example.com/r/tools      -                         -                          -
+//	pinned     example.com/r/pinned     -                         example.com/r/port@v0.3.0  example.com/r/port
+//	adapter/c  example.com/r/adapter/c  example.com/r/port        -                          example.com/r/port (only in the "new module" case)
 //
 // The root module's own package graph (graphRoot) has a root package that
 // imports svc, svc importing the port module, lib importing port only
-// from its external tests, and two unrelated packages (other, tooling), so
-// a root lane seeded through port is a proper "affected" subset.
+// from its external tests, a util package nothing imports and that
+// imports nothing, and an unrelated package (other), so a root lane
+// seeded through port is a proper "affected" subset.
 
 const fx = "example.com/r"
 
 func fixtureModules() []ModuleInfo {
 	return []ModuleInfo{
-		{Dir: ".", Path: fx, Deps: []string{fx + "/port"}},
+		{Dir: ".", Path: fx, Deps: []string{fx + "/port"}, Imports: []string{fx + "/port", fx + "/port/sub"}},
 		{Dir: "port", Path: fx + "/port"},
-		{Dir: "adapter/a", Path: fx + "/adapter/a", Deps: []string{fx + "/port"}},
-		{Dir: "adapter/b", Path: fx + "/adapter/b", Deps: []string{fx}},
-		{Dir: "it", Path: fx + "/it", Deps: []string{fx + "/adapter/a"}},
+		{Dir: "adapter/a", Path: fx + "/adapter/a", Deps: []string{fx + "/port"}, Imports: []string{fx + "/port"}},
+		{Dir: "adapter/b", Path: fx + "/adapter/b", Deps: []string{fx}, Imports: []string{fx}},
+		{Dir: "it", Path: fx + "/it", Deps: []string{fx + "/adapter/a", fx + "/port"}, Imports: []string{fx + "/adapter/a"}},
 		{Dir: "tools", Path: fx + "/tools"},
-		{Dir: "pinned", Path: fx + "/pinned", Pinned: []string{fx + "/port@v0.3.0"}},
+		{Dir: "pinned", Path: fx + "/pinned", Pinned: []string{fx + "/port@v0.3.0"}, Imports: []string{fx + "/port"}},
 	}
 }
 
 func fixtureModulesWithC() []ModuleInfo {
-	return append(fixtureModules(), ModuleInfo{Dir: "adapter/c", Path: fx + "/adapter/c", Deps: []string{fx + "/port"}})
+	return append(fixtureModules(), ModuleInfo{Dir: "adapter/c", Path: fx + "/adapter/c", Deps: []string{fx + "/port"}, Imports: []string{fx + "/port"}})
 }
 
 func graphRoot() Graph {
@@ -71,14 +73,20 @@ func graphRoot() Graph {
 			{ImportPath: fx, Dir: "/repo", Imports: []string{fx + "/svc"}},
 			{ImportPath: fx + "/svc", Dir: "/repo/svc", Imports: []string{fx + "/port"}},
 			{ImportPath: fx + "/lib", Dir: "/repo/lib", XTestImports: []string{fx + "/port/sub"}},
+			{ImportPath: fx + "/util", Dir: "/repo/util"},
 			{ImportPath: fx + "/other", Dir: "/repo/other"},
-			{ImportPath: fx + "/tooling", Dir: "/repo/tooling"},
 		},
 	}
 }
 
 func selectFixture(changed []string, modules []ModuleInfo) Result {
 	return Select(graphRoot(), changed, Options{Modules: modules})
+}
+
+// selectWithBase runs Select as with -base: goMods records, for each
+// changed nested go.mod, whether it exists at base and at head.
+func selectWithBase(changed []string, modules []ModuleInfo, goMods map[string]GoModPresence) Result {
+	return Select(graphRoot(), changed, Options{Modules: modules, GoMods: goMods})
 }
 
 func planFor(t *testing.T, res Result, dir string) ModulePlan {
@@ -159,7 +167,8 @@ func TestModuleGraph_TransitiveConsumer(t *testing.T) {
 // #102 case "new module": a new nested go.mod carves a directory out of its
 // parent (here the root), so the parent is fully changed.
 func TestModuleGraph_NewModule(t *testing.T) {
-	res := selectFixture([]string{"adapter/c/go.mod", "adapter/c/c.go"}, fixtureModulesWithC())
+	res := selectWithBase([]string{"adapter/c/go.mod", "adapter/c/c.go"}, fixtureModulesWithC(),
+		map[string]GoModPresence{"adapter/c/go.mod": {AtHead: true}})
 
 	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/c", "adapter/b"})
 	assertFull(t, graphRoot(), res)
@@ -272,15 +281,15 @@ func TestModuleGraph_RootGoModIsNotGlobal(t *testing.T) {
 	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/b"})
 }
 
-// A root affected lane (not full) still selects the modules that require
-// the root: requirements are the module edge, not imports (§5.1).
-func TestModuleGraph_RootAffectedLaneSelectsRequiringModules(t *testing.T) {
-	res := selectFixture([]string{"other/o.go"}, fixtureModules())
+// A root affected lane that includes a package a consumer imports selects
+// that consumer through the filtered edge.
+func TestModuleGraph_RootAffectedLaneSelectsImportingConsumer(t *testing.T) {
+	res := selectFixture([]string{"svc/s.go"}, fixtureModules())
 
 	if res.Mode != ModeAffected {
 		t.Fatalf("root Mode = %s, want %s (reasons=%v)", res.Mode, ModeAffected, res.Reasons)
 	}
-	assertSameSet(t, res.Selected, []string{fx + "/other"})
+	assertSameSet(t, res.Selected, []string{fx, fx + "/svc"})
 	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/b"})
 }
 
@@ -308,15 +317,145 @@ func TestModuleGraph_BoundaryInsideNestedModuleChangesThatModule(t *testing.T) {
 	}
 }
 
-// The root reached through a module it requires, with no root package
-// importing that module, must not silently test nothing: full fallback.
-func TestModuleGraph_RootRequiresUnimportedDependencyFallsBackToFull(t *testing.T) {
+// The root's parser-read imports (build tags ignored) name tools, so the
+// root is reached; but no root package in the go list graph imports it (a
+// build-tagged importer). The root lane must not silently test nothing:
+// full fallback.
+func TestModuleGraph_RootImporterOnlyBehindBuildTagFallsBackToFull(t *testing.T) {
 	mods := fixtureModules()
 	mods[0].Deps = append(mods[0].Deps, fx+"/tools")
+	mods[0].Imports = append(mods[0].Imports, fx+"/tools")
 	res := selectFixture([]string{"tools/main.go"}, mods)
 
 	assertFull(t, graphRoot(), res)
 	assertSameSet(t, moduleDirs(res.Modules), []string{"tools", "adapter/b"})
+}
+
+// Import filter: the root requires tools but imports none of its packages,
+// and tools' manifest is unchanged, so a tools change does not reach the
+// root (§5.1 "When the import filter is sound").
+func TestModuleGraph_RootRequiringButNotImportingIsNotReached(t *testing.T) {
+	mods := fixtureModules()
+	mods[0].Deps = append(mods[0].Deps, fx+"/tools")
+	res := selectFixture([]string{"tools/main.go"}, mods)
+
+	if res.Mode != ModeNone {
+		t.Fatalf("root Mode = %s, want %s (reasons=%v)", res.Mode, ModeNone, res.Reasons)
+	}
+	assertSameSet(t, moduleDirs(res.Modules), []string{"tools"})
+	if p := planFor(t, res, "."); p.Selected || !strings.Contains(p.Reason, "imports none of its affected packages") {
+		t.Fatalf("root plan = %+v, want not selected by the import filter", p)
+	}
+}
+
+// ...but when tools' go.mod changed, the unfiltered requirement edge
+// applies, and a changed manifest of a required module sends the root lane
+// to full.
+func TestModuleGraph_RequiredManifestChangeIsUnfiltered(t *testing.T) {
+	mods := fixtureModules()
+	mods[0].Deps = append(mods[0].Deps, fx+"/tools")
+	res := selectWithBase([]string{"tools/go.mod"}, mods, map[string]GoModPresence{"tools/go.mod": {AtBase: true, AtHead: true}})
+
+	assertFull(t, graphRoot(), res)
+	assertSameSet(t, moduleDirs(res.Modules), []string{"tools", "adapter/b"})
+}
+
+// Import filter (§5.5): a change to root package util makes the root lane
+// affected with only util; adapter/b requires the root but imports only the
+// root package, so it is not selected.
+func TestModuleGraph_ImportFilterSkipsConsumerNotImportingAffectedPackage(t *testing.T) {
+	res := selectFixture([]string{"util/u.go"}, fixtureModules())
+
+	if res.Mode != ModeAffected {
+		t.Fatalf("root Mode = %s, want %s (reasons=%v)", res.Mode, ModeAffected, res.Reasons)
+	}
+	assertSameSet(t, res.Selected, []string{fx + "/util"})
+	if len(res.Modules) != 0 {
+		t.Fatalf("modules = %v, want none: adapter/b does not import util", res.Modules)
+	}
+	if p := planFor(t, res, "adapter/b"); p.Selected || !strings.Contains(p.Reason, "imports none of its affected packages") {
+		t.Fatalf("adapter/b plan = %+v, want not selected by the import filter", p)
+	}
+}
+
+// Manifest edit versus add versus delete, all with -base (§5.5).
+
+// Edit: adapter/a/go.mod exists at base and head. No boundary effect: the
+// root lane stays none; adapter/a's manifest changed, so it reaches it
+// through the unfiltered edge.
+func TestModuleGraph_WithBase_GoModEditHasNoBoundaryEffect(t *testing.T) {
+	res := selectWithBase([]string{"adapter/a/go.mod"}, fixtureModules(),
+		map[string]GoModPresence{"adapter/a/go.mod": {AtBase: true, AtHead: true}})
+
+	if res.Mode != ModeNone {
+		t.Fatalf("root Mode = %s, want %s (reasons=%v)", res.Mode, ModeNone, res.Reasons)
+	}
+	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/a", "it"})
+}
+
+// Add: the "new module" case, with adapter/c/go.mod absent at base.
+func TestModuleGraph_WithBase_GoModAddIsBoundary(t *testing.T) {
+	res := selectWithBase([]string{"adapter/c/go.mod", "adapter/c/c.go"}, fixtureModulesWithC(),
+		map[string]GoModPresence{"adapter/c/go.mod": {AtHead: true}})
+
+	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/c", "adapter/b"})
+	assertFull(t, graphRoot(), res)
+	if !containsSubstring(res.Reasons, "module boundary changed: adapter/c/go.mod") {
+		t.Fatalf("root reasons = %v, want the module boundary reason", res.Reasons)
+	}
+}
+
+// Delete: adapter/b/go.mod exists at base only, so adapter/b is no longer a
+// discovered module and its files belong to the root: root lane full, and
+// every remaining module requiring the root (none here) is selected.
+func TestModuleGraph_WithBase_GoModDeleteIsBoundary(t *testing.T) {
+	var mods []ModuleInfo
+	for _, m := range fixtureModules() {
+		if m.Dir != "adapter/b" {
+			mods = append(mods, m)
+		}
+	}
+	res := selectWithBase([]string{"adapter/b/go.mod"}, mods,
+		map[string]GoModPresence{"adapter/b/go.mod": {AtBase: true}})
+
+	assertFull(t, graphRoot(), res)
+	if !containsSubstring(res.Reasons, "module boundary changed: adapter/b/go.mod") {
+		t.Fatalf("root reasons = %v, want the module boundary reason", res.Reasons)
+	}
+	if len(res.Modules) != 0 {
+		t.Fatalf("modules = %v, want none (no remaining module requires the root)", res.Modules)
+	}
+}
+
+// Without -base, the edit case is treated as a boundary change: root lane
+// full, the conservative fallback.
+func TestModuleGraph_WithoutBase_GoModEditIsBoundary(t *testing.T) {
+	res := selectFixture([]string{"adapter/a/go.mod"}, fixtureModules())
+
+	assertFull(t, graphRoot(), res)
+	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/a", "adapter/b", "it"})
+}
+
+// With -base, a changed go.mod that is absent from the presence map is
+// treated conservatively as a boundary change.
+func TestModuleGraph_WithBase_UnknownPresenceIsBoundary(t *testing.T) {
+	res := selectWithBase([]string{"adapter/a/go.mod"}, fixtureModules(), map[string]GoModPresence{})
+
+	assertFull(t, graphRoot(), res)
+}
+
+// A port/go.mod edit selects port plus its whole closure unfiltered, and
+// the root lane is full because the root requires port and port's manifest
+// changed (§5.2 step 6), even with no boundary effect.
+func TestModuleGraph_WithBase_RequiredModuleGoModEditSendsRootFull(t *testing.T) {
+	res := selectWithBase([]string{"port/go.mod"}, fixtureModules(),
+		map[string]GoModPresence{"port/go.mod": {AtBase: true, AtHead: true}})
+
+	assertFull(t, graphRoot(), res)
+	assertSameSet(t, moduleDirs(res.Modules), []string{"port", "adapter/a", "adapter/b", "it"})
+	if containsSubstring(res.Reasons, "module boundary changed") {
+		t.Fatalf("root reasons = %v, want no boundary reason for an edit", res.Reasons)
+	}
 }
 
 func TestModuleGraph_EmptyChangedListIsGlobal(t *testing.T) {

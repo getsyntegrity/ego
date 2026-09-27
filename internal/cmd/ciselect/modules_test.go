@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -87,6 +88,12 @@ go 1.26.0
 
 require `+rootModule+`/moda v0.3.0
 `)
+	// Parser-read imports: tests included, build tags ignored, own-module
+	// and third-party imports dropped.
+	writeFile(t, filepath.Join(root, "moda", "a.go"), "package moda\n\nimport _ \""+rootModule+"/command\"\n")
+	writeFile(t, filepath.Join(root, "moda", "a_test.go"), "package moda\n\nimport _ \""+rootModule+"/testkit\"\n")
+	writeFile(t, filepath.Join(root, "modb", "b_compat.go"), "//go:build compat\n\npackage modb\n\nimport (\n\t_ \""+rootModule+"/moda/sub\"\n\t_ \"example.com/thirdparty/x\"\n)\n")
+	writeFile(t, filepath.Join(root, "modb", "self.go"), "package modb\n\nimport _ \""+rootModule+"/modb/inner\"\n")
 	writeFile(t, filepath.Join(root, "vendor", "example.com", "dep", "go.mod"), "module example.com/dep\n\ngo 1.26.0\n")
 	return root
 }
@@ -121,12 +128,135 @@ func TestModuleDiscovery_BuildsRequirementGraph(t *testing.T) {
 	}
 	want := []selector.ModuleInfo{
 		{Dir: ".", Path: rootModule},
-		{Dir: "moda", Path: rootModule + "/moda", Deps: []string{rootModule}},
-		{Dir: "modb", Path: rootModule + "/modb", Deps: []string{rootModule + "/moda"}},
+		{Dir: "moda", Path: rootModule + "/moda", Deps: []string{rootModule}, Imports: []string{rootModule + "/command", rootModule + "/testkit"}},
+		{Dir: "modb", Path: rootModule + "/modb", Deps: []string{rootModule + "/moda"}, Imports: []string{rootModule + "/moda/sub"}},
 		{Dir: "modc", Path: rootModule + "/modc", Pinned: []string{rootModule + "/moda@v0.3.0"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("discoverModules() =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// The root module's import set covers only the root's own files: nested
+// module directories and testdata/ are not the root's.
+func TestModuleDiscovery_RootImportsSkipNestedModulesAndTestdata(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "pkg", "p.go"), "package pkg\n\nimport (\n\t_ \""+rootModule+"/modb\"\n\t_ \""+rootModule+"/pkg2\"\n)\n")
+	writeFile(t, filepath.Join(root, "pkg", "testdata", "t.go"), "package t\n\nimport _ \""+rootModule+"/modc\"\n")
+
+	got, err := discoverModules(root)
+	if err != nil {
+		t.Fatalf("discoverModules: %v", err)
+	}
+	if got[0].Dir != "." || !reflect.DeepEqual(got[0].Imports, []string{rootModule + "/modb"}) {
+		t.Fatalf("root module = %+v, want Imports [%s/modb]", got[0], rootModule)
+	}
+}
+
+// gitRepo creates a git repository at a new temporary directory with the
+// given files committed, and returns its path.
+func gitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for p, c := range files {
+		writeFile(t, filepath.Join(root, filepath.FromSlash(p)), c)
+	}
+	gitRun(t, root, "init", "-q")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "base")
+	return root
+}
+
+func gitRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// -base: a changed nested go.mod is classified by its existence at base
+// (git) and at head (the working tree): edit, add or delete. Other paths
+// and the root go.mod are not reported.
+func TestGoModPresence_EditAddDelete(t *testing.T) {
+	root := gitRepo(t, map[string]string{
+		"go.mod":      "module " + rootModule + "\n",
+		"moda/go.mod": "module " + rootModule + "/moda\n",
+		"modd/go.mod": "module " + rootModule + "/modd\n",
+	})
+	base := gitRun(t, root, "rev-parse", "HEAD")
+	writeFile(t, filepath.Join(root, "moda", "go.mod"), "module "+rootModule+"/moda\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n")
+	if err := os.Remove(filepath.Join(root, "modd", "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := goModPresence(root, base, []string{"moda/go.mod", "modn/go.mod", "modd/go.mod", "moda/x.go", "go.mod"})
+	if err != nil {
+		t.Fatalf("goModPresence: %v", err)
+	}
+	want := map[string]selector.GoModPresence{
+		"moda/go.mod": {AtBase: true, AtHead: true},
+		"modn/go.mod": {AtHead: true},
+		"modd/go.mod": {AtBase: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("goModPresence() = %v, want %v", got, want)
+	}
+}
+
+// An unknown -base revision fails the selection (and the workflow falls
+// back to -all), never a silent "absent at base".
+func TestGoModPresence_UnknownBaseFails(t *testing.T) {
+	root := gitRepo(t, map[string]string{"go.mod": "module " + rootModule + "\n"})
+
+	if _, err := goModPresence(root, "0000000000000000000000000000000000000000", []string{"moda/go.mod"}); err == nil {
+		t.Fatalf("goModPresence() error = nil, want an error for an unknown base")
+	}
+	// A revision can never start with "-": that would be a git option.
+	if _, err := goModPresence(root, "--git-dir=/nonexistent", []string{"moda/go.mod"}); err == nil || !strings.Contains(err.Error(), "must not start with") {
+		t.Fatalf("goModPresence() error = %v, want an option-like base rejected", err)
+	}
+}
+
+// With a real merge-base, as the workflow passes it: a go.mod added on the
+// base branch after the branch point is absent at the merge-base, so the
+// pull request's own add of the same file is still classified as an add
+// (the three-dot diff that produced the changed-file list agrees).
+func TestGoModPresence_MergeBaseMatchesThreeDotDiff(t *testing.T) {
+	root := gitRepo(t, map[string]string{"go.mod": "module " + rootModule + "\n"})
+	gitRun(t, root, "branch", "-M", "main")
+	gitRun(t, root, "checkout", "-q", "-b", "pr")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "pr adds modn")
+	gitRun(t, root, "checkout", "-q", "main")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n\ngo 1.26.0\n")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "main adds modn too")
+	gitRun(t, root, "checkout", "-q", "pr")
+
+	changed := gitRun(t, root, "diff", "--name-only", "--no-renames", "main...pr")
+	if changed != "modn/go.mod" {
+		t.Fatalf("three-dot diff = %q, want modn/go.mod", changed)
+	}
+	mergeBase := gitRun(t, root, "merge-base", "main", "pr")
+	got, err := goModPresence(root, mergeBase, []string{changed})
+	if err != nil {
+		t.Fatalf("goModPresence: %v", err)
+	}
+	if p := got["modn/go.mod"]; p.AtBase || !p.AtHead {
+		t.Fatalf("presence at merge-base = %+v, want added (absent at base, present at head)", p)
+	}
+	tip, err := goModPresence(root, "main", []string{changed})
+	if err != nil {
+		t.Fatalf("goModPresence(main): %v", err)
+	}
+	if p := tip["modn/go.mod"]; !p.AtBase {
+		t.Fatalf("presence at the base branch tip = %+v; this test documents why the merge-base is required", p)
 	}
 }
 
@@ -290,6 +420,22 @@ func TestRun_AllSurvivesBrokenNestedGoMod(t *testing.T) {
 	}
 	if strings.Contains(string(plan), `"path"`) {
 		t.Fatalf("plan.json has a path field in the directory-only fallback:\n%s", plan)
+	}
+}
+
+// A bad -base fails a -changed run (fail closed), while the -all fallback
+// never reads it, so the workflow's fallback cannot fail on it.
+func TestRun_BaseFailsClosedButAllIgnoresIt(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	changed := filepath.Join(t.TempDir(), "changed.txt")
+	writeFile(t, changed, "moda/go.mod\n")
+
+	if err := run([]string{"-changed", changed, "-base", "no-such-rev", "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard); err == nil {
+		t.Fatalf("run(-changed, bad -base) error = nil, want failure")
+	}
+	if err := run([]string{"-all", "-base", "no-such-rev", "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run(-all, bad -base) error = %v, want success", err)
 	}
 }
 

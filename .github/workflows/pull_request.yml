@@ -54,13 +54,14 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          git merge-base "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/base.txt"
       - name: Select packages
         id: select
         shell: bash
         env:
           GOFLAGS: -mod=vendor
         run: |
-          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -out-dir "$RUNNER_TEMP/ci"; then
+          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")" -out-dir "$RUNNER_TEMP/ci"; then
             :
           else
             echo "::warning::ciselect failed; falling back to the full suite"

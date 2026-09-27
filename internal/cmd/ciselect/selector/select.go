@@ -65,10 +65,25 @@ type Options struct {
 	// which also feeds dependency changes back into the root package
 	// lane.
 	Modules []ModuleInfo
+	// GoMods is set when the caller knows the base revision (-base): for
+	// each changed nested go.mod (module-relative path), whether it
+	// exists at base and at head. A go.mod present at both was edited and
+	// has no module boundary effect. When GoMods is nil, or a changed
+	// nested go.mod is missing from it, the change is treated as a
+	// boundary change: the conservative behavior.
+	GoMods map[string]GoModPresence
+}
+
+// GoModPresence records whether a go.mod exists at the base revision and
+// at head.
+type GoModPresence struct {
+	AtBase bool
+	AtHead bool
 }
 
 // ModuleInfo is one discovered Go module. All fields come from its go.mod
-// (`go mod edit -json`); nothing is hand-listed.
+// (`go mod edit -json`) and from parsing its files; nothing is
+// hand-listed.
 type ModuleInfo struct {
 	// Dir is the module's directory relative to the repository root,
 	// using forward slashes; "." for the root module.
@@ -84,6 +99,12 @@ type ModuleInfo struct {
 	// do not compile against the working tree, so they are reported,
 	// never followed as edges.
 	Pinned []string
+	// Imports are the in-repository import paths of other modules found
+	// by go/parser in this module's own files: all files, tests included,
+	// build tags ignored. They filter a requirement edge (a consumer is
+	// selected only if it imports an affected package of the module it
+	// requires), never create one.
+	Imports []string
 }
 
 // ModuleSelection is one nested module selected to be built, vetted,

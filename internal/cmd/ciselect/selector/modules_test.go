@@ -30,15 +30,15 @@ import (
 // moduleFixtureOpts returns Options wired for the fixtureGraph's root
 // module and two satellite modules (kafka-like "publisher/kafka" and
 // "publisher/nats"), used across the module-selection tests below. kafka
-// requires the root module through a local replace; nats requires nothing
-// in the repository, so it is only ever selected by a global change or by
-// its own changed files.
+// requires the root module through a local replace and imports the root
+// module's "command" package; nats requires nothing in the repository, so
+// it is only ever selected by a global change or by its own changed files.
 func moduleFixtureOpts() Options {
 	const mod = "github.com/x/mod"
 	opts := satelliteOpts("publisher/kafka", "publisher/nats")
 	opts.Modules = []ModuleInfo{
 		{Dir: ".", Path: mod},
-		{Dir: "publisher/kafka", Path: mod + "/publisher/kafka", Deps: []string{mod}},
+		{Dir: "publisher/kafka", Path: mod + "/publisher/kafka", Deps: []string{mod}, Imports: []string{mod + "/command"}},
 		{Dir: "publisher/nats", Path: mod + "/publisher/nats"},
 	}
 	return opts
@@ -88,17 +88,16 @@ func TestSelect_Modules_DocsOnlyIsNone(t *testing.T) {
 	}
 }
 
-// Module edges come from go.mod requirements, not imports (ego-arch-006
-// design §5.1): any root lane change selects every module that requires
-// the root, while the root's own package fast lane is unchanged.
-func TestSelect_Modules_RootLeafChangeSelectsModulesRequiringRootAndKeepsRootFastLane(t *testing.T) {
+func TestSelect_Modules_RootLeafChangeNotImportedByAnyModuleSelectsNoneAndKeepsRootFastLane(t *testing.T) {
 	g := fixtureGraph()
 	res := Select(g, []string{"internal/pause/x.go"}, moduleFixtureOpts())
 
 	if res.Mode != ModeAffected {
 		t.Fatalf("Mode = %s, want %s (root fast lane must be unaffected)", res.Mode, ModeAffected)
 	}
-	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka"})
+	if len(res.Modules) != 0 {
+		t.Fatalf("Modules = %v, want none: neither kafka nor nats imports internal/pause or the root package", res.Modules)
+	}
 }
 
 func TestSelect_Modules_RootChangeSelectsModuleRequiringRoot(t *testing.T) {

@@ -33,11 +33,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pablogore/ego/v4/internal/cmd/ciselect/selector"
@@ -73,6 +78,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	reasonFlag := fs.String("reason", "", "optional extra context appended to the summary")
 	moduleDirFlag := fs.String("module-dir", ".", "directory of the Go module to select packages from")
 	repoRootFlag := fs.String("repo-root", ".", "repository root that -changed paths are relative to")
+	baseFlag := fs.String("base", "", "optional git revision the -changed list was diffed from (for a three-dot diff, the merge-base); tells an added or deleted nested go.mod (a module boundary change) from an edited one")
 	outDirFlag := fs.String("out-dir", "", "directory to write mode, packages.txt, coverpkg, modules.json, plan.json and summary.md into (required)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -132,6 +138,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 		moduleRelChanged[i] = toModuleRelPath(repoRoot, moduleDir, c)
 	}
 
+	// Without -base, every changed nested go.mod counts as a module
+	// boundary change (the selector's conservative default). -all reads
+	// no changed files, so it needs no base either.
+	var goMods map[string]selector.GoModPresence
+	if *baseFlag != "" && !*allFlag {
+		presence, err := goModPresence(repoRoot, *baseFlag, changed)
+		if err != nil {
+			return fmt.Errorf("resolving -base: %w", err)
+		}
+		goMods = make(map[string]selector.GoModPresence, len(presence))
+		for p, v := range presence {
+			goMods[toModuleRelPath(repoRoot, moduleDir, p)] = v
+		}
+	}
+
 	reason := *reasonFlag
 	modules, err := discoverModules(moduleDir)
 	if err != nil {
@@ -152,6 +173,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		All:     *allFlag,
 		Reason:  reason,
 		Modules: modules,
+		GoMods:  goMods,
 	})
 
 	summary := selector.BuildSummary(result)
@@ -450,8 +472,125 @@ func discoverModules(root string) ([]selector.ModuleInfo, error) {
 		}
 		sort.Strings(infos[i].Deps)
 		sort.Strings(infos[i].Pinned)
+
+		imports, err := discoverModuleImports(root, infos[i].Dir, infos[i].Path, dirOfPath)
+		if err != nil {
+			return nil, fmt.Errorf("discovering imports for module %s: %w", infos[i].Dir, err)
+		}
+		infos[i].Imports = imports
 	}
 	return infos, nil
+}
+
+// discoverModuleImports parses every .go file of the module at
+// repo-relative dir, including _test.go files and files behind any build
+// constraint (a build-tagged or test-only importer must still count), with
+// go/parser in imports-only mode: no module download, no network, no
+// build. It does not descend into skipDirs or into a subdirectory holding
+// its own go.mod (another module's files). It returns the sorted,
+// de-duplicated import paths that belong to another discovered module
+// (longest module path prefix in dirOfPath); the module's own packages,
+// the standard library and third-party imports are dropped.
+func discoverModuleImports(root, dir, modPath string, dirOfPath map[string]string) ([]string, error) {
+	start := filepath.Join(root, filepath.FromSlash(dir))
+	fset := token.NewFileSet()
+	imports := make(map[string]bool)
+
+	walkErr := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p == start {
+				return nil
+			}
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if _, statErr := os.Stat(filepath.Join(p, "go.mod")); statErr == nil {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		file, parseErr := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return fmt.Errorf("parsing %s: %w", p, parseErr)
+		}
+		for _, imp := range file.Imports {
+			impPath, unquoteErr := strconv.Unquote(imp.Path.Value)
+			if unquoteErr != nil {
+				return fmt.Errorf("parsing import in %s: %w", p, unquoteErr)
+			}
+			if owner := owningModulePath(impPath, dirOfPath); owner != "" && owner != modPath {
+				imports[impPath] = true
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if len(imports) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(imports))
+	for imp := range imports {
+		out = append(out, imp)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// owningModulePath returns the discovered module path that provides import
+// path imp (the longest matching prefix), or "".
+func owningModulePath(imp string, dirOfPath map[string]string) string {
+	best := ""
+	for p := range dirOfPath {
+		if (imp == p || strings.HasPrefix(imp, p+"/")) && len(p) > len(best) {
+			best = p
+		}
+	}
+	return best
+}
+
+// goModPresence resolves, for every changed nested go.mod in changed
+// (repo-relative paths), whether it exists at the base revision
+// (`git cat-file -e <base>:<path>`) and at head (the working tree under
+// repoRoot). base must be the revision the changed-file list was diffed
+// from: for a three-dot diff, the merge-base. An unknown base is an error,
+// never "absent at base".
+func goModPresence(repoRoot, base string, changed []string) (map[string]selector.GoModPresence, error) {
+	if strings.HasPrefix(base, "-") {
+		return nil, fmt.Errorf("-base %q must not start with \"-\"", base)
+	}
+	// base is a revision (checked above not to be an option) and sp a
+	// repo-relative path from the changed-file list; neither reaches a shell.
+	verify := exec.Command("git", "rev-parse", "--verify", "--quiet", base+"^{commit}") //nolint:gosec // revision validated above, no shell
+	verify.Dir = repoRoot
+	if err := verify.Run(); err != nil {
+		return nil, fmt.Errorf("-base %s is not a commit in %s: %w", base, repoRoot, err)
+	}
+	out := make(map[string]selector.GoModPresence)
+	for _, c := range changed {
+		sp := strings.TrimPrefix(filepath.ToSlash(c), "./")
+		if path.Base(sp) != "go.mod" || path.Dir(sp) == "." {
+			continue
+		}
+		var p selector.GoModPresence
+		if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(sp))); err == nil {
+			p.AtHead = true
+		}
+		catFile := exec.Command("git", "cat-file", "-e", base+":"+sp) //nolint:gosec // revision validated above, no shell
+		catFile.Dir = repoRoot
+		if err := catFile.Run(); err == nil {
+			p.AtBase = true
+		}
+		out[sp] = p
+	}
+	return out, nil
 }
 
 // checkLocalReplaces fails when a local replace of the module at moduleDir
