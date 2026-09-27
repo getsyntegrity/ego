@@ -521,7 +521,7 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 	}
 
 	if !alreadyBound {
-		if action.isNoop() {
+		if sagaActionIsNoop(action) {
 			return
 		}
 
