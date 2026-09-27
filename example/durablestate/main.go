@@ -24,7 +24,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/signal"
@@ -38,6 +37,7 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
@@ -76,8 +76,10 @@ func main() {
 	entityID := uuid.NewString()
 	// create an entity behavior with a given id
 	behavior := NewAccountBehavior(entityID)
-	// create an entity
-	_ = engine.DurableStateEntity(ctx, behavior)
+	// create an entity. This example runs on a single node, so the behavior
+	// below (a domain-only behavior, no GoAkt serialization methods) never
+	// needs to be serialized by GoAkt.
+	_ = engine.SpawnDurableState(ctx, behavior)
 
 	// send some commands to the pid
 	var command proto.Message
@@ -114,13 +116,15 @@ func main() {
 	os.Exit(0)
 }
 
-// AccountBehavior implements DurableStateBehavior
+// AccountBehavior implements behaviorport.DurableState (port/behavior). It
+// has no GoAkt serialization methods: this example does not run in cluster
+// mode, so it never needs to be serialized by GoAkt.
 type AccountBehavior struct {
 	id string
 }
 
 // make sure that AccountBehavior is a true persistence behavior
-var _ ego.DurableStateBehavior = &AccountBehavior{}
+var _ behaviorport.DurableState = &AccountBehavior{}
 
 // NewAccountBehavior creates an instance of AccountBehavior
 // nolint
@@ -167,26 +171,4 @@ func (x *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 	default:
 		return nil, 0, errors.New("unhandled command")
 	}
-}
-
-func (x *AccountBehavior) MarshalBinary() (data []byte, err error) {
-	serializable := struct {
-		ID string `json:"id"`
-	}{
-		ID: x.id,
-	}
-	return json.Marshal(serializable)
-}
-
-func (x *AccountBehavior) UnmarshalBinary(data []byte) error {
-	serializable := struct {
-		ID string `json:"id"`
-	}{}
-
-	if err := json.Unmarshal(data, &serializable); err != nil {
-		return err
-	}
-
-	x.id = serializable.ID
-	return nil
 }

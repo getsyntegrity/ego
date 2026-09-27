@@ -41,6 +41,9 @@ import (
 // and UnmarshalBinary so GoAkt can copy the behavior to another cluster node.
 // Its method set is the same as before port/behavior existed; the domain
 // methods and their documentation live on [behaviorport.Saga].
+//
+// Deprecated: implement [behaviorport.Saga] from port/behavior and spawn with
+// [Engine.SpawnSaga]. Removed in the next major release (#124).
 type SagaBehavior interface {
 	behaviorport.Saga
 	extension.Dependency

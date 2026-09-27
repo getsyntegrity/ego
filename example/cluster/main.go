@@ -55,6 +55,7 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/projection"
 )
 
@@ -127,6 +128,11 @@ func main() {
 		ego.WithLogger(logger),
 		ego.WithOffsetStore(offsetStore),
 		ego.WithTelemetry(tel),
+		// Every node must register the behavior kinds it may host, so it can
+		// decode a spawn a peer places on it (design ego-arch-002-s3 §5.5):
+		// with RoundRobin placement through SpawnOn, a pod that never spawned
+		// an AccountBehavior itself still needs to be able to reconstruct one.
+		ego.WithBehaviorKinds(new(AccountBehavior)),
 		ego.WithProjection(projectionName, &projection.Options{
 			Handler:      projectionHandler,
 			BufferSize:   500,
@@ -382,14 +388,15 @@ func envInt(key string, defaultVal int) int {
 	return n
 }
 
-// entityWithRetry calls engine.Entity and retries up to 5 times on transient
-// cluster errors (e.g. olric state query timeouts under concurrent load on the
-// projection-leader pod). ErrActorAlreadyExists is always treated as success.
-func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior ego.EventSourcedBehavior) error {
+// entityWithRetry calls engine.SpawnEventSourced and retries up to 5 times on
+// transient cluster errors (e.g. olric state query timeouts under concurrent
+// load on the projection-leader pod). ErrActorAlreadyExists is always treated
+// as success.
+func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior behaviorport.EventSourced) error {
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := range maxAttempts {
-		err := engine.Entity(ctx, behavior)
+		err := engine.SpawnEventSourced(ctx, behavior)
 		if err == nil || errors.Is(err, gerrors.ErrActorAlreadyExists) {
 			return nil
 		}

@@ -30,16 +30,16 @@ import (
 )
 
 // SpawnEventSourced spawns an event-sourced entity for b, a behavior written
-// against the runtime-neutral contract in port/behavior. It is Entity for
-// that contract and shares its spawn path and options: the entity handles
+// against the runtime-neutral contract in port/behavior. The entity handles
 // commands, persists the resulting events and rebuilds its state from them.
-// Send it commands with SendCommand.
+// Send it commands with SendCommand. [Engine.Entity] is its deprecated
+// predecessor, for behaviors that also embed GoAkt's extension.Dependency.
 //
 // b does not need MarshalBinary/UnmarshalBinary on a single node. In cluster
 // mode GoAkt serializes every spawn so it can place the entity on any node,
 // so b must then be a non-nil pointer that implements
 // encoding.BinaryMarshaler and encoding.BinaryUnmarshaler, and its type must
-// be registered with WithEntityKinds on every node that may host it.
+// be registered with [WithBehaviorKinds] on every node that may host it.
 // Otherwise SpawnEventSourced returns a *BehaviorPlacementError wrapping
 // ErrBehaviorNotSerializable or ErrBehaviorNotPointer, before anything is
 // spawned. A nil behavior is rejected the same way in every mode.
@@ -50,28 +50,30 @@ func (engine *Engine) SpawnEventSourced(ctx context.Context, b behaviorport.Even
 }
 
 // SpawnDurableState spawns a durable-state entity for b, a behavior written
-// against the runtime-neutral contract in port/behavior. It is
-// DurableStateEntity for that contract and shares its spawn path and
-// options: the entity handles commands and persists only its latest state.
-// It requires a durable state store (WithStateStore) and returns
-// ErrDurableStateStoreRequired without one.
+// against the runtime-neutral contract in port/behavior. The entity handles
+// commands and persists only its latest state. It requires a durable state
+// store (WithStateStore) and returns ErrDurableStateStoreRequired without
+// one. [Engine.DurableStateEntity] is its deprecated predecessor, for
+// behaviors that also embed GoAkt's extension.Dependency.
 //
 // Placement in cluster mode follows the same rules as SpawnEventSourced: a
 // behavior GoAkt cannot serialize is rejected with a *BehaviorPlacementError
-// before anything is spawned.
+// before anything is spawned, and its type must be registered with
+// [WithBehaviorKinds] on every node that may host it.
 func (engine *Engine) SpawnDurableState(ctx context.Context, b behaviorport.DurableState, opts ...SpawnOption) error {
 	return engine.spawnDurableState(ctx, b, opts...)
 }
 
 // SpawnSaga spawns a saga for b, a behavior written against the
-// runtime-neutral contract in port/behavior. It is Saga for that contract and
-// shares its spawn path and options: the saga reacts to events, sends
+// runtime-neutral contract in port/behavior. The saga reacts to events, sends
 // commands to entities and compensates on failure. timeout bounds the whole
-// saga; zero means no timeout.
+// saga; zero means no timeout. [Engine.Saga] is its deprecated predecessor,
+// for behaviors that also embed GoAkt's extension.Dependency.
 //
 // Placement in cluster mode follows the same rules as SpawnEventSourced: a
 // behavior GoAkt cannot serialize is rejected with a *BehaviorPlacementError
-// before anything is spawned.
+// before anything is spawned, and its type must be registered with
+// [WithBehaviorKinds] on every node that may host it.
 // Returns ErrEventsStoreRequired, before anything is spawned, when the Config
 // has no events store.
 func (engine *Engine) SpawnSaga(ctx context.Context, b behaviorport.Saga, timeout time.Duration, opts ...SpawnOption) error {

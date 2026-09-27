@@ -731,6 +731,9 @@ func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
 // anything is spawned, with a *BehaviorPlacementError.
 // Returns ErrEventsStoreRequired, before anything is spawned, when the Config
 // has no events store.
+//
+// Deprecated: use [Engine.SpawnEventSourced]. Removed in the next major
+// release (#124).
 func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior, opts ...SpawnOption) error {
 	return engine.spawnEventSourced(ctx, behavior, opts...)
 }
@@ -993,6 +996,9 @@ func (engine *Engine) EntityExists(ctx context.Context, entityID string) (bool, 
 // Returns an error if the entity fails to initialize or encounters an issue during execution.
 // In cluster mode a behavior that GoAkt cannot serialize is rejected before
 // anything is spawned, with a *BehaviorPlacementError.
+//
+// Deprecated: use [Engine.SpawnDurableState]. Removed in the next major
+// release (#124).
 func (engine *Engine) DurableStateEntity(ctx context.Context, behavior DurableStateBehavior, opts ...SpawnOption) error {
 	return engine.spawnDurableState(ctx, behavior, opts...)
 }
@@ -1467,6 +1473,9 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 // spawned, with a *BehaviorPlacementError.
 // Returns ErrEventsStoreRequired, before anything is spawned, when the Config
 // has no events store.
+//
+// Deprecated: use [Engine.SpawnSaga]. Removed in the next major release
+// (#124).
 func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration, opts ...SpawnOption) error {
 	return engine.spawnSaga(ctx, behavior, timeout, opts...)
 }

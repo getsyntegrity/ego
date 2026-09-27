@@ -37,6 +37,10 @@ import (
 // import the testkit). Every ego.EventSourcedBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
 // for the test. A compile-time assertion in the ego package keeps it that way.
+//
+// The runtime-neutral contract lives in port/behavior
+// (behaviorport.EventSourced); this interface is its structural subset for
+// tests only.
 type EventSourcedBehavior interface {
 	InitialState() proto.Message
 	HandleCommand(ctx context.Context, command proto.Message, priorState proto.Message) (events []proto.Message, err error)
@@ -48,6 +52,10 @@ type EventSourcedBehavior interface {
 // import the testkit). Every ego.DurableStateBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
 // for the test. A compile-time assertion in the ego package keeps it that way.
+//
+// The runtime-neutral contract lives in port/behavior
+// (behaviorport.DurableState); this interface is its structural subset for
+// tests only.
 type DurableStateBehavior interface {
 	InitialState() proto.Message
 	HandleCommand(ctx context.Context, command proto.Message, priorVersion uint64, priorState proto.Message) (newState proto.Message, newVersion uint64, err error)

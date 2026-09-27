@@ -30,15 +30,23 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
+	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 )
 
-// AccountBehavior implements ego.EventSourcedBehavior for a bank account.
-// It handles CreateAccount, CreditAccount, and DebitAccount commands.
+// AccountBehavior implements behaviorport.EventSourced (port/behavior) for a
+// bank account. It handles CreateAccount, CreditAccount, and DebitAccount
+// commands. This example runs in cluster mode, so it also implements
+// MarshalBinary/UnmarshalBinary (ego.BehaviorKind) so GoAkt can place and
+// relocate it across nodes; main.go registers it with
+// ego.WithBehaviorKinds so every node can decode a spawn a peer places on it.
 type AccountBehavior struct {
 	id string
 }
 
-var _ ego.EventSourcedBehavior = (*AccountBehavior)(nil)
+var (
+	_ behaviorport.EventSourced = (*AccountBehavior)(nil)
+	_ ego.BehaviorKind          = (*AccountBehavior)(nil)
+)
 
 func NewAccountBehavior(id string) *AccountBehavior {
 	return &AccountBehavior{id: id}
