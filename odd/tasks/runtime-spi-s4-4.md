@@ -53,19 +53,50 @@ package and same checks, and it keeps the hot test file untouched (dispatcher pr
 
 ## Tasks
 
-- [ ] T1 RED accessor tests (nil before `Start` as an untyped nil, nil after a failed `Start`, the
+- [x] T1 RED accessor tests (nil before `Start` as an untyped nil, nil after a failed `Start`, the
   same engine as `Engine()` after `Start`, the stopped engine after `Stop`). Check: build failure.
   Route: inline.
-- [ ] T2 `App.Runtime()` and the doc example. Check: `go test ./compose/goakt/`. Route: inline.
-- [ ] T3 `internal/runtimeconsumer` with its closure test (negative control), and the end-to-end
+- [x] T2 `App.Runtime()` and the doc example. Check: `go test ./compose/goakt/`. Route: inline.
+- [x] T3 `internal/runtimeconsumer` with its closure test (negative control), and the end-to-end
   test. Check: `go test ./internal/runtimeconsumer/ ./compose/goakt/`. Route: inline.
-- [ ] T4 `CHANGELOG.md` and ego-arch-001 §3/§4/§5; evidence (apidiff, archcheck, lint, ciselect,
+- [x] T4 `CHANGELOG.md` and ego-arch-001 §3/§4/§5; evidence (apidiff, archcheck, lint, ciselect,
   root suite). Route: inline.
 
 ## Progress
 
-(none yet)
+- **RED 1** (T1, build): `go vet ./compose/goakt/` → `runtime_test.go:41:35: app.Runtime undefined
+  (type *App has no field or method Runtime)`.
+- **RED 2** (the nil check): a naive `return a.published.Load()` failed
+  `TestRuntime_NilBeforeStart` (`Runtime() before Start = (*ego.Engine)(nil), want an untyped nil
+  interface`) and `TestRuntime_NilAfterFailedStart`.
+- **GREEN** (T2, commit `98474ce`): with the nil check, `TestRuntime_NilBeforeStart`,
+  `TestRuntime_IsTheEngineAfterStartAndAfterStop`, `TestRuntime_NilAfterFailedStart` pass.
+- **RED 3** (T3): `go vet ./compose/goakt/` → `internal/runtimeconsumer: no non-test Go files`; the
+  closure test with no production code failed (`must contain ".../port/runtime"`, `".../port/behavior"`).
+- **GREEN** (T3, commit `a616ae5`): `TestProductionClosureExcludesRootAndGoAkt` and
+  `TestRuntime_ConsumerDrivesTheAppEndToEnd` pass. Production closure of `internal/runtimeconsumer`,
+  ego-owned part: `tenancy`, `command`, `port/behavior`, `internal/queue`, `internal/syncmap`,
+  `eventstream`, `port/runtime`, `test/data/testpb`; no root package, no GoAkt.
+- **Closure negative control**: a throwaway `internal/runtimeconsumer/zz_mutation.go` with
+  `import _ "github.com/pablogore/ego/v4"` made the closure test fail with 46 errors (first:
+  `must not reach the GoAkt runtime; got "github.com/tochemey/goakt/v4/extension"`); file removed,
+  test green again.
+- **T4** (commit `f5f97d0`): `CHANGELOG.md` S4 entry extended; ego-arch-001 §3 (contracts list,
+  adapter implements the SPI), §4 (`port/runtime` and `internal/runtimeconsumer` rows, adapter rows
+  point at #124), §5 (S4 done, what remains for #124).
+- **archcheck**: `8 modules checked, 51 packages checked, 209 edges checked, 0 baselined, 0
+  violation(s), 0 stale entries`. `internal/runtimeconsumer` has no layer (design §D8).
+- **apidiff** vs `33ac9fe`: `compose/goakt` compatible only, `(*App).Runtime: added`; `ego` empty.
+- **golangci-lint** `--new-from-rev=origin/main ./...` (go1.26.6 SDK, after `go mod vendor`;
+  `vendor/` removed after): 0 issues.
+- **ciselect** `-base origin/main`: mode `affected`, `compose/goakt` and `internal/runtimeconsumer`;
+  no nested module selected. Both packages pass, including #146's
+  `TestApp_TwoNodeClusterPlacesAndStopsCleanly`.
+- **Full root suite** (`go test -count=1 ./...`, no `-race`): 29 ok, exit 0.
+- **Nested-consumer check** (ego-arch-001 §5, build + vet): publishers ×4, `benchmark`,
+  `example/cluster`, `test/compat`, `mocks/ego` all OK.
+- Review tier / RDD: not run by this writer (the parent owns review routing).
 
 ## Next step
 
-T1.
+Open the pull request; CI must be green (the last #147 criterion).
