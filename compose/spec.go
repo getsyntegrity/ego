@@ -234,7 +234,7 @@ func validatePublishers[P interface{ ID() string }](publishers []P, fieldName, k
 func isTypedNil(v any) bool {
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface, reflect.UnsafePointer:
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
 		return rv.IsNil()
 	default:
 		return false

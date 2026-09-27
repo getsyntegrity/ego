@@ -89,5 +89,8 @@ this later is compatible; tightening it later would not be.
 ## Next step
 
 IMPL-3: `compose/internal/lifecycle`, the ordered start/stop sequencer returning `compose.StartError`.
-Follow-up for the `docs/ci.md` owner: add `composition-no-runtime` and `composition-leaf` rows to the
-"Architecture boundary check" rule table.
+
+Review follow-up (2026-09-27): the maintainer approved the strict V5 reading, now stated in
+design.md §D4a; `docs/ci.md` gained the two rule rows once #133 merged; the unreachable
+`reflect.Interface` case was dropped from `isTypedNil`. Nested adapter modules importing `compose`
+stay out of scope (follow-up on #106). `origin/main` was merged into the branch (no force-push).

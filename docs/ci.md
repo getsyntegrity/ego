@@ -177,6 +177,8 @@ Each rule applies to one layer and checks the direct import edges of every packa
 | `application-no-runtime` | `migration` | Must not import package `ego`, `internal/extensions` or GoAkt |
 | `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `ego` or GoAkt |
 | `no-cross-module-internal` | every nested module | Must not import root-module `internal/...` |
+| `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `ego`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
+| `composition-leaf` | root-module packages outside `compose/`, except `main` packages and `example/...` | Must not import `compose` or anything under it (ego-arch-003 design §D8) |
 
 A failure names the importer, the forbidden import and the rule, for example:
 
