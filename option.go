@@ -336,6 +336,8 @@ func WithEventAdapters(adapters ...eventadapter.EventAdapter) Option {
 // the behavior is serialized on the calling side and reconstructed on the
 // receiving side from goakt's dependency type registry. WithEntityKinds is
 // how that registry learns about behavior types ahead of time.
+//
+// Deprecated: use [BehaviorKind]. Removed in the next major release (#124).
 type EntityKind = extension.Dependency
 
 // WithEntityKinds pre-registers the behavior types of the entity kinds this
@@ -360,6 +362,9 @@ type EntityKind = extension.Dependency
 //
 // WithEntityKinds and WithBehaviorKinds append to the same registration list,
 // so the two can be mixed on one node and across nodes.
+//
+// Deprecated: use [WithBehaviorKinds]. Removed in the next major release
+// (#124).
 func WithEntityKinds(kinds ...EntityKind) Option {
 	return OptionFunc(func(c *Config) {
 		// A []EntityKind cannot be appended to a []BehaviorKind in one call:

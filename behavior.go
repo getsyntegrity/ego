@@ -51,6 +51,10 @@ type State = proto.Message
 // and UnmarshalBinary so GoAkt can copy the behavior to another cluster node.
 // Its method set is the same as before port/behavior existed; the domain
 // methods and their documentation live on [behaviorport.EventSourced].
+//
+// Deprecated: implement [behaviorport.EventSourced] from port/behavior and
+// spawn with [Engine.SpawnEventSourced]. Removed in the next major release
+// (#124).
 type EventSourcedBehavior interface {
 	behaviorport.EventSourced
 	extension.Dependency
@@ -65,6 +69,10 @@ type EventSourcedBehavior interface {
 // Metadata is available for the incoming command (e.g. the entity was
 // reached directly rather than through Engine.Dispatch/SendCommand), so
 // existing behaviors that do not implement this interface are unaffected.
+//
+// Deprecated: implement [behaviorport.EventSourcedEnvelope] from port/behavior
+// and spawn with [Engine.SpawnEventSourced]. Removed in the next major release
+// (#124).
 type EventSourcedEnvelopeBehavior interface {
 	EventSourcedBehavior
 	// HandleEnvelope is like HandleCommand but receives env, the full
@@ -92,6 +100,10 @@ type EventSourcedEnvelopeBehavior interface {
 // and UnmarshalBinary so GoAkt can copy the behavior to another cluster node.
 // Its method set is the same as before port/behavior existed; the domain
 // methods and their documentation live on [behaviorport.DurableState].
+//
+// Deprecated: implement [behaviorport.DurableState] from port/behavior and
+// spawn with [Engine.SpawnDurableState]. Removed in the next major release
+// (#124).
 type DurableStateBehavior interface {
 	behaviorport.DurableState
 	extension.Dependency
@@ -103,6 +115,10 @@ type DurableStateBehavior interface {
 // interface receives the full command.Envelope instead of the bare Command.
 // DurableStateBehavior's HandleCommand remains mandatory and is called
 // unchanged whenever no Metadata is available for the incoming command.
+//
+// Deprecated: implement [behaviorport.DurableStateEnvelope] from port/behavior
+// and spawn with [Engine.SpawnDurableState]. Removed in the next major release
+// (#124).
 type DurableStateEnvelopeBehavior interface {
 	DurableStateBehavior
 	// HandleEnvelope is like HandleCommand but receives env, the full
