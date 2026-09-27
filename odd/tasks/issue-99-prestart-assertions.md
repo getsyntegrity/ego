@@ -77,11 +77,11 @@ branches for an unchecked assertion.
 
 | File:line | Extension ID | Pattern | Assessment |
 |---|---|---|---|
-| `snapshots_writer_actor.go:93-97` | `SnapshotStoreExtensionID`, `EncryptorExtensionID` | nil-checked, then unchecked `.( *T)` | **Fixed in this PR** |
-| `projection_actor.go:111-127` | `EventAdaptersExtensionID`, `EventsStreamExtensionID`, `EncryptorExtensionID`, `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` (4 sites) | Same defect class — **not fixed here, out of scope** |
-| `event_sourced_actor.go:381-395` | `SnapshotStoreExtensionID`, `EventAdaptersExtensionID`, `EncryptorExtensionID`, `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` (4 sites) | Same defect class — **not fixed here, out of scope** |
-| `events_janitor_actor.go:80-82` | `SnapshotStoreExtensionID` | nil-checked, then unchecked `.( *T)` | Same defect class — **not fixed here, out of scope** |
-| `durable_state_actor.go:169-171` | `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` | Same defect class — **not fixed here, out of scope** |
+| `snapshots_writer_actor.go:93-97` | `SnapshotStoreExtensionID`, `EncryptorExtensionID` | nil-checked, then unchecked `.( *T)` | **Fixed in this PR (#127)** |
+| `projection_actor.go:111-127` | `EventAdaptersExtensionID`, `EventsStreamExtensionID`, `EncryptorExtensionID`, `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` (4 sites) | Same defect class — **fixed in the W0b2 follow-up PR** (branch `fix/99-prestart-audit-followup`) |
+| `event_sourced_actor.go:381-395` | `SnapshotStoreExtensionID`, `EventAdaptersExtensionID`, `EncryptorExtensionID`, `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` (4 sites) | Same defect class — **fixed in the W0b2 follow-up PR** |
+| `events_janitor_actor.go:80-82` | `SnapshotStoreExtensionID` | nil-checked, then unchecked `.( *T)` | Same defect class — **fixed in the W0b2 follow-up PR** |
+| `durable_state_actor.go:169-171` | `TelemetryExtensionID` | nil-checked, then unchecked `.( *T)` | Same defect class — **fixed in the W0b2 follow-up PR** |
 | `event_sourced_actor.go:302`, `durable_state_actor.go:146`, `saga_actor.go:153` | `TenancyExtensionID` | `!= nil` used only as a bool, no assertion | Safe |
 | `engine.go:308` | any (config validation) | `== nil` used only as a bool, no assertion | Safe |
 | `engine.go:465` | `ProjectionExtensionID` | comma-ok `ext.(*T)` (`, ok :=`) | Already safe |
@@ -194,3 +194,53 @@ ignore), (b) whether the four out-of-scope audit findings become a follow-up PR 
 (c) whether #99 can close after this PR or must stay open for the root-cause half — recommendation
 in the report is: close the defensive/audit half, keep #99 (or a narrowed replacement issue) open
 for the unproven root cause, exactly as PR #100 recommended.
+
+## Follow-up (W0b2): the four out-of-scope findings are now fixed
+
+Branch `fix/99-prestart-audit-followup`, base `origin/main` at `965293a` (current at the time this
+slice started). This closes decision (b) above: the four audit findings left open by PR #127 are
+fixed in this follow-up PR, using the exact same pattern and helpers (`requireExtension[T]` /
+`optionalExtension[T]` in `extension_lookup.go` — no changes needed there, both helpers already
+existed).
+
+- **`events_janitor_actor.go`** — `SnapshotStoreExtensionID` (1 site, `PreStart`). RED:
+  `TestEventsJanitorActor/returns_an_error_instead_of_panicking_when_the_snapshot_store_extension_is_registered_with_an_unexpected_type`
+  reproduced the real panic at `events_janitor_actor.go:81` (pre-fix line) before the fix. GREEN:
+  10/10 subtests pass.
+- **`durable_state_actor.go`** — `TelemetryExtensionID` (1 site, `PreStart`). RED reproduced the
+  panic at `durable_state_actor.go:170` (pre-fix line). GREEN: full `TestDurableStateBehavior` +
+  `TestDurableStateActorPreStartExtensions` suites pass.
+- **`projection_actor.go`** — `EventAdaptersExtensionID`, `EventsStreamExtensionID`,
+  `EncryptorExtensionID`, `TelemetryExtensionID` (4 sites, `PreStart`). RED reproduced the panic at
+  each of `projection_actor.go:112/118/122/126` (pre-fix lines) independently, one subtest per
+  extension ID. GREEN: full `TestProjection`, `TestProjectionActorPreStartFailure`,
+  `TestProjectionActorRunnerFailure` suites pass.
+- **`event_sourced_actor.go`** — `SnapshotStoreExtensionID`, `EventAdaptersExtensionID`,
+  `EncryptorExtensionID`, `TelemetryExtensionID` (4 sites, inside the `loadOptionalExtensions`
+  helper called from `PreStart`). RED reproduced the panic at each of
+  `event_sourced_actor.go:382/386/390/394` (pre-fix lines) independently. `loadOptionalExtensions`
+  changed signature from `func(...)` to `func(...) error`, and `PreStart` now checks and returns
+  that error instead of ignoring it. GREEN: full `TestEventSourcedActor` and
+  `TestEventSourcedActorErrorPaths` suites pass.
+
+Every RED test reused the `mistypedExtension` test double from `snapshots_writer_actor_test.go`
+(same package `ego`, no new test double needed) — a `goakt` `extension.Extension` whose `ID()`
+collides with a real extension slot but whose concrete type never matches, simulating a wiring bug
+that registers the wrong extension object under an existing extension ID.
+
+**Audit re-run after the fix** (`rg -n '\.Extension\(' --type go`): every remaining
+`ctx.Extension(...)` / `sys.Extension(...)` call in the module is either a bare `!= nil`/`== nil`
+presence check with no assertion (`event_sourced_actor.go:302`, `durable_state_actor.go:146`,
+`saga_actor.go:153`, `engine.go:308`), an already-safe comma-ok assertion (`engine.go:465`), inside
+`extension_lookup.go` itself (safe by construction), or a test-only call that only asserts
+Nil/NotNil with no assertion (`option_test.go`, `engine_test.go`). **No unchecked single-value type
+assertion on an extension remains anywhere in the module.** No findings turned up outside the four
+files this task named; nothing to report to the orchestrator beyond what was already known.
+
+**Remaining work:** exactly the root cause. Every defensive audit finding tracked against #99 is
+now fixed (PR #100 → #127 → this follow-up). What #99 asked for and PR #100 already flagged as
+unresolved — *why* an extension is ever missing during a live `Spawn`/`SpawnChild`, i.e. the actual
+nil-during-spawn race — is still not established. No new evidence toward that root cause was
+gathered in this follow-up slice either (it was out of scope for this task); see the draft #99
+comment in the report to the orchestrator for a proposal to narrow #99 to exactly that open
+question.
