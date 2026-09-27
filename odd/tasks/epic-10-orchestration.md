@@ -83,12 +83,12 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 
 | ID | Issue | Branch | Agent | PR | State | Blocking reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | ready to merge | approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
+| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | blocked | #128 review finding 2: #125 puts the family guard in public methods and assumes #123 removes the embed; #128 keeps the embed, guards in unexported spawn*, and §12 needs S3-4 before IMPL-4 — reconcile before merge (human decision). Earlier: approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
 | W0b | #99 | fix/99-prestart-assertion-audit @2585811 | writer | #127 | in review | reviewer running; audit left 4 files with the same pattern (projection_actor.go, event_sourced_actor.go, events_janitor_actor.go, durable_state_actor.go) for a follow-up; root cause still unproven; local golangci-lint broken on clean main (Go 1.27 stdlib) |
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
-| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @36121d7 | design writer | #128 | in review | independent reviewer running; then human review before any implementation (slices S3-1..S3-5; S3-2 before #105 IMPL-4) |
+| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @36121d7 | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
 | W1b | #122 | ci/122-publisher-test-closures | writer | — | in progress | — |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
 | W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
