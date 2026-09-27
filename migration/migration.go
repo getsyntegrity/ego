@@ -38,8 +38,8 @@
 //	    logger.Error("migration failed", "error", err)
 //	}
 //
-// When no logger is supplied the migrator logs through ego.DefaultLogger(),
-// kit-logger's process-wide logger.
+// When no logger is supplied the migrator logs through kit-logger's
+// process-wide logger — the same default ego.DefaultLogger() returns.
 //
 // The migrator reads every persistence ID in its scope (see WithScope), finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),
@@ -112,8 +112,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	ego "github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/internal/logging"
 	"github.com/pablogore/ego/v4/persistence"
 	"github.com/pablogore/ego/v4/tenancy"
 )
@@ -146,7 +146,7 @@ func New(eventsStore persistence.EventsStore, snapshotStore persistence.Snapshot
 	}
 	// Options may have set a nil or typed-nil logger, which would panic on the
 	// first log call. Resolving after the loop covers every option path.
-	m.logger = ego.ResolveLogger(m.logger)
+	m.logger = logging.ResolveLogger(m.logger)
 	if !m.scope.Valid() {
 		return nil, fmt.Errorf("migration: WithScope: %w", persistence.ErrInvalidScope)
 	}

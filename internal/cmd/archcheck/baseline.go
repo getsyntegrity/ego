@@ -30,13 +30,12 @@ import "github.com/pablogore/ego/v4/internal/cmd/archcheck/rules"
 // today and the criterion that removes it; ValidateBaseline enforces that
 // shape, and Evaluate reports an entry that stops matching a real
 // violation as stale, so this list can only shrink.
-var repoBaseline = []rules.BaselineEntry{
-	{
-		Importer:         "github.com/pablogore/ego/v4/migration",
-		Import:           "github.com/pablogore/ego/v4",
-		Rule:             "application-no-runtime",
-		Owner:            "@pablogore",
-		Justification:    "migration replays through ego's runtime types; no runtime-neutral contract exists for them yet",
-		RemovalCriterion: "S3/S4 (#103, #11): runtime-neutral contracts for what migration uses",
-	},
-}
+//
+// It is empty as of S4-1 (#147, ego-arch-001 §3): the last entry,
+// migration -> ego (application-no-runtime), was removed once migration
+// stopped importing package ego for ego.ResolveLogger and switched to the
+// runtime-free internal/logging package instead. Evaluate and ValidateBaseline
+// both accept an empty (or nil) baseline; see
+// TestValidateBaseline_EmptyBaselineIsValid and
+// TestEvaluate_EmptyBaselineOnCleanGraphReportsZero in rules/evaluate_test.go.
+var repoBaseline = []rules.BaselineEntry{}
