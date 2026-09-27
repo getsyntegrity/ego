@@ -40,7 +40,7 @@ var summaryOrder = []Class{
 // BuildSummary renders r as the markdown job-summary evidence: the mode,
 // why it was chosen, how many of the included packages were selected, the
 // selected package list, the changed files grouped by classification, and
-// a satellite-module notice when relevant.
+// a pointer to the nested module lane when relevant.
 func BuildSummary(r Result) string {
 	var b strings.Builder
 
@@ -93,7 +93,7 @@ func BuildSummary(r Result) string {
 	}
 
 	if hasClass(r.Changed, ClassSatellite) {
-		fmt.Fprintf(&b, "> Satellite-module changes are not covered by this lane (see #104).\n")
+		fmt.Fprintf(&b, "> Nested module changes are verified by the nested module lane (see the Nested modules section below).\n")
 	}
 
 	fmt.Fprintf(&b, "\n## Nested modules\n\n")

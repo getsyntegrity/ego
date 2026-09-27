@@ -162,7 +162,7 @@ func classify(p string, satelliteDirs []string, dirIndex map[string]string) Chan
 	}
 	if d, ok := matchingPrefix(sp, satelliteDirs); ok {
 		cf.Class = ClassSatellite
-		cf.Reason = fmt.Sprintf("%s is inside satellite module %s (not covered by this lane, see #104)", sp, d)
+		cf.Reason = fmt.Sprintf("%s is inside nested module %s (verified by the nested module lane)", sp, d)
 		return cf
 	}
 	if isNoTestPath(sp) {

@@ -22,7 +22,10 @@
 
 package selector
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // moduleFixtureOpts returns Options wired for the fixtureGraph's two
 // satellite modules (kafka-like "publisher/kafka" and "publisher/nats"),
@@ -54,6 +57,23 @@ func TestSelect_Modules_ChangedFileSelectsOnlyThatModule(t *testing.T) {
 	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka"})
 	if res.Modules[0].Reason != "changed files in publisher/kafka" {
 		t.Fatalf("Reason = %q, want %q", res.Modules[0].Reason, "changed files in publisher/kafka")
+	}
+}
+
+func TestSelect_Modules_SatelliteChangeIsReportedAsModuleLane(t *testing.T) {
+	g := fixtureGraph()
+	res := Select(g, []string{"publisher/kafka/producer.go"}, moduleFixtureOpts())
+
+	want := "publisher/kafka/producer.go is inside nested module publisher/kafka (verified by the nested module lane)"
+	if res.Changed[0].Reason != want {
+		t.Fatalf("Changed[0].Reason = %q, want %q", res.Changed[0].Reason, want)
+	}
+	summary := BuildSummary(res)
+	if strings.Contains(summary, "not covered") {
+		t.Fatalf("summary still claims nested module changes are not covered:\n%s", summary)
+	}
+	if !strings.Contains(summary, "verified by the nested module lane") {
+		t.Fatalf("summary does not point at the nested module lane:\n%s", summary)
 	}
 }
 
