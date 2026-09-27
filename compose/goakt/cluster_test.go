@@ -201,8 +201,13 @@ func startCluster(t *testing.T, ctx context.Context, nodes ...*clusterNode) {
 // alternate between the two nodes. The counter's value when the test
 // begins is unknown, so spawnOnPeer first aligns it: it spawns aligner
 // entities until one lands on from itself, which takes at most two spawns.
-// The next spawn, the subject, then goes to the other member, to. Nothing
-// else in the test calls SpawnOn meanwhile. If the subject stays on from —
+// The next spawn, the subject, then goes to the other member, to. This
+// holds only under two conditions, and the test meets both: nothing else
+// calls SpawnOn concurrently, so no other spawn advances the counter
+// between the aligner and the subject; and the membership is stable while
+// the test runs (both nodes joined before the first spawn and none leaves
+// until Stop), so members keeps the same two entries in the same order. If
+// the subject stays on from —
 // placement Local, a single-member cluster, a changed strategy — the test
 // fails instead of retrying.
 func spawnOnPeer(t *testing.T, ctx context.Context, from, to *clusterNode, id string, spawn func(id string) error) {
@@ -316,7 +321,9 @@ func TestApp_TwoNodeClusterPlacesAndStopsCleanly(t *testing.T) {
 		for _, n := range []*clusterNode{nodeA, nodeB} {
 			// The engine's Stop closes the stream; the actor-system step
 			// closes it again, which is a documented no-op (stopActorSystem).
-			if n.stream.closed.Load() == 0 {
+			if n.stream == nil {
+				t.Errorf("%s: the App never allocated its event stream", n.name)
+			} else if n.stream.closed.Load() == 0 {
 				t.Errorf("%s: the event stream was never closed", n.name)
 			}
 			if ev, st := n.evPub.closed.Load(), n.stPub.closed.Load(); ev != 1 || st != 1 {

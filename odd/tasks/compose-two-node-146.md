@@ -85,9 +85,13 @@ Negative controls (throwaway edits of the test, reverted by copying the saved fi
 committed; `cmp` confirmed the file restored):
 
 - **N1** node B registers `wallet` instead of `ledger`: RED — `node-A: spawn "ledger-1": dependency type
-  is not registered` (the aligner landed on A, the subject went to B, which cannot decode it).
+  is not registered` (in this run the aligner landed on A, and the subject went to B, which cannot decode
+  it). The failing spawn depends on where the round-robin counter starts: when the first aligner is
+  placed on B, the run fails there instead, with `node-A: spawn aligner "ledger-1-aligner-0": dependency
+  type is not registered`. Both messages are RED for the same cause.
 - **N2** node A registers `ledger` instead of `wallet`: RED — `node-B: spawn aligner
-  "wallet-1-aligner-0": dependency type is not registered`.
+  "wallet-1-aligner-0": dependency type is not registered`. As with N1, the failing spawn can instead be
+  the subject (`node-B: spawn "wallet-1": ...`), depending on where the counter starts.
 - **N3** A's spawns use `ego.WithPlacement(ego.Local)`: RED — `"ledger-1": local on node-B = false, local
   on node-A = true; want the spawn placed remotely on node-B, not kept on the calling node node-A`.
 
