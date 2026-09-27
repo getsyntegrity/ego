@@ -27,7 +27,9 @@
 //
 // An adapter that does not implement Describer is undeclared. It keeps
 // working exactly as before; declaring a Descriptor is how an adapter
-// becomes inspectable, never a requirement in v4.
+// becomes inspectable, never a requirement in v4. A nil or typed-nil value
+// is undeclared too, whatever its type's method set: Describe, StarterOf
+// and PingerOf report it as absent and never call its methods.
 //
 // # One assertion per optional interface
 //
