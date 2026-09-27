@@ -104,27 +104,38 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 
 ## Task board
 
-| ID | Issue | Branch | Agent | PR | State | Blocking reason |
-| --- | --- | --- | --- | --- | --- | --- |
-| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | ready to merge (CI pending on a88282c) | @a88282c: names marked confirmed and loader location fixed (delta checked by orchestrator). @4f8e05f approved, CI green. Former carry-over for IMPL-2, now in the design: the composition-leaf loader change is in internal/cmd/archcheck/loader.go (lines 106, 316) plus a package-name field on rules.Package in rules/graph.go, not main.go as the design says. Earlier cross-review: approve with small fixes (walkthrough → SpawnEventSourced, slice spread note, rule Source, S3-3 transitive dep, composition-leaf loader change); fix writer running. @678c8cf: maintainer's a98eb37 (composition-no-runtime rule) + alignment with #128 per decision 6; cross-consistency review running. #128 review finding 2: #125 puts the family guard in public methods and assumes #123 removes the embed; #128 keeps the embed, guards in unexported spawn*, and §12 needs S3-4 before IMPL-4 — reconcile before merge (human decision). Earlier: approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
-| W0b | #99 | fix/99-prestart-assertion-audit @2585811 | writer | #127 | ready to merge | reviewer approved (RED reproduced on main, GREEN 10/10), CI green all 7 jobs. Follow-up W0b2 (same crash class, all four in PreStart) planned after merge since it may reuse optionalExtension; audit left 4 files with the same pattern (projection_actor.go, event_sourced_actor.go, events_janitor_actor.go, durable_state_actor.go) for a follow-up; root cause still unproven; local golangci-lint broken on clean main (Go 1.27 stdlib) |
-| W0b2 | #99 follow-up | — | writer | — | planned | after #127 merges; must land before #123 S3-2 (both touch event_sourced_actor.go, durable_state_actor.go) |
-| W0b3 | #99 narrowing comment | — | orchestrator | — | planned | after W0b2 merges; draft goes to human before posting |
-| W1b2 | #122 tidy -diff gate | — | writer | — | planned | after #130 merges; scripts/ci/verify-module.sh + docs/ci.md (CI hot spot, serialize with #102 selector work) |
-| W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
-| W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | writer | #129 | ready to merge | reviewer approved (all 33 deletions checked vs GoAkt source; Never windows not shortened; mutations reproduced), CI green all 7 jobs; root pkg 423s → 360s. Writer's "corrupted go1.27.1 toolchain" claim did not reproduce |
-| W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
-| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @3f3b725 — READY TO MERGE (cross-review approved at c36e866; db6910c marks decisions 1–2 decided; 3f3b725 one line: Deprecated markers arrive in S3-5; both checked) (reviewer approved at 20142c2; last 2-line nit delta checked by orchestrator) | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
-| W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @2eabd30 | writer | #131 @adc416c | ready to merge | CI green all 7 jobs at adc416c (run 36302448864). | reviewer: approve with nits (CI green at 2eabd30, full suite green); nits fixed in adc416c (comment + doc only, checked by orchestrator); apidiff = documented false positive only; consumer program same on main and branch; archcheck 16/72/1/0/0; full suite + 6 nested modules green locally; ~900 lines (advisory); reviewer running |
-| W1a-2 | #123 S3-2 | — | — | — | planned | after #131 and W0b2 merge (engine.go spawn sites + actor files) |
-| W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @6538b93 | writer | #133 | in progress (R1/R2) | nits 4–6 in fd78eb7 confirmed (CI green); writer implementing R1/R2 per #132 @1d8838a incl. pull_request.yml -base one-liner; then CI + review. Earlier: in review (nits + human decision) | reviewer: approve with nits, CI green all 7. R1/R2 come from design #132 (§5.2 step 4 vs S0 Checks contradiction; step 3 "edited"); need human decision + #132 amendment. Nits 4–6 sent to writer. Imports field needed before/in S2. Earlier: two CI-cost regressions flagged by writer: R1 root change with no nested importer selects all 6 modules (was 0 per #111); R2 editing a nested go.mod runs full root suite; reviewer judging vs design |
-| W1b | #122 | ci/122-publisher-test-closures @24b652b (review fixes) | writer | #130 | ready to merge | re-review approved, CI green all 7 jobs (run 36288686950). Earlier: in review | compat tag lane in verify-module.sh; GoAkt/root gone from unit-test closure in 4 publishers; reviewer running; also edits ego-arch-001 design.md (outside ownership, overlaps #128) |
-| W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
-| W1d | #102 explore/ADR | docs/propose-ego-arch-006 @d8795df | design writer | #132 @22db49e | ready to merge (CI pending on 22db49e) | reviewer approved amendment at 1d8838a; 5 nits fixed in 22db49e (checked: design.md only). D1 plan: 162 files / 535 occurrences, Deprecated-notice claim dropped (shared tags), still gated on maintainer confirmation. Earlier @1d8838a in review | amended: R1 import filter, R2 -base, D1–D8 recorded, D1 target path getsyntegrity/ego/v4 + migration plan (161 files) pending maintainer confirmation before execution; reviewer checking. Earlier: ready to merge (decisions pending) | @e7fb40f nits fixed (checked). D1–D8 to human. @c653137 approve with nits (all 9 fixed; D7 contracts = egopb + port/publishing; D8 gate on F4 + amend §6(1)); 3 low nits sent; then decisions D1–D8 to human. Earlier: changes requested | reviewer confirmed publisher layout can never resolve (Origin.Subdir v4/publisher/kafka), go.work/vendor break, selector gaps, CI numbers; blocking: port module cycle via port/behavior→command→tenancy in root; fix list (9) sent to writer. Earlier: reviewer verifying first the claim that publisher module paths (…/v4/publisher/x in dir publisher/x) cannot resolve for consumers; decisions D1–D6 (module path, nested path layout, first version/release order, go.work, integration modules, §6(2)) go to human |
-| W2a | S4 runtime SPI (#11) | — | — | — | planned | issue draft needs human approval |
-| W2b | #106 | — | — | — | planned | #105 design + S3 merged |
-| W3 | #102 modules S1–S3 | — | — | — | planned | S1 (test/compat) after #130 merge + D5; S2/S3 need D1–D3, D7, D8 |
-| W4 | #124 | — | — | — | planned | all earlier items merged; breaking/versioning plan approved |
+State as of 2026-09-27, origin/main 965293a. Merges are squash merges done
+on the maintainer's instruction, each at the reviewed head
+(`--match-head-commit`) with CI green; older per-round detail is in git
+history of this file.
+
+| ID | Issue | Branch / head | PR | State | Notes / blocking reason |
+| --- | --- | --- | --- | --- | --- |
+| W0a | #105 design | docs/propose-ego-arch-003 @a88282c | #125 | merged (69f78f6) | IMPL-2 carry-over (loader.go + rules.Package name field) is in the design |
+| W0b | #99 fix | fix/99-prestart-assertion-audit @2585811 | #127 | merged (ffc5cd8) | root cause still unproven |
+| W0b2 | #99 follow-up | fix/99-prestart-audit-followup | — | in progress | 4 PreStart files; must land before S3-2; draft #99 narrowing comment comes with it |
+| W0b3 | #99 narrowing comment | — | — | planned | after W0b2 merges; human approves text |
+| W0c | #101 | — | — | done | closed 2026-09-27 with evidence comment |
+| W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | #129 | merged (3b80ad3) | root pkg 423s → 360s |
+| W0e | #10 body | — | — | done | applied after updatedAt check |
+| W1a | #123 design | docs/propose-ego-arch-002-s3 @3f3b725 | #128 | merged (e729b1b) | names and criterion 1 decided; #123 criterion 1 reworded |
+| W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @adc416c | #131 | merged (543da2c) | merged tree vetted against main before merge |
+| W1a-2 | #123 S3-2 | — | — | planned | after W0b2 merges (actor files) |
+| W1a-3..5 | #123 S3-3..S3-5 | — | — | planned | S3-3 after S3-2; S3-4 after S3-3; S3-5 last |
+| W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
+| W1b2 | #122 tidy -diff gate | — | — | planned | after #133 merges (docs/ci.md, CI serialization) |
+| W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
+| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec | — | in progress | compose.Spec/Validate + composition-no-runtime/composition-leaf rules |
+| W1c-3 | #105 IMPL-3 | — | — | planned | after IMPL-2 |
+| W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
+| W1d | #102 ADR | docs/propose-ego-arch-006 @22db49e | #132 | ready to merge after CI | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
+| W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector | #133 | in progress | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
+| W3-S1 | #102 S1 test/compat | — | — | planned | after #133 merges |
+| W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
+| W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
+| W2b | #106 | — | — | planned | after S3 and #105 IMPL-4 |
+| W4 | #124 | — | — | planned | all earlier items merged; breaking/versioning plan approved |
+| — | #134 | — | — | created | publisher module path bug under #39 |
 
 ## File ownership
 
