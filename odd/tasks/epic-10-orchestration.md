@@ -115,6 +115,11 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    #102 until contracts and publishers extraction is implemented and
    verified); left unticked in #10. #123 ticked in #10 (only that line
    changed, updatedAt checked).
+16. (2026-09-27) #145: maintainer edited the misleading PR comment
+   personally. Approved: V7 added to ego-arch-003 §D4a; G1 sentinels, G2
+   ValidationError, undeclared family sentinel; unknown family bits masked;
+   one PR. Explicit follow-up: two-node cluster test through compose/goakt.
+   Merge only after review + CI on the final head.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
