@@ -50,8 +50,8 @@ failed spawn with a less precise error, and the engine already knows at spawn ti
 - [x] **T3** RED/GREEN defect 3: `TestAddPublishersRejectsDuplicateIDs` (within a batch and against a
   registered publisher, for both kinds; one ID per kind still allowed).
 - [x] **T4** apidiff, archcheck, ciselect, full root suite, nested modules, golangci-lint, CHANGELOG.
-- [ ] **T5** One godoc sentence on `SpawnEventSourced`/`SpawnSaga` in `engine_spawn.go` once S3-3 (#141)
-  is on `main`.
+- [x] **T5** One godoc sentence on `SpawnEventSourced`/`SpawnSaga` in `engine_spawn.go` after S3-3 (#141,
+  `e86169a`) landed; merged `origin/main` with a normal merge commit (clean, no conflicts).
 
 ## Evidence
 
@@ -88,5 +88,7 @@ golangci-lint `0 issues`, archcheck unchanged.
 
 ## Next step
 
-T5 once #141 is merged: merge `origin/main` (normal merge commit) and add the godoc sentence. PR #140 now
-says `Closes #126`.
+All tasks done; PR #140 (`Closes #126`) awaits the maintainer's merge. Review nits (godoc on
+`Entity`/`Saga`, wrapping and `errors.Is` assertions in the Stop test) were applied. T5 check, after the
+merge of `e86169a`: `go vet .` clean; the three new tests and `TestEngineMultiNodeNeutralBehaviors` pass;
+full root suite passes once (Go 1.27.1, no `-race`).
