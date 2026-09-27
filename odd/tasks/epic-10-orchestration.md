@@ -113,7 +113,7 @@ history of this file.
 | --- | --- | --- | --- | --- | --- |
 | W0a | #105 design | docs/propose-ego-arch-003 @a88282c | #125 | merged (69f78f6) | IMPL-2 carry-over (loader.go + rules.Package name field) is in the design |
 | W0b | #99 fix | fix/99-prestart-assertion-audit @2585811 | #127 | merged (ffc5cd8) | root cause still unproven |
-| W0b2 | #99 follow-up | fix/99-prestart-audit-followup @bf11ea8 | #136 | in review | 4 PreStart files; must land before S3-2; draft #99 narrowing comment comes with it |
+| W0b2 | #99 follow-up | fix/99-prestart-audit-followup @bf11ea8 | #136 | approved; CI rerun of example/cluster (golangci-lint download HTTP 500) | 4 PreStart files; must land before S3-2; draft #99 narrowing comment comes with it |
 | W0b3 | #99 narrowing comment | — | — | planned | after W0b2 merges; human approves text |
 | W0c | #101 | — | — | done | closed 2026-09-27 with evidence comment |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | #129 | merged (3b80ad3) | root pkg 423s → 360s |
