@@ -21,8 +21,9 @@
 // SOFTWARE.
 
 // Command ciselect decides which packages of the github.com/pablogore/ego/v4
-// module a change must test and cover, and writes that decision out for the
-// CI workflows to consume. See internal/cmd/ciselect/selector for the
+// module a change must test and cover, and which Go modules of the
+// repository it must verify, and writes that decision out for the CI
+// workflows to consume. See internal/cmd/ciselect/selector for the
 // selection rules.
 package main
 
@@ -32,15 +33,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/pablogore/ego/v4/internal/cmd/ciselect/selector"
@@ -73,7 +70,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	reasonFlag := fs.String("reason", "", "optional extra context appended to the summary")
 	moduleDirFlag := fs.String("module-dir", ".", "directory of the Go module to select packages from")
 	repoRootFlag := fs.String("repo-root", ".", "repository root that -changed paths are relative to")
-	outDirFlag := fs.String("out-dir", "", "directory to write mode, packages.txt, coverpkg and summary.md into (required)")
+	outDirFlag := fs.String("out-dir", "", "directory to write mode, packages.txt, coverpkg, modules.json, plan.json and summary.md into (required)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -132,25 +129,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 		moduleRelChanged[i] = toModuleRelPath(repoRoot, moduleDir, c)
 	}
 
-	satelliteDirs, err := findSatelliteDirs(moduleDir)
+	reason := *reasonFlag
+	modules, err := discoverModules(moduleDir)
 	if err != nil {
-		return fmt.Errorf("scanning for satellite modules: %w", err)
-	}
-
-	modules := make([]selector.Module, 0, len(satelliteDirs))
-	for _, dir := range satelliteDirs {
-		imports, err := discoverModuleImports(moduleDir, dir, modulePath)
-		if err != nil {
-			return fmt.Errorf("discovering imports for module %s: %w", dir, err)
+		if !*allFlag {
+			return fmt.Errorf("building the module graph: %w", err)
 		}
-		modules = append(modules, selector.Module{Dir: dir, Imports: imports})
+		// -all is the fallback for a failed selection, so it must not
+		// fail on the same broken go.mod: every module is selected
+		// anyway, and its own verification job reports the breakage.
+		modules, err = discoverModuleDirs(moduleDir)
+		if err != nil {
+			return fmt.Errorf("scanning for nested modules: %w", err)
+		}
+		reason = strings.TrimSpace(reason + " (module graph unavailable; every discovered module selected by directory)")
 	}
 
 	result := selector.Select(graph, moduleRelChanged, selector.Options{
-		All:           *allFlag,
-		Reason:        *reasonFlag,
-		SatelliteDirs: satelliteDirs,
-		Modules:       modules,
+		All:     *allFlag,
+		Reason:  reason,
+		Modules: modules,
 	})
 
 	summary := selector.BuildSummary(result)
@@ -162,11 +160,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// goCommand returns a `go` command running in dir with the caller's
+// environment, except that GOWORK is forced to off: selection never runs
+// in workspace mode, where a go.work could satisfy an import that a
+// module's own go.mod does not require.
+func goCommand(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GOWORK=") {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(env, "GOWORK=off")
+	return cmd
+}
+
 // goListModulePath returns the import path of the module rooted at dir.
 func goListModulePath(dir string) (string, error) {
-	cmd := exec.Command("go", "list", "-m")
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd := goCommand(dir, "list", "-m")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -192,9 +205,7 @@ type rawPackage struct {
 // goListPackages runs `go list -e -json ./...` in dir and decodes the
 // concatenated JSON stream it prints, one object per package.
 func goListPackages(dir string) ([]selector.Package, error) {
-	cmd := exec.Command("go", "list", "-e", "-json", "./...")
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd := goCommand(dir, "list", "-e", "-json", "./...")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -318,8 +329,173 @@ func findSatelliteDirs(root string) ([]string, error) {
 	return satellites, nil
 }
 
-// writeOutputs writes mode, packages.txt, coverpkg, modules.json and
-// summary.md into outDir, creating it if necessary.
+// goModFile mirrors the subset of `go mod edit -json` output discovery
+// needs.
+type goModFile struct {
+	Module struct {
+		Path string
+	}
+	Require []struct {
+		Path    string
+		Version string
+	}
+	Replace []struct {
+		Old struct {
+			Path    string
+			Version string
+		}
+		New struct {
+			Path    string
+			Version string
+		}
+	}
+}
+
+// readGoMod runs `go mod edit -json` in the module at dir: it only parses
+// the go.mod file, with no network, no module download and no build.
+func readGoMod(dir string) (goModFile, error) {
+	var mod goModFile
+	cmd := goCommand(dir, "mod", "edit", "-json")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return mod, fmt.Errorf("go mod edit -json in %s: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
+	}
+	if err := json.Unmarshal(out, &mod); err != nil {
+		return mod, fmt.Errorf("decoding go mod edit -json in %s: %w", dir, err)
+	}
+	if mod.Module.Path == "" {
+		return mod, fmt.Errorf("go.mod in %s declares no module path", dir)
+	}
+	return mod, nil
+}
+
+// discoverModuleDirs returns the root module plus every nested module
+// directory under root, root first then sorted, with no go.mod read.
+func discoverModuleDirs(root string) ([]selector.ModuleInfo, error) {
+	dirs, err := findSatelliteDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(dirs)
+	out := []selector.ModuleInfo{{Dir: "."}}
+	for _, d := range dirs {
+		out = append(out, selector.ModuleInfo{Dir: d})
+	}
+	return out, nil
+}
+
+// discoverModules returns every Go module of the repository at root (the
+// root module first, then nested modules sorted by directory) with its
+// in-repository requirement edges, read from each go.mod. A requirement on
+// another discovered module is:
+//   - a Dep when a replace resolves it to that module's own directory in
+//     the working tree;
+//   - Pinned ("path@version") when no local replace applies, because the
+//     module then builds against a published version, not the working tree.
+//
+// A local replace pointing an in-repository requirement at any other
+// directory is ambiguous and is an error, as is any unreadable go.mod.
+func discoverModules(root string) ([]selector.ModuleInfo, error) {
+	infos, err := discoverModuleDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	mods := make([]goModFile, len(infos))
+	dirOfPath := make(map[string]string, len(infos))
+	for i := range infos {
+		mod, err := readGoMod(filepath.Join(root, filepath.FromSlash(infos[i].Dir)))
+		if err != nil {
+			return nil, err
+		}
+		if other, dup := dirOfPath[mod.Module.Path]; dup {
+			return nil, fmt.Errorf("module path %s is declared by both %s and %s", mod.Module.Path, other, infos[i].Dir)
+		}
+		mods[i] = mod
+		infos[i].Path = mod.Module.Path
+		dirOfPath[mod.Module.Path] = infos[i].Dir
+	}
+
+	for i := range infos {
+		mod := mods[i]
+		for _, req := range mod.Require {
+			depDir, inRepo := dirOfPath[req.Path]
+			if !inRepo || req.Path == infos[i].Path {
+				continue
+			}
+			local, isLocal, err := localReplace(mod, req.Path, req.Version)
+			if err != nil {
+				return nil, err
+			}
+			if !isLocal {
+				infos[i].Pinned = append(infos[i].Pinned, req.Path+"@"+req.Version)
+				continue
+			}
+			resolved, err := repoRelDir(root, infos[i].Dir, local)
+			if err != nil {
+				return nil, err
+			}
+			if resolved != depDir {
+				return nil, fmt.Errorf("module %s replaces %s with %s, which is %s, not that module's directory %s",
+					infos[i].Dir, req.Path, local, resolved, depDir)
+			}
+			infos[i].Deps = append(infos[i].Deps, req.Path)
+		}
+		sort.Strings(infos[i].Deps)
+		sort.Strings(infos[i].Pinned)
+	}
+	return infos, nil
+}
+
+// localReplace returns the local directory a replace directive of mod maps
+// requirement path@version to, if any. A version-specific replace wins
+// over a path-wide one, as in the go command. A replace by another
+// module version (not a directory) is not local.
+func localReplace(mod goModFile, reqPath, reqVersion string) (string, bool, error) {
+	var wide, exact *struct {
+		Path    string
+		Version string
+	}
+	for i := range mod.Replace {
+		r := &mod.Replace[i]
+		if r.Old.Path != reqPath {
+			continue
+		}
+		switch r.Old.Version {
+		case "":
+			wide = &r.New
+		case reqVersion:
+			exact = &r.New
+		}
+	}
+	chosen := exact
+	if chosen == nil {
+		chosen = wide
+	}
+	if chosen == nil || chosen.Version != "" {
+		return "", false, nil
+	}
+	return chosen.Path, true, nil
+}
+
+// repoRelDir resolves a replace directory target, relative to the module
+// at repo-relative moduleDir, to a clean repo-relative forward-slash
+// directory ("." for the root).
+func repoRelDir(root, moduleDir, target string) (string, error) {
+	abs := filepath.FromSlash(target)
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(root, filepath.FromSlash(moduleDir), abs)
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(abs))
+	if err != nil {
+		return "", fmt.Errorf("resolving replace target %s of module %s: %w", target, moduleDir, err)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// writeOutputs writes mode, packages.txt, coverpkg, modules.json,
+// plan.json and summary.md into outDir, creating it if necessary.
 func writeOutputs(outDir string, result selector.Result, summary string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
@@ -328,11 +504,16 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 	if err != nil {
 		return fmt.Errorf("encoding modules.json: %w", err)
 	}
+	planJSON, err := planJSON(result)
+	if err != nil {
+		return fmt.Errorf("encoding plan.json: %w", err)
+	}
 	files := map[string]string{
 		"mode":         string(result.Mode) + "\n",
 		"packages.txt": joinLines(result.Selected),
 		"coverpkg":     strings.Join(result.Included, ","),
 		"modules.json": modulesJSON,
+		"plan.json":    planJSON,
 		"summary.md":   summary,
 	}
 	for name, content := range files {
@@ -343,10 +524,10 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 	return nil
 }
 
-// modulesJSON renders the selected module directories as a JSON array of
-// strings, always valid JSON: "[]" when none were selected, never "null".
-// This is what pull_request.yml and build.yml feed into a matrix job's
-// fromJSON().
+// modulesJSON renders the selected nested module directories as a JSON
+// array of strings, always valid JSON: "[]" when none were selected, never
+// "null". This is what pull_request.yml and build.yml feed into a matrix
+// job's fromJSON().
 func modulesJSON(modules []selector.ModuleSelection) (string, error) {
 	dirs := make([]string, 0, len(modules))
 	for _, m := range modules {
@@ -359,69 +540,58 @@ func modulesJSON(modules []selector.ModuleSelection) (string, error) {
 	return string(b) + "\n", nil
 }
 
-// moduleImportsSkipDir reports whether a directory named name must never be
-// descended into while parsing a nested module's own files: skipDirs
-// (module/build caches, VCS metadata) plus "vendor", which a released
-// nested module never checks in but a locally `go mod vendor`-ed one
-// might.
-func moduleImportsSkipDir(name string) bool {
-	return skipDirs[name] || name == "vendor"
+// planDoc is plan.json: the whole decision in a CI-neutral form, every
+// discovered module listed, selected or not.
+type planDoc struct {
+	Global  bool         `json:"global"`
+	Reasons []string     `json:"reasons"`
+	Root    planRoot     `json:"root"`
+	Modules []planModule `json:"modules"`
 }
 
-// discoverModuleImports parses every non-vendor .go file under the nested
-// module at repo-relative dir (resolved against moduleDir), including
-// _test.go files — a nested module's tests can import a root package its
-// production code does not, and a CI-selection decision must not miss
-// that — with go/parser in imports-only mode: no module download, no
-// network, no build. It returns the sorted, de-duplicated set of import
-// paths that start with modulePath (the root module being selected for);
-// a nested module's other dependencies can never appear in the root
-// package graph, so they are dropped here rather than carried around
-// unused.
-func discoverModuleImports(moduleDir, dir, modulePath string) ([]string, error) {
-	root := filepath.Join(moduleDir, filepath.FromSlash(dir))
-	fset := token.NewFileSet()
-	imports := make(map[string]bool)
+type planRoot struct {
+	Mode     string   `json:"mode"`
+	Selected []string `json:"selected"`
+}
 
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != root && moduleImportsSkipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
+type planModule struct {
+	Dir      string   `json:"dir"`
+	Path     string   `json:"path"`
+	Selected bool     `json:"selected"`
+	Reason   string   `json:"reason"`
+	Chain    []string `json:"chain"`
+}
 
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			return fmt.Errorf("parsing %s: %w", path, parseErr)
-		}
-		for _, imp := range file.Imports {
-			impPath, unquoteErr := strconv.Unquote(imp.Path.Value)
-			if unquoteErr != nil {
-				return fmt.Errorf("parsing import in %s: %w", path, unquoteErr)
-			}
-			if impPath == modulePath || strings.HasPrefix(impPath, modulePath+"/") {
-				imports[impPath] = true
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
+// planJSON renders result as plan.json. Every list is a JSON array, never
+// null.
+func planJSON(result selector.Result) (string, error) {
+	doc := planDoc{
+		Global:  result.Global,
+		Reasons: nonNil(result.Reasons),
+		Root:    planRoot{Mode: string(result.Mode), Selected: nonNil(result.Selected)},
+		Modules: make([]planModule, 0, len(result.Plan)),
 	}
-
-	out := make([]string, 0, len(imports))
-	for imp := range imports {
-		out = append(out, imp)
+	for _, p := range result.Plan {
+		doc.Modules = append(doc.Modules, planModule{
+			Dir:      p.Dir,
+			Path:     p.Path,
+			Selected: p.Selected,
+			Reason:   p.Reason,
+			Chain:    nonNil(p.Chain),
+		})
 	}
-	sort.Strings(out)
-	return out, nil
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func joinLines(lines []string) string {

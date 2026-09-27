@@ -27,17 +27,19 @@ import (
 	"testing"
 )
 
-// moduleFixtureOpts returns Options wired for the fixtureGraph's two
-// satellite modules (kafka-like "publisher/kafka" and "publisher/nats"),
-// used across the module-selection tests below. kafka imports the root
-// module's "command" package; nats imports nothing from the root module,
-// so it is only ever selected by a full gate or by its own changed files.
-func moduleFixtureOpts(extraChanged ...string) Options {
+// moduleFixtureOpts returns Options wired for the fixtureGraph's root
+// module and two satellite modules (kafka-like "publisher/kafka" and
+// "publisher/nats"), used across the module-selection tests below. kafka
+// requires the root module through a local replace; nats requires nothing
+// in the repository, so it is only ever selected by a global change or by
+// its own changed files.
+func moduleFixtureOpts() Options {
 	const mod = "github.com/x/mod"
 	opts := satelliteOpts("publisher/kafka", "publisher/nats")
-	opts.Modules = []Module{
-		{Dir: "publisher/kafka", Imports: []string{mod + "/command"}},
-		{Dir: "publisher/nats", Imports: nil},
+	opts.Modules = []ModuleInfo{
+		{Dir: ".", Path: mod},
+		{Dir: "publisher/kafka", Path: mod + "/publisher/kafka", Deps: []string{mod}},
+		{Dir: "publisher/nats", Path: mod + "/publisher/nats"},
 	}
 	return opts
 }
@@ -86,19 +88,20 @@ func TestSelect_Modules_DocsOnlyIsNone(t *testing.T) {
 	}
 }
 
-func TestSelect_Modules_RootLeafChangeNotImportedByAnyModuleSelectsNoneAndKeepsRootFastLane(t *testing.T) {
+// Module edges come from go.mod requirements, not imports (ego-arch-006
+// design §5.1): any root lane change selects every module that requires
+// the root, while the root's own package fast lane is unchanged.
+func TestSelect_Modules_RootLeafChangeSelectsModulesRequiringRootAndKeepsRootFastLane(t *testing.T) {
 	g := fixtureGraph()
 	res := Select(g, []string{"internal/pause/x.go"}, moduleFixtureOpts())
 
 	if res.Mode != ModeAffected {
 		t.Fatalf("Mode = %s, want %s (root fast lane must be unaffected)", res.Mode, ModeAffected)
 	}
-	if len(res.Modules) != 0 {
-		t.Fatalf("Modules = %v, want none: neither kafka nor nats imports internal/pause or the root package", res.Modules)
-	}
+	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka"})
 }
 
-func TestSelect_Modules_RootChangeImportedByModuleSelectsIt(t *testing.T) {
+func TestSelect_Modules_RootChangeSelectsModuleRequiringRoot(t *testing.T) {
 	g := fixtureGraph()
 	res := Select(g, []string{"command/x.go"}, moduleFixtureOpts())
 
@@ -106,7 +109,7 @@ func TestSelect_Modules_RootChangeImportedByModuleSelectsIt(t *testing.T) {
 		t.Fatalf("Mode = %s, want %s (root fast lane must be unaffected)", res.Mode, ModeAffected)
 	}
 	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka"})
-	want := "imports affected root package github.com/x/mod/command"
+	want := "publisher/kafka ← ."
 	if res.Modules[0].Reason != want {
 		t.Fatalf("Reason = %q, want %q", res.Modules[0].Reason, want)
 	}
@@ -122,17 +125,20 @@ func TestSelect_Modules_AllSelectsEveryModule(t *testing.T) {
 
 	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka", "publisher/nats"})
 	for _, m := range res.Modules {
-		if m.Reason != "full gate: -all requested" {
-			t.Fatalf("Reason = %q, want the -all full-gate reason", m.Reason)
+		if m.Reason != "global: -all requested" {
+			t.Fatalf("Reason = %q, want the -all global reason", m.Reason)
 		}
 	}
 }
 
-func TestSelect_Modules_RootGoModChangeSelectsEveryModule(t *testing.T) {
+// The root go.mod is not a global path (ego-arch-006 design §5.3): it fully
+// changes the root, and only the modules that require the root follow.
+func TestSelect_Modules_RootGoModChangeSelectsModulesRequiringRoot(t *testing.T) {
 	g := fixtureGraph()
 	res := Select(g, []string{"go.mod"}, moduleFixtureOpts())
 
-	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka", "publisher/nats"})
+	assertFull(t, g, res)
+	assertSameSet(t, moduleDirs(res.Modules), []string{"publisher/kafka"})
 }
 
 func TestSelect_Modules_CIPathChangeSelectsEveryModule(t *testing.T) {
