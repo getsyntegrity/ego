@@ -79,6 +79,10 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    #125 is aligned with #128 before merge (guard in unexported spawn
    functions, #123 adds `port/behavior` instead of removing the embed,
    `WithCluster` takes `BehaviorKind`). Names still pending.
+7. (2026-09-27) Names confirmed: `port/behavior`, `Spawn*`,
+   `BehaviorKind`/`WithBehaviorKinds`, `BehaviorPlacementError`. #123
+   criterion 1 is met in v4 by `port/behavior` (old names keep the embed,
+   deprecated, until #124). S3-1 implementation dispatched.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -94,7 +98,8 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 | W0d | #112 slice 2 | test/112-async-waits-slice2 @9d76483 | writer | #129 | ready to merge | reviewer approved (all 33 deletions checked vs GoAkt source; Never windows not shortened; mutations reproduced), CI green all 7 jobs; root pkg 423s → 360s. Writer's "corrupted go1.27.1 toolchain" claim did not reproduce |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
 | W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @c36e866 — READY TO MERGE (cross-review approved, CI green); names + criterion-1 reading pending human before S3-1 implementation (reviewer approved at 20142c2; last 2-line nit delta checked by orchestrator) | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
-| W1b | #122 | ci/122-publisher-test-closures @5393faa | writer | #130 | in review | compat tag lane in verify-module.sh; GoAkt/root gone from unit-test closure in 4 publishers; reviewer running; also edits ego-arch-001 design.md (outside ownership, overlaps #128) |
+| W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior | writer | — | in progress | owns port/behavior/*, behavior.go, saga.go, saga_actor.go (one call site), testkit_compat_test.go |
+| W1b | #122 | ci/122-publisher-test-closures @24b652b (review fixes) | writer | #130 | in review | compat tag lane in verify-module.sh; GoAkt/root gone from unit-test closure in 4 publishers; reviewer running; also edits ego-arch-001 design.md (outside ownership, overlaps #128) |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
 | W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
 | W2a | S4 runtime SPI (#11) | — | — | — | planned | issue draft needs human approval |
