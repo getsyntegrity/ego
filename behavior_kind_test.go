@@ -113,14 +113,15 @@ func kindOptions() map[string]func(BehaviorKind) Option {
 	}
 }
 
-// TestErrBehaviorNotPointerMessage checks that the message states both rules
-// it covers: a spawned behavior must be a non-nil pointer, while a registered
-// kind only needs a pointer type, so a typed nil is allowed.
+// TestErrBehaviorNotPointerMessage checks that the message states the three
+// conditions it covers: a spawned behavior must be non-nil in any mode, and a
+// pointer in cluster mode; a registered kind must be a pointer type, and a
+// typed nil is allowed.
 func TestErrBehaviorNotPointerMessage(t *testing.T) {
 	msg := ErrBehaviorNotPointer.Error()
-	assert.Contains(t, msg, "must be a non-nil pointer to be spawned in cluster mode")
-	assert.Contains(t, msg, "registered with WithBehaviorKinds or WithEntityKinds must be a pointer type")
-	assert.Contains(t, msg, "a typed nil is allowed")
+	assert.Contains(t, msg, "a behavior must be non-nil to be spawned")
+	assert.Contains(t, msg, "and a pointer to be spawned in cluster mode")
+	assert.Contains(t, msg, "a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 }
 
 // unregistrableKinds are kinds GoAkt's type registry cannot name, each with

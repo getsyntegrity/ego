@@ -130,11 +130,14 @@ test/compat` and golangci-lint (0 issues) pass.
 **Error message amended (maintainer decision 2026-09-27).** The old `ErrBehaviorNotPointer` text,
 "eGo: a behavior kind registered with WithBehaviorKinds or WithEntityKinds, or spawned in cluster
 mode, must be a non-nil pointer", was stricter than `NewEngine` after the typed-nil fix (the RED
-output quoted above predates this change). New text: "eGo: a behavior must be a non-nil pointer to be
-spawned in cluster mode, and a behavior kind registered with WithBehaviorKinds or WithEntityKinds must
-be a pointer type (a typed nil is allowed)". Variable name and `errors.Is` behavior unchanged; design
-§5.6 updated with "(message amended 2026-09-27, #143)". RED: new `TestErrBehaviorNotPointerMessage`
-failed on the old text; GREEN after the change. No other test asserted the old text.
+output quoted above predates this change). A first amendment (`6ab540e`) still folded the nil rule
+into "non-nil pointer ... in cluster mode", although a nil behavior is rejected in every mode. Final
+text (second maintainer decision, same day): "eGo: a behavior must be non-nil to be spawned, and a
+pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or
+WithEntityKinds must be a pointer type (a typed nil is allowed)". Variable name and `errors.Is`
+behavior unchanged; design §5.6 updated with "(message amended 2026-09-27, #143)".
+`TestErrBehaviorNotPointerMessage` asserts the three conditions; it failed on the `6ab540e` text (RED)
+and passes on the final text (GREEN). No other test asserts the message.
 
 ## Next step
 

@@ -265,7 +265,7 @@ var (
 	ErrBehaviorNotSerializable = errors.New("eGo: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
 	// ErrBehaviorNotPointer: GoAkt's type registry names types through a pointer.
 	// (message amended 2026-09-27, #143)
-	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be a non-nil pointer to be spawned in cluster mode, and a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 )
 
 // BehaviorPlacementError reports why a behavior kind cannot be registered

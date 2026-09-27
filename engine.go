@@ -161,7 +161,7 @@ var (
 	// WithBehaviorKinds or WithEntityKinds only needs a pointer type: a typed
 	// nil such as (*T)(nil) registers T, while an untyped nil or a value type
 	// is rejected.
-	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be a non-nil pointer to be spawned in cluster mode, and a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
