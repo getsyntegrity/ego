@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -264,9 +265,10 @@ type Engine struct {
 // WithEntityKinds on the actor system, so that entity spawn requests routed
 // to this node from cluster peers can be deserialized. Every node in a
 // cluster must therefore build its engine with the same kinds. A kind that
-// is nil, a typed-nil pointer or not a pointer makes NewEngine return a
+// is an untyped nil or not a pointer makes NewEngine return a
 // *BehaviorPlacementError wrapping ErrBehaviorNotPointer, in single-node and
-// cluster mode alike, before any kind is registered.
+// cluster mode alike, before any kind is registered. A typed-nil pointer such
+// as (*T)(nil) registers T like new(T) does.
 //
 // The engine does NOT take ownership of the actor system. Engine.Stop will
 // not call sys.Stop; the caller stops the actor system on their own
@@ -306,10 +308,12 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	}
 
 	// GoAkt's type registry names a type through a pointer and panics, while
-	// holding the actor-system lock, on anything else. Check every kind
-	// before registering any of them.
+	// holding the actor-system lock, on an untyped nil or a non-pointer.
+	// Check every kind before registering any of them. A typed-nil pointer
+	// is accepted, as it always was: the registry only reads its pointer type
+	// and decodes into a fresh value of that type.
 	for _, kind := range config.behaviorKinds {
-		if !isNonNilPointer(kind) {
+		if kind == nil || reflect.TypeOf(kind).Kind() != reflect.Pointer {
 			return nil, &BehaviorPlacementError{Kind: fmt.Sprintf("%T", kind), Err: ErrBehaviorNotPointer}
 		}
 	}

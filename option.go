@@ -375,8 +375,8 @@ func WithEntityKinds(kinds ...EntityKind) Option {
 // set as EntityKind, spelled with the standard library only: any EntityKind
 // value is a BehaviorKind and any BehaviorKind value is an EntityKind.
 //
-// A BehaviorKind value must be a non-nil pointer, because the runtime's type
-// registry names a type through a pointer. Its MarshalBinary and
+// A BehaviorKind value must be a pointer, because the runtime's type registry
+// names a type through a pointer. Its MarshalBinary and
 // UnmarshalBinary carry the behavior's state between nodes.
 type BehaviorKind interface {
 	// ID returns the behavior's identifier.
@@ -390,11 +390,12 @@ type BehaviorKind interface {
 // the successor of WithEntityKinds, takes the same values, and appends to the
 // same registration list, so the two options can be mixed.
 //
-// Pass one non-nil pointer per behavior type (a zero value such as
-// new(AccountBehavior) is fine; only its concrete type is registered).
-// NewEngine registers every kind on the node's actor system and returns a
-// *BehaviorPlacementError wrapping ErrBehaviorNotPointer, before registering
-// anything, when a kind is nil, a typed-nil pointer or not a pointer.
+// Pass one pointer per behavior type (a zero value such as
+// new(AccountBehavior) is fine, and so is a typed-nil pointer; only its
+// concrete type is registered). NewEngine registers every kind on the node's
+// actor system and returns a *BehaviorPlacementError wrapping
+// ErrBehaviorNotPointer, before registering anything, when a kind is an
+// untyped nil or not a pointer.
 //
 // In cluster mode every node must list every kind it may receive. Single-node
 // deployments may omit this option.

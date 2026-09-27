@@ -21,12 +21,15 @@ single node, because kind registration always goes through the registry.
   `entityKinds []EntityKind` becomes `behaviorKinds []BehaviorKind`, and `WithEntityKinds` appends to
   it element by element, so both options feed one registration list and can be mixed. `EntityKind` and
   `WithEntityKinds` keep their exact signatures and are not deprecated yet (that is S3-5).
-- `engine.go` (`NewEngine` only): before calling `Inject`, every registered kind must be a non-nil
-  pointer. Otherwise `NewEngine` returns `*BehaviorPlacementError{Kind: "<Go type>", Err:
-  ErrBehaviorNotPointer}` with an empty `EntityID`, in single-node and cluster mode alike, and injects
-  nothing. The design names the pointer check; it does not say what a nil or typed-nil kind does. This
-  slice rejects both with the same error, because `ErrBehaviorNotPointer` already says "must be a
-  non-nil pointer" and GoAkt's registry cannot name either.
+- `engine.go` (`NewEngine` only): before calling `Inject`, every registered kind must be a pointer.
+  An untyped nil or a non-pointer makes `NewEngine` return `*BehaviorPlacementError{Kind: "<Go
+  type>", Err: ErrBehaviorNotPointer}` with an empty `EntityID`, in single-node and cluster mode
+  alike, and injects nothing. The design names the pointer check but not nil kinds. An untyped nil
+  panics in GoAkt's registry on `main`, so it is rejected with the same error. A typed-nil pointer
+  such as `(*T)(nil)` is accepted: GoAkt v4.5.4 registers it through `reflect.TypeOf(v).Elem()` and
+  decodes into `reflect.New(type)`, so on `main` it works exactly like `new(T)`, and rejecting it
+  would be a runtime break inside v4 (review finding on PR #143 at `0b35ef3`; the first version of
+  this slice rejected it).
 - `engine_neutral_cluster_test.go`: the `old and new registration interoperate` subtest.
 - `behavior_kind_test.go` (new): assignability, shared registration, `NewEngine` rejection.
 - `CHANGELOG.md`: one Features entry.
@@ -85,8 +88,8 @@ with a nil pointer dereference.
 
 **GREEN (T2).** Commit `69723c1` (after the rebase onto `658bbae`; `e618a82` before it). `TestBehaviorKindAssignability`,
 `TestWithEntityKindsAndWithBehaviorKindsShareRegistration`,
-`TestNewEngineRejectsUnregistrableKindsSingleNode` (6 cases: value type, nil, typed-nil, each through
-both options), `TestNewEngineRejectsValueTypeKindInClusterMode`, all of
+`TestNewEngineRejectsUnregistrableKindsSingleNode` (value type and untyped nil, each through both
+options; a typed-nil case was here until the review fix below), `TestNewEngineRejectsValueTypeKindInClusterMode`, all of
 `TestEngineMultiNodeNeutralBehaviors` (the three S3-3 subtests plus the interop subtest, both
 directions) and `TestEngineMultiNodeRemoteEntitySpawn` pass. The interop subtest passed in 10 of 10
 runs (`-count=5`, twice). Negative control (not committed): with `AccountEventSourcedBehavior` removed
@@ -114,6 +117,15 @@ fails on a typecheck error inside the toolchain's own `crypto/internal/randutil`
 issue unrelated to this change). golangci-lint `--new-from-rev=origin/main` (go1.26.6,
 `--modules-download-mode=mod` because no `vendor/` exists locally): `0 issues`.
 `TestEngineMultiNodeNeutralBehaviors -count=5` after the rebase: `ok`.
+
+**Review fix (typed-nil kinds).** Review of PR #143 at `0b35ef3` found that rejecting a typed-nil
+kind breaks v4 at runtime. Confirmed on a `658bbae` export: `WithEntityKinds((*AccountEventSourcedBehavior)(nil))`
+→ `NewEngine`, `Start`, `Stop` all succeed. RED: new `TestNewEngineAcceptsTypedNilPointerKind` (both
+options) fails on `0b35ef3` with `eGo: cannot register or place behavior *ego.AccountEventSourcedBehavior:
+... must be a non-nil pointer`. GREEN: `NewEngine` now rejects only an untyped nil or a non-pointer
+kind; the new test, the rejection tests (value type and untyped nil, single node and cluster), the
+interop subtest (`-count=5`), `go vet`, apidiff (still the two additions), `verify-module.sh
+test/compat` and golangci-lint (0 issues) pass.
 
 ## Next step
 

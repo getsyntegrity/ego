@@ -105,8 +105,17 @@ func TestWithEntityKindsAndWithBehaviorKindsShareRegistration(t *testing.T) {
 	require.NoError(t, engine.Start(ctx))
 }
 
+// kindOptions are the two registration options, keyed by name.
+func kindOptions() map[string]func(BehaviorKind) Option {
+	return map[string]func(BehaviorKind) Option{
+		"WithBehaviorKinds": func(k BehaviorKind) Option { return WithBehaviorKinds(k) },
+		"WithEntityKinds":   func(k BehaviorKind) Option { return WithEntityKinds(k) },
+	}
+}
+
 // unregistrableKinds are kinds GoAkt's type registry cannot name, each with
-// the Kind string NewEngine must report.
+// the Kind string NewEngine must report. A typed-nil pointer is not one of
+// them: the registry names it through its pointer type, like new(T).
 func unregistrableKinds() []struct {
 	name string
 	kind BehaviorKind
@@ -119,7 +128,33 @@ func unregistrableKinds() []struct {
 	}{
 		{"value type", valueTypeEventSourcedBehavior{id: "v-1"}, fmt.Sprintf("%T", valueTypeEventSourcedBehavior{})},
 		{"nil", nil, "<nil>"},
-		{"typed-nil pointer", (*AccountEventSourcedBehavior)(nil), fmt.Sprintf("%T", (*AccountEventSourcedBehavior)(nil))},
+	}
+}
+
+// TestNewEngineAcceptsTypedNilPointerKind keeps v4 behavior: GoAkt registers
+// a kind by its pointer type and decodes into a fresh value of that type, so
+// a typed-nil pointer such as (*T)(nil) registers the same type as new(T) and
+// must keep working through both options.
+func TestNewEngineAcceptsTypedNilPointerKind(t *testing.T) {
+	for optName, option := range kindOptions() {
+		t.Run(optName, func(t *testing.T) {
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+			cfg := NewConfig(store, WithLogger(DiscardLogger), option((*AccountEventSourcedBehavior)(nil)))
+			sys, err := goakt.NewActorSystem("TypedNilKind", cfg.GoaktOptions()...)
+			require.NoError(t, err)
+			require.NoError(t, sys.Start(ctx))
+
+			var engine *Engine
+			require.NotPanics(t, func() { engine, err = NewEngine(sys, cfg) })
+			require.NoError(t, err)
+			require.NoError(t, engine.Start(ctx))
+			require.NoError(t, engine.Stop(ctx))
+			require.NoError(t, sys.Stop(ctx))
+		})
 	}
 }
 
@@ -148,11 +183,7 @@ func requireKindRejected(t *testing.T, sys goakt.ActorSystem, cfg *Config, want 
 // a single node, where kind registration still goes through GoAkt's type
 // registry, for both registration options.
 func TestNewEngineRejectsUnregistrableKindsSingleNode(t *testing.T) {
-	options := map[string]func(BehaviorKind) Option{
-		"WithBehaviorKinds": func(k BehaviorKind) Option { return WithBehaviorKinds(k) },
-		"WithEntityKinds":   func(k BehaviorKind) Option { return WithEntityKinds(k) },
-	}
-	for optName, option := range options {
+	for optName, option := range kindOptions() {
 		for _, tc := range unregistrableKinds() {
 			t.Run(optName+"/"+tc.name, func(t *testing.T) {
 				ctx := context.Background()
