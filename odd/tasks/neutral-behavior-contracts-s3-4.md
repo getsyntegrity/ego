@@ -127,6 +127,15 @@ kind; the new test, the rejection tests (value type and untyped nil, single node
 interop subtest (`-count=5`), `go vet`, apidiff (still the two additions), `verify-module.sh
 test/compat` and golangci-lint (0 issues) pass.
 
+**Error message amended (maintainer decision 2026-09-27).** The old `ErrBehaviorNotPointer` text,
+"eGo: a behavior kind registered with WithBehaviorKinds or WithEntityKinds, or spawned in cluster
+mode, must be a non-nil pointer", was stricter than `NewEngine` after the typed-nil fix (the RED
+output quoted above predates this change). New text: "eGo: a behavior must be a non-nil pointer to be
+spawned in cluster mode, and a behavior kind registered with WithBehaviorKinds or WithEntityKinds must
+be a pointer type (a typed nil is allowed)". Variable name and `errors.Is` behavior unchanged; design
+§5.6 updated with "(message amended 2026-09-27, #143)". RED: new `TestErrBehaviorNotPointerMessage`
+failed on the old text; GREEN after the change. No other test asserted the old text.
+
 ## Next step
 
 Open the PR; review and merge are the maintainer's decisions. S3-5 (deprecation markers, examples)

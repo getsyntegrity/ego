@@ -154,10 +154,14 @@ var (
 	// runs on the local node.
 	ErrBehaviorNotSerializable = errors.New("eGo: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
 	// ErrBehaviorNotPointer is the cause carried by a *BehaviorPlacementError
-	// when a behavior that GoAkt must register or serialize is not a non-nil
-	// pointer. GoAkt's type registry names a type through a pointer and
-	// panics on anything else.
-	ErrBehaviorNotPointer = errors.New("eGo: a behavior kind registered with WithBehaviorKinds or WithEntityKinds, or spawned in cluster mode, must be a non-nil pointer")
+	// when a behavior cannot be handed to GoAkt's type registry, which names
+	// a type through a pointer and panics on anything else. A spawned
+	// behavior must be a non-nil pointer in cluster mode (and non-nil in any
+	// mode, since the spawn reads its ID). A kind registered with
+	// WithBehaviorKinds or WithEntityKinds only needs a pointer type: a typed
+	// nil such as (*T)(nil) registers T, while an untyped nil or a value type
+	// is rejected.
+	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be a non-nil pointer to be spawned in cluster mode, and a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 	// ZeroTime is the zero time
 	ZeroTime = time.Time{}
 )
