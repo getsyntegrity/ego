@@ -83,7 +83,7 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 
 | ID | Issue | Branch | Agent | PR | State | Blocking reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| W0a | #105 design review | docs/propose-ego-arch-003 @fb51c6b | reviewer | #125 | in review | findings fixed in fb51c6b (landing order #123 S3-2 → IMPL-4; citations); re-review + CI pending |
+| W0a | #105 design review | docs/propose-ego-arch-003 @cfa614c | reviewer | #125 | ready to merge | approved after 3 rounds (landing order #123 S3-2 → IMPL-4; citations engine.go deps 692/925/1326, spawn 699/932/1332); CI build pass, modules skipped |
 | W0b | #99 | fix/99-prestart-assertion-audit @2585811 | writer | #127 | in review | reviewer running; audit left 4 files with the same pattern (projection_actor.go, event_sourced_actor.go, events_janitor_actor.go, durable_state_actor.go) for a follow-up; root cause still unproven; local golangci-lint broken on clean main (Go 1.27 stdlib) |
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
