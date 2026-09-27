@@ -55,6 +55,9 @@ func TestRuntime_ConsumerDrivesTheAppEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Stop is idempotent (a no-op after Stop or a failed Start), so this
+	// cleanup only matters when the test fails before its explicit Stop; its
+	// error is deliberately ignored, the explicit Stop below checks it.
 	t.Cleanup(func() { _ = app.Stop(context.Background()) })
 	if err := app.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)

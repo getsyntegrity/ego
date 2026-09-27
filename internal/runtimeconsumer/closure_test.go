@@ -45,11 +45,34 @@ func hermeticGoEnv() []string {
 	return append(env, "GOWORK=off", "GOFLAGS=")
 }
 
+// modulePrefix is the root module's import path; every first-party package
+// starts with it.
+const modulePrefix = "github.com/pablogore/ego/v4"
+
+// allowedFirstParty is the closed set of first-party packages the
+// consumer's production build may contain besides itself: the two
+// contracts it is written against, the contracts they import (command,
+// tenancy, eventstream), eventstream's runtime-free internal utilities, and
+// the testpb messages. It mirrors port/runtime's architecture test
+// (ego-runtime-001 §D9). A new first-party dependency must be added here in
+// review, which is the point.
+var allowedFirstParty = []string{
+	modulePrefix + "/port/runtime",
+	modulePrefix + "/port/behavior",
+	modulePrefix + "/command",
+	modulePrefix + "/tenancy",
+	modulePrefix + "/eventstream",
+	modulePrefix + "/internal/queue",
+	modulePrefix + "/internal/syncmap",
+	modulePrefix + "/test/data/testpb",
+}
+
 // TestProductionClosureExcludesRootAndGoAkt is #147's closure criterion
-// (ego-runtime-001 §D8): the consumer's production build reaches
-// port/runtime, port/behavior and contracts, never the root package ego or
-// any GoAkt package. Only the production build is checked; the end-to-end
-// test that needs GoAkt lives in compose/goakt.
+// (ego-runtime-001 §D8): the consumer's production build reaches only
+// port/runtime, port/behavior and contracts — every first-party package in
+// it must be on allowedFirstParty — and never the root package ego or any
+// GoAkt package. Only the production build is checked; the end-to-end test
+// that needs GoAkt lives in compose/goakt.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps", ".")
 	cmd.Env = hermeticGoEnv()
@@ -63,13 +86,17 @@ func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 		switch {
 		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
 			t.Errorf("runtimeconsumer's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == "github.com/pablogore/ego/v4":
+		case dep == modulePrefix:
 			t.Errorf("runtimeconsumer's production closure must not reach the root package ego; got %q", dep)
+		case dep == modulePrefix+"/internal/runtimeconsumer":
+			// the package itself
+		case strings.HasPrefix(dep, modulePrefix+"/") && !slices.Contains(allowedFirstParty, dep):
+			t.Errorf("runtimeconsumer's production closure may contain only port/runtime, port/behavior and contracts; got %q", dep)
 		}
 	}
 	for _, want := range []string{
-		"github.com/pablogore/ego/v4/port/runtime",
-		"github.com/pablogore/ego/v4/port/behavior",
+		modulePrefix + "/port/runtime",
+		modulePrefix + "/port/behavior",
 	} {
 		if !slices.Contains(deps, want) {
 			t.Errorf("runtimeconsumer's production closure must contain %q, the contract it is written against", want)

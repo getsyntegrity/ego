@@ -97,6 +97,19 @@ package and same checks, and it keeps the hot test file untouched (dispatcher pr
   `example/cluster`, `test/compat`, `mocks/ego` all OK.
 - Review tier / RDD: not run by this writer (the parent owns review routing).
 
+- **Review nits** (independent review of `05e18ac`, approve with nits): N1 the closure test now
+  also fails on any first-party package outside an explicit allowlist (`port/runtime`,
+  `port/behavior`, `command`, `tenancy`, `eventstream`, `internal/queue`, `internal/syncmap`,
+  `test/data/testpb`, the set `go list -deps` reports); negative control: a temporary
+  `import _ ".../testkit"` failed it on `egopb`, `encryption`, `offsetstore`, `persistence`,
+  `port/adapter`, `testkit`; reverted. N2 the e2e test's cleanup `Stop` carries a comment that `Stop`
+  is idempotent and its error is deliberately ignored.
+
+## Post-merge check
+
+The PR lane ran ciselect `affected`, not `full`. After merge, watch `main`'s full-lane `build.yml`
+run for the merge commit; if it fails, reopen #147 (the PR says `Closes #147`).
+
 ## Next step
 
 Open the pull request; CI must be green (the last #147 criterion).
