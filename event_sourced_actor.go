@@ -305,7 +305,9 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 
-	entity.loadOptionalExtensions(ctx)
+	if err := entity.loadOptionalExtensions(ctx); err != nil {
+		return err
+	}
 	entity.setConfig(ctx)
 
 	if err := entity.validateAndRecover(ctx); err != nil {
@@ -376,25 +378,45 @@ func (entity *EventSourcedActor) PostStop(ctx *goakt.Context) error {
 }
 
 // loadOptionalExtensions reads optional extensions from the actor system.
-// Missing extensions are silently skipped.
-func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) {
-	if ext := ctx.Extension(extensions.SnapshotStoreExtensionID); ext != nil {
-		entity.snapshotStore = ext.(*extensions.SnapshotStoreExt).Underlying()
+// Missing extensions are silently skipped, but a present-but-mismatched-type
+// registration under any of these extension IDs is reported as an error
+// instead of letting the runtime panic (see optionalExtension in
+// extension_lookup.go and issue #99).
+func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) error {
+	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	if err != nil {
+		return err
+	}
+	if snapshotStoreExt != nil {
+		entity.snapshotStore = snapshotStoreExt.Underlying()
 	}
 
-	if ext := ctx.Extension(extensions.EventAdaptersExtensionID); ext != nil {
-		entity.eventAdapters = ext.(*extensions.EventAdapters).Adapters()
+	eventAdaptersExt, err := optionalExtension[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
+	if err != nil {
+		return err
+	}
+	if eventAdaptersExt != nil {
+		entity.eventAdapters = eventAdaptersExt.Adapters()
 	}
 
-	if ext := ctx.Extension(extensions.EncryptorExtensionID); ext != nil {
-		entity.encryptor = ext.(*extensions.EncryptorExtension).Encryptor()
+	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	if err != nil {
+		return err
+	}
+	if encryptorExt != nil {
+		entity.encryptor = encryptorExt.Encryptor()
 	}
 
-	if ext := ctx.Extension(extensions.TelemetryExtensionID); ext != nil {
-		telExt := ext.(*extensions.TelemetryExtension)
-		entity.tracer = telExt.Tracer()
-		entity.metrics = newMetrics(telExt.Meter())
+	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	if err != nil {
+		return err
 	}
+	if telemetryExt != nil {
+		entity.tracer = telemetryExt.Tracer()
+		entity.metrics = newMetrics(telemetryExt.Meter())
+	}
+
+	return nil
 }
 
 // setConfig reads the behavior and entity configuration from the
