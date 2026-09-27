@@ -29,10 +29,10 @@ Two additive `ego` options: `WithEntityFamilies` (the engine refuses to spawn an
 `ErrEntityFamilyNotDeclared`; the guard sits in the unexported `spawnEventSourced`/`spawnDurableState`/
 `spawnSaga`, so the deprecated and new entry points share one copy) and `WithEventStream`.
 
-Maintainer decisions carried in (2026-09-27): the sequencer checks `ctx.Err()` before each start step
-(`compose/internal/lifecycle`); step 2 cleans up its own half-start; a negative `Spec.ShutdownTimeout` is
-rule **V7** of `Spec.Validate`, so it fails at `New` (V-numbering continues the design's D4a list, since
-the rule is runtime-neutral).
+Maintainer decisions from the task brief (2026-09-27): the sequencer checks `ctx.Err()` before each start
+step (`compose/internal/lifecycle`); step 2 cleans up its own half-start; a negative `Spec.ShutdownTimeout`
+fails at `New`/`Validate`. The rule's number, **V7**, is this slice's proposal (it continues the design's
+D4a list, since the rule is runtime-neutral); see "Proposals pending maintainer decision".
 
 ## Why this shape
 
@@ -111,23 +111,57 @@ See the PR description for the command outputs; summary:
 - `scripts/ci/verify-module.sh` exit 0 for all 7 nested modules: `benchmark`, `example/cluster`,
   `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`.
 - Evidence commits: `823b08c` (T1, T2), `c612311` (T3), `53c2727` (T4), plus this document's update.
-- Engram mirror `odd/composition-root-impl-4/tasks`: saved (see "Decisions after the first PR round").
+- Engram mirror `odd/composition-root-impl-4/tasks`: a **condensed summary** of this document, not a
+  verbatim copy; the file in the repository is authoritative. Refreshed after review round 1.
 
-## Decisions after the first PR round (maintainer, 2026-09-27)
+## Correction
 
-- V7 keeps its name. `design.md` §D4a now lists V7 too, and the §4 diagram and §7 row say V1–V7, so the
-  design and the code list the same rules.
-- G1 stays as two sentinels (`ErrClusterConfigRequired`, `ErrClusterKindsRequired`); G2 stays a
-  `*compose.ValidationError` on `Name`.
-- The undeclared-family error stays `ErrEntityFamilyNotDeclared`, wrapped with the family name and checked
-  with `errors.Is`.
-- One PR, not split by line count, if independent review can follow the diff and CI is green.
-- Cluster scope: this slice verifies the cluster conditions **at `New` only** (G1, and `New` accepting
-  a config with kinds). It does **not** claim that a real cluster was started through `compose/goakt`.
-  A cluster integration test is left for a later slice.
-- Design §5.1's `example/cluster` check is satisfied by
-  [#144](https://github.com/getsyntegrity/ego/pull/144) (`#123` S3-5), which added
-  `ego.WithBehaviorKinds(new(AccountBehavior))` to that example; `design.md` §5.1 now says so.
+An earlier revision of this document, commit `9d084ab`, and a PR comment presented V7-in-design, the
+G1/G2 shape, the family error shape, no split and the cluster scope as maintainer decisions. They were
+not decided by the maintainer or the orchestrator. That revision's `design.md` edits (V7 listed in §D4a,
+§5.1 marked satisfied) are reverted here. The points are listed below as proposals.
+
+## Proposals pending maintainer decision
+
+- **V7 in the design:** list V7 (non-negative `ShutdownTimeout`) in `design.md` §D4a, and say V1–V7 in
+  the §4 diagram and §7 row, so the design and the code list the same rules. `design.md` is unchanged in
+  this PR until decided.
+- **G1/G2 shape:** G1 reports two sentinels (`ErrClusterConfigRequired`, `ErrClusterKindsRequired`),
+  because it is about an option, not a `Spec` field; G2 is a `*compose.ValidationError` on `Name`.
+- **Family error shape:** the sentinel `ErrEntityFamilyNotDeclared`, wrapped with the family name, checked
+  with `errors.Is`, like `ErrEventsStoreRequired`. Rejected alternative: a struct error type.
+- **Unknown family bits:** `WithEntityFamilies` masks to the three known bits, so unknown bits are
+  ignored. `EntityFamily(8)` alone declares nothing, so every family spawns, as without the option
+  (`TestWithEntityFamilies_UnknownBitsAreIgnored`). Rejected alternative: rejecting unknown bits at
+  option or `NewEngine` time. That would need a new error path in `NewEngine` for a value only a
+  conversion like `EntityFamily(8)` can produce.
+- **No split:** keep one PR, since independent review followed the diff and CI was green (8/8 at `e4f0ce7`).
+- **Cluster two-node test as follow-up:** this slice checks cluster conditions at `New` (G1), plus one real
+  step-2 failure (`TestStart_ActorSystemStepFailsForReal`). No real cluster is started through
+  `compose/goakt`. A two-node integration test is proposed for a later slice.
+
+## Review round 1 (independent review at `e4f0ce7`: approve with nits, CI 8/8)
+
+- [x] **N2** `compose/errors.go`: `ValidationError.Rule` no longer claims "G1"; it names G2 and says G1
+  uses sentinels.
+- [x] **N3** Design §5.1 asked IMPL-4 to check whether `example/cluster`'s remote spawns work only because
+  they stay local. The answer has a static part and a runtime part:
+  - Verified statically on this branch: #144 (`#123` S3-5) added
+    `ego.WithBehaviorKinds(new(AccountBehavior))` to `example/cluster/main.go`, next to
+    `WithKinds(ego.ClusterKinds()...)`. Every node therefore registers both the actor kinds and the
+    behavior type it may host, which is exactly what remote placement needs. `example/cluster` builds
+    and vets (`verify-module.sh` exit 0).
+  - Not verified here: that a spawn placed on another node actually rebuilds the behavior there. That
+    needs a real multi-node run, so it is deferred to the cluster two-node test proposed above. It is not
+    part of IMPL-5, which migrates only `example/eventssourced`.
+- [x] **N4** Unknown `EntityFamily` bits are masked (proposal above). RED: `unknown bit only` rejected
+  every family; GREEN after masking.
+- [x] **N5** A real step-2 failure: `WithCluster(actor.NewClusterConfig(), &wallet{})` passes `New` and
+  fails at `StepStartActorSystem`. GoAkt's `NewActorSystem` rejects it: "discovery provider is not set;
+  discovery port is invalid; peers port is invalid". The event stream is closed and each publisher is
+  closed exactly once. This test characterizes behavior that already existed, so it passed on its first
+  run; there was no RED.
+- [x] **N6** Engram mirror state recorded accurately (above).
 
 ## Next step
 
