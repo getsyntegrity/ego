@@ -23,10 +23,17 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/pablogore/ego/v4/internal/cmd/ciselect/selector"
 )
 
 // writeFile creates path (and its parent directories) with the given
@@ -41,87 +48,448 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// TestModuleDiscovery_FindsNestedModulesAndTheirRootImports builds a small
-// repository tree with two real nested modules (moda, modb) and a go.mod
-// nested inside a skipped directory (vendor/), and asserts that:
-//   - findSatelliteDirs discovers exactly moda and modb, and never descends
-//     into vendor/, so the go.mod hiding there is never even visited;
-//   - discoverModuleImports parses moda's and modb's non-vendor .go files,
-//     including _test.go (a nested module's tests can import a root
-//     package its production code does not), with go/parser only (no
-//     module download, no network), and returns only the imports that
-//     start with the root module's own path.
-func TestModuleDiscovery_FindsNestedModulesAndTheirRootImports(t *testing.T) {
+const rootModule = "github.com/example/root"
+
+// writeModuleTree builds a small repository with a root module and three
+// nested modules:
+//   - moda requires the root through a local replace (a module edge);
+//   - modb requires moda through a local replace (a nested-to-nested edge)
+//     plus a third-party module (never an edge);
+//   - modc requires moda at a published version with no replace (pinned,
+//     reported but never an edge);
+//
+// plus a go.mod hidden inside vendor/, which discovery must never visit.
+func writeModuleTree(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
-	const rootModule = "github.com/example/root"
+	writeFile(t, filepath.Join(root, "go.mod"), "module "+rootModule+"\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(root, "moda", "go.mod"), `module `+rootModule+`/moda
 
-	writeFile(t, filepath.Join(root, "go.mod"), "module "+rootModule+"\n\ngo 1.27.0\n")
+go 1.26.0
 
-	writeFile(t, filepath.Join(root, "moda", "go.mod"), "module "+rootModule+"/moda\n\ngo 1.26.0\n")
-	writeFile(t, filepath.Join(root, "moda", "producer.go"), `package moda
+require `+rootModule+` v0.0.0
 
-import (
-	"fmt"
+replace `+rootModule+` => ../
+`)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
 
-	_ "`+rootModule+`/command"
+go 1.26.0
+
+require (
+	`+rootModule+`/moda v0.0.0
+	example.com/thirdparty v1.2.3
 )
 
-var _ = fmt.Sprintf
+replace `+rootModule+`/moda => ../moda
 `)
-	writeFile(t, filepath.Join(root, "moda", "producer_test.go"), `package moda
+	writeFile(t, filepath.Join(root, "modc", "go.mod"), `module `+rootModule+`/modc
 
-import (
-	_ "`+rootModule+`/testkit"
-)
+go 1.26.0
+
+require `+rootModule+`/moda v0.3.0
 `)
-
-	writeFile(t, filepath.Join(root, "modb", "go.mod"), "module "+rootModule+"/modb\n\ngo 1.26.0\n")
-	writeFile(t, filepath.Join(root, "modb", "consumer.go"), `package modb
-
-import "strings"
-
-var _ = strings.ToUpper
-`)
-
-	// A go.mod hidden inside vendor/ must never be treated as a nested
-	// module: findSatelliteDirs must not even descend into vendor/.
+	// Parser-read imports: tests included, build tags ignored, own-module
+	// and third-party imports dropped.
+	writeFile(t, filepath.Join(root, "moda", "a.go"), "package moda\n\nimport _ \""+rootModule+"/command\"\n")
+	writeFile(t, filepath.Join(root, "moda", "a_test.go"), "package moda\n\nimport _ \""+rootModule+"/testkit\"\n")
+	writeFile(t, filepath.Join(root, "modb", "b_compat.go"), "//go:build compat\n\npackage modb\n\nimport (\n\t_ \""+rootModule+"/moda/sub\"\n\t_ \"example.com/thirdparty/x\"\n)\n")
+	writeFile(t, filepath.Join(root, "modb", "self.go"), "package modb\n\nimport _ \""+rootModule+"/modb/inner\"\n")
 	writeFile(t, filepath.Join(root, "vendor", "example.com", "dep", "go.mod"), "module example.com/dep\n\ngo 1.26.0\n")
-	writeFile(t, filepath.Join(root, "vendor", "example.com", "dep", "dep.go"), "package dep\n")
+	return root
+}
+
+// TestModuleDiscovery_FindsNestedModules asserts that findSatelliteDirs
+// discovers exactly the nested modules and never descends into vendor/,
+// so the go.mod hiding there is never even visited.
+func TestModuleDiscovery_FindsNestedModules(t *testing.T) {
+	root := writeModuleTree(t)
 
 	dirs, err := findSatelliteDirs(root)
 	if err != nil {
 		t.Fatalf("findSatelliteDirs: %v", err)
 	}
 	sort.Strings(dirs)
-	wantDirs := []string{"moda", "modb"}
-	if len(dirs) != len(wantDirs) {
-		t.Fatalf("findSatelliteDirs() = %v, want %v", dirs, wantDirs)
+	if want := []string{"moda", "modb", "modc"}; !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("findSatelliteDirs() = %v, want %v", dirs, want)
 	}
-	for i := range wantDirs {
-		if dirs[i] != wantDirs[i] {
-			t.Fatalf("findSatelliteDirs() = %v, want %v", dirs, wantDirs)
-		}
+}
+
+// TestModuleDiscovery_BuildsRequirementGraph asserts that discoverModules
+// reads every module's go.mod through `go mod edit -json` and keeps only
+// in-repository requirements: those resolved to the working tree through a
+// local replace become Deps, those pinned to a published version become
+// Pinned, and third-party requirements are dropped.
+func TestModuleDiscovery_BuildsRequirementGraph(t *testing.T) {
+	root := writeModuleTree(t)
+
+	got, err := discoverModules(root)
+	if err != nil {
+		t.Fatalf("discoverModules: %v", err)
+	}
+	want := []selector.ModuleInfo{
+		{Dir: ".", Path: rootModule},
+		{Dir: "moda", Path: rootModule + "/moda", Deps: []string{rootModule}, Imports: []string{rootModule + "/command", rootModule + "/testkit"}},
+		{Dir: "modb", Path: rootModule + "/modb", Deps: []string{rootModule + "/moda"}, Imports: []string{rootModule + "/moda/sub"}},
+		{Dir: "modc", Path: rootModule + "/modc", Pinned: []string{rootModule + "/moda@v0.3.0"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("discoverModules() =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// The root module's import set covers only the root's own files: nested
+// module directories and testdata/ are not the root's.
+func TestModuleDiscovery_RootImportsSkipNestedModulesAndTestdata(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "pkg", "p.go"), "package pkg\n\nimport (\n\t_ \""+rootModule+"/modb\"\n\t_ \""+rootModule+"/pkg2\"\n)\n")
+	writeFile(t, filepath.Join(root, "pkg", "testdata", "t.go"), "package t\n\nimport _ \""+rootModule+"/modc\"\n")
+
+	got, err := discoverModules(root)
+	if err != nil {
+		t.Fatalf("discoverModules: %v", err)
+	}
+	if got[0].Dir != "." || !reflect.DeepEqual(got[0].Imports, []string{rootModule + "/modb"}) {
+		t.Fatalf("root module = %+v, want Imports [%s/modb]", got[0], rootModule)
+	}
+}
+
+// gitRepo creates a git repository at a new temporary directory with the
+// given files committed, and returns its path.
+func gitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for p, c := range files {
+		writeFile(t, filepath.Join(root, filepath.FromSlash(p)), c)
+	}
+	gitRun(t, root, "init", "-q")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "base")
+	return root
+}
+
+func gitRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// -base: a changed nested go.mod is classified by its existence at base
+// (git) and at head (the working tree): edit, add or delete. Other paths
+// and the root go.mod are not reported.
+func TestGoModPresence_EditAddDelete(t *testing.T) {
+	root := gitRepo(t, map[string]string{
+		"go.mod":      "module " + rootModule + "\n",
+		"moda/go.mod": "module " + rootModule + "/moda\n",
+		"modd/go.mod": "module " + rootModule + "/modd\n",
+	})
+	base := gitRun(t, root, "rev-parse", "HEAD")
+	writeFile(t, filepath.Join(root, "moda", "go.mod"), "module "+rootModule+"/moda\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n")
+	if err := os.Remove(filepath.Join(root, "modd", "go.mod")); err != nil {
+		t.Fatal(err)
 	}
 
-	modaImports, err := discoverModuleImports(root, "moda", rootModule)
+	got, err := goModPresence(root, base, []string{"moda/go.mod", "modn/go.mod", "modd/go.mod", "moda/x.go", "go.mod"})
 	if err != nil {
-		t.Fatalf("discoverModuleImports(moda): %v", err)
+		t.Fatalf("goModPresence: %v", err)
 	}
-	wantModaImports := []string{rootModule + "/command", rootModule + "/testkit"}
-	if len(modaImports) != len(wantModaImports) {
-		t.Fatalf("discoverModuleImports(moda) = %v, want %v", modaImports, wantModaImports)
+	want := map[string]selector.GoModPresence{
+		"moda/go.mod": {AtBase: true, AtHead: true},
+		"modn/go.mod": {AtHead: true},
+		"modd/go.mod": {AtBase: true},
 	}
-	for i := range wantModaImports {
-		if modaImports[i] != wantModaImports[i] {
-			t.Fatalf("discoverModuleImports(moda) = %v, want %v", modaImports, wantModaImports)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("goModPresence() = %v, want %v", got, want)
+	}
+}
+
+// An unknown -base revision fails the selection (and the workflow falls
+// back to -all), never a silent "absent at base".
+func TestGoModPresence_UnknownBaseFails(t *testing.T) {
+	root := gitRepo(t, map[string]string{"go.mod": "module " + rootModule + "\n"})
+
+	if _, err := goModPresence(root, "0000000000000000000000000000000000000000", []string{"moda/go.mod"}); err == nil {
+		t.Fatalf("goModPresence() error = nil, want an error for an unknown base")
+	}
+	// A revision can never start with "-": that would be a git option.
+	if _, err := goModPresence(root, "--git-dir=/nonexistent", []string{"moda/go.mod"}); err == nil || !strings.Contains(err.Error(), "must not start with") {
+		t.Fatalf("goModPresence() error = %v, want an option-like base rejected", err)
+	}
+}
+
+// With a real merge-base, as the workflow passes it: a go.mod added on the
+// base branch after the branch point is absent at the merge-base, so the
+// pull request's own add of the same file is still classified as an add
+// (the three-dot diff that produced the changed-file list agrees).
+func TestGoModPresence_MergeBaseMatchesThreeDotDiff(t *testing.T) {
+	root := gitRepo(t, map[string]string{"go.mod": "module " + rootModule + "\n"})
+	gitRun(t, root, "branch", "-M", "main")
+	gitRun(t, root, "checkout", "-q", "-b", "pr")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "pr adds modn")
+	gitRun(t, root, "checkout", "-q", "main")
+	writeFile(t, filepath.Join(root, "modn", "go.mod"), "module "+rootModule+"/modn\n\ngo 1.26.0\n")
+	gitRun(t, root, "add", "-A")
+	gitRun(t, root, "commit", "-q", "-m", "main adds modn too")
+	gitRun(t, root, "checkout", "-q", "pr")
+
+	changed := gitRun(t, root, "diff", "--name-only", "--no-renames", "main...pr")
+	if changed != "modn/go.mod" {
+		t.Fatalf("three-dot diff = %q, want modn/go.mod", changed)
+	}
+	mergeBase := gitRun(t, root, "merge-base", "main", "pr")
+	got, err := goModPresence(root, mergeBase, []string{changed})
+	if err != nil {
+		t.Fatalf("goModPresence: %v", err)
+	}
+	if p := got["modn/go.mod"]; p.AtBase || !p.AtHead {
+		t.Fatalf("presence at merge-base = %+v, want added (absent at base, present at head)", p)
+	}
+	tip, err := goModPresence(root, "main", []string{changed})
+	if err != nil {
+		t.Fatalf("goModPresence(main): %v", err)
+	}
+	if p := tip["modn/go.mod"]; !p.AtBase {
+		t.Fatalf("presence at the base branch tip = %+v; this test documents why the merge-base is required", p)
+	}
+}
+
+// A go.mod that cannot be read must fail the whole selection, so the
+// workflow falls back to the full suite, never a silent partial graph.
+func TestModuleDiscovery_BrokenGoModFails(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), "this is not a go.mod\n")
+
+	if _, err := discoverModules(root); err == nil {
+		t.Fatalf("discoverModules() error = nil, want an error for a malformed go.mod")
+	}
+}
+
+// A local replace that points an in-repository requirement at a directory
+// other than that module's own is ambiguous: fail closed.
+func TestModuleDiscovery_ReplaceToWrongDirectoryFails(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
+
+go 1.26.0
+
+require `+rootModule+`/moda v0.0.0
+
+replace `+rootModule+`/moda => ../modc
+`)
+
+	if _, err := discoverModules(root); err == nil {
+		t.Fatalf("discoverModules() error = nil, want an error for a replace to the wrong module directory")
+	}
+}
+
+// A local replace whose target is inside the repository but is not a
+// discovered module would hide an edge from the graph: fail closed.
+func TestModuleDiscovery_ReplaceToUndiscoveredRepoDirFails(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "notamodule", "x.go"), "package notamodule\n")
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
+
+go 1.26.0
+
+require example.com/elsewhere v0.0.0
+
+replace example.com/elsewhere => ../notamodule
+`)
+
+	if _, err := discoverModules(root); err == nil {
+		t.Fatalf("discoverModules() error = nil, want an error for a replace into an undiscovered repository directory")
+	}
+}
+
+// A local replace pointing outside the repository is not an in-repository
+// edge and stays allowed.
+func TestModuleDiscovery_ReplaceOutsideRepoIsIgnored(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
+
+go 1.26.0
+
+require example.com/elsewhere v0.0.0
+
+replace example.com/elsewhere => ../../outside
+`)
+
+	if _, err := discoverModules(root); err != nil {
+		t.Fatalf("discoverModules() error = %v, want a replace outside the repository to be ignored", err)
+	}
+}
+
+// Go ignores testdata/ directories, and so must discovery: a fixture
+// go.mod under testdata/ is never a module of the repository.
+func TestModuleDiscovery_SkipsTestdata(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "internal", "tool", "testdata", "fixture", "go.mod"), "this fixture is not parsed\n")
+
+	dirs, err := findSatelliteDirs(root)
+	if err != nil {
+		t.Fatalf("findSatelliteDirs: %v", err)
+	}
+	sort.Strings(dirs)
+	if want := []string{"moda", "modb", "modc"}; !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("findSatelliteDirs() = %v, want %v", dirs, want)
+	}
+	if _, err := discoverModules(root); err != nil {
+		t.Fatalf("discoverModules() error = %v, want the testdata go.mod never parsed", err)
+	}
+}
+
+// Every go subprocess ciselect starts runs outside workspace mode, so a
+// go.work can never satisfy a requirement a go.mod does not declare.
+func TestGoCommand_ForcesGOWORKOff(t *testing.T) {
+	t.Setenv("GOWORK", "/somewhere/go.work")
+	cmd := goCommand(t.TempDir(), "env", "GOWORK")
+
+	// Only GOWORK entries are reported: the rest of the environment may
+	// hold secrets and must never reach a test log.
+	var gowork []string
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "GOWORK=") {
+			gowork = append(gowork, kv)
 		}
 	}
-
-	modbImports, err := discoverModuleImports(root, "modb", rootModule)
-	if err != nil {
-		t.Fatalf("discoverModuleImports(modb): %v", err)
+	if !reflect.DeepEqual(gowork, []string{"GOWORK=off"}) {
+		t.Fatalf("go subprocess GOWORK entries = %v, want exactly [GOWORK=off]", gowork)
 	}
-	if len(modbImports) != 0 {
-		t.Fatalf("discoverModuleImports(modb) = %v, want none (only imports stdlib)", modbImports)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env GOWORK: %v", err)
+	}
+	if got := string(out); got != "off\n" {
+		t.Fatalf("go env GOWORK = %q, want %q", got, "off\n")
+	}
+}
+
+// writeRootPackage gives the temporary root module one package, so the
+// root lane's `go list ./...` has something to load.
+func writeRootPackage(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "root.go"), "package root\n")
+}
+
+// A selector run on a changed-file list fails on an unreadable nested
+// go.mod, so the workflow's `-all` fallback takes over.
+func TestRun_ChangedFailsOnBrokenNestedGoMod(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), "this is not a go.mod\n")
+	changed := filepath.Join(t.TempDir(), "changed.txt")
+	writeFile(t, changed, "moda/x.go\n")
+
+	err := run([]string{"-changed", changed, "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatalf("run() error = nil, want the broken go.mod to fail the selection")
+	}
+}
+
+// The `-all` fallback must not fail on the very thing it falls back from:
+// with an unreadable nested go.mod it still selects every discovered
+// module by directory.
+func TestRun_AllSurvivesBrokenNestedGoMod(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), "this is not a go.mod\n")
+	out := t.TempDir()
+
+	if err := run([]string{"-all", "-module-dir", root, "-repo-root", root, "-out-dir", out}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run(-all) error = %v, want success", err)
+	}
+	modules, err := os.ReadFile(filepath.Join(out, "modules.json"))
+	if err != nil {
+		t.Fatalf("reading modules.json: %v", err)
+	}
+	if string(modules) != "[\"moda\",\"modb\",\"modc\"]\n" {
+		t.Fatalf("modules.json = %q, want every discovered module", modules)
+	}
+	// Without a readable go.mod the module path is unknown: plan.json
+	// omits the field instead of printing an empty path.
+	plan, err := os.ReadFile(filepath.Join(out, "plan.json"))
+	if err != nil {
+		t.Fatalf("reading plan.json: %v", err)
+	}
+	if strings.Contains(string(plan), `"path"`) {
+		t.Fatalf("plan.json has a path field in the directory-only fallback:\n%s", plan)
+	}
+}
+
+// A bad -base fails a -changed run (fail closed), while the -all fallback
+// never reads it, so the workflow's fallback cannot fail on it.
+func TestRun_BaseFailsClosedButAllIgnoresIt(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	changed := filepath.Join(t.TempDir(), "changed.txt")
+	writeFile(t, changed, "moda/go.mod\n")
+
+	if err := run([]string{"-changed", changed, "-base", "no-such-rev", "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard); err == nil {
+		t.Fatalf("run(-changed, bad -base) error = nil, want failure")
+	}
+	if err := run([]string{"-all", "-base", "no-such-rev", "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run(-all, bad -base) error = %v, want success", err)
+	}
+}
+
+// plan.json lists every module, selected or not, and keeps modules.json's
+// shape: nested directories only, "[]" when empty.
+func TestWriteOutputs_PlanAndModulesJSON(t *testing.T) {
+	res := selector.Result{
+		Mode:    selector.ModeNone,
+		Reasons: []string{"only documentation/governance or satellite-module changes"},
+		Modules: []selector.ModuleSelection{{Dir: "moda", Reason: "changed files in moda", Chain: []string{"moda"}}},
+		Plan: []selector.ModulePlan{
+			{Dir: ".", Path: rootModule, Reason: "not affected"},
+			{Dir: "moda", Path: rootModule + "/moda", Selected: true, Reason: "changed files in moda", Chain: []string{"moda"}},
+		},
+	}
+	out := t.TempDir()
+	if err := writeOutputs(out, res, "summary"); err != nil {
+		t.Fatalf("writeOutputs: %v", err)
+	}
+
+	modules, err := os.ReadFile(filepath.Join(out, "modules.json"))
+	if err != nil {
+		t.Fatalf("reading modules.json: %v", err)
+	}
+	if string(modules) != "[\"moda\"]\n" {
+		t.Fatalf("modules.json = %q, want %q", modules, "[\"moda\"]\n")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(out, "plan.json"))
+	if err != nil {
+		t.Fatalf("reading plan.json: %v", err)
+	}
+	var plan struct {
+		Global  bool     `json:"global"`
+		Reasons []string `json:"reasons"`
+		Root    struct {
+			Mode     string   `json:"mode"`
+			Selected []string `json:"selected"`
+		} `json:"root"`
+		Modules []struct {
+			Dir      string   `json:"dir"`
+			Path     string   `json:"path"`
+			Selected bool     `json:"selected"`
+			Reason   string   `json:"reason"`
+			Chain    []string `json:"chain"`
+		} `json:"modules"`
+	}
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatalf("plan.json is not valid JSON: %v\n%s", err, raw)
+	}
+	if plan.Global || plan.Root.Mode != "none" || plan.Root.Selected == nil || len(plan.Modules) != 2 {
+		t.Fatalf("plan.json = %+v, want root mode none, selected [] (not null) and both modules", plan)
+	}
+	if m := plan.Modules[1]; m.Dir != "moda" || !m.Selected || m.Path != rootModule+"/moda" || m.Reason == "" {
+		t.Fatalf("plan.json modules[1] = %+v, want moda selected with its path and reason", m)
 	}
 }
