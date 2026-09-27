@@ -140,7 +140,7 @@ Every current root-module package appears once. "Stay" means the package already
 | `encryption` | Contract | — | Stay | — |
 | `eventadapter` | Contract | — (+ protobuf runtime) | Stay | — |
 | `ego` (`publisher.go`) | Contract inside runtime package | `egopb` | `port/publishing` + aliases in `ego` | S1a done (#116); S1b done (publishers import `port/publishing`) |
-| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/<name>` (exact name left to #103) | S3, #103 |
+| `ego` (`behavior.go`, `saga.go`) | Contract coupled to GoAkt (`extension.Dependency`) | — | `port/behavior`, proposed in `ego-arch-002-s3/design.md` §5.1 (name confirmed 2026-09-27, #123) | S3, #123 |
 | `ego` (engine, actors, options, logger, telemetry, projection runner) | GoAkt runtime adapter | 13 first-party packages | Stay in `ego` for v4; separation shaped by the runtime SPI | S4, #11 |
 | `ego` (`option.go`: `Config`, `NewConfig`, `Config.GoaktOptions`; `engine.go`: `NewEngine`, `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers`) | Composition-root helpers, mixed into the runtime adapter | (same package as above) | Stay in `ego` for v4; destination defined by #105 (section 4.1) | #105 |
 | `internal/extensions` | GoAkt runtime adapter | `encryption`, `eventadapter`, `eventstream`, `offsetstore`, `persistence`, `projection` | Stay; moves with the runtime adapter | S4, #11 |
@@ -286,8 +286,8 @@ Limits: the S1 prototype covered Kafka only, over two rounds on a loaded host. M
 
 | Decision | Why it is open | Who closes it |
 |---|---|---|
-| Protobuf policy: are `egopb` and `proto.Message` part of the supported public contract? | It decides whether `persistence`, `offsetstore` and `port/publishing` may keep importing `egopb`, and whether `command`, `eventadapter` and `projection` may keep importing the protobuf runtime. Removing GoAkt does not answer it. | A follow-up ADR before any contract drops or wraps `egopb` |
+| Protobuf policy: are `egopb` and `proto.Message` part of the supported public contract? | **Decided 2026-09-26:** yes. `egopb` and `proto.Message` remain a supported public contract for all of v4 and are revisited at the next major release. Rationale: archcheck's `contract-allowlist` already admits `egopb` and the protobuf runtime in contracts, and dropping them would break every behavior signature for no runtime-decoupling gain. | Maintainers (closed); revisit at the next major |
 | Module path `github.com/pablogore/ego/v4` versus the repository `getsyntegrity/ego` | The proxy resolves the path through a GitHub redirect. Migrating the path is a breaking import change for every consumer. | Maintainers, before the first release |
 | First published root version | Nested modules require `v4.4.3`, which does not exist; no tags exist in either repository. | Release owner, together with #111's release verification |
 | Composition root destination | Assembly is split today between package `ego` (`NewConfig`, `GoaktOptions`, `NewEngine`, publisher registration) and the consumer's `main` (section 4.1). This ADR only classifies it. | #105 |
-| Alias deprecation window | Aliases keep v4 compatible; whether and when to mark them `Deprecated:` is not decided. | S1 implementer, recorded in the S1 PR |
+| Alias deprecation window | **Decided 2026-09-26:** deprecate first, no break inside v4. Every temporary alias and deprecated API (`EntityKind`, the S1 publisher aliases in package `ego`, and whatever S3 adds) is marked `Deprecated:` and removed at the major release introduced by #124, not earlier. Rationale: #124 already plans the major that empties the root package, so one removal point keeps v4 compatible and gives consumers a single migration. | Maintainers (closed); removal executed by #124 |
