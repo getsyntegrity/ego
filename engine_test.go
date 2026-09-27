@@ -983,23 +983,69 @@ func TestEngineClusterMode(t *testing.T) {
 // registry was only populated by its own (never-issued) Entity() calls.
 func TestEngineMultiNodeRemoteEntitySpawn(t *testing.T) {
 	ctx := context.Background()
-	host := "127.0.0.1"
 
-	ports := dynaport.Get(6)
-	gossipAddrs := []string{
-		net.JoinHostPort(host, strconv.Itoa(ports[0])),
-		net.JoinHostPort(host, strconv.Itoa(ports[3])),
+	cluster := newTestCluster(t,
+		[]Option{WithEntityKinds(new(AccountEventSourcedBehavior))},
+		[]Option{WithEntityKinds(new(AccountEventSourcedBehavior))},
+	)
+	engine1 := cluster.engines[0]
+
+	// Only node1 spawns. With RoundRobin placement over two members, a run of
+	// spawns is guaranteed to place some entities on node2, which never called
+	// Entity() itself.
+	for range 8 {
+		entityID := uuid.NewString()
+		require.NoError(t, engine1.Entity(ctx, NewEventSourcedEntity(entityID)),
+			"remote spawn must succeed on a node that never called Entity() itself")
+
+		// SpawnOn (and therefore Entity) only returns once the actor's
+		// registry record is written to the cluster store, so the entity is
+		// immediately addressable from this node — no retry needed.
+		state, _, err := engine1.SendCommand(ctx, entityID, &testpb.CreateAccount{
+			AccountBalance: 100,
+		}, time.Minute)
+		require.NoError(t, err)
+		account, ok := state.(*testpb.Account)
+		require.True(t, ok)
+		assert.EqualValues(t, 100, account.GetAccountBalance())
+	}
+}
+
+// testCluster is a cluster of eGo engines started in one process by
+// newTestCluster. systems[i] and engines[i] belong to node i.
+type testCluster struct {
+	systems []goakt.ActorSystem
+	engines []*Engine
+}
+
+// newTestCluster starts one clustered actor system and eGo engine per entry
+// of nodeOpts, all in this process, and waits until every node sees all the
+// others as peers. Each node gets its own in-memory events store and
+// DiscardLogger; nodeOpts[i] adds node i's options (for example its entity
+// kinds). Nodes discover each other through mockClusterProvider, and their
+// cluster config registers ClusterKinds() with GoAkt's default RoundRobin
+// placement, so a run of SpawnOn calls from one node places some actors on
+// the others. Engines and actor systems are stopped at test cleanup.
+func newTestCluster(t *testing.T, nodeOpts ...[]Option) *testCluster {
+	t.Helper()
+	ctx := context.Background()
+	host := "127.0.0.1"
+	nodes := len(nodeOpts)
+	require.GreaterOrEqual(t, nodes, 2, "a test cluster needs at least two nodes")
+
+	// Three ports per node: gossip, peers and remoting.
+	ports := dynaport.Get(3 * nodes)
+	gossipAddrs := make([]string, nodes)
+	for i := range nodes {
+		gossipAddrs[i] = net.JoinHostPort(host, strconv.Itoa(ports[3*i]))
 	}
 
-	newNode := func(gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
+	newNode := func(opts []Option, gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
 		store := testkit.NewEventsStore()
 		require.NoError(t, store.Connect(ctx))
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-		cfg := NewConfig(store,
-			WithLogger(DiscardLogger),
-			WithEntityKinds(new(AccountEventSourcedBehavior)),
-		)
+		cfg := NewConfig(store, append([]Option{WithLogger(DiscardLogger)}, opts...)...)
 
 		provider := &mockClusterProvider{id: "test", peers: gossipAddrs}
 		clusterCfg := goakt.NewClusterConfig().
@@ -1021,57 +1067,57 @@ func TestEngineMultiNodeRemoteEntitySpawn(t *testing.T) {
 		return sys, cfg
 	}
 
-	sys1, cfg1 := newNode(ports[0], ports[1], ports[2])
-	sys2, cfg2 := newNode(ports[3], ports[4], ports[5])
-
-	// start both nodes concurrently so they bootstrap the cluster together
-	errs := make(chan error, 2)
-	go func() { errs <- sys1.Start(ctx) }()
-	go func() { errs <- sys2.Start(ctx) }()
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	t.Cleanup(func() {
-		_ = sys1.Stop(context.Background())
-		_ = sys2.Stop(context.Background())
-	})
-
-	// wait until both nodes see each other as peers
-	require.Eventually(t, func() bool {
-		peers1, err1 := sys1.Peers(ctx, time.Second)
-		peers2, err2 := sys2.Peers(ctx, time.Second)
-		return err1 == nil && err2 == nil && len(peers1) == 1 && len(peers2) == 1
-	}, 30*time.Second, 500*time.Millisecond, "the two nodes never formed a cluster")
-
-	engine1, err := NewEngine(sys1, cfg1)
-	require.NoError(t, err)
-	require.NoError(t, engine1.Start(ctx))
-	engine2, err := NewEngine(sys2, cfg2)
-	require.NoError(t, err)
-	require.NoError(t, engine2.Start(ctx))
-	t.Cleanup(func() {
-		_ = engine1.Stop(context.Background())
-		_ = engine2.Stop(context.Background())
-	})
-
-	// Only node1 spawns. With RoundRobin placement over two members, a run of
-	// spawns is guaranteed to place some entities on node2, which never called
-	// Entity() itself.
-	for range 8 {
-		entityID := uuid.NewString()
-		require.NoError(t, engine1.Entity(ctx, NewEventSourcedEntity(entityID)),
-			"remote spawn must succeed on a node that never called Entity() itself")
-
-		// SpawnOn (and therefore Entity) only returns once the actor's
-		// registry record is written to the cluster store, so the entity is
-		// immediately addressable from this node — no retry needed.
-		state, _, err := engine1.SendCommand(ctx, entityID, &testpb.CreateAccount{
-			AccountBalance: 100,
-		}, time.Minute)
-		require.NoError(t, err)
-		account, ok := state.(*testpb.Account)
-		require.True(t, ok)
-		assert.EqualValues(t, 100, account.GetAccountBalance())
+	cluster := &testCluster{
+		systems: make([]goakt.ActorSystem, nodes),
+		engines: make([]*Engine, nodes),
 	}
+	configs := make([]*Config, nodes)
+	for i, opts := range nodeOpts {
+		cluster.systems[i], configs[i] = newNode(opts, ports[3*i], ports[3*i+1], ports[3*i+2])
+	}
+
+	// start all nodes concurrently so they bootstrap the cluster together
+	errs := make(chan error, nodes)
+	for _, sys := range cluster.systems {
+		go func() { errs <- sys.Start(ctx) }()
+	}
+	for range nodes {
+		require.NoError(t, <-errs)
+	}
+	t.Cleanup(func() {
+		for _, sys := range cluster.systems {
+			_ = sys.Stop(context.Background())
+		}
+	})
+
+	// wait until every node sees all the others as peers
+	require.Eventually(t, func() bool {
+		for _, sys := range cluster.systems {
+			peers, err := sys.Peers(ctx, time.Second)
+			if err != nil || len(peers) != nodes-1 {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "the nodes never formed a cluster")
+
+	// Registered before the start loop so that, if one engine fails to
+	// build or start, the engines already started are still stopped.
+	t.Cleanup(func() {
+		for _, engine := range cluster.engines {
+			if engine != nil {
+				_ = engine.Stop(context.Background())
+			}
+		}
+	})
+	for i, sys := range cluster.systems {
+		engine, err := NewEngine(sys, configs[i])
+		require.NoError(t, err)
+		cluster.engines[i] = engine
+		require.NoError(t, engine.Start(ctx))
+	}
+
+	return cluster
 }
 
 // TestParseCommandReply pins the reply-decoding contract.
