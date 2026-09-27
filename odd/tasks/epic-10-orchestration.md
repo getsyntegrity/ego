@@ -125,7 +125,7 @@ history of this file.
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
 | W1b2 | #122 tidy -diff gate | — | — | planned | after #133 merges (docs/ci.md, CI serialization) |
 | W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
-| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 | fixing (V5 §D4a line, docs/ci.md rows, sync with main) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
+| W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | ready to merge (V5 §D4a line, docs/ci.md rows, main merged in cleanly; CI green) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
 | W1c-3 | #105 IMPL-3 | — | — | planned | after IMPL-2 |
 | W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
