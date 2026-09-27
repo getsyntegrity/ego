@@ -87,15 +87,29 @@ func newSnapshotsWriterActor() *snapshotsWriterActor {
 }
 
 // PreStart loads the snapshot store and optional encryptor from the actor
-// system extensions.
+// system extensions. Both are genuinely optional here: a missing
+// registration is not an error, but a mismatched type registered under
+// either extension ID is (see optionalExtension in extension_lookup.go and
+// issue #99).
 func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
 	a.logger = kitLoggerFrom(ctx.Logger())
-	if ext := ctx.Extension(extensions.SnapshotStoreExtensionID); ext != nil {
-		a.snapshotStore = ext.(*extensions.SnapshotStoreExt).Underlying()
+
+	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	if err != nil {
+		return err
 	}
-	if ext := ctx.Extension(extensions.EncryptorExtensionID); ext != nil {
-		a.encryptor = ext.(*extensions.EncryptorExtension).Encryptor()
+	if snapshotStoreExt != nil {
+		a.snapshotStore = snapshotStoreExt.Underlying()
 	}
+
+	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	if err != nil {
+		return err
+	}
+	if encryptorExt != nil {
+		a.encryptor = encryptorExt.Encryptor()
+	}
+
 	return nil
 }
 
