@@ -47,6 +47,8 @@ Each behavior is passed to GoAkt as a spawn dependency at three sites:
 - `Engine.DurableStateEntity`: `engine.go:911`, `engine.go:925` and `engine.go:932` (`SpawnOn`).
 - `Engine.Saga`: `engine.go:1310`, `engine.go:1326` and `engine.go:1332` (`Spawn`).
 
+All numbers were verified on `origin/main` at `77beda6`. The GoAkt spawn calls are at `engine.go:699`, `932` and `1332`. #123's text cites `692`, `925` and `1326`, which are the lines that build the dependency slice, not the lines that spawn. (`Config.GoaktOptions` starts at `option.go:122`; S3 does not change it.)
+
 `NewEngine` also registers the configured kinds with `actorSys.Inject(dependencies...)` (`engine.go:253-259`).
 
 In GoAkt v4.5.4 the dependencies are serialized in these places:
