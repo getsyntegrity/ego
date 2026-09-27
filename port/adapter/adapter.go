@@ -157,15 +157,17 @@ func PingerOf(v any) (Pinger, bool) {
 }
 
 // isNil reports whether v is nil or holds a nil value of a kind that can
-// be nil (a typed-nil pointer, map, slice, func, channel or interface).
-// It inspects nilness only; it never discovers methods.
+// be nil (a typed-nil pointer, map, slice, func, channel or unsafe
+// pointer), the same kind set as compose's isTypedNil. reflect.ValueOf
+// never reports an Interface kind for a value stored in an any, so that
+// kind is not listed. It inspects nilness only; it never discovers methods.
 func isNil(v any) bool {
 	if v == nil {
 		return true
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
 		return rv.IsNil()
 	default:
 		return false

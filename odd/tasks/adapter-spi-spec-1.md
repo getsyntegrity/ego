@@ -34,7 +34,10 @@ wrong constraint) and widening `composition-leaf` (it exempts `main` packages), 
 
 ## Scope and constraints
 
-- File ownership: exactly the spec's list, plus `CHANGELOG.md` and this document. Not touched:
+- File ownership: the spec's list, plus `CHANGELOG.md`, this document and
+  `internal/cmd/archcheck/e2e_test.go` (an end-to-end fixture for the new rule; it is outside the
+  spec's `internal/cmd/archcheck/rules/*_test.go` glob, within the coordinator's
+  `internal/cmd/archcheck/**` scope). Not touched:
   `engine.go`, `port/runtime`, `spawn_config.go`, `saga.go`, `supervisor.go`, `compose/`, publisher
   production code, `.github/`.
 - Additive in v4: no method added to any existing interface; apidiff additions only.
