@@ -381,6 +381,12 @@ pull the module into the root module's own build:
    `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
    sets; a local run leaves it off by default, per this repository's own
    rule against running the race detector locally.
+6. When the module has any file gated behind the `compat` build tag,
+   `go vet -tags compat ./...`, `golangci-lint run --build-tags compat`
+   and (only when the module has tests) `go test -tags compat ./...` run
+   too, right after their untagged equivalents — the compatibility lane;
+   see "Compatibility lane (#122)" below. A module with no compat-tagged
+   file skips this step entirely.
 
 Any of these steps failing fails the module's own job, and therefore the
 whole check — a Kafka build error, a Kafka lint finding or a Kafka test
@@ -401,6 +407,148 @@ whatever the module selection rules above decided for that PR. The module
 list is never hand-maintained: it comes from `modules.json`, so a new
 nested module is picked up the moment its `go.mod` exists, with no
 workflow edit.
+
+### Compatibility lane (#122)
+
+S1b (above) switched the four publishers' *production* build to
+`port/publishing`, but each module's *tests* still imported package `ego`
+directly, through `compat_test.go`, to check the historical S1
+compatibility aliases (`ego.EventPublisher`, `ego.StatePublisher`,
+`ego.ErrPublisherNotStarted` — ADR `ego-arch-001` §5, S1 criterion 3, kept
+until [#124](https://github.com/getsyntegrity/ego/issues/124)). That import
+pulled the whole GoAkt runtime back into `go list -deps -test ./...`: 45
+GoAkt packages and the root package itself, even though production code
+never touched either. `#122` fixes the *test* closure the same way S1b fixed
+the production one, without weakening the compatibility check itself.
+
+**Mechanism: a build tag, not a new module or package.** Each publisher's
+`compat_test.go` now starts with `//go:build compat` and keeps only the
+`ego`-alias assertions; a new `publisher_contract_test.go`, with no build
+tag, keeps the equivalent `publishing`-only assertions, so the default
+build never has to choose between "test the aliases" and "test the
+contract" — it always gets the contract, and the alias check moves to a
+second, explicit build. `go build`, `go test` and `go list` all skip a file
+whose build tag is unset by default, so `go list -deps -test ./...` (no
+`-tags`) no longer sees `compat_test.go`'s import of `ego` at all, and
+therefore never resolves GoAkt for it either. Passing `-tags=compat`
+restores exactly the old, single-file behavior.
+
+Two alternatives were rejected:
+
+- **A subpackage inside the same module** (e.g. `publisher/kafka/compat`).
+  `go list -deps -test ./...` at the module root already walks every
+  subpackage, so this would not remove anything from the closure the
+  acceptance criteria measure — it only adds indirection.
+- **A separate nested Go module per publisher** (its own `go.mod` under
+  `publisher/kafka/compat/`). Promoting a boundary to its own module is a
+  heavier decision, gated on design.md §6 (a real benefit beyond compile
+  time, its own CI discovery, a release story, no hidden coupling); a
+  four-line historical alias check does not clear that bar, and it would
+  need a change to `internal/cmd/ciselect`'s nested-module discovery, which
+  #122 is explicitly scoped to avoid (see below).
+- **A separate GitHub Actions job**, distinct from the `modules` matrix job,
+  dedicated to the compatibility lane. This would need its own selection
+  logic duplicating (or worse, diverging from) the module-selection rules
+  above, its own checkout/setup-go/golangci-lint-install steps, and its own
+  `needs:`/`if:` wiring in both `pull_request.yml` and `build.yml` — for a
+  check whose environment (the module's own `go.mod`, its checked-in
+  `replace`, `GOWORK=off`, the same `GO_TEST_RACE` policy) is otherwise
+  identical to the module job that already exists. Running it as additional
+  steps inside the same `verify-module.sh` invocation, for the same module,
+  gets an equally separate `go test -tags compat ./...` build (Go treats a
+  different `-tags` value as a wholly separate build; nothing here shares a
+  package cache entry with the untagged build) without duplicating any
+  workflow wiring, and it needed zero changes to either workflow file.
+
+**Where it runs: the same module job, one conditional step.**
+`scripts/ci/verify-module.sh` now detects a `compat`-tagged file in the
+module it is verifying (`grep -rl '^//go:build compat$'`) and, only when one
+exists, runs `go vet -tags compat ./...`, `golangci-lint run --build-tags
+compat ...` and `go test -tags compat ./...` immediately after the
+untagged equivalents — inside the same `modules` matrix job described
+above, with the same `replace`, the same `GOWORK=off`, and the same
+`GO_TEST_RACE` policy. No new workflow job, and no change to
+`pull_request.yml` or `build.yml`: a module with no compat-tagged file (all
+of `benchmark`, `example/cluster`, and any future nested module without one)
+pays nothing extra.
+
+**Why this is required-equivalent, with no `ciselect` change.**
+`internal/cmd/ciselect` decides whether a publisher module is selected at
+all by parsing every `.go` file in it — including `_test.go` files — with
+`go/parser` in imports-only mode (`discoverModuleImports`,
+`internal/cmd/ciselect/main.go`). That parser never evaluates build
+constraints, so it still sees `compat_test.go`'s `import
+"github.com/pablogore/ego/v4"` exactly as before the build tag was added.
+Consequently:
+
+- A change confined to `publisher/kafka/compat_test.go` alone still selects
+  `publisher/kafka` (rule: "changed files in the module's own directory"),
+  so the compatibility lane runs whenever that file itself changes.
+- A change to a root `.go` file — including `publisher.go`, where the S1
+  aliases live — is a full-fallback path, so `ciselect`'s root lane reports
+  mode `full`, whose `Selected` set is every included root package; every
+  nested module that imports any of them, which today means every nested
+  module, is selected too (reason: "imports affected root package
+  `github.com/pablogore/ego/v4`"). Observed with `ciselect -changed
+  <publisher.go>`: mode `full`, `modules.json` =
+  `["benchmark","example/cluster","publisher/kafka","publisher/nats","publisher/pulsar","publisher/websocket"]`.
+
+So a PR that could actually break an alias always selects the four
+publisher modules, and each selected module's job now runs the
+compatibility lane. No branch-protection or required-check change was
+needed either way: this repository has none configured today (see the
+baseline table below), so "required" here means "the same `modules` job
+that already gates every other publisher check," not a GitHub-enforced
+status.
+
+**What did *not* change: `go.mod`, `go.sum`, the module graph.**
+`go mod tidy -diff` reports no diff in any of the four publishers, before or
+after. `go mod tidy` has no `-tags` flag (`go help mod tidy`), so — unlike
+`go build`/`go test`/`go list`, which only look at the default build unless
+told otherwise — it conservatively keeps requirements for every custom
+build tag a module's files use, including `compat`. `github.com/tochemey/goakt/v4`
+therefore stays an indirect requirement in every publisher's `go.mod`,
+needed to build the compatibility lane, and `go.sum` keeps its checksums,
+so `go test -tags compat ./...` never needs a network fetch. The win is
+entirely in the *test-compilation* closure (`go list -deps -test ./...`),
+not the module graph (`go mod graph`, byte-for-byte unchanged) or the
+declared requirements. Measured per publisher, `GOWORK=off`:
+
+| Module | prod deps | default test-closure deps | default test-closure GoAkt/root | compat-tagged test-closure deps | `go mod tidy -diff` |
+|---|---|---|---|---|---|
+| kafka | 299 (unchanged) | 611 → 313 | 45+1 → 0 | 611 (unchanged) | no diff |
+| nats | 256 (unchanged) | 565 → 273 | 45+1 → 0 | 565 (unchanged) | no diff |
+| pulsar | 577 (unchanged) | 822 → 585 | 45+1 → 0 | 822 (unchanged) | no diff |
+| websocket | 239 (unchanged) | 551 → 256 | 45+1 → 0 | 551 (unchanged) | no diff |
+
+("default" = `go list -deps[-test] ./...`, no `-tags`; "compat-tagged" = the
+same command with `-tags compat`, which reproduces the pre-#122 closure
+exactly, confirming the historical check still exercises everything it
+used to.)
+
+**Regression guard.** Each publisher module gained
+`TestUnitTestClosureExcludesRuntimeAndRoot`, which shells out to `go list
+-deps -test ./...` from inside the test binary and fails if
+`github.com/tochemey/goakt/v4` (any subpackage) or the root package
+reappears. It is a normal, untagged test, so it runs on every `go test
+./...` and fails first if this ever regresses; it was observed failing
+(RED) against the pre-#122, single-file `compat_test.go` before the split.
+
+**Timing.** Clean-`GOCACHE` `go test -count=1 ./...` wall time, one
+machine, Go 1.27.1, no `-race` (this repository's local rule — CI's own
+`-race` numbers are a separate, later measurement):
+
+| Module | Before (single untagged `compat_test.go`) | After (default lane) |
+|---|---|---|
+| kafka | 30.1s | 13.3s |
+| nats | 34.0s | 15.4s |
+| pulsar | 55.8s | 29.1s |
+| websocket | 33.8s | 18.2s |
+
+The compatibility lane itself (`-tags compat`) still compiles GoAkt, so its
+own wall time stays close to the "before" column (kafka measured 26.7s) —
+expected, since it is deliberately running the same historical build the
+default lane used to run on every `go test`.
 
 ### Release verification: two different questions
 
