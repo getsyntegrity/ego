@@ -67,9 +67,9 @@ const (
 // It represents the action that a supervisor can take when an entity fails or panics
 // during message processing. Each directive corresponds to a specific recovery behavior:
 //
-//   - StopDirective: Instructs the supervisor to stop the failing actor.
-//     allowing it to continue processing messages (typically used for recoverable errors).
-//   - RestartDirective: Instructs the supervisor to restart the failing actor, reinitializing its state.
+//   - StopDirective: Instructs the supervisor to stop the failing entity
+//     (typically used when the failure is irrecoverable).
+//   - RestartDirective: Instructs the supervisor to restart the failing entity, reinitializing its state.
 type SupervisorDirective int
 
 const (
@@ -255,7 +255,8 @@ func WithTenant(id tenancy.TenantID) SpawnOption {
 // an earlier one.
 //
 // Like context.WithValue, it panics when it is called, not later at spawn, if
-// key is nil or not comparable, so a bad key fails where the option is built.
+// key is nil or its type is not comparable, so a bad key fails where the
+// option is built.
 func WithAdapterSetting(key, value any) SpawnOption {
 	if key == nil {
 		panic("eGo: runtime.WithAdapterSetting: nil key")
@@ -271,8 +272,11 @@ func WithAdapterSetting(key, value any) SpawnOption {
 	})
 }
 
-// isComparableKey reports whether key can be used as a map key without a
-// panic, with the same test context.WithValue applies.
+// isComparableKey reports whether key is non-nil and of a comparable type,
+// the same test context.WithValue applies. A key of a comparable type can
+// still panic as a map key when its dynamic value is not comparable (an
+// interface field holding a slice, for example); like context.WithValue, the
+// check is on the type only.
 func isComparableKey(key any) bool {
 	return key != nil && reflect.TypeOf(key).Comparable()
 }
