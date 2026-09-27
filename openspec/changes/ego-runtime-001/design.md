@@ -252,7 +252,7 @@ So the contract carries no write-side field, which leaves #12's decision open, a
 
 **Behavior change: nil options.** `newSpawnConfig` calls `Apply` on every option (`spawn_config.go:104-106`), so a nil `SpawnOption` panics today. `ResolveSpawnOptions` skips it. No caller can rely on that panic; S4-2's `CHANGELOG.md` entry records the change.
 
-**apidiff expectation.** The alias moves make apidiff report an incompatible change for every symbol whose declaration now names a `port/runtime` type. The spike measured 31 such lines for package `ego` (§11), of two shapes. 21 read "changed from X to X": the seven `Engine` methods that take `...SpawnOption` or return `*SagaInfo`, the five moved types, and the nine `With*` spawn options. The ten moved constants read "changed from X to github.com/pablogore/ego/v4/port/runtime.X" (for example `RoundRobin: changed from EntitiesPlacement to …/port/runtime.EntitiesPlacement`), because a constant reports its type's new qualified name. This is the cross-package-alias limitation S1 and S3 hit (ego-arch-002-s3 §6), not a real change; as there, the consumer program decides compatibility. The sentinels produce no report (their type is `error` before and after).
+**apidiff expectation.** The alias moves make apidiff report an incompatible change for every symbol whose declaration now names a `port/runtime` type. The spike measured 31 such lines for package `ego` (§11), of two shapes. 16 read "changed from X to X": the seven `Engine` methods that take `...SpawnOption` or return `*SagaInfo`, and the nine `With*` spawn options. 15 read "changed from X to github.com/pablogore/ego/v4/port/runtime.X": the five moved types (for example `SpawnOption: changed from SpawnOption to …/port/runtime.SpawnOption`) and their ten constants (for example `RoundRobin: changed from EntitiesPlacement to …/port/runtime.EntitiesPlacement`), because each now reports its type's new qualified name. This is the cross-package-alias limitation S1 and S3 hit (ego-arch-002-s3 §6), not a real change; as there, the consumer program decides compatibility. The sentinels produce no report (their type is `error` before and after).
 
 ### D4 — "Not supported"
 
@@ -418,7 +418,7 @@ PR #149 is not merged; this design is written so either outcome of its open deci
 | `compose/goakt` step 4 and `probeStores` (SPI-5) | S4-4 adds a method elsewhere in `app.go`; serialize |
 | O1: adapters must not import `compose` | S4 adds no import from an adapter module |
 
-Nothing here blocks S4-2: #149 adds no runtime port today. The constraint in row 2 must be carried into #149 (or RUNTIME-006) before runtime capabilities are defined.
+Nothing here blocks S4-2: #149 adds no runtime port today. The constraint in row 2 is already carried into #149 at head `d928228` (its §2 and follow-up F-E).
 
 ## 9. Slices
 
