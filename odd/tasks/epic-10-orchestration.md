@@ -120,6 +120,10 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    ValidationError, undeclared family sentinel; unknown family bits masked;
    one PR. Explicit follow-up: two-node cluster test through compose/goakt.
    Merge only after review + CI on the final head.
+17. (2026-09-27) Created #146 (two-node test via compose/goakt; remote
+   placement unambiguous, both directions, clean shutdown of both nodes, 5 runs).
+   D1 reaffirmed: migrate to getsyntegrity before first publish; #102 S2/S3
+   wait for F4 and that migration; #124 stays last with its planned major.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -152,12 +156,15 @@ history of this file.
 | W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
 | W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @dddcea5 | #137 | merged (ab41d3c) | DefaultShutdownTimeout 30s only when unset (open question with #24) |
 | W1c-4 | #105 IMPL-4 | feat/105-impl-4-compose-goakt @e4f0ce7 | #145 @dd14c52 | merged (f2b5130); follow-up: two-node cluster test through compose/goakt (issue draft pending approval); open for maintainer: misleading PR comment, V7 design line, G1/family shape, no split, cluster test follow-up | D7 observed: PostStop flush written to store, not delivered to publisher (for #24) | after S3-3, S3-4, IMPL-1. Must include: ctx.Err() check before each start step (approved 2026-09-27); family guard in the unexported spawn* functions; step 2 half-start self-cleanup test; compose.Spec negative ShutdownTimeout candidate |
+| W1c-5 | #105 IMPL-5 | docs/105-impl-5-example | — | in progress (from f2b5130) | example/eventssourced via compose/goakt |
+| W1c-6 | #105 IMPL-6 | — | — | blocked | compose/inmem needs #11 in-memory runtime + neutral engine API (S4) |
+| W1c-7 | #146 two-node test | — | — | planned | follow-up of #145 decision (e); issue created |
+| W2a | S4 runtime SPI (#11) | — | — | drafting (read-only) | draft goes to maintainer; includes removal of baseline migration -> ego |
+| W2b | #106 adapter SPI | docs/propose-ego-arch-004 | — | in progress (docs) | includes nested adapters -> compose dependency rule |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @e6a669e | #142 | merged (658bbae) | approved with nits, CI 8/8; maintainer chose option (c): no reflect/unsafe, per-publisher pre-Start check + identity check in test/compat, ADR note, nits; then review + CI |
 | W3-S2/S3 | #102 contracts module, publishers | — | — | planned | gated on F4 (D8) and D1 migration confirmation |
-| W2a | S4 runtime SPI (#11) | — | — | planned | issue draft needs human approval |
-| W2b | #106 | — | — | planned | after S3 and #105 IMPL-4 |
 | W4 | #124 | — | — | planned | all earlier items merged; breaking/versioning plan approved |
 | — | #134 | — | — | created | publisher module path bug under #39 |
 
