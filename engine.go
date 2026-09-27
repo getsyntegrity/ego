@@ -152,8 +152,8 @@ var (
 // BehaviorPlacementError reports why a behavior cannot be placed by the GoAkt
 // runtime: spawned in cluster mode, where GoAkt serializes it, or registered
 // as a kind with GoAkt's type registry. Despite the name, it covers
-// registration as well as spawning; EntityID is empty for a registration
-// error.
+// registration as well as spawning. EntityID is empty for a registration
+// error and for a nil or typed-nil behavior, which has no readable ID.
 //
 // Err is ErrBehaviorNotSerializable or ErrBehaviorNotPointer, so callers can
 // test the cause with errors.Is and read the details with errors.As. The
@@ -161,7 +161,8 @@ var (
 type BehaviorPlacementError struct {
 	// Kind is the Go type of the behavior, for example "*main.AccountBehavior".
 	Kind string
-	// EntityID is the spawn's entity or saga ID; empty for a registration error.
+	// EntityID is the spawn's entity or saga ID; empty for a registration
+	// error or a nil behavior.
 	EntityID string
 	// Err is the cause: ErrBehaviorNotSerializable or ErrBehaviorNotPointer.
 	Err error
@@ -171,7 +172,8 @@ type BehaviorPlacementError struct {
 // and the cause.
 func (e *BehaviorPlacementError) Error() string {
 	if e.EntityID == "" {
-		return fmt.Sprintf("eGo: cannot register behavior kind %s: %v", e.Kind, e.Err)
+		// Kind registration, or a nil behavior with no readable ID.
+		return fmt.Sprintf("eGo: cannot register or place behavior %s: %v", e.Kind, e.Err)
 	}
 	return fmt.Sprintf("eGo: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
 }

@@ -115,6 +115,26 @@ lint `0 issues`, tests pass, including the `compat` lane where present). Root go
 (`--new-from-rev=origin/main ./...`, Go 1.26.6, local `go mod vendor`, not committed): `0 issues`.
 CI is authoritative for lint and the race lane.
 
+## Review follow-up (PR #139, approve with nits)
+
+- [x] **T6** Reject nil and typed-nil behaviors up front in `spawnDependency`, in every mode, with
+  `*BehaviorPlacementError` wrapping `ErrBehaviorNotPointer` (no new exported error). Before, outside
+  cluster mode a nil behavior was wrapped in `LocalBehavior` and the spawn panicked at `behavior.ID()`,
+  and in cluster mode a nil or typed-nil domain-only behavior got `ErrBehaviorNotSerializable` (wrong
+  cause). Reworded the "never registered" docs on `LocalBehavior` and `spawnDependency` (GoAkt's
+  child-spawn path does `Inject` its dependencies, `actor/pid.go:3648`), and reflowed the
+  `dispatchToBehavior` comments. `BehaviorPlacementError.Error()` with an empty `EntityID` now says
+  "cannot register or place".
+  - RED: new `TestSpawnDependency/nil_and_typed-nil_behaviors_are_rejected_in_every_mode` (7 behaviors
+    × 2 modes) failed (`Expected nil, but got: &extensions.LocalBehavior{behavior:… (nil)}`); new
+    `TestEngineRejectsNilBehaviorsSingleNode` failed in all 9 cases (nil and typed-nil, three
+    families, old API and unexported functions) with `should not panic … nil pointer dereference`;
+    the new cluster-mode subtest failed in 6 of 9 cases with the wrong cause (the 3 typed-nil
+    serializable ones already got `ErrBehaviorNotPointer`).
+  - GREEN: all pass, with no panic and no change in `NumActors`. The existing cluster tests pass, as
+    do archcheck (unchanged) and apidiff (the same three additions only). golangci-lint on
+    `. ./internal/extensions/` with Go 1.26.6: `0 issues`.
+
 ## Next step
 
 S3-3 (public `SpawnEventSourced`/`SpawnDurableState`/`SpawnSaga`, two-node test helper, remote-spawn

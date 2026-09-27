@@ -222,18 +222,102 @@ func TestSpawnDependency(t *testing.T) {
 		}
 	})
 
-	t.Run("nil pointer is not a pointer GoAkt can register", func(t *testing.T) {
-		sys := &placementProbeSystem{inCluster: true}
-		var b *AccountEventSourcedBehavior
-
-		dep, err := spawnDependency(sys, b)
-		require.Nil(t, dep)
-		require.ErrorIs(t, err, ErrBehaviorNotPointer)
-		var placement *BehaviorPlacementError
-		require.ErrorAs(t, err, &placement)
-		assert.Empty(t, placement.EntityID, "a nil pointer has no readable ID")
-		assert.Empty(t, sys.injected)
+	t.Run("nil and typed-nil behaviors are rejected in every mode", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			behavior interface{ ID() string }
+			kind     string
+		}{
+			{"nil", nil, "<nil>"},
+			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*ego.AccountEventSourcedBehavior"},
+			{"typed-nil domain-only event-sourced", (*domainOnlyEventSourced)(nil), "*ego.domainOnlyEventSourced"},
+			{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*ego.AccountDurableStateBehavior"},
+			{"typed-nil domain-only durable state", (*domainOnlyDurableState)(nil), "*ego.domainOnlyDurableState"},
+			{"typed-nil serializable saga", (*testSagaBehavior)(nil), "*ego.testSagaBehavior"},
+			{"typed-nil domain-only saga", (*domainOnlySaga)(nil), "*ego.domainOnlySaga"},
+		}
+		for _, inCluster := range []bool{false, true} {
+			for _, tc := range cases {
+				sys := &placementProbeSystem{inCluster: inCluster}
+				dep, err := spawnDependency(sys, tc.behavior)
+				require.Nil(t, dep, "%s inCluster=%v", tc.name, inCluster)
+				require.ErrorIs(t, err, ErrBehaviorNotPointer, "%s inCluster=%v", tc.name, inCluster)
+				var placement *BehaviorPlacementError
+				require.ErrorAs(t, err, &placement)
+				assert.Equal(t, tc.kind, placement.Kind)
+				assert.Empty(t, placement.EntityID, "a nil behavior has no readable ID")
+				assert.Empty(t, sys.injected)
+			}
+		}
 	})
+}
+
+// nilBehaviorSpawns returns one spawn per family for a nil behavior and for
+// typed-nil pointers, through the old public API and the unexported spawn
+// functions. Each must be rejected before it reaches GoAkt.
+func nilBehaviorSpawns(ctx context.Context, engine *Engine) []struct {
+	name  string
+	spawn func() error
+} {
+	return []struct {
+		name  string
+		spawn func() error
+	}{
+		{"Entity nil", func() error { return engine.Entity(ctx, nil) }},
+		{"Entity typed-nil", func() error { return engine.Entity(ctx, (*AccountEventSourcedBehavior)(nil)) }},
+		{"spawnEventSourced typed-nil domain-only", func() error {
+			return engine.spawnEventSourced(ctx, (*domainOnlyEventSourced)(nil))
+		}},
+		{"DurableStateEntity nil", func() error { return engine.DurableStateEntity(ctx, nil) }},
+		{"DurableStateEntity typed-nil", func() error {
+			return engine.DurableStateEntity(ctx, (*AccountDurableStateBehavior)(nil))
+		}},
+		{"spawnDurableState typed-nil domain-only", func() error {
+			return engine.spawnDurableState(ctx, (*domainOnlyDurableState)(nil))
+		}},
+		{"Saga nil", func() error { return engine.Saga(ctx, nil, 0) }},
+		{"Saga typed-nil", func() error { return engine.Saga(ctx, (*testSagaBehavior)(nil), 0) }},
+		{"spawnSaga typed-nil domain-only", func() error { return engine.spawnSaga(ctx, (*domainOnlySaga)(nil), 0) }},
+	}
+}
+
+// requireNilBehaviorsRejected runs every nilBehaviorSpawns case against
+// engine: each returns a *BehaviorPlacementError wrapping
+// ErrBehaviorNotPointer, does not panic, and spawns nothing.
+func requireNilBehaviorsRejected(t *testing.T, engine *Engine) {
+	t.Helper()
+	ctx := context.Background()
+	sys := engine.ActorSystem()
+	for _, tc := range nilBehaviorSpawns(ctx, engine) {
+		t.Run(tc.name, func(t *testing.T) {
+			before := sys.NumActors()
+			var err error
+			require.NotPanics(t, func() { err = tc.spawn() })
+			require.ErrorIs(t, err, ErrBehaviorNotPointer)
+			var placement *BehaviorPlacementError
+			require.ErrorAs(t, err, &placement)
+			assert.Empty(t, placement.EntityID)
+			assert.Equal(t, before, sys.NumActors(), "nothing may be spawned for a nil behavior")
+		})
+	}
+}
+
+// TestEngineRejectsNilBehaviorsSingleNode covers nil and typed-nil
+// behaviors outside cluster mode, where a non-serializable behavior would
+// otherwise be carried by a LocalBehavior and its ID read at spawn.
+func TestEngineRejectsNilBehaviorsSingleNode(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "NilBehaviors", store, WithLogger(DiscardLogger), WithStateStore(stateStore))
+	require.NoError(t, engine.Start(ctx))
+
+	requireNilBehaviorsRejected(t, engine)
 }
 
 func TestBehaviorPlacementError(t *testing.T) {
@@ -402,6 +486,10 @@ func TestEngineRejectsUnplaceableBehaviorsInClusterMode(t *testing.T) {
 			assert.False(t, exists, "nothing may be spawned for a rejected behavior")
 		})
 	}
+
+	t.Run("nil and typed-nil behaviors", func(t *testing.T) {
+		requireNilBehaviorsRejected(t, engine)
+	})
 
 	// A serializable pointer behavior still spawns and answers in cluster mode.
 	id := uuid.NewString()

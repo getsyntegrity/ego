@@ -388,10 +388,16 @@ func (x *EntityConfig) UnmarshalBinary(data []byte) error {
 var errLocalOnly = errors.New("eGo: this behavior has no MarshalBinary/UnmarshalBinary; it runs on its local node only and cannot be serialized")
 
 // LocalBehavior carries a behavior that cannot be serialized to a spawn on
-// the local node, as a GoAkt spawn dependency. It is never registered with
-// ActorSystem.Inject and never serialized: the engine hands one to GoAkt only
-// outside cluster mode, where GoAkt serializes no spawn dependency for
-// spawning or relocation (ego-arch-002-s3 design, §5.3).
+// the local node, as a GoAkt spawn dependency. The engine hands one to GoAkt
+// only outside cluster mode, where GoAkt serializes no spawn dependency for
+// spawning or relocation (ego-arch-002-s3 design, §5.3), so it is never
+// serialized.
+//
+// The engine never passes a LocalBehavior, or the behavior it wraps, to
+// ActorSystem.Inject. GoAkt itself registers the dependencies of a child
+// spawn (PID.SpawnChild) with Inject; if one ever carried a LocalBehavior,
+// that would register only the wrapper's own pointer type, which GoAkt's
+// type registry accepts, never the wrapped behavior's type.
 //
 // Its ID is the behavior's ID, so the dependency key GoAkt uses is the same
 // as when the behavior itself is the dependency. Its serialization methods

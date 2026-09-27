@@ -495,9 +495,9 @@ func (entity *DurableStateActor) provablyInSyncAfterConflict(err error) bool {
 // dispatchToBehavior invokes entity.behavior against cmd, preferring
 // HandleEnvelope over HandleCommand when both entity.behavior implements
 // behaviorport.DurableStateEnvelope (DurableStateEnvelopeBehavior is one)
-// and a command.Metadata is available on ctx
-// (#60, M-3). See EventSourcedActor.dispatchToBehavior for the full
-// rationale — this mirrors it for the durable-state path.
+// and a command.Metadata is available on ctx (#60, M-3). See
+// EventSourcedActor.dispatchToBehavior for the full rationale — this
+// mirrors it for the durable-state path.
 func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
 	envBehavior, ok := entity.behavior.(behaviorport.DurableStateEnvelope)
 	if !ok {

@@ -758,8 +758,9 @@ func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
 // dispatchToBehavior invokes entity.behavior against cmd, preferring
 // HandleEnvelope over HandleCommand when both entity.behavior implements
 // behaviorport.EventSourcedEnvelope (EventSourcedEnvelopeBehavior is one)
-// and a command.Metadata is available on goCtx (#60, M-3). goCtx must already be unwrapped from the receiving
-// ReceiveContext via ctx.Context(): on a local dispatch this is the same
+// and a command.Metadata is available on goCtx (#60, M-3). goCtx must
+// already be unwrapped from the receiving ReceiveContext via
+// ctx.Context(): on a local dispatch this is the same
 // context.Context Engine.Dispatch attached a command.Carrier to (see
 // command_context.go), so metadataFromContext rematerializes it here
 // without any wire-format change. Any behavior that does not implement the

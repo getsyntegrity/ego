@@ -36,22 +36,31 @@ import (
 // (ego-arch-002-s3 design, §5.3). It is the one place where the engine
 // decides how a behavior reaches GoAkt:
 //
+//   - A nil behavior or a typed-nil pointer is rejected in every mode with a
+//     *BehaviorPlacementError wrapping ErrBehaviorNotPointer and an empty
+//     EntityID, since it has no ID the spawn could read.
 //   - A non-nil pointer that implements extension.Dependency is returned
 //     unchanged, after registering its type with sys.Inject, in and out of
 //     cluster mode. The GoAkt type name and wire bytes stay exactly the
 //     caller's, so nodes on either side of an upgrade keep decoding each
 //     other's spawns and relocations.
 //   - Anything else outside cluster mode is wrapped in an
-//     extensions.LocalBehavior, which is never registered and never
-//     serialized. GoAkt serializes spawn dependencies only in cluster mode,
-//     and its type registry panics on non-pointer types, so a value-type or
-//     domain-only behavior must not reach Inject.
+//     extensions.LocalBehavior. The behavior's own type never reaches
+//     sys.Inject, whose type registry panics on non-pointer types, and the
+//     wrapper is never serialized: GoAkt serializes spawn dependencies only
+//     in cluster mode.
 //   - Anything else in cluster mode is rejected with a *BehaviorPlacementError
 //     wrapping ErrBehaviorNotSerializable (no serialization methods) or
 //     ErrBehaviorNotPointer (serialization methods on a non-pointer). The
 //     caller returns it before any spawn, so nothing is started locally and
 //     nothing is written to the cluster registry.
 func spawnDependency(sys goakt.ActorSystem, b interface{ ID() string }) (extension.Dependency, error) {
+	// A nil behavior, or a typed-nil pointer, has no usable ID: the spawn
+	// would read it and panic. Reject it in every mode, before anything else.
+	if isNilValue(b) {
+		return nil, &BehaviorPlacementError{Kind: fmt.Sprintf("%T", b), Err: ErrBehaviorNotPointer}
+	}
+
 	dependency, serializable := b.(extension.Dependency)
 	pointer := isNonNilPointer(b)
 
@@ -75,11 +84,7 @@ func spawnDependency(sys goakt.ActorSystem, b interface{ ID() string }) (extensi
 		cause = ErrBehaviorNotPointer
 	}
 
-	placementErr := &BehaviorPlacementError{Kind: fmt.Sprintf("%T", b), Err: cause}
-	if !isNilValue(b) {
-		placementErr.EntityID = b.ID()
-	}
-	return nil, placementErr
+	return nil, &BehaviorPlacementError{Kind: fmt.Sprintf("%T", b), EntityID: b.ID(), Err: cause}
 }
 
 // behaviorFrom reads a behavior of contract T from a spawn dependency, as an
