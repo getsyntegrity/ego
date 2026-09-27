@@ -83,7 +83,7 @@ panic ... reflect: Elem of invalid type ego.valueTypeEventSourcedBehavior` from
 `goakt .../types.(*registry).Register` via `actorSystem.Inject` via `NewEngine`; the `nil` case panicked
 with a nil pointer dereference.
 
-**GREEN (T2).** Commit `e618a82`. `TestBehaviorKindAssignability`,
+**GREEN (T2).** Commit `69723c1` (after the rebase onto `658bbae`; `e618a82` before it). `TestBehaviorKindAssignability`,
 `TestWithEntityKindsAndWithBehaviorKindsShareRegistration`,
 `TestNewEngineRejectsUnregistrableKindsSingleNode` (6 cases: value type, nil, typed-nil, each through
 both options), `TestNewEngineRejectsValueTypeKindInClusterMode`, all of
@@ -93,18 +93,27 @@ runs (`-count=5`, twice). Negative control (not committed): with `AccountEventSo
 from node 2's `WithBehaviorKinds`, the node-1-to-node-2 direction fails with `dependency type is not
 registered`, so the subtest does detect a missing registration.
 
-**Compatibility (T3).** `apidiff` of package `ego`, `origin/main` `b4aa140` vs branch: `Compatible
-changes: BehaviorKind: added; WithBehaviorKinds: added`, nothing else. The S3-1 consumer program
-(uses `WithEntityKinds(kinds...)` with a `[]ego.EntityKind`) builds and runs against both, output
-identical (9 lines, ends `OK`). archcheck on both: `37 packages checked, 157 edges checked, 1
-baselined, 0 violation(s), 0 stale entries`.
+**Rebase.** #142 (the `test/compat` module) merged as `658bbae` after this branch was cut from
+`b4aa140`; the branch was rebased onto it before publishing and every check below was re-run there.
+
+**Compatibility (T3).** `apidiff` of package `ego`, `origin/main` `658bbae` vs branch: `Compatible
+changes: BehaviorKind: added; WithBehaviorKinds: added`, nothing else (same result against `b4aa140`).
+The S3-1 consumer program (uses `WithEntityKinds(kinds...)` with a `[]ego.EntityKind`) builds and
+runs against both, output identical (9 lines, ends `OK`). archcheck identical on main and branch:
+`8 modules checked, 44 packages checked, 182 edges checked, 1 baselined, 0 violation(s), 0 stale
+entries`.
 
 **T4.** `CHANGELOG.md` Features entry added.
 
-**T5.** `ciselect -base origin/main`: mode `full` (root package changed; all six nested modules
-selected). golangci-lint `--new-from-rev=origin/main` (GOROOT go1.26.6, `GOTOOLCHAIN=local`,
-`--modules-download-mode=mod` because no `vendor/` exists locally): `0 issues`. Root suite and
-nested modules: see PR body.
+**T5.** `ciselect -changed ... -base origin/main`: mode `full` (root package changed; all seven nested
+modules selected, `test/compat` included). Root suite through `scripts/ci/go-test.sh` with
+`GO_TEST_RACE=0` (default toolchain, go1.27.1 auto): exit 0, 23 packages `ok`. `verify-module.sh` for
+`benchmark`, `example/cluster`, `publisher/{kafka,nats,pulsar,websocket}` and `test/compat`: all exit
+0 with GOROOT go1.26.6 and `GOTOOLCHAIN=local` (with the go1.27.1 toolchain the script's lint step
+fails on a typecheck error inside the toolchain's own `crypto/internal/randutil`, an environment
+issue unrelated to this change). golangci-lint `--new-from-rev=origin/main` (go1.26.6,
+`--modules-download-mode=mod` because no `vendor/` exists locally): `0 issues`.
+`TestEngineMultiNodeNeutralBehaviors -count=5` after the rebase: `ok`.
 
 ## Next step
 
