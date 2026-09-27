@@ -120,7 +120,7 @@ type Spec struct {
 	StatePublishers []publishing.StatePublisher
 
 	// ShutdownTimeout bounds rollback and Stop; zero means the composition
-	// root's default.
+	// root's default. It must not be negative (V7).
 	ShutdownTimeout time.Duration
 }
 
@@ -143,6 +143,9 @@ type Spec struct {
 //     element is reported under V5 too.
 //   - V6: every publisher is non-nil, and publisher IDs are unique per
 //     kind (events, states).
+//   - V7: ShutdownTimeout is not negative. Zero means the composition
+//     root's default; a negative value would otherwise fail only when the
+//     composition root builds its lifecycle, after New had succeeded.
 func (s Spec) Validate() error {
 	var errs []error
 	report := func(rule, field, problem string) {
@@ -198,6 +201,10 @@ func (s Spec) Validate() error {
 
 	validatePublishers(s.EventPublishers, "EventPublishers", "events", report)
 	validatePublishers(s.StatePublishers, "StatePublishers", "state", report)
+
+	if s.ShutdownTimeout < 0 {
+		report("V7", "ShutdownTimeout", fmt.Sprintf("must not be negative, got %s (zero means the default)", s.ShutdownTimeout))
+	}
 
 	return errors.Join(errs...)
 }

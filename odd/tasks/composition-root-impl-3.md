@@ -35,8 +35,13 @@ the design's suggested 30s as `DefaultShutdownTimeout`, applied only when the co
 zero, so `compose/goakt` passes `Spec.ShutdownTimeout` straight through and the default stays one
 constant to change. Flush/drain policy (#24, `LIFE-004`) is untouched: the sequencer only orders calls.
 
-Rejected alternative: checking `ctx.Err()` between start steps inside the sequencer. The design does not
-specify it; each step already receives the caller's `ctx` and fails on its own when it is cancelled.
+Originally rejected alternative, since adopted: checking `ctx.Err()` between start steps inside the
+sequencer. IMPL-3 left it out because the design does not specify it and each step already receives the
+caller's `ctx`. The maintainer approved it on 2026-09-27, and IMPL-4 (#105) adds it: `Start` checks
+`ctx.Err()` before each step and, when the context is done, fails the step about to run without calling
+it, returning a `*compose.StartError` naming that step and rolling back the steps already started
+(`TestStart_ChecksContextBeforeEachStep`). The reason: a step that ignores its context would otherwise
+start one more component that rollback must immediately undo.
 
 ## Constraints
 
@@ -95,7 +100,8 @@ specify it; each step already receives the caller's `ctx` and fails on its own w
   undo step during a normal rollback is not handled (the failure branch marks itself settled first so
   cleanup never runs twice).
 - [x] **R4** `ShutdownTimeout` godoc: it bounds the whole cleanup (every undo plus `Release`), not each step.
-- Not done, by decision: no `ctx.Err()` check between start steps (maintainer decision pending).
+- Not done in IMPL-3: no `ctx.Err()` check between start steps (maintainer decision pending then;
+  approved 2026-09-27 and added in IMPL-4).
 
 ## Carried to IMPL-4 or a follow-up
 
