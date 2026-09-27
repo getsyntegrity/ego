@@ -175,7 +175,7 @@ type EventSourcedBehavior interface {
 }
 ```
 
-The same shape applies to `DurableStateBehavior` and `SagaBehavior`. `EventSourcedEnvelopeBehavior` and `DurableStateEnvelopeBehavior` keep their declarations (the old base interface plus `HandleEnvelope`). `ID()` appears in both embedded interfaces with an identical signature, which Go has allowed since 1.14.
+The snippet shows the final shape. S3-1 adds only the re-expressed declaration; the `Deprecated:` comment is added later, in S3-5 (§9). The same shape applies to `DurableStateBehavior` and `SagaBehavior`. `EventSourcedEnvelopeBehavior` and `DurableStateEnvelopeBehavior` keep their declarations (the old base interface plus `HandleEnvelope`). `ID()` appears in both embedded interfaces with an identical signature, which Go has allowed since 1.14.
 
 `SagaAction` and `SagaCommand` become aliases: `type SagaAction = behaviorport.SagaAction`. The unexported method `(*SagaAction).isNoop` (`saga.go:83`) cannot stay a method on a type declared in another package, so it becomes the unexported function `sagaActionIsNoop(a *SagaAction) bool`, used at `saga_actor.go:524`.
 
