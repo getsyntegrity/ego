@@ -2329,6 +2329,122 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
+	t.Run("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+		persistenceID := uuid.NewString()
+
+		eventStore := new(mocks.EventsStore)
+
+		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedSnapshotSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the event adapters extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+		persistenceID := uuid.NewString()
+
+		eventStore := new(mocks.EventsStore)
+
+		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEventAdaptersSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.EventAdaptersExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the encryptor extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+		persistenceID := uuid.NewString()
+
+		eventStore := new(mocks.EventsStore)
+
+		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEncryptorSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.EncryptorExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStream := eventstream.New()
+		persistenceID := uuid.NewString()
+
+		eventStore := new(mocks.EventsStore)
+
+		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedTelemetrySystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.TelemetryExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		actor := newEventSourcedActor()
+		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
 	t.Run("with snapshot store GetLatestSnapshot failure during recovery", func(t *testing.T) {
 		ctx := context.TODO()
 

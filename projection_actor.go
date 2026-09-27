@@ -108,23 +108,38 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		opts = append(opts, withDeadLetterHandler(options.DeadLetterHandler))
 	}
 
-	if ext := ctx.Extension(extensions.EventAdaptersExtensionID); ext != nil {
-		opts = append(opts, withEventAdapters(ext.(*extensions.EventAdapters).Adapters()))
+	eventAdaptersExt, err := optionalExtension[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
+	if err != nil {
+		return err
+	}
+	if eventAdaptersExt != nil {
+		opts = append(opts, withEventAdapters(eventAdaptersExt.Adapters()))
 	}
 
 	// Events persisted on this node trigger an immediate pull instead of
 	// waiting for the next pull interval.
-	if ext := ctx.Extension(extensions.EventsStreamExtensionID); ext != nil {
-		opts = append(opts, withEventsStream(ext.(*extensions.EventsStream).Underlying()))
+	eventsStreamExt, err := optionalExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	if err != nil {
+		return err
+	}
+	if eventsStreamExt != nil {
+		opts = append(opts, withEventsStream(eventsStreamExt.Underlying()))
 	}
 
-	if ext := ctx.Extension(extensions.EncryptorExtensionID); ext != nil {
-		opts = append(opts, withEncryptor(ext.(*extensions.EncryptorExtension).Encryptor()))
+	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	if err != nil {
+		return err
+	}
+	if encryptorExt != nil {
+		opts = append(opts, withEncryptor(encryptorExt.Encryptor()))
 	}
 
-	if ext := ctx.Extension(extensions.TelemetryExtensionID); ext != nil {
-		telExt := ext.(*extensions.TelemetryExtension)
-		x.metrics = newMetrics(telExt.Meter())
+	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	if err != nil {
+		return err
+	}
+	if telemetryExt != nil {
+		x.metrics = newMetrics(telemetryExt.Meter())
 		if x.metrics != nil {
 			opts = append(opts, withMetrics(x.metrics))
 		}

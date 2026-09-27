@@ -105,6 +105,21 @@ func BuildSummary(r Result) string {
 		}
 	}
 
+	if len(r.Plan) > 0 {
+		fmt.Fprintf(&b, "\n## Module plan\n\n")
+		if r.Global {
+			fmt.Fprintf(&b, "Global change: every module is selected.\n\n")
+		}
+		fmt.Fprintf(&b, "| module | selected | why |\n|---|---|---|\n")
+		for _, p := range r.Plan {
+			selected := "no"
+			if p.Selected {
+				selected = "yes"
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", p.Dir, selected, strings.ReplaceAll(p.Reason, "|", `\|`))
+		}
+	}
+
 	return b.String()
 }
 

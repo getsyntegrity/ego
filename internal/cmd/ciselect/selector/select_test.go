@@ -124,7 +124,7 @@ func TestSelect_SatelliteOnlyIsNone(t *testing.T) {
 	// select the nested module itself.
 	g := fixtureGraph()
 	opts := satelliteOpts()
-	opts.Modules = []Module{{Dir: "benchmark"}}
+	opts.Modules = []ModuleInfo{{Dir: "benchmark"}}
 	res := Select(g, []string{"benchmark/bench_test.go"}, opts)
 
 	if res.Mode != ModeNone {

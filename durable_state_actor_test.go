@@ -49,6 +49,36 @@ import (
 	"github.com/pablogore/ego/v4/testkit"
 )
 
+func TestDurableStateActorPreStartExtensions(t *testing.T) {
+	t.Run("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		durableStore := testkit.NewDurableStore()
+		require.NoError(t, durableStore.Connect(ctx))
+
+		eventStream := eventstream.New()
+
+		actorSystem, err := goakt.NewActorSystem("TestDurableStateMistypedTelemetrySystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewDurableStateStore(durableStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.TelemetryExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		pid, err := actorSystem.Spawn(ctx, "durable-state-mistyped-telemetry", newDurableStateActor())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+}
+
 func TestDurableStateBehavior(t *testing.T) {
 	t.Run("with state reply", func(t *testing.T) {
 		ctx := context.TODO()
