@@ -171,7 +171,7 @@ history of this file.
 | W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging @6b798c4 | #152 @86740a6 | merged — archcheck baseline empty | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 @c650d6f | #151 | merged | Q1 no Deprecated on aliases + ego-arch-001 §10 corrected; Q2 WithAdapterSetting public; merge authorized after CI on final head |
 | W2a-2 | #147 S4-2 neutral types | feat/147-s4-2-runtime-types @f504e10 | #156 | merged by maintainer as merge commit 75171e3 (second parent f504e10; not rewritten) | port/runtime, spawn_config/saga/supervisor, engine.go sentinel aliases, CHANGELOG |
-| W2a-3 | #147 S4-3 interfaces | feat/147-s4-3-runtime-interfaces @c84e894 | #160 | approved with nits (2 doc nits); merge needs maintainer authorization | engine_runtime.go assertion + test double; carries S4-2 doc nits |
+| W2a-3 | #147 S4-3 interfaces | feat/147-s4-3-runtime-interfaces @c84e894 | #160 @15555da | nits fixed (ErrUnsupported precedence documented for #148); delta re-review + CI pending; merge needs maintainer authorization | engine_runtime.go assertion + test double; carries S4-2 doc nits |
 | W2a-4 | #147 S4-4 composition + consumer | — | — | planned | after S4-3; compose/goakt App.Runtime() |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 @ff3eced | merged | port/adapter + external-adapter-no-composition |
