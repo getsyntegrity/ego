@@ -37,6 +37,11 @@ These were decided on #147 on 2026-09-27. This design records them and does not 
 
 The maintainer's instruction for S4-D adds two constraints: keep small interfaces per capability, and keep v4 public compatibility (no break inside v4; aliases with preserved identity; deprecations only per ego-arch-001 §10 until #124's major release).
 
+**Maintainer decisions (2026-09-27) on this design (PR #151):**
+
+8. **Q1:** no `Deprecated:` markers on the aliases (S1, S3 and the new S4 aliases) or on the `ego.With*` wrappers; they stay unmarked until #124 removes them, accepting that consumers get no staticcheck warning before then. ego-arch-001 §10 is corrected accordingly (§10).
+9. **Q2:** `runtime.WithAdapterSetting` is public v4 API, additive and not removable inside v4; the home of the write-side options stays #12's call (§10).
+
 Everything else in this document is a proposal that becomes accepted when this pull request is approved.
 
 ## 3. Scope boundary
@@ -86,8 +91,8 @@ type Sagas interface {
 	SpawnSaga(ctx context.Context, b behavior.Saga, timeout time.Duration, opts ...SpawnOption) error
 	// SagaStatus returns the saga's ID and current state. Known gap: the
 	// GoAkt adapter never fills SagaInfo.Status, so it always reads
-	// SagaRunning (engine.go:1638-1641; follow-up FU-1, §7). Callers must
-	// not rely on Status until FU-1 is fixed.
+	// SagaRunning (engine.go:1638-1641; follow-up FU-1, #153). Callers must
+	// not rely on Status until #153 is fixed.
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
 
@@ -214,7 +219,7 @@ func WithTenant(id tenancy.TenantID) SpawnOption
 func WithAdapterSetting(key, value any) SpawnOption
 ```
 
-**Relocation's documentation.** Today `WithRelocation`'s comment says "In cluster mode, entities are relocatable by default" (`spawn_config.go:141-144`), but the code disables relocation unless `WithRelocation(true)` is passed (`engine.go:1903-1905`). `runtime.WithRelocation` does not inherit that sentence: its comment keeps the parameter description (`spawn_config.go:150-154`) and states the actual default, "relocation is disabled unless `WithRelocation(true)` is passed; RUNTIME-003 owns the contract". The comment on `ego.WithRelocation` becomes a pointer to it. Whether the default should change is follow-up FU-2 (§7), not S4.
+**Relocation's documentation.** Today `WithRelocation`'s comment says "In cluster mode, entities are relocatable by default" (`spawn_config.go:141-144`), but the code disables relocation unless `WithRelocation(true)` is passed (`engine.go:1903-1905`). `runtime.WithRelocation` does not inherit that sentence: its comment keeps the parameter description (`spawn_config.go:150-154`) and states the actual default, "relocation is disabled unless `WithRelocation(true)` is passed; RUNTIME-003 owns the contract". The comment on `ego.WithRelocation` becomes a pointer to it. Whether the default should change is follow-up FU-2 (#154), not S4.
 
 **Why this keeps v4 compatible.** The method keeps its name, `Apply`, and keeps an unexported parameter type; only the package that declares that type changes, from `ego` to `port/runtime`. Code outside both packages could never name either type, so every use it can write compiles unchanged: holding and passing options, storing them in a `[]ego.SpawnOption`, embedding `ego.SpawnOption` in a struct (the only way outside code can satisfy it), taking the method expression `ego.SpawnOption.Apply`, even the pathological `opt.Apply(nil)`. The spike's consumer program exercises every one of these against the baseline and the moved tree (§11).
 
@@ -248,7 +253,7 @@ func newSpawnConfig(opts ...SpawnOption) *spawnConfig {
 }
 ```
 
-So the contract carries no write-side field, which leaves #12's decision open, and the three call sites of `newSpawnConfig` in `engine.go` (`:783`, `:1068`, `:1546`) do not change. Another runtime ignores these settings, exactly as it would ignore any adapter's setting. If #12 decides a write-side setting belongs in the contract, a getter is added to `SpawnSettings` and the `ego` constructor switches to a neutral one: additive. Consumer code that wants a write-side option must import `ego` until then; that is the price of not deciding #12 here, and open question Q2 asks whether the mechanism itself is acceptable.
+So the contract carries no write-side field, which leaves #12's decision open, and the three call sites of `newSpawnConfig` in `engine.go` (`:783`, `:1068`, `:1546`) do not change. Another runtime ignores these settings, exactly as it would ignore any adapter's setting. If #12 decides a write-side setting belongs in the contract, a getter is added to `SpawnSettings` and the `ego` constructor switches to a neutral one: additive. Consumer code that wants a write-side option must import `ego` until then; that is the price of not deciding #12 here. The mechanism itself was approved as public v4 API (§10, Q2).
 
 **Behavior change: nil options.** `newSpawnConfig` calls `Apply` on every option (`spawn_config.go:104-106`), so a nil `SpawnOption` panics today. `ResolveSpawnOptions` skips it. No caller can rely on that panic; S4-2's `CHANGELOG.md` entry records the change.
 
@@ -372,7 +377,7 @@ The inventory with `file:line` is exploration §4. #124 decides the final packag
 | `compose/goakt` | — | — | `App.Runtime`: addition |
 | everything else | unchanged | unchanged | `internal/runtimeconsumer` is internal |
 
-SemVer: a minor release. No `Deprecated:` marker is added in S4 unless Q1 decides otherwise. Every slice records in its pull request: apidiff for each package it touches, against the baseline; the base-API consumer program (§11) built, vetted and run against base and head with identical output; and the nested-consumer check of ego-arch-001 §5 for the slices that change exported API (S4-2, S4-4).
+SemVer: a minor release. No `Deprecated:` marker is added in S4 (§10, Q1). Every slice records in its pull request: apidiff for each package it touches, against the baseline; the base-API consumer program (§11) built, vetted and run against base and head with identical output; and the nested-consumer check of ego-arch-001 §5 for the slices that change exported API (S4-2, S4-4).
 
 ## 5. Test plan
 
@@ -400,10 +405,10 @@ No `-race` locally and no workbench; CI is the race gate. The two-node test of #
 - **#29**: an `EntityRef` handle, if added, is new methods next to the ID-based ones; the ID stays valid.
 - **RUNTIME-003**: receives the placement finding of exploration §5.4 and the choice between no-op and typed error for settings a runtime cannot honor (§D4 rule 3).
 
-**Named follow-ups for pre-existing bugs** (issue to be created by the maintainer; this change does not fix them and creates no issue):
+**Named follow-ups for pre-existing bugs** (this change does not fix them; the maintainer opened an issue for each):
 
-- **FU-1** `Engine.SagaStatus` never fills `SagaInfo.Status`, so it always reads `SagaRunning` (`engine.go:1638-1641`; the actor tracks it at `saga_actor.go:58`). Recorded as a known gap in the `Sagas.SagaStatus` interface doc (§D1). #148's in-memory runtime should fill it.
-- **FU-2** Relocation default: `WithRelocation`'s doc says relocatable by default (`spawn_config.go:141`), the code disables it unless `WithRelocation(true)` (`engine.go:1903-1905`). `runtime.WithRelocation` documents the actual behavior (§D3); whether the default changes is for RUNTIME-003.
+- **FU-1** ([#153](https://github.com/getsyntegrity/ego/issues/153)) `Engine.SagaStatus` never fills `SagaInfo.Status`, so it always reads `SagaRunning` (`engine.go:1638-1641`; the actor tracks it at `saga_actor.go:58`). Recorded as a known gap in the `Sagas.SagaStatus` interface doc (§D1). #148's in-memory runtime should fill it.
+- **FU-2** ([#154](https://github.com/getsyntegrity/ego/issues/154)) Relocation default: `WithRelocation`'s doc says relocatable by default (`spawn_config.go:141`), the code disables it unless `WithRelocation(true)` (`engine.go:1903-1905`). `runtime.WithRelocation` documents the actual behavior (§D3); whether the default changes is for RUNTIME-003.
 
 ## 8. Alignment with PR #149 (adapter SPI)
 
@@ -449,9 +454,11 @@ Each slice is one pull request with at most four tasks. About 400 authored lines
 
 S4-1 is independent and may land any time. S4-2 → S4-3 → S4-4, strictly. No release tag between S4-2 and S4-3. #148 starts after S4-4.
 
-## 10. Open questions for the maintainer
+## 10. Maintainer decisions (2026-09-27) on the former open questions
 
-### Q1 — `Deprecated:` markers on the aliases and wrappers added here
+Both questions below were open in the first version of this design and were decided by the maintainer on 2026-09-27 on PR #151. The options are kept for the record.
+
+### Q1 — `Deprecated:` markers on the aliases and wrappers added here (decided)
 
 ego-arch-001 §10 says every temporary alias is marked `Deprecated:`. The code does not do that: the S1 aliases (`publisher.go:27-39`) and the S3 aliases `SagaAction`/`SagaCommand` (`saga.go:52-61`) carry no marker, and ego-arch-002-s3 §6 says "none: aliases stay valid names until #124". Only APIs with a *different* replacement (`Engine.Entity` → `SpawnEventSourced`) were deprecated.
 
@@ -460,9 +467,9 @@ ego-arch-001 §10 says every temporary alias is marked `Deprecated:`. The code d
 | (a) No marker in S4, as S1 and S3 did; #124's plan marks everything at once before the major | Consistent with the code; no staticcheck noise inside package `ego`, which uses these names everywhere. **Cost:** consumers get no staticcheck warning about the old names before #124 removes them; the `CHANGELOG.md` table and #124's migration guide are their only notice |
 | (b) Mark the aliases and the `ego.With*` wrappers `Deprecated:` in S4-4 | Follows §10 literally; every internal use needs a `//nolint:staticcheck` or a switch to `runtimeport` names in `engine.go` and the actors, a large diff in hot files |
 
-**Recommendation: (a).** ego-arch-001 §10's alias-deprecation wording is a maintainer decision (2026-09-26), so rewording it to what the code does ("aliases of the same type are not marked; APIs with a different replacement are") needs the maintainer's explicit sign-off; S4-4 changes §10 only if it is given.
+**Maintainer decision (2026-09-27, #151): (a).** No `Deprecated:` marker on the aliases of S1, S3 and S4, or on the `ego.With*` wrappers added here; they stay unmarked until #124 removes them. The accepted cost: consumers get no staticcheck warning before #124. ego-arch-001 §10 is corrected in this pull request to say so, citing this decision.
 
-### Q2 — Adapter settings as public API
+### Q2 — Adapter settings as public API (decided)
 
 `runtime.WithAdapterSetting(key, value any)` and `SpawnSettings.AdapterSetting(key)` exist so the write-side options can stay outside the contract (decision 3) while `SpawnOption` moves.
 
@@ -472,7 +479,7 @@ ego-arch-001 §10 says every temporary alias is marked `Deprecated:`. The code d
 | (b) Put the four write-side settings in `SpawnSettings` now | No generic door, but decides #12's question here, against decision 3 |
 | (c) Keep write-side options returning something other than `SpawnOption` | Incompatible: their result type is `SpawnOption` today |
 
-**Recommendation: (a).**
+**Maintainer decision (2026-09-27, #151): (a).** `runtime.WithAdapterSetting` and `SpawnSettings.AdapterSetting` are public v4 API: additive, not removable inside v4. Where the write-side options finally live stays #12's call.
 
 ## 11. Evidence and reproduction
 

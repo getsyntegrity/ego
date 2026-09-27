@@ -68,9 +68,12 @@ Each slice has at most four tasks (design §9). No release tag is cut between S4
 
 The in-memory runtime and `compose/inmem` (#148); moving the engine, the actors and `internal/extensions` (#124, ego-arch-006 F3); documented placement, supervision and passivation semantics (RUNTIME-003); capability negotiation (RUNTIME-006, #149 F-E); the conformance suite (RUNTIME-007); drain and shutdown policy (#24); the write-side option redesign (#12); an `EntityRef` handle (#29, #12).
 
-## Open questions
+## Maintainer decisions (2026-09-27)
 
-Two, each with a recommendation (design §10): whether the moved aliases and the `ego.With*` wrappers get `Deprecated:` markers in v4 (recommended: no, following the S1 and S3 code), and whether the adapter-specific setting mechanism for write-side options is acceptable as public API (recommended: yes, as `runtime.WithAdapterSetting`).
+The two questions this proposal left open were decided by the maintainer on PR #151 (design §2 and §10):
+
+- **Q1:** no `Deprecated:` markers on the aliases (S1, S3 and the new S4 aliases) or on the `ego.With*` wrappers; they stay unmarked until #124 removes them, accepting that consumers get no staticcheck warning before then. This pull request corrects ego-arch-001 §10 to match.
+- **Q2:** `runtime.WithAdapterSetting` is public v4 API, additive and not removable inside v4. Where the write-side options finally live stays #12's call.
 
 ## Rollback
 
