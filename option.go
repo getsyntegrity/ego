@@ -24,7 +24,9 @@ package ego
 
 import (
 	"encoding"
+	"fmt"
 	"reflect"
+	"strings"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
@@ -58,6 +60,10 @@ type Config struct {
 	telemetry     *Telemetry
 	encryptor     encryption.Encryptor
 	behaviorKinds []BehaviorKind
+
+	// entityFamilies is the set declared with WithEntityFamilies; zero
+	// means nothing was declared and every family may be spawned.
+	entityFamilies EntityFamily
 
 	// tenantResolver is the effective tenancy.TenantResolver, if any. Its
 	// non-nil-ness IS tenant-aware mode (design.md D1) — there is no
@@ -408,6 +414,88 @@ type BehaviorKind interface {
 func WithBehaviorKinds(kinds ...BehaviorKind) Option {
 	return OptionFunc(func(c *Config) {
 		c.behaviorKinds = append(c.behaviorKinds, kinds...)
+	})
+}
+
+// EntityFamily is a bit set of the entity families an engine hosts:
+// event-sourced entities, durable-state entities and sagas. Declare the
+// families with WithEntityFamilies; combine several with |, for example
+// EventSourcedFamily|SagaFamily.
+type EntityFamily uint8
+
+const (
+	// EventSourcedFamily covers SpawnEventSourced and its deprecated
+	// predecessor Entity.
+	EventSourcedFamily EntityFamily = 1 << iota
+	// DurableStateFamily covers SpawnDurableState and its deprecated
+	// predecessor DurableStateEntity.
+	DurableStateFamily
+	// SagaFamily covers SpawnSaga and its deprecated predecessor Saga.
+	SagaFamily
+)
+
+// knownEntityFamilies is every family bit the engine knows; other bits are
+// ignored by WithEntityFamilies.
+const knownEntityFamilies = EventSourcedFamily | DurableStateFamily | SagaFamily
+
+// String names the families in f, joined with "|" in declaration order,
+// for example "EventSourced|Saga". A value with no known family bit, or
+// with an unknown bit, prints as EntityFamily(n).
+func (f EntityFamily) String() string {
+	if f == 0 || f&^knownEntityFamilies != 0 {
+		return fmt.Sprintf("EntityFamily(%d)", uint8(f))
+	}
+	var names []string
+	for _, known := range []struct {
+		family EntityFamily
+		name   string
+	}{
+		{EventSourcedFamily, "EventSourced"},
+		{DurableStateFamily, "DurableState"},
+		{SagaFamily, "Saga"},
+	} {
+		if f&known.family != 0 {
+			names = append(names, known.name)
+		}
+	}
+	return strings.Join(names, "|")
+}
+
+// WithEntityFamilies declares the entity families the engine hosts. Once
+// declared, a spawn of any other family — through the SpawnEventSourced,
+// SpawnDurableState and SpawnSaga methods or their deprecated predecessors
+// Entity, DurableStateEntity and Saga — returns an error wrapping
+// ErrEntityFamilyNotDeclared, naming the family, before anything is spawned.
+//
+// The option is repeatable; the declared set is the union of every call.
+// Bits other than the three families above are ignored. Without the option,
+// or when no known family bit is ever passed, nothing is declared and every
+// family spawns as before, so existing configurations are unchanged.
+// compose/goakt passes a Spec's declared families through this option.
+func WithEntityFamilies(families ...EntityFamily) Option {
+	return OptionFunc(func(c *Config) {
+		for _, family := range families {
+			c.entityFamilies |= family & knownEntityFamilies
+		}
+	})
+}
+
+// WithEventStream sets the in-process event stream the actor system and the
+// engine share, instead of the one NewConfig allocates. The caller that
+// supplies it hands it over: Engine.Stop closes it, as it closes the
+// default one. A nil or typed-nil stream is ignored and the default stays.
+//
+// compose/goakt uses it so the composition root owns the stream from the
+// start and can close it itself when startup fails before an engine exists.
+func WithEventStream(stream eventstream.Stream) Option {
+	return OptionFunc(func(c *Config) {
+		if stream == nil {
+			return
+		}
+		if v := reflect.ValueOf(stream); v.Kind() == reflect.Pointer && v.IsNil() {
+			return
+		}
+		c.eventStream = stream
 	})
 }
 

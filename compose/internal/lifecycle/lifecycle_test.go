@@ -565,16 +565,21 @@ func TestCleanup_RunsUnderWithoutCancelAndTimeout(t *testing.T) {
 	t.Run("rollback, caller context cancelled", func(t *testing.T) {
 		var undo, release cleanupProbe
 		cause := context.Canceled
+		// The caller's context is cancelled while the first step runs, so
+		// the second step fails on it and rollback runs with a context
+		// whose parent is already done.
+		ctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "kept"))
+		defer cancel()
 		seq := mustNew(t, Config{
 			Steps: []Step{
-				{Name: "runtime", Start: func(context.Context) error { return nil }, Stop: undo.observe},
+				{Name: "runtime", Start: func(context.Context) error { cancel(); return nil }, Stop: undo.observe},
 				{Name: "engine", Start: func(ctx context.Context) error { return ctx.Err() }},
 			},
 			Release:         release.observe,
 			ShutdownTimeout: timeout,
 		})
 		before := time.Now()
-		err := seq.Start(cancelledCtx())
+		err := seq.Start(ctx)
 
 		var se *compose.StartError
 		if !errors.As(err, &se) || se.Step != "engine" || !errors.Is(se.Err, cause) {
@@ -674,4 +679,66 @@ func TestStartAndStop_AreSerialized(t *testing.T) {
 	if got := rec.calls(); !slices.Equal(got, want) {
 		t.Fatalf("calls = %v, want %v: Stop must wait for Start instead of interleaving", got, want)
 	}
+}
+
+// TestStart_ChecksContextBeforeEachStep covers the maintainer decision of
+// 2026-09-27: Start checks ctx.Err() before running each step. A context
+// that is already done when a step is about to run fails that step without
+// calling it, and the steps already started roll back as for any failure.
+func TestStart_ChecksContextBeforeEachStep(t *testing.T) {
+	t.Run("cancelled before the first step", func(t *testing.T) {
+		rec := newRecorder()
+		seq := mustNew(t, rec.config("probe", "runtime"))
+
+		err := seq.Start(cancelledCtx())
+
+		var se *compose.StartError
+		if !errors.As(err, &se) || se.Step != "probe" || !errors.Is(se.Err, context.Canceled) || se.Rollback != nil {
+			t.Fatalf("Start = %v, want a StartError for step probe carrying context.Canceled and a clean rollback", err)
+		}
+		if got, want := rec.calls(), []string{"release"}; !slices.Equal(got, want) {
+			t.Fatalf("calls = %v, want %v: no step may run on a done context", got, want)
+		}
+		if got := seq.State(); got != StateFailed {
+			t.Fatalf("State = %s, want %s", got, StateFailed)
+		}
+	})
+
+	t.Run("cancelled while a step runs", func(t *testing.T) {
+		rec := newRecorder()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		cfg := rec.config("probe", "runtime", "engine")
+		start := cfg.Steps[1].Start
+		cfg.Steps[1].Start = func(ctx context.Context) error {
+			cancel() // the step itself succeeds; the caller gives up meanwhile
+			return start(ctx)
+		}
+		seq := mustNew(t, cfg)
+
+		err := seq.Start(ctx)
+
+		var se *compose.StartError
+		if !errors.As(err, &se) || se.Step != "engine" || !errors.Is(se.Err, context.Canceled) {
+			t.Fatalf("Start = %v, want a StartError naming the engine step, the one about to run", err)
+		}
+		want := []string{"start probe", "start runtime", "stop runtime", "stop probe", "release"}
+		if got := rec.calls(); !slices.Equal(got, want) {
+			t.Fatalf("calls = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("deadline exceeded", func(t *testing.T) {
+		rec := newRecorder()
+		ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
+		defer cancel()
+		seq := mustNew(t, rec.config("probe"))
+
+		err := seq.Start(ctx)
+
+		var se *compose.StartError
+		if !errors.As(err, &se) || se.Step != "probe" || !errors.Is(se.Err, context.DeadlineExceeded) {
+			t.Fatalf("Start = %v, want a StartError for step probe carrying context.DeadlineExceeded", err)
+		}
+	})
 }

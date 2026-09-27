@@ -26,6 +26,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pablogore/ego/v4/encryption"
 	"github.com/pablogore/ego/v4/eventadapter"
@@ -302,6 +303,22 @@ func TestSpecValidate_V6_DuplicatePublisherIDsPerKind(t *testing.T) {
 	})
 }
 
+// V7: a negative ShutdownTimeout is rejected at Validate, so a composition
+// root fails at New instead of when it builds its lifecycle sequence. Zero
+// (the default) and any positive value pass.
+func TestSpecValidate_V7_NegativeShutdownTimeout(t *testing.T) {
+	spec := validSpec()
+	spec.ShutdownTimeout = -time.Second
+	requireOneProblem(t, spec.Validate(), "V7", "ShutdownTimeout")
+
+	for _, d := range []time.Duration{0, time.Nanosecond, time.Minute} {
+		spec.ShutdownTimeout = d
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() with ShutdownTimeout %s = %v, want nil", d, err)
+		}
+	}
+}
+
 // Validate reports every problem at once instead of stopping at the first,
 // in a deterministic order: Spec field order, projections sorted by name.
 func TestSpecValidate_ReportsEveryProblem(t *testing.T) {
@@ -310,6 +327,7 @@ func TestSpecValidate_ReportsEveryProblem(t *testing.T) {
 		SnapshotStore:   (*fakeSnapshotStore)(nil),
 		EventPublishers: []publishing.EventPublisher{&fakeEventPublisher{id: "x"}, &fakeEventPublisher{id: "x"}},
 		StatePublishers: []publishing.StatePublisher{nil},
+		ShutdownTimeout: -1,
 	}
 	err := spec.Validate()
 	got := problems(t, err)
@@ -323,6 +341,7 @@ func TestSpecValidate_ReportsEveryProblem(t *testing.T) {
 		{"V4", `Projections["b-view"].Handler`},
 		{"V6", "EventPublishers[1]"},
 		{"V6", "StatePublishers[0]"},
+		{"V7", "ShutdownTimeout"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("Validate() reported %d problems, want %d: %v", len(got), len(want), err)

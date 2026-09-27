@@ -179,6 +179,11 @@ func (s *Sequence) setState(st State) {
 // Start runs every step in order with ctx. It returns ErrNotStartable,
 // without running anything, unless the sequence is in StateNew.
 //
+// Before each step, Start checks ctx.Err(). When ctx is already done, the
+// step about to run is not called and counts as failed with ctx.Err()
+// (context.Canceled or context.DeadlineExceeded), so the StartError names
+// that step and the steps already started roll back as below.
+//
 // When step k fails, Start does not run the steps after it. It calls Stop
 // on steps k-1 down to 1, then Release, attempting every one even when some
 // fail, under the cleanup context (see Stop). It then returns a
@@ -212,7 +217,14 @@ func (s *Sequence) Start(ctx context.Context) error {
 	}()
 
 	for _, step := range s.steps {
-		if err := step.Start(ctx); err != nil {
+		// A done context fails the step about to run without calling it,
+		// so a caller that gave up does not start one more component that
+		// rollback must immediately undo.
+		err := ctx.Err()
+		if err == nil {
+			err = step.Start(ctx)
+		}
+		if err != nil {
 			settled = true // cleanup below runs once; the deferred one must not repeat it
 			rollback := s.cleanup(ctx, true)
 			s.setState(StateFailed)

@@ -132,6 +132,7 @@ The engine must know the declared families to reject a spawn of an undeclared on
 - **V4** — `Projections` non-empty ⇒ `OffsetStore` must be non-nil, and every entry must have a non-nil `*projection.Options` with a non-nil `Handler`.
 - **V5** — a typed-nil interface value is rejected wherever a literal `nil` would be, not just a literal `nil` — the same class of bug behind the `eventsStore.Ping` panic in §2.2, caught here instead of at first spawn. The typed-nil check covers every interface-typed field and element, optional ones included (`SnapshotStore`, `Encryptor`, `TenantResolver`, each `EventAdapters` element): leaving an optional field out (a literal `nil`) is allowed, but a typed nil passes the runtime's own `!= nil` guards and panics on first use, so it is rejected. A literal `nil` `EventAdapters` element is also reported under V5 (maintainer decision, 2026-09-27, #135).
 - **V6** — every configured publisher is non-nil, and publisher IDs are unique per kind (events, states). `AddEventPublishers`/`AddStatePublishers` key publishers by `ID()` (`engine.go:1228`, `engine.go:1269`), so a duplicate overwrites the first entry and orphans its `sendEvent`/`sendState` goroutine; `Stop` never closes it.
+- **V7** — `ShutdownTimeout` is not negative (maintainer decision 2026-09-27, #145).
 
 No tenant-resolver rule is needed: `NewEngine` rejects more than one resolver (`ErrAmbiguousTenantResolver`, `engine.go:80`, checked at `engine.go:240-242`) because `WithTenantResolver` can be called repeatedly (`option.go:435`), but `Spec` has a single `TenantResolver` field, so that state cannot be built.
 
@@ -205,8 +206,8 @@ Two new rules in `internal/cmd/archcheck` (`internal/cmd/archcheck/rules/rules.g
 flowchart TB
   subgraph target["Target: GoAkt composition (compose/goakt)"]
     main2["consumer main()"]
-    egoakt["egoakt.New(compose.Spec{...}, opts...)<br/>compose/goakt — static validation (V1-V6, G1-G2), nothing started"]
-    specv["compose.Spec.Validate()<br/>V1-V6, D4a"]
+    egoakt["egoakt.New(compose.Spec{...}, opts...)<br/>compose/goakt — static validation (V1-V7, G1-G2), nothing started"]
+    specv["compose.Spec.Validate()<br/>V1-V7, D4a"]
     life["compose/internal/lifecycle<br/>ordered Start/Stop, rollback — D6, D7"]
     app["app.Start(ctx)<br/>probe stores, then steps 2-5"]
     engref["app.Engine()<br/>*ego.Engine: Entity/SendCommand"]
@@ -321,7 +322,7 @@ Mapping `#105`'s stated acceptance criteria to the slice that delivers it and th
 |---|---|---|
 | Explicit, documented composition root | IMPL-4 (and this design) | `compose/goakt` package exists with godoc; this document is the record of the decision. |
 | Core/application do not instantiate concrete adapters | IMPL-2, IMPL-4 | The existing `contract-allowlist` and `application-no-runtime` rules keep contracts and `migration` from importing adapters, so they cannot construct one; IMPL-2 adds `composition-no-runtime`, which applies the same denylist to `compose` and `compose/internal/lifecycle`. `compose.Spec` holds only caller-constructed instances. In the composed path the event stream is allocated by `compose/goakt` (the composition root) and handed in through `ego.WithEventStream`; the manual path keeps `NewConfig`'s `eventstream.New()`, which sits in the GoAkt adapter layer, not in core. |
-| An invalid graph fails at construction, not at first command | IMPL-2, IMPL-4 | V1–V6 unit tests in IMPL-2 and G1–G2 tests in IMPL-4; the typed-nil case (V5) specifically targets the `Ping`-panic class of bug from §2.2. |
+| An invalid graph fails at construction, not at first command | IMPL-2, IMPL-4 | V1–V7 unit tests (V1–V6 in IMPL-2, V7 in IMPL-4) and G1–G2 tests in IMPL-4; the typed-nil case (V5) specifically targets the `Ping`-panic class of bug from §2.2. |
 | Deterministic Start/Stop order with rollback on partial failure | IMPL-3, IMPL-4 | Ordered-fakes tests in IMPL-3; the five-step injected-failure tests in IMPL-4, including publisher and event-stream release. |
 | Tests cover valid wiring, missing dependency, startup failure, and shutdown | IMPL-2, IMPL-3, IMPL-4 | The test columns of those three rows, combined. |
 | At least one GoAkt composition and one in-memory composition without changing the domain | IMPL-4 (GoAkt half); IMPL-6 (in-memory half, blocked) | IMPL-4's end-to-end test proves the GoAkt half. The in-memory half is **not** met until IMPL-6 runs the same behavior value, through the same consumer code, on `compose/inmem` with the same `Spec`; a design that only claims neutrality does not satisfy it. `#105` therefore stays open until IMPL-6 lands, or until maintainers explicitly split this criterion into a follow-up issue. |
