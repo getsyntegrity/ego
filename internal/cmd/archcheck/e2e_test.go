@@ -405,3 +405,45 @@ func TestRunCheck_NestedToNestedInternalFails(t *testing.T) {
 		t.Errorf("stdout = %q, want it to name no-cross-module-internal", stdout.String())
 	}
 }
+
+// TestLoadModuleTable_MalformedGoModFailsClosed: a nested go.mod that
+// `go mod edit -json` cannot parse makes loadModuleTable return an error
+// naming the module directory, rather than a table without that module.
+func TestLoadModuleTable_MalformedGoModFailsClosed(t *testing.T) {
+	requireGo(t)
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/malformed\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "broken", "go.mod"), "module github.com/example/malformed/broken\n\nrequire (\n")
+
+	_, err := loadModuleTable(dir)
+	if err == nil {
+		t.Fatal("loadModuleTable() = nil error, want an error for a malformed go.mod")
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error %q does not name the broken module directory", err)
+	}
+}
+
+// TestLoadModuleTable_EmptyModulePathFailsClosed: a go.mod with no module
+// directive declares no module path. readGoModRequirements must not hand
+// back a usable empty path, and loadModuleTable refuses it rather than
+// indexing a module whose empty path every import path would match.
+func TestLoadModuleTable_EmptyModulePathFailsClosed(t *testing.T) {
+	requireGo(t)
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module github.com/example/nopath\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "anon", "go.mod"), "go 1.21\n")
+
+	if path, _, err := readGoModRequirements(filepath.Join(dir, "anon")); err == nil && path != "" {
+		t.Fatalf("readGoModRequirements() = (%q, nil), want an empty path or an error for a go.mod with no module directive", path)
+	}
+	_, err := loadModuleTable(dir)
+	if err == nil {
+		t.Fatal("loadModuleTable() = nil error, want an error for a go.mod with no module path")
+	}
+	if !strings.Contains(err.Error(), "anon") {
+		t.Errorf("error %q does not name the anon module directory", err)
+	}
+}

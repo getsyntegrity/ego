@@ -368,6 +368,7 @@ One module per pull request, and the selector first. Each slice lists at most fi
 - **Owns:** `test/compat/**` (new), `publisher/*/compat_test.go` (deleted), `internal/cmd/archcheck/**` (rules), `docs/ci.md`.
 - **Tasks:**
   1. The module requires the root and the four publishers through local `replace`, and holds #130's alias and sentinel assertions for all four.
+     - Implementation note (maintainer decision, 2026-09-27, PR #142): the runtime sentinel assertion is split into the per-publisher contract check (`Publish` before `Start` returns `publishing.ErrPublisherNotStarted`, in each publisher's `publisher_contract_test.go`) plus an identity check in `test/compat` (`ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and `errors.Is` both ways). Together they prove the original assertion, because `ego.ErrPublisherNotStarted` is defined as `publishing.ErrPublisherNotStarted`.
   2. Delete the four `compat_test.go` files. The publishers keep `publisher_contract_test.go` and the closure test.
   3. archcheck: rule `no-module-cycle` over in-repository requirements, and `no-cross-module-internal` generalized from "nested module to root" to any pair of modules (`rules.go:179-191`).
   4. `docs/ci.md`: list `test/compat` as unreleased; record the measured selection.

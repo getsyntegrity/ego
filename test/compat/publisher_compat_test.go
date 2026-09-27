@@ -23,14 +23,11 @@
 package compat_test
 
 import (
-	"context"
 	"errors"
-	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/pablogore/ego/v4"
-	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/publishing"
 	"github.com/pablogore/ego/v4/publisher/kafka"
 	"github.com/pablogore/ego/v4/publisher/nats"
 	"github.com/pablogore/ego/v4/publisher/pulsar"
@@ -55,84 +52,24 @@ var (
 	_ ego.StatePublisher = (*websocket.DurableStatePublisher)(nil)
 )
 
-// TestPublishBeforeStartMatchesEgoSentinel checks, for every publisher, that
-// the error a stopped publisher returns still matches the historical
-// ego.ErrPublisherNotStarted alias. It is the runtime half of each
-// publisher's former compat_test.go, one subtest per publisher and kind.
-//
-// Each publisher is built without a broker connection, in the same state the
-// former in-package test built with a struct literal: the zero value with
-// its unexported `started` flag set to a new, false go.uber.org/atomic.Bool.
-// Publish rejects the call before touching the client. See stoppedPublisher
-// for why the flag is set through reflection.
-func TestPublishBeforeStartMatchesEgoSentinel(t *testing.T) {
-	ctx := context.Background()
-	cases := []struct {
-		name    string
-		publish func(t *testing.T) error
-	}{
-		{"kafka/events", func(t *testing.T) error {
-			return stoppedPublisher[kafka.EventsPublisher](t).Publish(ctx, &egopb.Event{})
-		}},
-		{"kafka/state", func(t *testing.T) error {
-			return stoppedPublisher[kafka.DurableStatePublisher](t).Publish(ctx, &egopb.DurableState{})
-		}},
-		{"nats/events", func(t *testing.T) error {
-			return stoppedPublisher[nats.EventsPublisher](t).Publish(ctx, &egopb.Event{})
-		}},
-		{"nats/state", func(t *testing.T) error {
-			return stoppedPublisher[nats.DurableStatePublisher](t).Publish(ctx, &egopb.DurableState{})
-		}},
-		{"pulsar/events", func(t *testing.T) error {
-			return stoppedPublisher[pulsar.EventsPublisher](t).Publish(ctx, &egopb.Event{})
-		}},
-		{"pulsar/state", func(t *testing.T) error {
-			return stoppedPublisher[pulsar.DurableStatePublisher](t).Publish(ctx, &egopb.DurableState{})
-		}},
-		{"websocket/events", func(t *testing.T) error {
-			return stoppedPublisher[websocket.EventsPublisher](t).Publish(ctx, &egopb.Event{})
-		}},
-		{"websocket/state", func(t *testing.T) error {
-			return stoppedPublisher[websocket.DurableStatePublisher](t).Publish(ctx, &egopb.DurableState{})
-		}},
+// TestEgoSentinelIsThePublishingSentinel is the module-crossing half of the
+// historical runtime check "a stopped publisher's error matches
+// ego.ErrPublisherNotStarted" (ADR ego-arch-006, §6 S1). The other half runs
+// inside each publisher module: TestPublishBeforeStartMatchesPublishingSentinel
+// in publisher_contract_test.go checks that Publish before Start returns an
+// error matching publishing.ErrPublisherNotStarted, for events and state.
+// Because the two sentinels are the same error value, every error that
+// matches one matches the other, so together the two checks prove the
+// original assertion for every publisher.
+func TestEgoSentinelIsThePublishingSentinel(t *testing.T) {
+	if ego.ErrPublisherNotStarted != publishing.ErrPublisherNotStarted {
+		t.Errorf("ego.ErrPublisherNotStarted (%p) is not the same value as publishing.ErrPublisherNotStarted (%p)",
+			ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.publish(t)
-			if !errors.Is(err, ego.ErrPublisherNotStarted) {
-				t.Errorf("errors.Is(%v, ego.ErrPublisherNotStarted) = false", err)
-			}
-		})
+	if !errors.Is(ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) {
+		t.Error("errors.Is(ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) = false")
 	}
-}
-
-// stoppedPublisher returns a zero-value *T whose unexported `started` field
-// holds a new go.uber.org/atomic.Bool with value false: exactly the value the
-// former in-package tests built as &T{started: atomic.NewBool(false)}.
-//
-// This module is outside the publishers' packages, so it cannot name the
-// field in a struct literal, and every publisher constructor dials its
-// broker (Pulsar has no embeddable server). Setting the field through
-// reflect.NewAt is the only way to keep the runtime assertion one-to-one
-// without adding a test hook to the publishers' production API. The helper
-// fails the test, rather than silently checking something else, if the
-// field is renamed or changes type.
-func stoppedPublisher[T any](t *testing.T) *T {
-	t.Helper()
-	p := new(T)
-	field := reflect.ValueOf(p).Elem().FieldByName("started")
-	if !field.IsValid() {
-		t.Fatalf("%T has no field named started; update stoppedPublisher to the publisher's new stop flag", p)
+	if !errors.Is(publishing.ErrPublisherNotStarted, ego.ErrPublisherNotStarted) {
+		t.Error("errors.Is(publishing.ErrPublisherNotStarted, ego.ErrPublisherNotStarted) = false")
 	}
-	ft := field.Type()
-	if ft.Kind() != reflect.Pointer || ft.Elem().PkgPath() != "go.uber.org/atomic" || ft.Elem().Name() != "Bool" {
-		t.Fatalf("%T.started has type %s, want *go.uber.org/atomic.Bool; update stoppedPublisher", p, ft)
-	}
-	// A zero go.uber.org/atomic.Bool reads false, the same as NewBool(false).
-	stopped := reflect.New(ft.Elem())
-	// #nosec G103 -- test-only write to one unexported field of a value this
-	// function just allocated; the field's type is checked above.
-	reflect.NewAt(ft, unsafe.Pointer(field.UnsafeAddr())).Elem().Set(stopped)
-	return p
 }

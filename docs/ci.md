@@ -599,35 +599,50 @@ requires it. Its module path follows the current scheme,
 the repository ever resolves it, so it needs none of the module-path
 decisions (D1–D3) the contracts module waits for.
 
-It holds, one-to-one, what each publisher's `compat_test.go` held:
+Each publisher's `compat_test.go` held two kinds of checks. They moved as
+follows:
 
-- the eight compile-time assertions `_ ego.EventPublisher =
-  (*<pub>.EventsPublisher)(nil)` and `_ ego.StatePublisher =
-  (*<pub>.DurableStatePublisher)(nil)`, for kafka, nats, pulsar and
-  websocket;
-- `TestPublishBeforeStartMatchesEgoSentinel`, one subtest per publisher and
-  kind (eight), checking that `Publish` on a stopped publisher returns an
-  error that `errors.Is` matches against `ego.ErrPublisherNotStarted`.
+- **The eight compile-time alias assertions** move to `test/compat`
+  unchanged: `_ ego.EventPublisher = (*<pub>.EventsPublisher)(nil)` and
+  `_ ego.StatePublisher = (*<pub>.DurableStatePublisher)(nil)`, for kafka,
+  nats, pulsar and websocket.
+- **The runtime sentinel check** ("`Publish` on a stopped publisher returns
+  an error that matches `ego.ErrPublisherNotStarted`", events and state, per
+  publisher) is split in two:
+  - inside each publisher module, `TestPublishBeforeStartMatchesPublishingSentinel`
+    in `publisher_contract_test.go` checks that `Publish` before `Start`
+    returns an error matching `publishing.ErrPublisherNotStarted`, for
+    events and state. It builds the stopped publisher with a struct
+    literal, which only code inside the package can do;
+  - in `test/compat`, `TestEgoSentinelIsThePublishingSentinel` checks that
+    `ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
+    `errors.Is` in both directions.
 
-The stopped publisher is built exactly as the old in-package test built it:
-the zero value with its unexported `started` flag set to a new, false
-`go.uber.org/atomic.Bool`. From outside the package that takes
-`reflect.NewAt` (every constructor dials its broker, and Pulsar has no
-embeddable server); the helper checks the field's name and type first and
-fails the test if either changes, so it can never silently check something
-else. The rejected alternatives were a test hook in the publishers'
-production API (outside S1's scope) and splitting the check into
-"publisher returns `publishing.ErrPublisherNotStarted`" plus "the two
-sentinels are the same value", which only proves the original assertion
-transitively.
+  Together the two halves prove the original check: `ego.ErrPublisherNotStarted`
+  is defined as `publishing.ErrPublisherNotStarted`, so any error that matches
+  one matches the other. The split was a maintainer decision on PR #142
+  (recorded in `openspec/changes/ego-arch-006/design.md` §6 S1). It keeps
+  `test/compat` free of `reflect`/`unsafe`: a module outside the publisher
+  packages cannot build a stopped publisher any other way, because every
+  constructor dials its broker and Pulsar has no embeddable server.
 
 What this changes for the publishers: `compat_test.go` is gone, so no file
 in a publisher imports package `ego` any more, in any build. `go mod tidy`
 therefore drops every indirect requirement that only `ego`'s import needed
 (GoAkt, Olric, OpenTelemetry and their dependencies) from each publisher's
-`go.mod` and `go.sum`; the publishers still require the root module itself
-for `egopb` and `port/publishing` until slice S3. Each publisher keeps
-`publisher_contract_test.go` (the `publishing`-only assertions) and
+`go.mod` and `go.sum`. It also **adds** a few `// indirect` lines that pin
+versions the publisher already resolved through the root's requirements:
+`github.com/prometheus/client_golang` in `publisher/kafka`, and twelve
+modules in `publisher/pulsar` (`testcontainers-go`, the `moby` and `docker`
+clients, `gopsutil` and their dependencies, plus `golang.org/x/crypto`).
+`publisher/nats` and `publisher/websocket` only lose lines. The versions a
+publisher actually builds and tests with do not change: the module
+versions behind `go list -deps -test ./...` are identical to `main` in all
+four publishers (kafka 21 modules, nats 13, pulsar 72, websocket 7). The
+publishers still require the root module itself for `egopb` and
+`port/publishing` until slice S3. Each publisher keeps
+`publisher_contract_test.go` (the `publishing`-only assertions, including
+the runtime half of the sentinel check above) and
 `TestUnitTestClosureExcludesRuntimeAndRoot`.
 
 `test/compat` is verified like any other nested module: the `modules` job
@@ -636,6 +651,12 @@ discovers it from its `go.mod` (no workflow change), and
 vet, lint and `go test ./...`. The selector picks it for any change that
 reaches the root packages it imports or any publisher (see "Measured
 selection after S1" above).
+
+**Cost.** `test/compat` builds all four publishers plus the root package
+`ego` with GoAkt, so it is now the slowest module job: about 195 s in PR
+run 36331397582 (`publisher/pulsar` took about 154 s, the other modules 30
+to 64 s). It runs on every leaf publisher PR, because a change to any
+publisher selects it (`test/compat ← publisher/<name>`).
 
 ### Compatibility lane (#122) — historical, superseded by S1
 

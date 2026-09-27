@@ -30,15 +30,19 @@ requirements, read with `go mod edit -json`) and two module-aware checks:
 
 ## Why this shape
 
-Judgement call on the sentinel assertion. The old test built a stopped publisher with the unexported
-field `started`, which an external module cannot reach, and every constructor dials a broker. The
-alternatives were (a) a real broker or fake server per publisher (Pulsar has no embeddable server),
-(b) adding an exported test hook to the publishers' production code (out of S1's scope), or (c)
-splitting the check into "publisher returns `publishing.ErrPublisherNotStarted`" (already in each
-publisher) plus "`ego.ErrPublisherNotStarted` is the same value" (a weaker, transitive form). We chose
-(d): `test/compat` builds the zero-value publisher and sets its `started` field through
-`reflect` + `unsafe`, exactly the state the old test built, so the runtime assertion stays
-one-to-one. If the field is renamed or retyped the helper fails the test loudly instead of passing.
+The sentinel assertion. The old test built a stopped publisher with the unexported field `started`,
+which a separate module cannot reach, and every constructor dials a broker. The options were (a) a
+real broker or fake server per publisher (Pulsar has no embeddable server), (b) an exported test hook
+in the publishers' production code (outside S1's scope), (c) splitting the check into "publisher
+returns `publishing.ErrPublisherNotStarted`" (already in each publisher's `publisher_contract_test.go`,
+events and state, all four) plus "`ego.ErrPublisherNotStarted` is the same value" in `test/compat`,
+or (d) setting the field from `test/compat` through `reflect` + `unsafe`.
+
+The first push used (d). The maintainers chose (c) on 2026-09-27 (PR #142), and the branch now
+implements it. (c) is not weaker: `ego.ErrPublisherNotStarted` is defined as
+`publishing.ErrPublisherNotStarted`, so an error matches one exactly when it matches the other, and
+the two halves together prove the original assertion for every publisher and kind. It also keeps
+`reflect`/`unsafe` out of the tests. The ADR records the split in §6 S1, task 1.
 
 ## Constraints
 
@@ -63,7 +67,10 @@ never `-race`).
 - [x] T3 archcheck module table, `no-module-cycle`, generalized `no-cross-module-internal`
   (route: inline; RED: fixtures fail before the rules exist). Commit `c4272bd`.
 - [x] T4 `docs/ci.md` and `CHANGELOG.md`: `test/compat` listed as unreleased, measured selection
-  recorded (route: inline). Commit: the docs commit on this branch.
+  recorded (route: inline). Commit `0fa4dab`.
+- [x] T5 Maintainer decision on PR #142: option (c) for the sentinel check (drop `reflect`/`unsafe`,
+  add the identity check, ADR note), plus review nits: tidy wording, `test/compat` job cost, loader
+  fail-closed tests (route: inline). Commit: the T5 commit on this branch.
 
 ## Acceptance criteria and checks
 
@@ -81,20 +88,25 @@ Toolchain: `env -u GOROOT` gives Go 1.27.1 for build and test. golangci-lint 2.1
 go1.26.6 and fails type-checking against the 1.27.1 standard library, so every `verify-module.sh`
 run and the root lint used the fallback `GOROOT=/home/pablog/sdk/go1.26.6 GOTOOLCHAIN=local`.
 
-- **Assertion mapping (T1).** Per publisher P in kafka, nats, pulsar, websocket, the old
-  `publisher/P/compat_test.go` held `_ ego.EventPublisher = (*EventsPublisher)(nil)`,
-  `_ ego.StatePublisher = (*DurableStatePublisher)(nil)` and
-  `TestPublishBeforeStartMatchesEgoSentinel` (events and state). `test/compat/publisher_compat_test.go`
-  holds `_ ego.EventPublisher = (*P.EventsPublisher)(nil)`, `_ ego.StatePublisher =
-  (*P.DurableStatePublisher)(nil)` and subtests `P/events`, `P/state` of
-  `TestPublishBeforeStartMatchesEgoSentinel`: 8 compile-time plus 8 runtime assertions, 16 of 16.
+- **Assertion mapping (T1, revised in T5).** Per publisher P in kafka, nats, pulsar, websocket, the
+  old `publisher/P/compat_test.go` held `_ ego.EventPublisher = (*EventsPublisher)(nil)`,
+  `_ ego.StatePublisher = (*DurableStatePublisher)(nil)` and `TestPublishBeforeStartMatchesEgoSentinel`
+  (events and state). Now: the 8 compile-time assertions are in
+  `test/compat/publisher_compat_test.go` as `(*P.EventsPublisher)(nil)` / `(*P.DurableStatePublisher)(nil)`;
+  the 8 runtime checks are `TestPublishBeforeStartMatchesPublishingSentinel` (events and state) in
+  each `publisher/P/publisher_contract_test.go`, plus one identity check
+  `TestEgoSentinelIsThePublishingSentinel` in `test/compat`.
 - **RED (T1).** Temporarily set `ego.ErrPublisherNotStarted = errors.New(...)` in `publisher.go`:
   all 8 subtests FAIL. Temporarily widened `ego.EventPublisher`/`StatePublisher` with an extra method:
   `go vet`/`go test` report 8 "does not implement" errors, one per assertion. `publisher.go`
   restored with `git checkout` both times (never committed). GREEN: 8/8 subtests pass.
 - **T2.** Publisher closure tests (`TestUnitTestClosureExcludesRuntimeAndRoot`) and contract tests
   pass. `go mod tidy` was required by the tidy gate: it dropped the indirect GoAkt, Olric and OTel
-  lines from each publisher's `go.mod`/`go.sum` (S3 still owns dropping the root requirement).
+  lines from each publisher's `go.mod`/`go.sum` (S3 still owns dropping the root requirement), and
+  added indirect lines pinning already-resolved versions: 1 in kafka (`prometheus/client_golang`),
+  12 in pulsar (`testcontainers-go`, `moby`/`docker` clients, `gopsutil`, `x/crypto`, ...); nats and
+  websocket only lose lines. The module versions behind `go list -deps -test ./...` are identical to
+  `main` in all four (kafka 21, nats 13, pulsar 72, websocket 7 modules).
 - **RED (T3).** New `rules/modules_test.go`: with only the `Module`/`Graph.Modules` types added, 9
   tests fail (unknown rule `no-module-cycle`; no violation for nested-to-nested and root-to-nested
   `internal/` imports; no error for a package outside every module). e2e tests failed to compile
@@ -113,9 +125,18 @@ run and the root lint used the fallback `GOROOT=/home/pablog/sdk/go1.26.6 GOTOOL
   `test/compat ← .` because `test/compat` imports package `ego` directly. Selection is identical.
 - **CI discovery.** `modules.json` comes from discovery; `test/compat` appears in it with no
   workflow edit. No workflow or branch-protection change needed.
-- **Pending.** CI measurement on a draft PR (design §6 S1 "CI measurement") needs maintainer
-  authorization and was not done. Native review (RDD) not run by the writer.
+- **RED (T5).** Identity check: with `ego.ErrPublisherNotStarted = errors.New(...)` in a throwaway,
+  uncommitted edit of `publisher.go`, `TestEgoSentinelIsThePublishingSentinel` fails all three
+  checks (`==`, `errors.Is` both ways); restored with `git checkout`, it passes. Loader tests: with the
+  error and empty-path guards in `loadModuleTable` temporarily removed, the new
+  `TestLoadModuleTable_MalformedGoModFailsClosed` and `TestLoadModuleTable_EmptyModulePathFailsClosed`
+  fail; restored, they pass.
+- **CI cost.** PR run 36331397582: `test/compat` job about 195 s, the slowest module job
+  (`publisher/pulsar` about 154 s). It runs on every leaf publisher PR.
+- **Pending.** The throwaway draft-PR CI measurement (design §6 S1) needs maintainer authorization
+  and was not done. Native review (RDD) was not run by the writer.
 
 ## Next step
 
-Open the PR; CI on the PR is the authoritative lint and race run.
+PR #142 is open. Waiting on its CI for the T5 commit and on maintainer review; merging is the
+maintainers' call.
