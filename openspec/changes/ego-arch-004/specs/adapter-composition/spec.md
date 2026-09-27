@@ -28,7 +28,10 @@ After specs 1 and 2 the SPI exists and is tested, but core code does not use it 
 - **V8b** — declaration and method set agree in both directions for `CapStart`, `CapReady` and `CapFixedTenant`, checked through `adapter.StarterOf`/`PingerOf` and `tenancy.AsFixedTenantResolver`. Capabilities implied by the port are skipped.
 - **V8c** — a requirement table that starts empty.
 
-Undeclared adapters MUST validate exactly as today (design §D6).
+Undeclared adapters MUST validate exactly as today (design §D6). Two limits on V8b also apply:
+
+- **Unknown capabilities.** A declared capability that `compose` does not know (one added later by another issue) MUST be accepted by V8; the adapter's own conformance tests check it (AT-1 through `Target.Capabilities`).
+- **The runtime port.** When a runtime port is added (F-E), V8b MUST be one-directional for it (declared ⇒ implemented only), because the composite `port/runtime` interface makes every runtime implement every capability interface (`openspec/changes/ego-runtime-001/design.md` §8). Runtime capabilities are declaration-only.
 
 #### Scenario: undeclared-but-implemented fixed tenant
 
@@ -56,6 +59,18 @@ Undeclared adapters MUST validate exactly as today (design §D6).
 
 `tenancy.AsFixedTenantResolver` MUST be the only type assertion on `FixedTenantResolver`. `tenancy.FixedTenantOf` and `engine.go:883` MUST call it, with no change in behavior.
 
+#### Scenario: a multi-tenant resolver that implements the interface
+
+- GIVEN a resolver that implements `FixedTenantResolver` and returns `(zero TenantID, false)`
+- WHEN a spawn without `WithTenant` runs
+- THEN `FixedTenantOf` reports no fixed tenant and the spawn fails with `ErrSpawnTenantUndetermined`, exactly as before this spec
+
+#### Scenario: no other assertion site
+
+- GIVEN the production Go files after this spec
+- WHEN they are searched for a type assertion to `FixedTenantResolver`
+- THEN the only match is inside `tenancy.AsFixedTenantResolver`
+
 ## Tasks (5)
 
 1. **V8** — V8a/V8b/V8c in `compose/spec.go`, written RED first (including the undeclared-but-implemented `FixedTenantResolver` case and the typed-nil ordering case).
@@ -80,7 +95,7 @@ Undeclared adapters MUST validate exactly as today (design §D6).
 ## Dependencies
 
 - **Spec 1** (`port/adapter`) and **spec 2** (the adopter the guide uses) must be merged.
-- **Shared hot spots** (design §6): `engine.go` with #147 S4-3; `compose/goakt/app.go` and `app_test.go` with #147 S4-4 and #146. The recommended order is to let #147 S4-3/S4-4 land first and rebase this slice onto them.
+- **Shared hot spots** (design §6): `compose/goakt/app.go` and `app_test.go` with #147 S4-4 (`App.Runtime()`) and #146. The recommended order is to let S4-4 land first and rebase this slice onto it. #147 S4-3 does not touch `engine.go`: its compile-time assertion goes in `engine_runtime.go`. #147 S4-2 edits only the error `var` block of `engine.go`, a different region from line 883.
 - **#148** (`compose/inmem`) reuses `compose/internal/adapters`. If #148 lands first, this slice extracts the helper from both composition roots instead.
 
 ## Next in the chain

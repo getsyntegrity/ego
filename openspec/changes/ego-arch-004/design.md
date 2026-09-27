@@ -36,7 +36,7 @@ Terms used below:
 | Adapter/SPI versioning and compatibility ranges (COMPAT-005) | #37 | Keeps `Descriptor` extensible so #37 can add a field additively |
 | Observability contract (telemetry is still `*ego.Telemetry`, `telemetry.go:32-37`) | #31 | Out of scope; telemetry stays a borrowed value, not a port |
 
-**How this vocabulary fits #147 and #148.** [#147](https://github.com/getsyntegrity/ego/issues/147) (RUNTIME-001/002, maintainer decisions recorded in the issue on 2026-09-27) defines `port/runtime` as small interfaces, one per capability, plus a composite interface. [#148](https://github.com/getsyntegrity/ego/issues/148) (the in-memory runtime and `compose/inmem`) requires that an operation a runtime does not support return an explicit typed error, not panic. Those two rules are the *consumer* side of a capability: which interfaces a runtime value implements, and what a caller gets when it calls something unsupported. This design is the *provider* side: what an adapter declares, so the composition root can check it before anything starts. They compose rather than compete. A runtime adapter can carry a `Descriptor` whose capabilities name what it supports. The runtime port is the exception to V8b's two-way check (§D6). The S4 runtime design in [PR #151](https://github.com/getsyntegrity/ego/pull/151) gives `port/runtime` a composite interface, so every runtime implements all four capability interfaces. For example, the in-memory runtime of #148 answers projection calls with `runtime.ErrUnsupported`. The method set therefore says nothing about support. For the runtime port, V8b must not apply the implemented ⇒ declared direction, and runtime capabilities are declaration-only (RUNTIME-006). #148's typed "unsupported" error stays the call-time answer for anything that cannot be known statically. #147 itself says the provider side of the runtime follows #106's model; this design does not define any runtime interface. See follow-up F-E.
+**How this vocabulary fits #147 and #148.** [#147](https://github.com/getsyntegrity/ego/issues/147) (RUNTIME-001/002, maintainer decisions recorded in the issue on 2026-09-27) defines `port/runtime` as small interfaces, one per capability, plus a composite interface. [#148](https://github.com/getsyntegrity/ego/issues/148) (the in-memory runtime and `compose/inmem`) requires that an operation a runtime does not support return an explicit typed error, not panic. Those two rules are the *consumer* side of a capability: which interfaces a runtime value implements, and what a caller gets when it calls something unsupported. This design is the *provider* side: what an adapter declares, so the composition root can check it before anything starts. They compose rather than compete. A runtime adapter can carry a `Descriptor` whose capabilities name what it supports. The runtime port is the exception to V8b's two-way check (§D6). The S4 runtime design, merged as [`openspec/changes/ego-runtime-001/design.md`](../ego-runtime-001/design.md) §8, gives `port/runtime` a composite interface, so every runtime implements all four capability interfaces. For example, the in-memory runtime of #148 answers projection calls with `runtime.ErrUnsupported`. The method set therefore says nothing about support. For the runtime port, V8b must not apply the implemented ⇒ declared direction, and runtime capabilities are declaration-only (RUNTIME-006). #148's typed "unsupported" error stays the call-time answer for anything that cannot be known statically. #147 itself says the provider side of the runtime follows #106's model; this design does not define any runtime interface. See follow-up F-E.
 
 ## 3. Decisions
 
@@ -292,7 +292,7 @@ Everything is additive in v4, per ego-arch-001 §10.
 |---|---|---|
 | `port/adapter`, `port/adapter/adaptertest`, `port/publishing/publishingtest` | new | additions only |
 | every existing contract interface (`port/publishing`, `persistence`, `offsetstore`, `encryption`, `tenancy`) | no method added to any interface | no incompatible change |
-| `tenancy`, `persistence`, `offsetstore`, `port/publishing` (port-name constants only) | adds untyped constants; `tenancy` also adds `AsFixedTenantResolver` and `FixedTenantOf` | additions only; no new import |
+| `tenancy`, `encryption`, `persistence`, `offsetstore`, `port/publishing` (port-name constants only) | adds untyped constants; `tenancy` also adds `AsFixedTenantResolver` and `FixedTenantOf` | additions only; no new import |
 | `compose` | adds rule V8 inside `Validate` | no exported change; behavior changes only for adapters that declare a descriptor, which none do before this change |
 | `compose/goakt` | step 4 calls `Start`/`Ping` when implemented | no exported change |
 | `ego` | `engine.go:883` calls `tenancy.FixedTenantOf` | no exported change |
@@ -326,7 +326,7 @@ Per the maintainer decision of 2026-09-27 (decision A in §9), no spec carries m
 |---|---|---|---|---|---|
 | 1 | [`specs/adapter-spi-boundary/spec.md`](./specs/adapter-spi-boundary/spec.md): `port/adapter`, untyped port-name constants, archcheck `external-adapter-no-composition`, publisher closure tests, the `ego-arch-001/design.md:118` amendment | SPI-1, SPI-2 | 5 | nothing | spec 2 |
 | 2 | [`specs/adapter-conformance/spec.md`](./specs/adapter-conformance/spec.md): `adaptertest`, `publishingtest`, idempotent websocket `Close`, websocket and `testkit` adopters | SPI-3, SPI-4 | 5 | spec 1; if ego-arch-006 S3 lands first, the websocket half waits for S2 to carry `port/adapter` (O2) | spec 3 |
-| 3 | [`specs/adapter-composition/spec.md`](./specs/adapter-composition/spec.md): V8, the step-4 start-and-probe helper in `compose/internal/adapters`, `adapter.PingerOf` in `probeStores`, `tenancy.AsFixedTenantResolver`/`FixedTenantOf`, `docs/adapters.md` | SPI-5 | 5 | specs 1 and 2; rebase after #147 S4-3/S4-4 (§6) | none; follow-ups below |
+| 3 | [`specs/adapter-composition/spec.md`](./specs/adapter-composition/spec.md): V8, the step-4 start-and-probe helper in `compose/internal/adapters`, `adapter.PingerOf` in `probeStores`, `tenancy.AsFixedTenantResolver`/`FixedTenantOf`, `docs/adapters.md` | SPI-5 | 5 | specs 1 and 2; rebase after #147 S4-4 (§6) | none; follow-ups below |
 
 The slice names SPI-1 to SPI-5 used elsewhere in this document refer to the pull requests inside these specs. File ownership never overlaps between specs: in particular, spec 1 owns all four `publisher/*/closure_test.go` files, and spec 2 does not edit them. The ~400 changed lines per pull request is a planning heuristic, not a cap.
 
@@ -336,7 +336,7 @@ The slice names SPI-1 to SPI-5 used elsewhere in this document refer to the pull
 - **F-B** `port/adapter` and `adaptertest` move into the ego-arch-006 contracts module in its slice S2 (decision O2; recorded amendment of ego-arch-006 D7 (i), §9).
 - **F-C** An optional `ID` in each publisher `Config`, defaulting to today's constant (decision O3). A good fit to land together with F-A, one publisher at a time.
 - **F-D** (not scheduled) an `external-adapter-contracts-only` allowlist that would enforce all of ego-arch-001 §3, only if the maintainers later ask for it; O1 chose the dedicated denylist rule.
-- **F-E** Provider-side runtime capabilities for #11 RUNTIME-006: a runtime adapter's `Descriptor` declares which `port/runtime` capabilities from #147 it supports. These capabilities are declaration-only: because the composite interface in [PR #151](https://github.com/getsyntegrity/ego/pull/151) makes every runtime implement every capability interface, V8b must not apply the implemented ⇒ declared direction to the runtime port. #148's typed "unsupported" error stays the call-time answer (§2).
+- **F-E** Provider-side runtime capabilities for #11 RUNTIME-006: a runtime adapter's `Descriptor` declares which `port/runtime` capabilities from #147 it supports. These capabilities are declaration-only: because the composite interface in [`openspec/changes/ego-runtime-001/design.md`](../ego-runtime-001/design.md) §8 makes every runtime implement every capability interface, V8b must not apply the implemented ⇒ declared direction to the runtime port. #148's typed "unsupported" error stays the call-time answer (§2).
 - **F-F** Observability port for telemetry and logging (#31), after which the `kit-logger` assertions can move behind it.
 
 ## 6. Dependencies and sequencing
@@ -349,12 +349,12 @@ The slice names SPI-1 to SPI-5 used elsewhere in this document refer to the pull
 
   | File | This change | Other work |
   |---|---|---|
-  | `engine.go` | SPI-5: one line at `:883` | #147 S4-3 (`*ego.Engine` implements `port/runtime`; may add methods and a compile-time assertion) |
-  | `compose/goakt/app.go` | SPI-5: step 4 and `probeStores` | #147 S4-4 (adds a neutral runtime accessor to `App`); #146 (two-node test through `compose/goakt`; mostly new test files, but it may touch `WithCluster` wiring) |
+  | `engine.go` | SPI-5: one line at `:883` | #147 S4-2 edits only the error `var` block (`engine.go:61-174`, ego-runtime-001 §9), a different region; S4-3 puts its compile-time assertion in its own file, `engine_runtime.go`, and does not touch `engine.go` |
+  | `compose/goakt/app.go` | SPI-5: step 4 and `probeStores` | #147 S4-4 (adds `App.Runtime()`, a different function); #146 (two-node test through `compose/goakt`; mostly new test files, but it may touch `WithCluster` wiring) |
   | `compose/goakt/app_test.go` | SPI-5: step-4 failure tests | #146 and #147 S4-4 add tests beside them |
   | `publisher/*/closure_test.go` | SPI-2 only (SPI-4 does not edit them) | — |
 
-  The `engine.go` and `app.go` edits in SPI-5 are small and local, so the recommended order is to let #147 S4-3/S4-4 land first and rebase SPI-5 onto them.
+  The only overlap that needs ordering is `compose/goakt/app.go` with #147 S4-4. The SPI-5 edits there are small and local, so the recommended order is to let S4-4 land first and rebase SPI-5 onto it. `engine.go` is also touched by #147 S4-2, but in a different region, so an ordinary rebase suffices.
 - **#24.** See §7. No slice waits for #24.
 
 ## 7. Interactions with #24 (lifecycle epic)

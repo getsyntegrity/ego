@@ -29,11 +29,11 @@ Nothing in core changes behavior in this spec. Core starts using the new package
 
 ### Requirement: contract packages keep no dependency on `port/adapter`
 
-`port/publishing`, `persistence` and `offsetstore` MUST declare their port names as **untyped** string constants, so none of them imports `port/adapter`. If `port/publishing` imported `port/adapter` while the two sit in different modules, the ego-arch-006 S2 contracts module would form a module cycle (design §D3).
+`port/publishing`, `persistence`, `offsetstore`, `tenancy` and `encryption` MUST declare their port names as **untyped** string constants, so none of them imports `port/adapter`. If `port/publishing` imported `port/adapter` while the two sit in different modules, the ego-arch-006 S2 contracts module would form a module cycle (design §D3).
 
 #### Scenario: moving `port/publishing` stays cycle-free
 
-- GIVEN the three contract packages after this spec
+- GIVEN the five contract packages after this spec
 - WHEN their imports are listed
 - THEN none of them imports `port/adapter`
 
@@ -56,14 +56,14 @@ archcheck MUST report the rule `external-adapter-no-composition` when a package 
 ## Tasks (5)
 
 1. **`port/adapter`** — types, accessors, package doc naming the one-assertion rule; unit tests written RED first (accessors on implementing and non-implementing values, `Declares`/`Serves`, typed-nil input). *(SPI-1)*
-2. **Port-name constants and architecture tests** — untyped constants in `port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go`; a `go list -deps` architecture test for `port/adapter` with an empty non-stdlib allowlist; a test that none of the three contract packages imports `port/adapter`. *(SPI-1)*
+2. **Port-name constants and architecture tests** — untyped constants in `port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go`, `tenancy/port.go`, `encryption/port.go` (the resolver and encryptor slots need them for V8a in spec 3); a `go list -deps` architecture test for `port/adapter` with an empty non-stdlib allowlist; a test that none of the five contract packages imports `port/adapter`. *(SPI-1)*
 3. **archcheck rule** — RED graph tests (adapter imports `compose`, `compose/goakt`, `compose/internal/lifecycle`, where `no-cross-module-internal` also fires; plus a root `main` importing `compose` that stays allowed), then `external-adapter-no-composition` in `DefaultRules`. *(SPI-2)*
 4. **Closure tests** — the four `publisher/*/closure_test.go` reject `<root>/compose` and its subpackages. *(SPI-2)*
 5. **Documentation** — `docs/ci.md` rule table and the adapter-roots note under "Adding a layer"; amend `openspec/changes/ego-arch-001/design.md:118`: the `compose` part of "adapters import only contracts and `egopb`" is now enforced by archcheck, and the rest stays enforced in review. *(SPI-2)*
 
 ## Checks
 
-- `go test ./port/... ./persistence/... ./offsetstore/...`
+- `go test ./port/... ./persistence/... ./offsetstore/... ./tenancy/... ./encryption/...`
 - `go test ./internal/cmd/archcheck/...`
 - `go run ./internal/cmd/archcheck` on the slice head: 0 violations and no new baseline entry
 - `scripts/ci/verify-module.sh` for each of the four publishers (closure tests)
@@ -73,7 +73,7 @@ archcheck MUST report the rule `external-adapter-no-composition` when a package 
 
 | Slice | Files |
 |---|---|
-| SPI-1 | `port/adapter/**` (new); `port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go` (new) |
+| SPI-1 | `port/adapter/**` (new); `port/publishing/port.go`, `persistence/port.go`, `offsetstore/port.go`, `tenancy/port.go`, `encryption/port.go` (new) |
 | SPI-2 | `internal/cmd/archcheck/rules/rules.go`, `internal/cmd/archcheck/rules/*_test.go`, `docs/ci.md`, `publisher/*/closure_test.go` (all four; no later spec edits them), `openspec/changes/ego-arch-001/design.md` (one sentence in §3) |
 
 ## Dependencies

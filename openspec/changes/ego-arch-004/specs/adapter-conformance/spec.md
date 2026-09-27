@@ -24,6 +24,18 @@ It also fixes the one lifecycle rule the chosen publisher breaks today: its `Clo
 
 `adaptertest` MUST import only the standard library and `port/adapter`. `publishingtest` MUST import only the standard library, `port/publishing` and `egopb`, and MUST NOT import `port/adapter`, so it can move with `port/publishing` into the ego-arch-006 contracts module. A publisher that runs the suites MUST keep GoAkt and the root package out of `go list -deps -test ./...` (design §D8).
 
+#### Scenario: the architecture tests hold the line
+
+- GIVEN `adaptertest` and `publishingtest`
+- WHEN their architecture tests run `go list -deps` on them
+- THEN every non-standard-library dependency is on the package's allowlist (`port/adapter` for `adaptertest`; `port/publishing`, `egopb` and the protobuf runtime for `publishingtest`)
+
+#### Scenario: an adopting publisher keeps its clean test closure
+
+- GIVEN `publisher/websocket` after it runs both suites
+- WHEN its closure test runs `go list -deps -test ./...`
+- THEN no `github.com/tochemey/goakt/v4` package and not the root package appear
+
 ### Requirement: a skip means "unreachable", nothing else
 
 A check MUST be skipped only when the target's factory returns an error matching `adaptertest.ErrUnreachable`. Any other factory error fails. A check that has no hook, or that cannot apply because the adapter connects in its constructor, MUST be reported as "not exercised", never as passed (design §D8 "Hooks").

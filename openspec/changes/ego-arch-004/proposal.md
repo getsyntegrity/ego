@@ -73,7 +73,7 @@ Also in scope: named follow-ups F-A to F-F, and the mapping of every #106 accept
 All additive (design §D9):
 
 - New packages `port/adapter`, `port/adapter/adaptertest`, `port/publishing/publishingtest`.
-- New untyped constants in `port/publishing`, `persistence`, `offsetstore` and `tenancy`, plus `tenancy.AsFixedTenantResolver` and `tenancy.FixedTenantOf`. No existing contract package imports `port/adapter`.
+- New untyped constants in `port/publishing`, `persistence`, `offsetstore`, `tenancy` and `encryption`, plus `tenancy.AsFixedTenantResolver` and `tenancy.FixedTenantOf`. No existing contract package imports `port/adapter`.
 - New `Describe` methods on `testkit` stores and on `publisher/websocket` types; websocket `Close` becomes idempotent (a second call returns nil instead of the connection error).
 - Behavior: `compose.Spec.Validate` rule V8 applies only to adapters that declare a descriptor; `compose/goakt` step 4 starts and probes publishers that implement `Starter`/`Pinger`. No existing signature changes and nothing is deprecated.
 
