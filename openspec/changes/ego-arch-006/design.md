@@ -301,11 +301,11 @@ One module per pull request, and the selector first. Each slice lists at most fi
 
 This slice follows D7 option (i). Under D7 (ii) it would also carry `port/behavior`, `command` and `tenancy`, and it would then need its own split into slices.
 
-- **Owns:** the new module directory (for example `contracts/`, named in the slice; it cannot be `egopb/` or `port/`, see the D2 directory consequence); `egopb/**` and `port/publishing/**`, which become alias packages in the root; `buf.gen.yaml`; the root `go.mod`; `internal/cmd/archcheck/**`; `docs/ci.md`.
+- **Owns:** under D2 (a)/(a'), the new module directory (for example `contracts/`, named in the slice; it cannot be `egopb/` or `port/`, see the D2 directory consequence); under D2 (b), the directory `v4/<dir>` instead, with no alias packages; `egopb/**` and `port/publishing/**`, which become alias packages in the root; `buf.gen.yaml`; the root `go.mod`; `internal/cmd/archcheck/**`; `docs/ci.md`.
 - **Tasks:**
   1. Resolution proof for the chosen D2 layout: a scratch consumer module resolves the new path at a pseudo-version of the branch head (the exploration §5 method). Under D2 (b) this is a blocking spike, not a check.
   2. Create the module in its new directory, holding `egopb` (with `go_package` pointed at it) and `publishing`. The root requires it through a local `replace` for integrated verification, plus the pseudo-version of an already-merged commit. That makes it a two-step landing, because a commit cannot name its own hash.
-  3. Leave alias packages at the old root paths `…/v4/egopb` and `…/v4/port/publishing`, kept until #124.
+  3. Under D2 (a)/(a'), leave alias packages at the old root paths `…/v4/egopb` and `…/v4/port/publishing`, kept until #124. (Under D2 (b) the import paths do not change, so this task is empty: the packages move to `v4/<dir>` and need no alias.)
      - They have to be separate root packages in the old directories. Under D2 (a) or (a') an alias cannot share a directory with the new module's `go.mod`.
      - They are needed even before the first release, because the root already resolves by pseudo-version.
      - Package `ego`'s `publisher.go` aliases re-point to the new path.
@@ -340,7 +340,8 @@ This slice follows D7 option (i). Under D7 (ii) it would also carry `port/behavi
   - topological release order, which amends ego-arch-001 §8 item 1 (D3);
   - the D2 tag scheme;
   - `verify-published.sh` generalized to every released module and every in-repository requirement, since it hard-codes the root path today (`verify-published.sh:35`);
-  - release only from a commit whose `build.yml` full gate passed.
+  - release only from a commit whose `build.yml` full gate passed;
+  - refuse a v2+ tag on a nested module whose path has no `/vN` suffix, or require the matching `/vN` path first. Today the major-bump branch of `release.yml` (`release.yml:126-130`) would produce an invalid `publisher/<name>/v2.0.0` tag for a suffix-less path.
 - **F5** `go.work` per D4 (script, or committed file plus drift check).
 
 ## 7. Risks
