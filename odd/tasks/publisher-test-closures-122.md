@@ -49,7 +49,11 @@ names every nested module (evidence below).
 ## Constraints
 
 - File ownership: `publisher/*/`, the workflow files and `scripts/ci/*` only as needed for the
-  compatibility lane, `docs/ci.md`, `CHANGELOG.md`, this document. Not `internal/cmd/ciselect`,
+  compatibility lane, `docs/ci.md`, `CHANGELOG.md`, this document, and
+  `openspec/changes/ego-arch-001/design.md` (disclosed post-hoc: T4 edits §5/§7 there — it documents
+  that S1 criterion 4 is now covered by a real test, `TestUnitTestClosureExcludesRuntimeAndRoot`,
+  rather than being a one-time observation; the ADR is the only place that fact belongs, and the edit
+  does not conflict with #128's separate S3-design work in the same file). Not `internal/cmd/ciselect`,
   `internal/cmd/archcheck`, or root `.go` files.
 - The historical `ego`-alias/sentinel check must keep running in CI against all four publishers; it
   must not silently stop being verified.

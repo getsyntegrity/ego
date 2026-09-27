@@ -23,10 +23,29 @@
 package kafka
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 )
+
+// hermeticGoEnv returns a copy of the current process environment with any
+// existing GOWORK and GOFLAGS entries removed and GOWORK=off, GOFLAGS=
+// (empty) appended, so the child `go` invocation below can never inherit a
+// stray root go.work file or an ambient GOFLAGS value from the caller's
+// shell — it always evaluates the module's default build tags in isolation,
+// regardless of how the test binary itself was invoked.
+func hermeticGoEnv() []string {
+	base := os.Environ()
+	env := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "GOWORK=") || strings.HasPrefix(kv, "GOFLAGS=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GOWORK=off", "GOFLAGS=")
+}
 
 // TestUnitTestClosureExcludesRuntimeAndRoot guards the regression tracked by
 // #122: this module's default (untagged) unit-test closure must never again
@@ -34,11 +53,13 @@ import (
 // alias/sentinel compatibility checks against package `ego` still exist —
 // see compat_test.go — but they run behind the `compat` build tag, in a
 // separate CI lane (docs/ci.md, "Compatibility lane"), specifically so this
-// command stays clean. GOWORK is inherited from the caller (verify-module.sh
-// and the local test-execution rule both set GOWORK=off) so a stray root
-// go.work file can never fold this module back into the root module's graph.
+// command stays clean. The child `go list` runs under hermeticGoEnv() so a
+// stray root go.work file or an inherited GOFLAGS can never change the
+// result, independently of verify-module.sh's own GOWORK=off.
 func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-test", "./...").CombinedOutput()
+	cmd := exec.Command("go", "list", "-deps", "-test", "./...")
+	cmd.Env = hermeticGoEnv()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list -deps -test ./...: %v\n%s", err, out)
 	}
