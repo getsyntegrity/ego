@@ -73,7 +73,7 @@ Five pull requests, each about 400 changed lines or fewer, with file ownership i
 | S3-1 | `port/behavior` contracts; `ego` names re-expressed on top of them | First; independent of #105 |
 | S3-2 | Spawn-site bridge in `engine.go`, internal wrapper, typed errors, actors on neutral types | Before #105 IMPL-4 |
 | S3-3 | `Spawn*` entry points (new file) and the two-node remote-spawn test | After S3-2 |
-| S3-4 | `BehaviorKind`/`WithBehaviorKinds`; `NewEngine` check; the mixed-registration two-node subtest | After S3-2 |
+| S3-4 | `BehaviorKind`/`WithBehaviorKinds`; `NewEngine` check; the mixed-registration two-node subtest | After S3-2 (and S3-3) |
 | S3-5 | Deprecations, `CHANGELOG.md`, examples | Last |
 
 ## Archcheck
