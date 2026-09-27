@@ -73,7 +73,7 @@ func NewEventsPublisher(config *Config) (*EventsPublisher, error) {
 func (x *EventsPublisher) Close(ctx context.Context) error {
 	// we give the publisher 3 seconds to close. This is an abitrary value.
 	// It helps to ensure that the publisher has enough time to close.
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	x.started.Store(false)
@@ -94,7 +94,7 @@ func (x *EventsPublisher) ID() string {
 //
 // Returns:
 //   - error: If an error occurs during event publication, it is returned.
-func (x *EventsPublisher) Publish(ctx context.Context, event *egopb.Event) error {
+func (x *EventsPublisher) Publish(_ context.Context, event *egopb.Event) error {
 	if !x.started.Load() {
 		return ego.ErrPublisherNotStarted
 	}
@@ -153,7 +153,7 @@ func NewDurableStatePublisher(config *Config) (*DurableStatePublisher, error) {
 func (x *DurableStatePublisher) Close(ctx context.Context) error {
 	// we give the publisher 3 seconds to close. This is an abitrary value.
 	// It helps to ensure that the publisher has enough time to close.
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	x.started.Store(false)
@@ -174,7 +174,7 @@ func (x *DurableStatePublisher) ID() string {
 //
 // Returns:
 //   - error: If an error occurs during event publication, it is returned.
-func (x *DurableStatePublisher) Publish(ctx context.Context, state *egopb.DurableState) error {
+func (x *DurableStatePublisher) Publish(_ context.Context, state *egopb.DurableState) error {
 	if !x.started.Load() {
 		return ego.ErrPublisherNotStarted
 	}

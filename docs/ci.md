@@ -94,7 +94,7 @@ buckets, checked in this order:
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
 | Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
-| Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`)                          | Selects nothing for that file; recorded as "not covered by this lane" |
+| Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
 | No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
 | Unknown          | Anything else                                                                                                                                                                                | Forces mode `full`, with the offending path in the reason |
@@ -293,17 +293,167 @@ selection — it is sharding the root package's tests across parallel jobs,
 which is out of scope for this change and tracked as a follow-up in the
 feature document (`odd/tasks/affected-package-fast-lane.md`).
 
-## Multi-module path (#104)
+## Nested module CI (#111)
 
 `benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`,
 `publisher/pulsar` and `publisher/websocket` each carry their own `go.mod`
-and are not reached by `go list ./...` from the root module, so they are
-outside `internal/cmd/ciselect`'s package graph entirely. The selector
-already accepts `-module-dir` and `-repo-root` flags so a future change
-can point it at one of those satellite modules and run it again for that
-module's own graph — the selection algorithm itself does not assume the
-module is the repository root. Today, a change confined to a satellite
-module classifies as `Satellite` and selects nothing; `summary.md` records
-it as "not covered by this lane (see #104)" so that limitation is visible
-on every PR that touches one, rather than silently skipped. Wiring CI to
-actually run a satellite module's own tests is left to #104.
+and are not reached by `go list ./...` from the root module, so they sit
+outside `internal/cmd/ciselect`'s own package graph entirely (see
+"How the selector decides" above). Before #111, a change confined to one
+of these directories classified as `Satellite`, `ciselect` reported
+`ModeNone`, and no CI job ever built, vetted, linted or tested it — a pull
+request that only touched `publisher/kafka` went green without compiling
+Kafka. This section describes how that gap is closed: nested modules get
+their own, independent selection decision and their own per-module CI
+job, on top of the root package lane described above, which is otherwise
+unchanged (docs-only changes still select nothing for the root package,
+and a leaf change still gets the root's own fast `affected` lane).
+
+### Module selection rules
+
+`ciselect` still discovers every nested module automatically (the same
+`findSatelliteDirs` walk #104 already used, skipping `vendor/` and a few
+other non-module directories), and it now also parses each one's own
+non-vendor `.go` files — including `_test.go`, since a module's tests can
+import a root package its production code does not — with `go/parser` in
+imports-only mode. No network call and no `go list` run inside a nested
+module: the parser only needs to see which `github.com/pablogore/ego/v4/...`
+import paths a module's files mention, not resolve them.
+
+A nested module is selected, independently of whatever mode the root
+package lane decided, by exactly one of these rules, checked in order:
+
+1. **A changed file falls under the module's own directory** (for
+   example, anything under `publisher/kafka/`) — reason "changed files in
+   `<dir>`". This is the fix for the original gap: a Kafka-only change now
+   selects the Kafka module even though the root lane still reports
+   `ModeNone` for it.
+2. **The root lane's own affected package set intersects a root package
+   the module directly imports.** If `publisher/kafka` imports
+   `github.com/pablogore/ego/v4/port/publishing`, and a change to that
+   package puts it in the root lane's `Selected` set, Kafka is selected
+   too — reason "imports affected root package `<path>`". When the root
+   lane's mode is `full`, `Selected` equals every included root package,
+   so this rule alone ends up selecting every module that imports the
+   root package at all (which is every nested module today, since they
+   all `require github.com/pablogore/ego/v4`).
+3. **A full-gate path changed**, or `-all` was passed: root `go.mod` or
+   `go.sum`, or anything under `.github/`, `scripts/ci/` or
+   `internal/cmd/ciselect/` — reason "full gate: `<reason>`". This is a
+   smaller, closed set of paths than the root lane's own full-fallback
+   list (it does not include, for example, `protos/` or `egopb/`,
+   which force the root lane to `full` but do not change how a nested
+   module builds): it selects every module unconditionally.
+
+A module that matches none of these rules is not selected at all — a
+change to an unrelated root leaf package that no module imports leaves
+every module untouched, exactly like today.
+
+### `modules.json` and the job summary
+
+`ciselect` writes the selected module directories to
+`<out-dir>/modules.json`, a JSON array of strings — `[]`, never `null`,
+when nothing was selected — so a GitHub Actions job can feed it straight
+into a matrix's `fromJSON(...)` without any extra parsing step. The job
+summary (`summary.md`) gets a `## Nested modules` section listing each
+selected module and its reason, or the line "no nested modules selected"
+when none were.
+
+### `scripts/ci/verify-module.sh`: what runs for one selected module
+
+For each module `fromJSON(modules.json)` names, `scripts/ci/verify-module.sh
+<module-dir>` runs, with `GOWORK=off` so a stray root `go.work` can never
+pull the module into the root module's own build:
+
+1. `go mod download`
+2. `go build ./...` (into a scratch directory when the module has a
+   `main` package, so a verification run never leaves a stray binary in
+   the module's own working tree)
+3. `go vet ./...`
+4. `golangci-lint run` against the **root** `.golangci.yml` — nested
+   modules have no lint config of their own — with
+   `--modules-download-mode=mod`, overriding the root config's
+   `modules-download-mode: vendor`, since nested modules do not check in
+   a `vendor/` directory
+5. `go test ./...` only when the module has at least one `*_test.go`
+   file; a module with none (every publisher today) reports "no tests"
+   in the job summary instead of running `go test` against nothing.
+   `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
+   sets; a local run leaves it off by default, per this repository's own
+   rule against running the race detector locally.
+
+Any of these steps failing fails the module's own job, and therefore the
+whole check — a Kafka build error, a Kafka lint finding or a Kafka test
+failure now blocks the PR the same way a root-package failure always did.
+
+### The `modules` matrix job
+
+Both `pull_request.yml` and `build.yml` add a `modules` job that
+`needs: build`, runs only `if: needs.build.outputs.modules != '[]'`, and
+fans out one `strategy.matrix.module` entry per string in that JSON
+array, with `fail-fast: false` so one module's failure does not cancel
+the others mid-run. Each matrix job checks out the repository, sets up
+the same Go version as the root lane, installs the same pinned
+`golangci-lint` version, and runs `scripts/ci/verify-module.sh
+"${{ matrix.module }}"` with `GO_TEST_RACE=1`. `build.yml` always selects
+every module (it runs `ciselect -all`); `pull_request.yml` selects
+whatever the module selection rules above decided for that PR. The module
+list is never hand-maintained: it comes from `modules.json`, so a new
+nested module is picked up the moment its `go.mod` exists, with no
+workflow edit.
+
+### Release verification: two different questions
+
+Two distinct claims exist about a nested module, and this repository
+checks both, separately:
+
+- **Does the monorepo build together, right now?** `verify-module.sh`
+  above answers this on every PR and on every push to `main`, using the
+  module's checked-in `replace github.com/pablogore/ego/v4 => ../../`
+  (or `../` for `benchmark`) directive. This is "integrated verification"
+  in `openspec/changes/ego-arch-001/design.md` §8.
+- **Does a real consumer, resolving the module from the proxy, actually
+  get something that builds?** A checked-in `replace` is invisible to a
+  consumer — Go ignores `replace` directives in a dependency, only in the
+  main module — so integrated verification says nothing about this.
+  `scripts/ci/verify-published.sh <module-dir> <ego-version>` answers it:
+  it copies the module into a scratch directory, runs
+  `go mod edit -dropreplace=github.com/pablogore/ego/v4
+  -require=github.com/pablogore/ego/v4@<version>` in one edit (dropping
+  the replace and pointing at the target version together, so the module
+  graph is never resolved against the old, unpublished requirement before
+  the edit takes effect), then `go mod tidy && go build ./...`. If
+  `go list -m github.com/pablogore/ego/v4@<version>` cannot even resolve
+  the version, it fails fast with one `::error::` line instead of a
+  confusing `go.sum`/build error. `release.yml` runs it for each
+  publisher, right after that publisher's own `go get`/`go mod tidy` and
+  before any tag is created, so a publisher release can never point at a
+  root version that turns out not to build.
+
+### Version policy
+
+- The root module is released first, as a semantic-version tag `v4.x.y`.
+- Each publisher module is released only against a root version that
+  already exists on the module proxy — never against an unpublished
+  version, and never verified only through the local `replace`.
+  `release.yml` discovers which directories under `publisher/` to release
+  from `publisher/*/go.mod` (never a hand-written list), updates each
+  one's `github.com/pablogore/ego/v4` requirement to the just-published
+  root tag, runs `verify-published.sh` against it, and only then tags
+  `publisher/<name>/vX.Y.Z`.
+- `benchmark` and `example/cluster` are never released. They exist only
+  as integrated-verification consumers (`verify-module.sh` covers them
+  in the PR and `main` lanes) and keep their `replace` directive
+  permanently.
+
+### Toolchain requirements
+
+CI builds and tests everything — the root module and every nested
+module — with Go 1.27.0 (`actions/setup-go`'s `go-version` input). The
+root module's own `go.mod` declares `go 1.26.0`; the nested modules
+declare `go 1.26.0` (`benchmark`, `example/cluster`, `publisher/kafka`,
+`publisher/nats`, `publisher/websocket`) or `go 1.26.2`
+(`publisher/pulsar`), and none of them pins a `toolchain` line, so the
+installed 1.27.0 toolchain satisfies every one of them without
+downloading anything else. `golangci-lint` is pinned to the same version,
+`v2.13.1`, for the root lane and for every nested module's own lint step.

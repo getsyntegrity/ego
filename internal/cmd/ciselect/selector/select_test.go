@@ -115,12 +115,22 @@ func TestSelect_DocsOnlyIsNone(t *testing.T) {
 }
 
 func TestSelect_SatelliteOnlyIsNone(t *testing.T) {
+	// A satellite-only change selects nothing in the root package lane
+	// (unchanged from before #111): the root module's own tests have
+	// nothing to gain from running. Before #111 that also meant the
+	// change went entirely unverified: no CI job built or tested the
+	// nested module either. Module selection (opts.Modules) closes that
+	// gap independently of the root Mode, so the same change must still
+	// select the nested module itself.
 	g := fixtureGraph()
-	res := Select(g, []string{"benchmark/bench_test.go"}, satelliteOpts())
+	opts := satelliteOpts()
+	opts.Modules = []Module{{Dir: "benchmark"}}
+	res := Select(g, []string{"benchmark/bench_test.go"}, opts)
 
 	if res.Mode != ModeNone {
 		t.Fatalf("Mode = %s, want %s (reasons=%v)", res.Mode, ModeNone, res.Reasons)
 	}
+	assertSameSet(t, moduleDirs(res.Modules), []string{"benchmark"})
 }
 
 func TestSelect_DocsPlusLeafIsAffected(t *testing.T) {

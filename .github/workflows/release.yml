@@ -34,6 +34,21 @@ jobs:
         with:
           go-version: "1.27.0"
 
+      - name: Discover publishers
+        id: discover-publishers
+        shell: bash
+        run: |
+          PUBLISHERS=""
+          for d in publisher/*/; do
+            d="${d%/}"
+            if [ -f "$d/go.mod" ]; then
+              PUBLISHERS="$PUBLISHERS $(basename "$d")"
+            fi
+          done
+          PUBLISHERS="${PUBLISHERS# }"
+          echo "Discovered publishers: ${PUBLISHERS}"
+          echo "publishers=$PUBLISHERS" >> "$GITHUB_OUTPUT"
+
       - name: Get ego version from tag
         id: ego-version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
@@ -89,7 +104,7 @@ jobs:
         run: |
           EGO_VERSION="${{ steps.ego-version.outputs.version }}"
           BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
-          PUBLISHERS="kafka nats pulsar websocket"
+          PUBLISHERS="${{ steps.discover-publishers.outputs.publishers }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -131,6 +146,12 @@ jobs:
             go get "github.com/pablogore/ego/v4@${EGO_VERSION}"
             go mod tidy
             cd ../..
+
+            # Published verification: this publisher must build against
+            # the just-published root version with no local replace, not
+            # only with the checked-in `replace ../../` this repo uses for
+            # everyday development.
+            scripts/ci/verify-published.sh "publisher/${PUB}" "${EGO_VERSION}"
 
             # Stage changes if any
             if ! git diff --quiet "publisher/${PUB}/go.mod" "publisher/${PUB}/go.sum"; then
@@ -194,7 +215,7 @@ jobs:
         run: |
           EGO_VERSION="${{ steps.ego-version.outputs.version }}"
           BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
-          PUBLISHERS="kafka nats pulsar websocket"
+          PUBLISHERS="${{ steps.discover-publishers.outputs.publishers }}"
 
           for PUB in $PUBLISHERS; do
             PREFIX="publisher/${PUB}/v"

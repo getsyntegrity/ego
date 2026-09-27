@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# verify-module.sh builds, vets, lints (against the root .golangci.yml) and,
+# when the module has any *_test.go file, tests one nested Go module: a
+# directory with its own go.mod, outside the root module's `go list ./...`
+# graph and therefore outside internal/cmd/ciselect's own coverage (see
+# docs/ci.md). It verifies the module the way it is checked out today,
+# with its local `replace` directives in effect ("integrated
+# verification" in openspec/changes/ego-arch-001/design.md §8) — release
+# verification against a published root version is
+# scripts/ci/verify-published.sh, a separate, stricter check.
+#
+# Usage: verify-module.sh <module-dir>
+#   <module-dir>   repo-relative path to the nested module, e.g.
+#                  "publisher/kafka" or "example/cluster".
+#
+# Environment:
+#   GO_TEST_RACE         "1" adds -race to `go test` (CI sets this for the
+#                        module matrix job); default "0", so a local run
+#                        never uses the race detector, per this
+#                        repository's own local-testing rule.
+#   GITHUB_STEP_SUMMARY  when set, a short markdown block naming the
+#                        module, the steps that ran, and whether tests
+#                        were skipped is appended to it.
+#
+# GOWORK=off is forced throughout so a stray go.work at the repository
+# root can never pull a nested module's build into the root module's own
+# graph.
+
+usage() {
+  echo "usage: $0 <module-dir>" >&2
+  exit 2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+module_dir=$1
+export GOWORK=off
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$script_dir/../.." && pwd)
+module_path="$repo_root/$module_dir"
+
+if [ ! -f "$module_path/go.mod" ]; then
+  echo "verify-module.sh: $module_dir has no go.mod" >&2
+  exit 1
+fi
+
+steps=()
+
+cd "$module_path"
+
+echo "::group::go mod download ($module_dir)"
+go mod download
+echo "::endgroup::"
+steps+=("go mod download")
+
+echo "::group::go build ($module_dir)"
+# A module with at least one `package main` (e.g. example/cluster) needs
+# an explicit -o scratch directory: a bare `go build ./...` would
+# otherwise drop a binary straight into the module's own working tree
+# (example/cluster/cluster). A build-only, `go list` requires no module
+# download beyond what "go mod download" above already fetched.
+# `go build -o <dir>/ ./...` itself refuses with "no main packages to
+# build" for a library-only module (every publisher today), so -o is only
+# passed when a main package actually exists.
+if go list -f '{{.Name}}' ./... | grep -qx main; then
+  build_out=$(mktemp -d)
+  trap 'rm -rf "$build_out"' EXIT
+  go build -o "$build_out/" ./...
+else
+  go build ./...
+fi
+echo "::endgroup::"
+steps+=("go build ./...")
+
+echo "::group::go vet ($module_dir)"
+go vet ./...
+echo "::endgroup::"
+steps+=("go vet ./...")
+
+echo "::group::golangci-lint ($module_dir)"
+golangci-lint run --modules-download-mode=mod --config "$repo_root/.golangci.yml" ./...
+echo "::endgroup::"
+steps+=("golangci-lint run")
+
+tests_note=""
+if [ -n "$(find . -name '*_test.go' -print -quit)" ]; then
+  race_flags=()
+  if [ "${GO_TEST_RACE:-0}" = "1" ]; then
+    race_flags=(-race)
+  fi
+  echo "::group::go test ($module_dir)"
+  # shellcheck disable=SC2068 # race_flags is intentionally an empty or
+  # one-element array, never a string to word-split.
+  go test ${race_flags[@]+"${race_flags[@]}"} ./...
+  echo "::endgroup::"
+  steps+=("go test ./...")
+else
+  tests_note="no tests"
+fi
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### verify-module: \`$module_dir\`"
+    echo
+    for s in "${steps[@]}"; do
+      echo "- $s"
+    done
+    if [ -n "$tests_note" ]; then
+      echo "- go test: $tests_note"
+    fi
+    echo
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
