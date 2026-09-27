@@ -166,7 +166,7 @@ history of this file.
 | W2a | #147 S4 runtime SPI | — | — | issue created | decisions 1–7 approved 2026-09-27 |
 | W2a-1 | #147 S4-1 empty baseline | refactor/147-s4-1-logging | — | in progress | internal/logging; remove migration -> ego |
 | W2a-D | #147 S4-D design | docs/propose-ego-runtime-001 | — | in progress (docs) | small per-capability interfaces, v4 compatible; aligns with #149 |
-| W2b | #106 adapter SPI | docs/propose-ego-arch-004 @a5a67bd | #149 | in review (docs; O1–O7 open) | includes nested adapters -> compose dependency rule |
+| W2b | #106 adapter SPI | docs/propose-ego-arch-004 @a5a67bd | #149 | approved with nits (fixing 13 items); ~22 tasks across 5 slices exceeds the 4–5 task cap — flag to maintainer; O1–O7 open | includes nested adapters -> compose dependency rule |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @e6a669e | #142 | merged (658bbae) | approved with nits, CI 8/8; maintainer chose option (c): no reflect/unsafe, per-publisher pre-Start check + identity check in test/compat, ADR note, nits; then review + CI |
