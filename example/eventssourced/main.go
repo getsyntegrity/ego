@@ -25,6 +25,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,55 +33,76 @@ import (
 
 	"github.com/google/uuid"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
-	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/pablogore/ego/v4"
+	"github.com/pablogore/ego/v4/compose"
+	egoakt "github.com/pablogore/ego/v4/compose/goakt"
 	samplepb "github.com/pablogore/ego/v4/example/examplepb"
 	behaviorport "github.com/pablogore/ego/v4/port/behavior"
 	"github.com/pablogore/ego/v4/testkit"
 )
 
 func main() {
-	// create the go context
-	ctx := context.Background()
 	// create the kit-logger Logger the whole runtime logs through: eGo, the
 	// actor system it sits on, and this program
 	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
+	if err := run(context.Background(), logger); err != nil {
+		logger.Error("eventssourced example failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run wires and runs the example through compose/goakt, eGo's GoAkt
+// composition root (openspec/changes/ego-arch-003/design.md §5.1). Every
+// cleanup step is registered with defer before the corresponding resource
+// can fail later, so run never leaves anything open on its way out and main
+// never calls os.Exit before those defers have executed.
+func run(ctx context.Context, logger kitlog.Logger) error {
 	// create the event store
 	eventStore := testkit.NewEventsStore()
-	// connect the event store
-	_ = eventStore.Connect(ctx)
-	// build the eGo Config once and reuse it for both the actor system and
-	// the engine. cfg.GoaktOptions() returns the goakt.Option list eGo needs
-	// (extensions, pubsub, logger adapter, default supervisor); the caller
-	// composes anything else (cluster, TLS, custom actors) directly via goakt.
-	cfg := ego.NewConfig(eventStore, ego.WithLogger(logger))
-	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	if err := eventStore.Connect(ctx); err != nil {
+		return fmt.Errorf("connect event store: %w", err)
+	}
+	// the consumer owns the store (design §D5): it connects before New and
+	// disconnects after Stop. Deferred before app.Stop below, so it runs
+	// after app.Stop, per Go's LIFO defer order.
+	defer func() { _ = eventStore.Disconnect(ctx) }()
+
+	// egoakt.New validates the Spec (V1-V7) with no I/O and starts nothing:
+	// a configuration mistake is visible before any goroutine or connection
+	// exists. Import compose/goakt as egoakt so it doesn't clash with the
+	// goakt module.
+	app, err := egoakt.New(compose.Spec{
+		Name:        "Sample",
+		Families:    compose.EventSourced,
+		EventsStore: eventStore,
+	}, egoakt.WithLogger(logger))
 	if err != nil {
-		logger.Error("failed to build actor system", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("build app: %w", err)
 	}
-	if err := sys.Start(ctx); err != nil {
-		logger.Error("failed to start actor system", "error", err)
-		os.Exit(1)
+	// required once New succeeded (design §D5): App owns the actor system,
+	// the engine and, from here on, every publisher in the Spec (none in
+	// this example). Stop is idempotent and a no-op after a failed Start.
+	defer func() { _ = app.Stop(ctx) }()
+
+	// app.Start probes the store, then starts the actor system and the
+	// engine in a fixed order (design §D6); on failure it names the step
+	// that failed and rolls back everything already started.
+	if err := app.Start(ctx); err != nil {
+		return fmt.Errorf("start app: %w", err)
 	}
-	// plug eGo in
-	engine, err := ego.NewEngine(sys, cfg)
-	if err != nil {
-		logger.Error("failed to create ego engine", "error", err)
-		os.Exit(1)
-	}
-	// start ego engine
-	_ = engine.Start(ctx)
+
 	// create a persistence id
 	entityID := uuid.NewString()
 	// create an entity behavior with a given id
 	behavior := NewAccountBehavior(entityID)
-	// create an entity. This example runs on a single node, so the behavior
+	// spawn the entity. This example runs on a single node, so the behavior
 	// below (a domain-only behavior, no GoAkt serialization methods) never
 	// needs to be serialized by GoAkt.
-	_ = engine.SpawnEventSourced(ctx, behavior)
+	if err := app.Engine().SpawnEventSourced(ctx, behavior); err != nil {
+		return fmt.Errorf("spawn event-sourced behavior: %w", err)
+	}
 
 	// send some commands to the pid
 	var command proto.Message
@@ -89,8 +111,10 @@ func main() {
 		AccountId:      entityID,
 		AccountBalance: 500.00,
 	}
-	// send the command to the actor. Please don't ignore the error in production grid code
-	reply, _, _ := engine.SendCommand(ctx, entityID, command, time.Minute)
+	reply, _, err := app.Engine().SendCommand(ctx, entityID, command, time.Minute)
+	if err != nil {
+		return fmt.Errorf("create account: %w", err)
+	}
 	account := reply.(*samplepb.Account)
 	logger.Info("current balance on opening", "balance", account.GetAccountBalance())
 
@@ -99,8 +123,10 @@ func main() {
 		AccountId: entityID,
 		Balance:   250,
 	}
-
-	reply, _, _ = engine.SendCommand(ctx, entityID, command, time.Minute)
+	reply, _, err = app.Engine().SendCommand(ctx, entityID, command, time.Minute)
+	if err != nil {
+		return fmt.Errorf("credit account: %w", err)
+	}
 	account = reply.(*samplepb.Account)
 	logger.Info("current balance after a credit of 250", "balance", account.GetAccountBalance())
 
@@ -109,12 +135,9 @@ func main() {
 	signal.Notify(interruptSignal, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	<-interruptSignal
 
-	// disconnect the event store
-	_ = eventStore.Disconnect(ctx)
-	// stop ego first, then the actor system (the caller owns its lifecycle)
-	_ = engine.Stop(ctx)
-	_ = sys.Stop(ctx)
-	os.Exit(0)
+	return nil
+	// the deferred app.Stop(ctx) and eventStore.Disconnect(ctx) above now
+	// run, in that order, before main observes run's return value.
 }
 
 // AccountBehavior implements behaviorport.EventSourced (port/behavior). It
