@@ -79,18 +79,18 @@ Package `ego` (the engine, actors, options, telemetry and every compatibility al
 
 ## 3. Decisions for the maintainers
 
-The design does not choose these. Each row names the slices it blocks.
+The design did not choose these. **The maintainers approved them on 2026-09-27:** D2–D7 as recommended, D8 option (C), and D1's direction, "migrate the module path before the first release", subject to explicit confirmation of the target path and migration plan below before anything is executed. They guide S2 and S3. Each row names the slices it blocks.
 
-| # | Decision | Blocks | Recommendation |
-|---|---|---|---|
-| D1 | Module identity | S2, S3 | Decide before S2; if moving, move before the first release |
-| D2 | Nested-module path, layout and versioning | S2, S3, publisher consumability | (a) suffix-less paths with independent v0/v1 versions |
-| D3 | First published version and release order | S2 consumability, release | Topological order (amends ego-arch-001 §8 item 1) |
-| D4 | `go.work` policy | F5 only | W2, generated and not committed |
-| D5 | Unreleased integration-consumer modules | S1 | Yes, bounded |
-| D6 | Reading of §6(2) against #102 | none (confirmation) | Keep §6(2) |
-| D7 | Contents of the contracts module(s) | S2, S3 | (i) `egopb` + `port/publishing` in one module |
-| D8 | Meeting §6(1) and §6(4) before any release exists | S2, S3 | (C) gate on F4, amend §6(1) only |
+| # | Decision | Blocks | Recommendation | Status (2026-09-27) |
+|---|---|---|---|---|
+| D1 | Module identity | S2, S3 | Decide before S2; if moving, move before the first release | **Approved direction**: migrate before the first release. Execution waits for maintainer confirmation of the target path and plan below |
+| D2 | Nested-module path, layout and versioning | S2, S3, publisher consumability | (a) suffix-less paths with independent v0/v1 versions | **Approved** (a) |
+| D3 | First published version and release order | S2 consumability, release | Topological order (amends ego-arch-001 §8 item 1) | **Approved**: topological order, §8 item 1 amended |
+| D4 | `go.work` policy | F5 only | W2, generated and not committed | **Approved** W2 |
+| D5 | Unreleased integration-consumer modules | S1 | Yes, bounded | **Approved** |
+| D6 | Reading of §6(2) against #102 | none (confirmation) | Keep §6(2) | **Approved** |
+| D7 | Contents of the contracts module(s) | S2, S3 | (i) `egopb` + `port/publishing` in one module | **Approved** (i) |
+| D8 | Meeting §6(1) and §6(4) before any release exists | S2, S3 | (C) gate on F4, amend §6(1) only | **Approved** (C): S2 and S3 stay gated on F4; only §6(1) is amended |
 
 ### D1 — Module identity
 
@@ -169,6 +169,58 @@ The publishers import exactly two root packages, `egopb` and `port/publishing` (
 
 **Recommendation:** (C). §6(4) protects consumers and should stay a hard gate. §6(1)'s "one release" cannot be satisfied when no release exists, and archcheck has enforced the rules on every `main` build since #117.
 
+### D1 target path and migration plan (proposal, pending maintainer confirmation before execution)
+
+**Status:** the maintainers approved the direction ("migrate the module path before the first release") on 2026-09-27. **Nothing in this subsection may be executed until a maintainer explicitly confirms the target paths and this plan.** It is a proposal, not a decision.
+
+**Proposed target paths.** They are consistent with D2 (a): the root keeps its major suffix, and nested modules are suffix-less with their own v0/v1 versions.
+
+| Module (directory) | Today | Proposed target |
+|---|---|---|
+| root (`.`) | `github.com/pablogore/ego/v4` | `github.com/getsyntegrity/ego/v4` |
+| contracts (new directory, S2) | — | `github.com/getsyntegrity/ego/contracts` |
+| `publisher/kafka`, `nats`, `pulsar`, `websocket` | `github.com/pablogore/ego/v4/publisher/<name>` | `github.com/getsyntegrity/ego/publisher/<name>` |
+| `benchmark`, `example/cluster`, `test/compat` (unreleased) | `github.com/pablogore/ego/v4/<dir>` | `github.com/getsyntegrity/ego/<dir>` |
+
+Why these paths:
+
+- The root keeps `/v4` so the major version keeps meaning "the v4 API line". #124's later break then becomes `/v5`.
+- The rejected alternative is restarting the root at v0/v1 under the new path. It would have no suffix, but it would signal a new, unstable API.
+- Exploration §5 observed that `github.com/getsyntegrity/ego/v4` already resolves by pseudo-version through the proxy. A suffix-less nested path finds its directory: `github.com/pablogore/ego/publisher/kafka` located `publisher/kafka/go.mod` and failed only on the declared path.
+
+**What changes, in one mechanical pull request.** A half-renamed tree does not build, so this is one unit. It will exceed the ~400-line planning heuristic (161 files and 525 occurrences of `pablogore/ego` outside `openspec/` and `odd/` at the baseline):
+
+- **`go.mod` module lines** of all seven modules, plus the nested modules' `require` and `replace` lines that name the root.
+- **Every import in the repository**, including generated code: the `go_package` options in `protos/ego/ego.proto:7` and `protos/test/test.proto:5`, regenerated with `buf`; mocks, regenerated; examples; `benchmark`.
+- **Documentation:** `readme.md`, `docs/ci.md`, `CHANGELOG.md`, `SECURITY.md`, `example/cluster/README.md`. Historical `openspec/` and `odd/` records stay as written.
+- **CI and release:**
+  - `release.yml:90` and `:146`;
+  - `scripts/ci/verify-published.sh:35`;
+  - the tag scheme of D2, which becomes `publisher/<name>/v0.x.y`, owned by F4.
+- **Tooling that assumes the path:** `internal/cmd/archcheck` (`baseline.go`, `loader.go`, `main.go` and their tests) and `internal/cmd/ciselect/main.go`, wherever the path is written literally rather than read from `go.mod`.
+- **The four publishers' `closure_test.go`** (from #130), which hard-codes the root path at line 71 of `publisher/kafka/closure_test.go`.
+- **Out of scope:** `github.com/pablogore/kit-logger` is a separate module, owned by #39 REL-007. The `@pablogore` owner handles in `.github/` are not module paths.
+
+**Ordering:**
+
+- after S0 and S1, which do not depend on the path;
+- **before S2**, so the contracts module is born under its final path;
+- before F4 publishes anything;
+- well before #124, which later moves the root to `/v5`.
+
+Just before the migration commit, one commit adds a `// Deprecated: use github.com/getsyntegrity/ego/v4` comment to the old root `module` line. Consumers of the last old-path pseudo-version then get a notice from `go list -m -u`.
+
+**Consumer impact.** No tags exist, so no *tagged* version breaks. Consumers pinned to a root pseudo-version under the old path keep building, because the proxy keeps serving those commits. To upgrade, they must rewrite their imports: a module path cannot alias another module path. The migration guide belongs to #39 REL-006. The publishers have no consumers, because they could never be resolved (exploration §5).
+
+**Verification before merge:**
+
+- `GOWORK=off go build ./...` and `go vet ./...` in every module;
+- archcheck and the full CI gate;
+- `rg 'pablogore/ego'` finds only historical records;
+- from a scratch consumer module, `go get` at the migration branch head's pseudo-version, through the proxy and again with `GOPROXY=direct`, for the root and one publisher. This is the exploration §5 method, and it must now succeed where it failed.
+
+**Rollback.** Before any tag exists, revert the single migration PR. Anyone who already adopted the new path at a pseudo-version would break, so do it only if it is found early. After the first tag under the new path there is no rollback: a return would be yet another path change.
+
 **Why this is not a stop condition.** #102's goals and ego-arch-001 §6 can both be met. §2.2 shows each proposed module passing §6 once D7 and D8 are settled. The open decisions fit as options, each with a safe default: without D1–D3, D7 and D8, Wave 3 still delivers S0 and S1, which are the selector, the first leaf module and the pipeline validation. The only #102 criterion that stays unmet until then is "the relevant hexagonal boundaries are real modules".
 
 ## 4. `go.work` policy
@@ -207,11 +259,19 @@ type ModuleInfo struct {
 	Pinned  []string // in-repo module paths it requires at a published
 	                 // version with no local replace; reported, never edges
 	Imports []string // in-repo import paths found by go/parser (all files,
-	                 // build tags ignored), used only for root-lane seeding
+	                 // tests included, build tags ignored: #111's
+	                 // discoverModuleImports), used for the import filter
+	                 // (§5.2 step 5) and root-lane seeding
 }
 ```
 
-**Why `go.mod` requirements and not imports decide module edges.** A requirement changes a module's build even when no package imports anything from it, because minimal version selection reads the required module's own `go.mod`. Requirements are therefore the safe edge. Imports are finer, but they are wrong in both directions: they miss that case, and a parser that ignores build tags over-counts. Imports are kept only for the package-level root lane (§5.2, step 6).
+**Why `go.mod` requirements and not imports decide module edges.** A requirement changes a module's build even when no package imports anything from it, because minimal version selection reads the required module's own `go.mod`. Requirements are therefore the safe edge. Imports are finer, but they are wrong in both directions: they miss that case, and a parser that ignores build tags over-counts. Imports are therefore a *filter* on a requirement edge, never an edge by themselves (§5.2, step 5).
+
+**When the import filter is sound.** Minimal version selection reads a required module D's `go.mod`, and `go.sum` only records checksums. So if D's `go.mod` and `go.sum` are unchanged, D contributes exactly the same build list to a consumer M as before. The only way a change in D can then reach M is through D's package code, and package code reaches M only through M's imports, direct or through another module M also imports. The requirement edge can therefore be narrowed to "M imports an affected package of D" **exactly when D's manifest is unchanged and D is not fully changed**. When D's `go.mod` or `go.sum` changed, D had a boundary change, or D's lane is `full`, the unfiltered requirement edge applies.
+
+**The import set must be parser-based.** It must include tests and ignore build tags, as #111's `discoverModuleImports` does (`main.go:381-425`). A build-tagged importer, like #130's `//go:build compat` files, would otherwise be missed. The field exists from S0, and S2 must not start without it: S2 moves packages whose importers include such files.
+
+**`replace` applies only in the main module.** When `it` is built, `adapter/a`'s own `replace` of `port` is ignored, so `it` compiles against the working-tree `port` only if `it` has its own local `replace` for it. A transitive chain `it ← adapter/a ← port` is therefore real at `HEAD` only when every consumer along it carries its own local `replace`. The selector does not check this: it walks the chain anyway, which may over-select. Over-selection is the safe direction. Nested modules that need to test against the working tree must list local `replace`s for their whole in-repository closure.
 
 **Why pinned requirements are not edges.** A module that requires an in-repository module at a published version, with no `replace`, does not compile against the working tree, so a change there cannot break it at `HEAD`. The published-verification job (F4) owns that case, and the summary names such a module as "pinned to vX.Y.Z; not affected at HEAD".
 
@@ -219,9 +279,14 @@ type ModuleInfo struct {
 
 1. **Global check.** If any changed path is global (§5.3), select every module, set the root lane to `full`, and record the reason. Stop.
 2. **Ownership.** Each changed file belongs to the module with the longest `Dir` prefix (its nearest `go.mod`). Files owned by the root go through today's root classifier unchanged (package / no-test / full-fallback / unknown), so the package-level fast lane keeps working. Any file in a nested module marks that module changed. That is conservative on purpose: a nested module is always verified whole with `./...`.
-3. **Boundary change.** A changed nested `go.mod` (added, edited or deleted) marks that module changed **and** its parent module (the module that owns the directory when that `go.mod` is absent) as fully changed, with the reason "module boundary changed". This closes gap 3 of exploration §6: carving a directory out of the root sends the root lane to `full`.
-4. **Changed set.** C is every nested module marked changed, plus the root when its lane is not `none`.
-5. **Reverse-transitive closure.** A breadth-first walk over the reversed `Deps` edges starting from C, in sorted order so the output is deterministic. For each reached module it records the first chain, for example `test/compat ← publisher/kafka ← contracts`.
+3. **Boundary change.** A nested `go.mod` that was **added or deleted** (it exists at exactly one of base and head) marks its parent module (the module that owns the directory when that `go.mod` is absent) as fully changed, with the reason "module boundary changed". An added `go.mod` also marks its own new module changed. This closes gap 3 of exploration §6: carving a directory out of the root sends the root lane to `full`. An **edited** nested `go.mod` (it exists at both) has no boundary effect: it marks that module changed with its **manifest changed**, so its dependents follow through the unfiltered requirement edge (step 5).
+   - *Mechanism.* `ciselect` gains an optional `-base <rev>` flag. For each changed nested `go.mod`, it checks existence at head (the filesystem) and at base (`git cat-file -e <rev>:<path>`). `pull_request.yml` passes `-base "$BASE_SHA"`, a one-line change that S0 includes. Without `-base` (local runs, `build.yml`'s `-all`), every changed nested `go.mod` is treated as a boundary change, which is the conservative behavior.
+4. **Changed set.** C is every nested module marked changed, plus the root when its lane is not `none`. Each member records whether its manifest changed (`go.mod` or `go.sum` edited, or a boundary change) and its **affected packages**: every package of a nested module, which is conservative because nested modules are verified whole; and, for the root, the packages #111's root lane selects (`root.Selected`).
+5. **Reverse-transitive closure with the import filter.** A breadth-first walk over the reversed `Deps` edges starting from C, in sorted order so the output is deterministic. A consumer M of a reached module D is selected:
+   - **unfiltered** when D's manifest changed, D is fully changed, or D is the root with lane `full`;
+   - **otherwise only if** M's `Imports` name one of D's affected packages.
+
+   A selected nested module then counts all its packages as affected for the next hop. For the root, this reproduces #111's accepted rule exactly: when the root lane is `affected` and the root manifest is unchanged, a nested module is selected only if it imports an affected root package. The walk records the first chain for each selected module, for example `test/compat ← publisher/kafka ← contracts`.
 6. **Root-lane seeding through a dependency.** When the root is reached only because a module D it requires changed, the root lane's seed is the root packages whose `Imports`, `TestImports` or `XTestImports` name a package of D. The existing package closure (`graph.go:177-219`) runs from there. If D's `go.mod` or `go.sum` changed, the root lane runs `full`.
 7. **Fail closed.** A `go mod edit` error or an unreadable `go.mod` makes `ciselect` exit non-zero, and the workflow then reruns it with `-all` (`pull_request.yml:63-68`). There is no "unowned" path: the root module's directory is the repository root, so every path belongs to some module. A file under a directory the discovery walk skips (`odd/`, `.codegraph/`, and so on) belongs to the root and goes through the root classifier. That classifier's existing `unknown` rule (`classify.go:181-183`) sends anything it cannot place to the full suite.
 
@@ -243,31 +308,37 @@ Two paths are deliberately **not** global: the root `go.mod` and `go.sum`. They 
 
 Fixture repository (in-memory `ModuleInfo`, pure package test, no filesystem):
 
-| Dir | Path | Deps (local) | Pinned |
-|---|---|---|---|
-| `.` | `example.com/r` | `example.com/r/port` | — |
-| `port` | `example.com/r/port` | — | — |
-| `adapter/a` | `example.com/r/adapter/a` | `example.com/r/port` | — |
-| `adapter/b` | `example.com/r/adapter/b` | `example.com/r` | — |
-| `it` | `example.com/r/it` | `example.com/r/adapter/a` | — |
-| `tools` | `example.com/r/tools` | — | — |
-| `pinned` | `example.com/r/pinned` | — | `example.com/r/port@v0.3.0` |
-| `adapter/c` | `example.com/r/adapter/c` | `example.com/r/port` | — (present only in the "new module" case) |
+| Dir | Path | Deps (local) | Pinned | Imports (parser) |
+|---|---|---|---|---|
+| `.` | `example.com/r` | `example.com/r/port` | — | root package `example.com/r` imports `example.com/r/port`; root package `example.com/r/util` imports nothing and nothing imports it |
+| `port` | `example.com/r/port` | — | — | — |
+| `adapter/a` | `example.com/r/adapter/a` | `example.com/r/port` | — | `example.com/r/port` |
+| `adapter/b` | `example.com/r/adapter/b` | `example.com/r` | — | `example.com/r` |
+| `it` | `example.com/r/it` | `example.com/r/adapter/a`, `example.com/r/port` (its own local `replace` for each) | — | `example.com/r/adapter/a` |
+| `tools` | `example.com/r/tools` | — | — | — |
+| `pinned` | `example.com/r/pinned` | — | `example.com/r/port@v0.3.0` | `example.com/r/port` |
+| `adapter/c` | `example.com/r/adapter/c` | `example.com/r/port` | — | `example.com/r/port` (present only in the "new module" case) |
 
 | Case (#102) | Changed files | Expected modules | Expected root lane | Expected reasons |
 |---|---|---|---|---|
 | **Leaf** | `tools/main.go` | `tools` | `none` | `tools`: changed files |
-| **Shared contract** | `port/p.go` | `port`, `.`, `adapter/a`, `adapter/b`, `it` | seeded from root packages importing `example.com/r/port/...` | `adapter/b`: `adapter/b ← . ← port`; `pinned`: not selected, "pinned to v0.3.0" |
+| **Shared contract** | `port/p.go` | `port`, `.`, `adapter/a`, `adapter/b`, `it` | `affected`, seeded from root packages importing `example.com/r/port` (so `example.com/r` is selected; `util` is not) | `adapter/b`: `adapter/b ← . ← port`, passing the import filter because it imports `example.com/r`; `pinned`: not selected, "pinned to v0.3.0" |
 | **Transitive consumer** | `adapter/a/a.go` | `adapter/a`, `it` | `none` | `it`: `it ← adapter/a` |
-| **New module** | `adapter/c/go.mod`, `adapter/c/c.go` | `adapter/c`, `.`, `adapter/b` | `full` | `adapter/c`: changed files; `.`: "module boundary changed: adapter/c/go.mod"; `adapter/b`: `adapter/b ← .` |
+| **New module** (with `-base`: `adapter/c/go.mod` absent at base) | `adapter/c/go.mod`, `adapter/c/c.go` | `adapter/c`, `.`, `adapter/b` | `full` | `adapter/c`: changed files; `.`: "module boundary changed: adapter/c/go.mod"; `adapter/b`: `adapter/b ← .` (unfiltered, root lane is `full`) |
 | **Global change** | `go.work` (and separately `.github/workflows/x.yml`) | all 7 (8 with `adapter/c`) | `full` | "global: go.work changed" |
 
 Additional cases:
 
 - docs only (`docs/x.md`) selects nothing;
-- a `port/go.mod` edit selects `port` plus its whole closure, with the root lane `full`;
+- **manifest edit vs add vs delete** (all with `-base`):
+  - *edit* `adapter/a/go.mod`, present at base and head: selects `adapter/a` and `it` through the unfiltered edge. There is no boundary effect, so the root lane stays `none`.
+  - *add*: the "new module" case above.
+  - *delete* `adapter/b/go.mod`, present at base only: `adapter/b`'s files now belong to the root, the root lane is `full` ("module boundary changed"), and every remaining module that requires the root is selected.
+  - *without `-base`*, the edit case is treated as a boundary change (root lane `full`), which is the conservative fallback.
+- a `port/go.mod` edit selects `port` plus its whole closure unfiltered, and the root lane is `full` because the root requires `port` and `port`'s manifest changed (§5.2 step 6);
+- **import filter**: a change to root package `util` (`util/u.go`) makes the root lane `affected` with only `util` selected. `adapter/b` requires the root but imports only `example.com/r`, so it is **not** selected. Changing the root `go.mod` instead selects `adapter/b` through the unfiltered edge;
 - a file under a skipped directory (`odd/tasks/x.md`) is owned by the root and classified as documentation, selecting nothing;
-- a root package change (an `engine.go` equivalent) selects `.` and `adapter/b` only. `it` is not selected, because it requires `adapter/a`, not the root; this proves the walk follows edges, not proximity.
+- a root package change (an `engine.go` equivalent, which the root classifier sends to `full`) selects `.` and `adapter/b` only. `it` is not selected: it requires `adapter/a` and `port`, not the root. This proves the walk follows edges, not proximity.
 
 Each case is written first and observed failing (RED) against today's selector, as the repository's TDD mode requires.
 
@@ -277,13 +348,14 @@ One module per pull request, and the selector first. Each slice lists at most fi
 
 ### S0 — Module-aware, reverse-transitive selector (no gate)
 
-- **Owns:** `internal/cmd/ciselect/**`, `docs/ci.md` (the selector and module sections). No workflow change, because `modules.json` keeps its shape.
+- **Owns:** `internal/cmd/ciselect/**`, `docs/ci.md` (the selector and module sections), and one line of `.github/workflows/pull_request.yml`, which passes `-base "$BASE_SHA"`. `modules.json` keeps its shape.
 - **Tasks:**
   1. `ModuleInfo` discovery through `go mod edit -json`, with `GOWORK=off` forced on every `go` subprocess `ciselect` starts.
   2. Closure, ownership, boundary-change and global-path rules in `selector`, driven by the §5.5 fixtures (RED first).
-  3. Root-lane seeding through dependency modules; `plan.json`; the summary table.
-  4. `docs/ci.md`: new selection rules, global list, `plan.json`, the "why" table.
-- **Checks:** `go test ./internal/cmd/ciselect/...`; `go run ./internal/cmd/ciselect` on the exploration §6 changes (the expected output only differs for `go.work`, which becomes global); the full root lane plus the `modules` job on the PR.
+  3. The import filter (parser-based `Imports`, tests included, build tags ignored); root-lane seeding through dependency modules; `plan.json`; the summary table.
+  4. The `-base <rev>` flag (add/delete versus edit of a nested `go.mod`) and the one-line `pull_request.yml` change.
+  5. `docs/ci.md`: new selection rules, global list, `-base`, `plan.json`, the "why" table.
+- **Checks:** `go test ./internal/cmd/ciselect/...`; `go run ./internal/cmd/ciselect` on the exploration §6 changes (the expected output only differs for `go.work`, which becomes global. The other rows match because, with the root lane `affected` and the root manifest unchanged, requirement edges to the root apply #111's import filter); the full root lane plus the `modules` job on the PR.
 - **CI measurement:** before, the numbers in exploration §7. After, two throwaway draft PRs (never merged, and opened only with the maintainers' authorization) on the S0 head: a comment-only change to `publisher/kafka/kafka.go` (leaf) and to `port/publishing/publishing.go` (contract). Record each run's ID, wall clock and job durations in `docs/ci.md`. The contract run is also the first real measurement of that class.
 
 ### S1 — `test/compat` integration module (gates: S0 merged, #130 merged, D5)
@@ -297,7 +369,7 @@ One module per pull request, and the selector first. Each slice lists at most fi
 - **Checks:** `scripts/ci/verify-module.sh test/compat` and the four publishers; archcheck; a `port/publishing` change selects `test/compat` with the chain `test/compat ← publisher/… ← .` (the first real nested-to-nested edge).
 - **CI measurement:** the same leaf draft PR. It now selects `publisher/kafka` and `test/compat`; record the added job time.
 
-### S2 — Contracts module (`egopb` + `port/publishing`) (gates: D1, D2, D3, D7, D8; S0 merged; F4 under D8 (A) or (C))
+### S2 — Contracts module (`egopb` + `port/publishing`) (gates: D1 target path confirmed, D2, D3, D7, D8; S0 merged with the parser-based `Imports` field; F4 under D8 (C))
 
 This slice follows D7 option (i). Under D7 (ii) it would also carry `port/behavior`, `command` and `tenancy`, and it would then need its own split into slices.
 
@@ -354,6 +426,8 @@ This slice follows D7 option (i). Under D7 (ii) it would also carry `port/behavi
 - **Interaction with #124 and the alias window.** #124 removes every alias in a major release. Modules created in v4 must not add a second alias layer that outlives it. Mitigation: F1–F3 are timed to the #124 major.
 - **Selector trust.** Coarser module edges select more modules than today's import-based rule in a few cases (a `require` with no import). That is intended: it is the safe direction. The selector's own source stays a global path, so a selector bug cannot pick its own fix.
 - **archcheck layer detection.** Layers are keyed by import-path prefix. A contract moved into a nested module must still be recognized as a contract (S2, task 4), or the allowlist silently stops applying.
+
+- **Executing D1 without confirmation.** The path migration touches 161 files and cannot be rolled back after the first tag. Mitigation: the D1 plan in §3 is marked as requiring explicit maintainer confirmation before execution, and S2 is gated on it.
 
 ## 8. Rejected alternatives
 

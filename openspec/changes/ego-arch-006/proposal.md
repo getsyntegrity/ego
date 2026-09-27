@@ -63,9 +63,9 @@ Recommended: **selector first, then a few §6-qualified modules, gated on the pa
 - **A separate schema module for `egopb` under a port module.** The schema module alone fails §6(2): its only effect is letting the port module avoid requiring the root, and one contracts module does that with one release unit fewer.
 - **A tools or `migration` module as the first "leaf".** Both fail §6(2): they remove nothing from anyone's requirement list. The first leaf is `test/compat`, which the #122 lane needs anyway, and which exercises the first nested-to-nested edge.
 
-## Decisions needed from the maintainers
+## Decisions (approved by the maintainers on 2026-09-27)
 
-Design §3 gives the options and tradeoffs. In short:
+Design §3 gives the options and tradeoffs. The maintainers approved D2–D7 as recommended and D8 option (C). They approved D1's direction, "migrate the module path before the first release", with one condition: execution waits for explicit confirmation of the concrete target paths and migration plan in design §3 ("D1 target path and migration plan"). These decisions guide S2 and S3. The recommendations as recorded:
 
 | # | Decision | Recommendation | Blocks |
 |---|---|---|---|
@@ -78,7 +78,7 @@ Design §3 gives the options and tradeoffs. In short:
 | D7 | Contents of the contracts module(s) | (i) `egopb` + `port/publishing` only; `port/behavior` waits for F1. Alternatives: (ii) also `port/behavior`, `command` and `tenancy`; (iii) two modules, schema plus port (rejected). | S2, S3 |
 | D8 | §6(1) needs "one release" and §6(4) needs a published-verification job, and neither exists | (C): gate S2 on the release pipeline (F4), and amend §6(1) to count `main` builds since #117. Alternatives: (A) gate on F4 and a first release; (B) amend both. | S2, S3 |
 
-Without D1–D3, D7 and D8, Wave 3 still delivers S0 (the selector) and S1 (the first leaf module and nested-to-nested edge). No module that the root requires is created before those decisions.
+S0 (the selector) and S1 (the first leaf module and nested-to-nested edge) proceed now. S2 and S3 stay gated on F4 (the release pipeline with published-version verification, per D8 (C)) and on maintainer confirmation of the D1 target path. No module that the root requires is created before then.
 
 ## Affected public consumer surfaces
 
