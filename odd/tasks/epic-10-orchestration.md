@@ -107,6 +107,10 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    orchestrator's reviewer never delivered a final verdict on option (c)).
    S3-5 and IMPL-4 wait until S3-4 is reviewed and CI-green. Still no release
    tag between S3-2 and S3-4.
+14. (2026-09-27) #143 (S3-4) merged as 2a6d5a8 on the maintainer's
+   standing authorization after the message fix and green CI. The no-tag
+   restriction between S3-2 and S3-4 is lifted. S3-5 runs before IMPL-4
+   (shared engine.go/option.go/example files).
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
@@ -131,8 +135,8 @@ history of this file.
 | W1a-1 | #123 S3-1 | feat/123-s3-1-port-behavior @adc416c | #131 | merged (543da2c) | merged tree vetted against main before merge |
 | W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge @1dfa090 | #139 | merged (9084b80) | apidiff: 3 additions only; value-type RED hang reproduced; spawn* functions ready for IMPL-4 guard |
 | W1a-3 | #123 S3-3 | feat/123-s3-3-spawn-methods @c478929 | #141 | merged (e86169a) | engine_spawn.go, new cluster test, engine_test.go helper only |
-| W1a-4 | #123 S3-4 | feat/123-s3-4-behavior-kind @0b35ef3 | #143 | re-review @af25069 (typed-nil accepted; untyped nil / value type rejected) | from main b4aa140; no release tag until S3-4 merges |
-| W1a-5 | #123 S3-5 | — | — | planned | Deprecated markers, CHANGELOG, examples; after S3-4 |
+| W1a-4 | #123 S3-4 | feat/123-s3-4-behavior-kind @0b35ef3 | #143 @2e670f6 | merged (2a6d5a8) — typed-nil kinds accepted; ErrBehaviorNotPointer message amended (3 rules) | from main b4aa140; no release tag until S3-4 merges |
+| W1a-5 | #123 S3-5 | feat/123-s3-5-deprecations | — | in progress | from main 2a6d5a8; IMPL-4 waits for it (engine.go/option.go/example overlap) |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
 | W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | merged (23bc7f4) | all six modules tidy on main; no workflow change |
 | W1c-1 | #105 IMPL-1 (#126) | fix/126-engine-lifecycle @74adde4 | #140 | merged (b4aa140); #126 closed | pre-existing Stop-lock and EraseEntity/ProjectionLag issues recorded on #24 (issuecomment-5857989413) |
