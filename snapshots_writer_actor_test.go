@@ -44,6 +44,30 @@ import (
 	"github.com/pablogore/ego/v4/testkit"
 )
 
+// mistypedExtension is a goakt extension.Extension whose ID() collides with
+// a real extension slot (e.g. extensions.SnapshotStoreExtensionID) but whose
+// concrete type does not match what snapshotsWriterActor.PreStart expects
+// there. It simulates a wiring bug where the wrong extension ends up
+// registered under an existing extension ID.
+//
+// See issue #99: snapshotsWriterActor.PreStart nil-checks
+// extensions.SnapshotStoreExtensionID and extensions.EncryptorExtensionID
+// before asserting their type (both are genuinely optional dependencies),
+// but the assertion itself was unchecked
+// (ext.(*extensions.SnapshotStoreExt), ext.(*extensions.EncryptorExtension)).
+// A present-but-mismatched-type extension still panics with an
+// unrecoverable "interface conversion" error, and that panic crashes the
+// whole process instead of just failing the one Spawn call, because
+// goakt drives Spawn/SpawnChild through a
+// golang.org/x/sync/singleflight.Group that deliberately re-panics a
+// recovered panic on a fresh, unrecoverable goroutine (see
+// extension_lookup.go).
+type mistypedExtension struct {
+	id string
+}
+
+func (m *mistypedExtension) ID() string { return m.id }
+
 func TestSnapshotsWriterActor(t *testing.T) {
 	t.Run("persists snapshot to store on success", func(t *testing.T) {
 		ctx := context.TODO()
@@ -436,6 +460,64 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		pause.For(time.Second)
 
 		assert.True(t, pid.IsRunning())
+
+		require.NoError(t, eventStore.Disconnect(ctx))
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStore := testkit.NewEventsStore()
+		require.NoError(t, eventStore.Connect(ctx))
+
+		eventStream := eventstream.New()
+
+		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedStoreSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-store", newSnapshotsWriterActor())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+
+		require.NoError(t, eventStore.Disconnect(ctx))
+		eventStream.Close()
+		require.NoError(t, actorSystem.Stop(ctx))
+	})
+
+	t.Run("returns an error instead of panicking when the encryptor extension is registered with an unexpected type", func(t *testing.T) {
+		ctx := context.TODO()
+
+		eventStore := testkit.NewEventsStore()
+		require.NoError(t, eventStore.Connect(ctx))
+
+		eventStream := eventstream.New()
+
+		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedEncSystem",
+			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithExtensions(
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEventsStream(eventStream),
+				&mistypedExtension{id: extensions.EncryptorExtensionID},
+			),
+			goakt.WithActorInitMaxRetries(1))
+		require.NoError(t, err)
+		require.NoError(t, actorSystem.Start(ctx))
+
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-enc", newSnapshotsWriterActor())
+		require.Error(t, err)
+		require.Nil(t, pid)
+		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
 
 		require.NoError(t, eventStore.Disconnect(ctx))
 		eventStream.Close()
