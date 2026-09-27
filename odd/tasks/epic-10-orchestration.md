@@ -136,7 +136,7 @@ history of this file.
 | W1a-2 | #123 S3-2 | feat/123-s3-2-spawn-bridge @1dfa090 | #139 | merged (9084b80) | apidiff: 3 additions only; value-type RED hang reproduced; spawn* functions ready for IMPL-4 guard |
 | W1a-3 | #123 S3-3 | feat/123-s3-3-spawn-methods @c478929 | #141 | merged (e86169a) | engine_spawn.go, new cluster test, engine_test.go helper only |
 | W1a-4 | #123 S3-4 | feat/123-s3-4-behavior-kind @0b35ef3 | #143 @2e670f6 | merged (2a6d5a8) — typed-nil kinds accepted; ErrBehaviorNotPointer message amended (3 rules) | from main b4aa140; no release tag until S3-4 merges |
-| W1a-5 | #123 S3-5 | feat/123-s3-5-deprecations | — | in progress | from main 2a6d5a8; IMPL-4 waits for it (engine.go/option.go/example overlap) |
+| W1a-5 | #123 S3-5 | feat/123-s3-5-deprecations @6585517 | #144 | in review (Closes #123) | from main 2a6d5a8; IMPL-4 waits for it (engine.go/option.go/example overlap) |
 | W1b | #122 | ci/122-publisher-test-closures @24b652b | #130 | merged (965293a) | compat lane via build tag |
 | W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | merged (23bc7f4) | all six modules tidy on main; no workflow change |
 | W1c-1 | #105 IMPL-1 (#126) | fix/126-engine-lifecycle @74adde4 | #140 | merged (b4aa140); #126 closed | pre-existing Stop-lock and EraseEntity/ProjectionLag issues recorded on #24 (issuecomment-5857989413) |
