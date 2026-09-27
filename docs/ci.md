@@ -321,8 +321,10 @@ force the full gate, and carving a directory out of the root with a new
 `go.mod` could leave the root lane at `none`.
 
 **Discovery.** `ciselect` finds every module the same way as before (the
-`findSatelliteDirs` walk, skipping `vendor/`, `odd/`, `.codegraph/` and a
-few other directories), adds the root, and reads each module's `go.mod`
+`findSatelliteDirs` walk, skipping `vendor/`, `testdata/`, `odd/`,
+`.codegraph/` and a few other directories; the go command ignores
+`testdata/` too, so a fixture `go.mod` there is never a module), adds the
+root, and reads each module's `go.mod`
 with `go mod edit -json`. That only parses the file: no network, no
 module download, no build, and no new dependency in the root `go.mod`.
 An in-repository requirement becomes an **edge** only when a `replace`
@@ -373,9 +375,12 @@ not declare.
    module's `go.mod` or `go.sum` changed, or no root package imports it,
    the root lane runs `full`. (Nothing in the root requires a nested
    module today, so this only matters once a contracts module exists.)
-7. **Fail closed.** An unreadable `go.mod`, a `go mod edit` error, or a
+7. **Fail closed.** An unreadable `go.mod`, a `go mod edit` error, a
    `replace` that points an in-repository requirement at some other
-   directory makes `ciselect` exit non-zero, and `pull_request.yml` reruns
+   directory, or a local `replace` whose target is inside the repository
+   but is not a discovered module makes `ciselect` exit non-zero (a local
+   `replace` pointing outside the repository is not an in-repository edge
+   and is allowed), and `pull_request.yml` reruns
    it with `-all`. With `-all`, a broken `go.mod` does not fail the
    fallback itself: every discovered module is selected by directory, and
    that module's own verification job reports the breakage.
@@ -439,7 +444,9 @@ that does not depend on GitHub Actions, so a later portable pipeline
 ```
 
 It lists every discovered module, selected or not, each with a reason;
-every list is a JSON array, never `null`. No workflow consumes `plan.json`
+every list is a JSON array, never `null`. In the `-all` fallback with an
+unreadable `go.mod`, modules are discovered by directory only, so their
+paths are unknown and each entry omits `path`. No workflow consumes `plan.json`
 yet.
 
 ### `scripts/ci/verify-module.sh`: what runs for one selected module

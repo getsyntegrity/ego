@@ -159,6 +159,62 @@ replace `+rootModule+`/moda => ../modc
 	}
 }
 
+// A local replace whose target is inside the repository but is not a
+// discovered module would hide an edge from the graph: fail closed.
+func TestModuleDiscovery_ReplaceToUndiscoveredRepoDirFails(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "notamodule", "x.go"), "package notamodule\n")
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
+
+go 1.26.0
+
+require example.com/elsewhere v0.0.0
+
+replace example.com/elsewhere => ../notamodule
+`)
+
+	if _, err := discoverModules(root); err == nil {
+		t.Fatalf("discoverModules() error = nil, want an error for a replace into an undiscovered repository directory")
+	}
+}
+
+// A local replace pointing outside the repository is not an in-repository
+// edge and stays allowed.
+func TestModuleDiscovery_ReplaceOutsideRepoIsIgnored(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "modb", "go.mod"), `module `+rootModule+`/modb
+
+go 1.26.0
+
+require example.com/elsewhere v0.0.0
+
+replace example.com/elsewhere => ../../outside
+`)
+
+	if _, err := discoverModules(root); err != nil {
+		t.Fatalf("discoverModules() error = %v, want a replace outside the repository to be ignored", err)
+	}
+}
+
+// Go ignores testdata/ directories, and so must discovery: a fixture
+// go.mod under testdata/ is never a module of the repository.
+func TestModuleDiscovery_SkipsTestdata(t *testing.T) {
+	root := writeModuleTree(t)
+	writeFile(t, filepath.Join(root, "internal", "tool", "testdata", "fixture", "go.mod"), "this fixture is not parsed\n")
+
+	dirs, err := findSatelliteDirs(root)
+	if err != nil {
+		t.Fatalf("findSatelliteDirs: %v", err)
+	}
+	sort.Strings(dirs)
+	if want := []string{"moda", "modb", "modc"}; !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("findSatelliteDirs() = %v, want %v", dirs, want)
+	}
+	if _, err := discoverModules(root); err != nil {
+		t.Fatalf("discoverModules() error = %v, want the testdata go.mod never parsed", err)
+	}
+}
+
 // Every go subprocess ciselect starts runs outside workspace mode, so a
 // go.work can never satisfy a requirement a go.mod does not declare.
 func TestGoCommand_ForcesGOWORKOff(t *testing.T) {
@@ -225,6 +281,15 @@ func TestRun_AllSurvivesBrokenNestedGoMod(t *testing.T) {
 	}
 	if string(modules) != "[\"moda\",\"modb\",\"modc\"]\n" {
 		t.Fatalf("modules.json = %q, want every discovered module", modules)
+	}
+	// Without a readable go.mod the module path is unknown: plan.json
+	// omits the field instead of printing an empty path.
+	plan, err := os.ReadFile(filepath.Join(out, "plan.json"))
+	if err != nil {
+		t.Fatalf("reading plan.json: %v", err)
+	}
+	if strings.Contains(string(plan), `"path"`) {
+		t.Fatalf("plan.json has a path field in the directory-only fallback:\n%s", plan)
 	}
 }
 

@@ -45,10 +45,13 @@ import (
 
 // skipDirs are directories the satellite-module scan never descends into:
 // they are either huge (module/build caches) or cannot contain a Go module
-// relevant to this repository.
+// relevant to this repository. testdata is ignored by the go command
+// itself, so a fixture go.mod there is never one of the repository's
+// modules.
 var skipDirs = map[string]bool{
 	".git":         true,
 	"vendor":       true,
+	"testdata":     true,
 	"node_modules": true,
 	".codegraph":   true,
 	".atl":         true,
@@ -419,6 +422,9 @@ func discoverModules(root string) ([]selector.ModuleInfo, error) {
 
 	for i := range infos {
 		mod := mods[i]
+		if err := checkLocalReplaces(root, infos[i].Dir, mod, dirOfPath); err != nil {
+			return nil, err
+		}
 		for _, req := range mod.Require {
 			depDir, inRepo := dirOfPath[req.Path]
 			if !inRepo || req.Path == infos[i].Path {
@@ -446,6 +452,34 @@ func discoverModules(root string) ([]selector.ModuleInfo, error) {
 		sort.Strings(infos[i].Pinned)
 	}
 	return infos, nil
+}
+
+// checkLocalReplaces fails when a local replace of the module at moduleDir
+// points inside the repository at a directory that is not a discovered
+// module: the graph would silently miss that edge. Targets outside the
+// repository are not in-repository edges and are allowed.
+func checkLocalReplaces(root, moduleDir string, mod goModFile, dirOfPath map[string]string) error {
+	discovered := make(map[string]bool, len(dirOfPath))
+	for _, d := range dirOfPath {
+		discovered[d] = true
+	}
+	for _, r := range mod.Replace {
+		if r.New.Version != "" {
+			continue
+		}
+		resolved, err := repoRelDir(root, moduleDir, r.New.Path)
+		if err != nil {
+			return err
+		}
+		if resolved == ".." || strings.HasPrefix(resolved, "../") {
+			continue
+		}
+		if !discovered[resolved] {
+			return fmt.Errorf("module %s replaces %s with %s, which is %s inside the repository but not a discovered module",
+				moduleDir, r.Old.Path, r.New.Path, resolved)
+		}
+	}
+	return nil
 }
 
 // localReplace returns the local directory a replace directive of mod maps
@@ -555,8 +589,10 @@ type planRoot struct {
 }
 
 type planModule struct {
-	Dir      string   `json:"dir"`
-	Path     string   `json:"path"`
+	Dir string `json:"dir"`
+	// Path is omitted when unknown: in the -all fallback with an
+	// unreadable go.mod, modules are discovered by directory only.
+	Path     string   `json:"path,omitempty"`
 	Selected bool     `json:"selected"`
 	Reason   string   `json:"reason"`
 	Chain    []string `json:"chain"`

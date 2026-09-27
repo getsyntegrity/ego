@@ -131,6 +131,25 @@ packages ok, 0 failures, 450 s. `scripts/ci/verify-module.sh` with
 stdlib typecheck in `internal/poll` (environmental, also on untouched
 packages). CI lint is authoritative.
 
+**Review follow-up (PR #133, approve with nits).** Findings 4 to 6 applied
+on the same branch. R1 and R2 below and the parser-based `Imports` field
+were left unchanged, as the review asked.
+
+- 4: a local `replace` into a repository directory that is not a
+  discovered module now fails discovery (fail closed; the workflow falls
+  back to `-all`). A target outside the repository is still allowed.
+  RED: `TestModuleDiscovery_ReplaceToUndiscoveredRepoDirFails: discoverModules()
+  error = nil`. GREEN after `checkLocalReplaces`.
+- 5: `plan.json` omits `path` when it is unknown (`-all` directory-only
+  fallback), and `docs/ci.md` says so. RED: `TestRun_AllSurvivesBrokenNestedGoMod:
+  plan.json has a path field`.
+- 6: discovery skips `testdata/`. RED: `TestModuleDiscovery_SkipsTestdata:
+  findSatelliteDirs() = [internal/tool/testdata/fixture moda modb modc]`.
+
+After the fix, both test packages pass on go1.27.1 and go1.26.6, lint
+reports 0 issues (go1.26.6), and the real-repository outputs (a) to (h) are
+unchanged, with coverpkg `ce183755` throughout.
+
 ## Needs a maintainer decision
 
 1. **The design's S0 check is wrong for two change classes.** §6 S0 says
