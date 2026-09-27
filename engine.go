@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,12 @@ var (
 	// persistence.EventsStore, which is valid for a durable-state-only
 	// deployment). Nothing is spawned.
 	ErrEventsStoreRequired = errors.New("events store is required")
+	// ErrDuplicatePublisherID is returned by AddEventPublishers and
+	// AddStatePublishers when a publisher's ID is already registered for
+	// that kind, or appears more than once in the same call. The error
+	// names the duplicate IDs. The whole call is rejected: no publisher
+	// from it is registered, subscribed or started.
+	ErrDuplicatePublisherID = errors.New("duplicate publisher id")
 	// ErrProjectionNotRegistered is returned by StartProjection when the given
 	// name was never registered on the engine's Config via WithProjection.
 	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with ego.WithProjection")
@@ -1281,6 +1288,33 @@ func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, err
 	return command.NewMetadata(op)
 }
 
+// duplicatePublisherIDs checks a batch of publisher IDs of one kind before
+// any of them is registered. It returns an error wrapping
+// ErrDuplicatePublisherID that names, in batch order and once each, every ID
+// already registered (as reported by registered) or repeated in the batch;
+// otherwise nil.
+func duplicatePublisherIDs(ids []string, registered func(id string) bool) error {
+	seen := make(map[string]struct{}, len(ids))
+	reported := make(map[string]struct{})
+	var duplicates []string
+	for _, id := range ids {
+		_, repeated := seen[id]
+		seen[id] = struct{}{}
+		if !repeated && !registered(id) {
+			continue
+		}
+		if _, done := reported[id]; done {
+			continue
+		}
+		reported[id] = struct{}{}
+		duplicates = append(duplicates, strconv.Quote(id))
+	}
+	if len(duplicates) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrDuplicatePublisherID, strings.Join(duplicates, ", "))
+}
+
 // AddEventPublishers registers one or more event publishers with the eGo engine.
 // This function subscribes the publishers to the event stream, allowing them to receive events.
 //
@@ -1289,7 +1323,10 @@ func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, err
 // Parameters:
 //   - publishers: A list of event publishers to be added to the engine.
 //
-// Returns an error if the engine has not started.
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
 func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
@@ -1297,6 +1334,17 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.eventsStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
@@ -1330,7 +1378,10 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 // Parameters:
 //   - publishers: A list of state publishers to be added to the engine.
 //
-// Returns an error if the engine has not started.
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
 func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 	if !engine.Started() {
 		return ErrEngineNotStarted
@@ -1338,6 +1389,17 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.statesStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()

@@ -165,3 +165,127 @@ func TestSpawnWithoutEventsStore(t *testing.T) {
 		require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior("durable-"+uuid.NewString())))
 	})
 }
+
+// countingEventPublisher is an EventPublisher that counts Close calls.
+type countingEventPublisher struct {
+	id     string
+	closes atomic.Int32
+}
+
+var _ EventPublisher = (*countingEventPublisher)(nil)
+
+func (p *countingEventPublisher) ID() string { return p.id }
+
+func (p *countingEventPublisher) Publish(context.Context, *egopb.Event) error { return nil }
+
+func (p *countingEventPublisher) Close(context.Context) error {
+	p.closes.Add(1)
+	return nil
+}
+
+// closeCounter is what TestAddPublishersRejectsDuplicateIDs needs from a
+// fake publisher of either kind.
+type closeCounter interface {
+	closeCount() int32
+}
+
+func (p *countingEventPublisher) closeCount() int32 { return p.closes.Load() }
+func (p *countingStatePublisher) closeCount() int32 { return p.closes.Load() }
+
+// TestAddPublishersRejectsDuplicateIDs is the #126 defect 3 regression: a
+// publisher ID that is already registered for its kind, or repeated within
+// one batch, fails the whole call with ErrDuplicatePublisherID and leaves
+// the engine exactly as it was: no publisher of the batch is registered,
+// subscribed or started, and Stop closes only the publishers registered
+// before the call.
+func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
+	ctx := context.Background()
+
+	type kind struct {
+		name       string
+		topic      string
+		registered func(*Engine) int
+		newPub     func(id string) closeCounter
+		add        func(*Engine, ...closeCounter) error
+	}
+	kinds := []kind{
+		{
+			name:       "events",
+			topic:      eventsTopic,
+			registered: func(e *Engine) int { return e.eventsStreams.Len() },
+			newPub:     func(id string) closeCounter { return &countingEventPublisher{id: id} },
+			add: func(e *Engine, ps ...closeCounter) error {
+				pubs := make([]EventPublisher, 0, len(ps))
+				for _, p := range ps {
+					pubs = append(pubs, p.(EventPublisher))
+				}
+				return e.AddEventPublishers(pubs...)
+			},
+		},
+		{
+			name:       "states",
+			topic:      statesTopic,
+			registered: func(e *Engine) int { return e.statesStreams.Len() },
+			newPub:     func(id string) closeCounter { return &countingStatePublisher{id: id} },
+			add: func(e *Engine, ps ...closeCounter) error {
+				pubs := make([]StatePublisher, 0, len(ps))
+				for _, p := range ps {
+					pubs = append(pubs, p.(StatePublisher))
+				}
+				return e.AddStatePublishers(pubs...)
+			},
+		},
+	}
+
+	for _, k := range kinds {
+		t.Run(k.name+"/duplicate within the batch", func(t *testing.T) {
+			engine := newTestEngine(t, "dup-batch-"+uuid.NewString(), testkit.NewEventsStore())
+			require.NoError(t, engine.Start(ctx))
+
+			fresh := k.newPub("fresh")
+			first := k.newPub("dup")
+			second := k.newPub("dup")
+			err := k.add(engine, fresh, first, second)
+			require.ErrorIs(t, err, ErrDuplicatePublisherID)
+			assert.ErrorContains(t, err, `"dup"`)
+
+			assert.Zero(t, k.registered(engine), "nothing registered")
+			assert.Zero(t, engine.eventStream.SubscribersCount(k.topic), "nothing subscribed")
+
+			require.NoError(t, engine.Stop(ctx))
+			for _, p := range []closeCounter{fresh, first, second} {
+				assert.Zero(t, p.closeCount(), "a rejected publisher is never started, so never closed")
+			}
+		})
+
+		t.Run(k.name+"/duplicate of a registered publisher", func(t *testing.T) {
+			engine := newTestEngine(t, "dup-registered-"+uuid.NewString(), testkit.NewEventsStore())
+			require.NoError(t, engine.Start(ctx))
+
+			existing := k.newPub("dup")
+			require.NoError(t, k.add(engine, existing))
+			subscribers := engine.eventStream.SubscribersCount(k.topic)
+
+			fresh := k.newPub("fresh")
+			again := k.newPub("dup")
+			err := k.add(engine, fresh, again)
+			require.ErrorIs(t, err, ErrDuplicatePublisherID)
+			assert.ErrorContains(t, err, `"dup"`)
+
+			assert.Equal(t, 1, k.registered(engine), "only the publisher registered before")
+			assert.Equal(t, subscribers, engine.eventStream.SubscribersCount(k.topic), "no new subscriber")
+
+			require.NoError(t, engine.Stop(ctx))
+			assert.EqualValues(t, 1, existing.closeCount(), "the registered publisher is still closed by Stop")
+			assert.Zero(t, fresh.closeCount())
+			assert.Zero(t, again.closeCount())
+		})
+	}
+
+	t.Run("the same ID may be used once per kind", func(t *testing.T) {
+		engine := newTestEngine(t, "dup-kinds-"+uuid.NewString(), testkit.NewEventsStore())
+		require.NoError(t, engine.Start(ctx))
+		require.NoError(t, engine.AddEventPublishers(&countingEventPublisher{id: "shared"}))
+		require.NoError(t, engine.AddStatePublishers(&countingStatePublisher{id: "shared"}))
+	})
+}
