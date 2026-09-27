@@ -39,9 +39,10 @@ import (
 )
 
 // failingCloseEventPublisher is an EventPublisher whose Close always fails
-// and counts how many times it was called.
+// and counts how many times it was called. Close returns err.
 type failingCloseEventPublisher struct {
 	id     string
+	err    error
 	closes atomic.Int32
 }
 
@@ -53,7 +54,7 @@ func (p *failingCloseEventPublisher) Publish(context.Context, *egopb.Event) erro
 
 func (p *failingCloseEventPublisher) Close(context.Context) error {
 	p.closes.Add(1)
-	return errors.New("close failed: " + p.id)
+	return p.err
 }
 
 // countingStatePublisher is a StatePublisher that counts Close calls.
@@ -83,8 +84,10 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 
 	// Both event publishers fail on Close, so whichever one the map yields
 	// first, the other is closed only if Stop carries on after the error.
-	first := &failingCloseEventPublisher{id: "events-1"}
-	second := &failingCloseEventPublisher{id: "events-2"}
+	errFirst := errors.New("close failed: events-1")
+	errSecond := errors.New("close failed: events-2")
+	first := &failingCloseEventPublisher{id: "events-1", err: errFirst}
+	second := &failingCloseEventPublisher{id: "events-2", err: errSecond}
 	states := &countingStatePublisher{id: "states-1"}
 	require.NoError(t, engine.AddEventPublishers(first, second))
 	require.NoError(t, engine.AddStatePublishers(states))
@@ -92,8 +95,10 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 
 	err := engine.Stop(ctx)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "close failed: events-1")
-	assert.ErrorContains(t, err, "close failed: events-2")
+	assert.ErrorContains(t, err, `close events publisher "events-1": close failed: events-1`)
+	assert.ErrorContains(t, err, `close events publisher "events-2": close failed: events-2`)
+	assert.ErrorIs(t, err, errFirst, "the first publisher's error is reachable through the join")
+	assert.ErrorIs(t, err, errSecond, "the second publisher's error is reachable through the join")
 
 	assert.EqualValues(t, 1, first.closes.Load(), "first event publisher closed once")
 	assert.EqualValues(t, 1, second.closes.Load(), "second event publisher closed once")

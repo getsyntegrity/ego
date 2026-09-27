@@ -708,6 +708,8 @@ func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
 // Returns an error if the entity fails to initialize or encounters an issue during execution.
 // In cluster mode a behavior that GoAkt cannot serialize is rejected before
 // anything is spawned, with a *BehaviorPlacementError.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) Entity(ctx context.Context, behavior EventSourcedBehavior, opts ...SpawnOption) error {
 	return engine.spawnEventSourced(ctx, behavior, opts...)
 }
@@ -1442,6 +1444,8 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 // Returns an error if the saga fails to initialize. In cluster mode a
 // behavior that GoAkt cannot serialize is rejected before anything is
 // spawned, with a *BehaviorPlacementError.
+// Returns ErrEventsStoreRequired, before anything is spawned, when the Config
+// has no events store.
 func (engine *Engine) Saga(ctx context.Context, behavior SagaBehavior, timeout time.Duration, opts ...SpawnOption) error {
 	return engine.spawnSaga(ctx, behavior, timeout, opts...)
 }
