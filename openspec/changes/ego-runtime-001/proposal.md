@@ -58,9 +58,9 @@ The one internal adjustment is `spawn_config_test.go`, which calls `Apply` with 
 | Slice | Content | Gate |
 |---|---|---|
 | S4-1 | Remove the `migration -> ego` archcheck baseline entry (`internal/logging`) | In progress separately; not designed here |
-| **S4-2** | `port/runtime` types, options, `SpawnSettings`, sentinels; aliases in `ego` | This design approved |
+| **S4-2** | `port/runtime` types, options, `SpawnSettings`, sentinels; aliases in `ego`; `CHANGELOG.md` entry for them | This design approved |
 | **S4-3** | `port/runtime` interfaces; `*ego.Engine` assertion; GoAkt-free test double | S4-2; best after #146 |
-| **S4-4** | `compose/goakt.App.Runtime()`; end-to-end consumer; `CHANGELOG.md`; ego-arch-001 §3–§5 | S4-3; after S4-1 (shared ADR sections); best after #146 |
+| **S4-4** | `compose/goakt.App.Runtime()`; end-to-end consumer; `CHANGELOG.md` addition; ego-arch-001 §3–§5 | S4-3; after S4-1 (shared ADR sections); best after #146 |
 
 Each slice has at most four tasks (design §9). No release tag is cut between S4-2 and S4-3, so the types never ship without the interface that justifies them (#147, risks).
 

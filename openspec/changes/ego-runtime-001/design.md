@@ -84,6 +84,10 @@ type Entities interface {
 // Sagas spawns sagas and reports their status.
 type Sagas interface {
 	SpawnSaga(ctx context.Context, b behavior.Saga, timeout time.Duration, opts ...SpawnOption) error
+	// SagaStatus returns the saga's ID and current state. Known gap: the
+	// GoAkt adapter never fills SagaInfo.Status, so it always reads
+	// SagaRunning (engine.go:1638-1641; follow-up FU-1, §7). Callers must
+	// not rely on Status until FU-1 is fixed.
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
 
@@ -178,16 +182,19 @@ type SpawnOption interface {
 }
 
 // SpawnSettings is the resolved, read-only result of a list of options.
-// Runtimes read it; nothing can change it after ResolveSpawnOptions.
+// Runtimes read it; nothing can change it after ResolveSpawnOptions. It
+// holds a map of adapter settings, so it is not comparable with ==; compare
+// the getters instead.
 type SpawnSettings struct{ c spawnConfig }
 
 // ResolveSpawnOptions applies opts in order over the defaults
 // (RestartDirective, RoundRobin) and returns the result. A nil option is
-// skipped.
+// skipped; a non-nil value that embeds a nil SpawnOption (for example
+// struct{ SpawnOption }{}) is not nil, so its Apply still panics, as today.
 func ResolveSpawnOptions(opts ...SpawnOption) SpawnSettings
 
 func (s SpawnSettings) PassivateAfter() time.Duration            // 0: no passivation
-func (s SpawnSettings) Relocation() bool                         // default false (exploration §5.2)
+func (s SpawnSettings) Relocation() bool                         // default false, as the code behaves today (exploration §5.2)
 func (s SpawnSettings) SupervisorDirective() SupervisorDirective // default RestartDirective
 func (s SpawnSettings) Placement() EntitiesPlacement             // default RoundRobin
 func (s SpawnSettings) Tenant() tenancy.TenantID                 // "" when not declared
@@ -201,10 +208,13 @@ func WithTenant(id tenancy.TenantID) SpawnOption
 
 // WithAdapterSetting carries a value that only one runtime adapter reads,
 // under a key only that adapter can name (an unexported type, as with
-// context.WithValue). Other runtimes ignore it. key must be comparable and
-// non-nil.
+// context.WithValue). Other runtimes ignore it. Like context.WithValue,
+// it panics when it is called, not later at spawn, if key is nil or not
+// comparable, so a bad key fails where the option is built.
 func WithAdapterSetting(key, value any) SpawnOption
 ```
+
+**Relocation's documentation.** Today `WithRelocation`'s comment says "In cluster mode, entities are relocatable by default" (`spawn_config.go:141-144`), but the code disables relocation unless `WithRelocation(true)` is passed (`engine.go:1903-1905`). `runtime.WithRelocation` does not inherit that sentence: its comment keeps the parameter description (`spawn_config.go:150-154`) and states the actual default, "relocation is disabled unless `WithRelocation(true)` is passed; RUNTIME-003 owns the contract". The comment on `ego.WithRelocation` becomes a pointer to it. Whether the default should change is follow-up FU-2 (§7), not S4.
 
 **Why this keeps v4 compatible.** The method keeps its name, `Apply`, and keeps an unexported parameter type; only the package that declares that type changes, from `ego` to `port/runtime`. Code outside both packages could never name either type, so every use it can write compiles unchanged: holding and passing options, storing them in a `[]ego.SpawnOption`, embedding `ego.SpawnOption` in a struct (the only way outside code can satisfy it), taking the method expression `ego.SpawnOption.Apply`, even the pathological `opt.Apply(nil)`. The spike's consumer program exercises every one of these against the baseline and the moved tree (§11).
 
@@ -240,9 +250,9 @@ func newSpawnConfig(opts ...SpawnOption) *spawnConfig {
 
 So the contract carries no write-side field, which leaves #12's decision open, and the three call sites of `newSpawnConfig` in `engine.go` (`:783`, `:1068`, `:1546`) do not change. Another runtime ignores these settings, exactly as it would ignore any adapter's setting. If #12 decides a write-side setting belongs in the contract, a getter is added to `SpawnSettings` and the `ego` constructor switches to a neutral one: additive. Consumer code that wants a write-side option must import `ego` until then; that is the price of not deciding #12 here, and open question Q2 asks whether the mechanism itself is acceptable.
 
-**Behavior change: nil options.** `newSpawnConfig` calls `Apply` on every option (`spawn_config.go:104-106`), so a nil `SpawnOption` panics today. `ResolveSpawnOptions` skips it. No caller can rely on that panic; `CHANGELOG.md` records the change.
+**Behavior change: nil options.** `newSpawnConfig` calls `Apply` on every option (`spawn_config.go:104-106`), so a nil `SpawnOption` panics today. `ResolveSpawnOptions` skips it. No caller can rely on that panic; S4-2's `CHANGELOG.md` entry records the change.
 
-**apidiff expectation.** The alias moves make apidiff report "changed from X to X" for every symbol whose declaration now names a `port/runtime` type. The spike measured 31 such lines for package `ego` (§11): the seven `Engine` methods that take `...SpawnOption` or return `*SagaInfo`, the five moved types, their ten constants, and the nine `With*` spawn options. This is the cross-package-alias limitation S1 and S3 hit (ego-arch-002-s3 §6), not a real change; as there, the consumer program decides compatibility. The sentinels produce no report (their type is `error` before and after).
+**apidiff expectation.** The alias moves make apidiff report an incompatible change for every symbol whose declaration now names a `port/runtime` type. The spike measured 31 such lines for package `ego` (§11), of two shapes. 21 read "changed from X to X": the seven `Engine` methods that take `...SpawnOption` or return `*SagaInfo`, the five moved types, and the nine `With*` spawn options. The ten moved constants read "changed from X to github.com/pablogore/ego/v4/port/runtime.X" (for example `RoundRobin: changed from EntitiesPlacement to …/port/runtime.EntitiesPlacement`), because a constant reports its type's new qualified name. This is the cross-package-alias limitation S1 and S3 hit (ego-arch-002-s3 §6), not a real change; as there, the consumer program decides compatibility. The sentinels produce no report (their type is `error` before and after).
 
 ### D4 — "Not supported"
 
@@ -265,9 +275,9 @@ The contract rules, written into the package documentation:
 
 1. An unsupported operation returns such an error **before any side effect**, and never panics (#148's criterion).
 2. It is never used for a transient failure. A runtime that supports projections but cannot reach its store returns that store error.
-3. Spawn settings are not operations. A runtime honors the settings it understands and treats the rest as today's GoAkt adapter treats placement outside a cluster (`spawn_config.go:34`): they have no effect. Which settings must be honored is RUNTIME-003's contract, not this one.
+3. Spawn settings are not operations, and **this design states no default** for a setting a runtime cannot honor (for example cluster placement on a single-node runtime). Whether such a setting is a no-op, as placement outside a cluster is for GoAkt today (`spawn_config.go:34`), or fails the spawn with an `*UnsupportedError` before anything is spawned, is RUNTIME-003's decision. `ErrUnsupported` is available for either answer. **Note for the maintainer:** #148's criterion already expects "cluster placement unsupported → typed error". If RUNTIME-003 chooses no-op, #148's wording needs amending; if it chooses the error, #148 stands as written.
 
-**Why an error, not optional interfaces.** #147 and the maintainer's decision 2 put all four capabilities in the composite, and #148 expects "an explicit typed error, without panic". An error at call time needs no type assertion by the caller. **Knowing in advance** whether a runtime supports projections is RUNTIME-006, which #149 plans to model with its `Descriptor` (§8). The two answers are complementary: the descriptor says what a runtime declares; `ErrUnsupported` is what an undeclared operation returns if it is called anyway.
+**Why an error, not optional interfaces.** #147 and the maintainer's decision 2 put all four capabilities in the composite, and #148 expects "an explicit typed error, without panic". An error at call time needs no type assertion by the caller. **Knowing in advance** whether a runtime supports projections is RUNTIME-006, which #149 plans to model with its `Descriptor` (§8). The two answers are complementary: the descriptor says what a runtime declares; `ErrUnsupported` is what an undeclared operation returns if it is called anyway. Because every runtime implements every method, runtime capabilities cannot be inferred from the method set; §8 states that constraint for #149 and RUNTIME-006.
 
 **What the GoAkt adapter returns.** Nothing new: `*ego.Engine` supports every operation. `ErrUnsupported` is for #148 and the S4-3 test double.
 
@@ -388,7 +398,12 @@ No `-race` locally and no workbench; CI is the race gate. The two-node test of #
 - **#24**: no lifecycle method in the interface; `App.Runtime()` follows `App.Engine()`'s documented state (refuses work after `Stop`). The `EraseEntity`/`ProjectionLag` nil-store fix (#24 comment) keeps the signatures.
 - **#12**: write-side options stay out of the contract (§D3); `Dispatch` already takes #12's `command.Envelope`.
 - **#29**: an `EntityRef` handle, if added, is new methods next to the ID-based ones; the ID stays valid.
-- **RUNTIME-003**: receives the two findings of exploration §5 (relocation default; placement outside a cluster).
+- **RUNTIME-003**: receives the placement finding of exploration §5.4 and the choice between no-op and typed error for settings a runtime cannot honor (§D4 rule 3).
+
+**Named follow-ups for pre-existing bugs** (issue to be created by the maintainer; this change does not fix them and creates no issue):
+
+- **FU-1** `Engine.SagaStatus` never fills `SagaInfo.Status`, so it always reads `SagaRunning` (`engine.go:1638-1641`; the actor tracks it at `saga_actor.go:58`). Recorded as a known gap in the `Sagas.SagaStatus` interface doc (§D1). #148's in-memory runtime should fill it.
+- **FU-2** Relocation default: `WithRelocation`'s doc says relocatable by default (`spawn_config.go:141`), the code disables it unless `WithRelocation(true)` (`engine.go:1903-1905`). `runtime.WithRelocation` documents the actual behavior (§D3); whether the default changes is for RUNTIME-003.
 
 ## 8. Alignment with PR #149 (adapter SPI)
 
@@ -397,13 +412,13 @@ PR #149 is not merged; this design is written so either outcome of its open deci
 | #149 element | Relation to this design |
 |---|---|
 | `port/adapter.Descriptor`, capability constants, one accessor per capability (§D1–§D3) | Not used. S4 declares no capability names and adds no type assertion. RUNTIME-006 (#149 F-E) can add a `runtime` port name and capability constants, and a runtime adapter can implement `adapter.Describer`, without changing any interface here |
-| "Unsupported = not declared and not implemented" (§D3 table) | Holds for the descriptor. The composite interface requires the method, so an undeclared capability's method exists and returns `ErrUnsupported` (§D4). The two do not contradict: #149 classifies what is declared; `ErrUnsupported` is the call-time answer |
+| "Unsupported = not declared and not implemented" (§D3 table), checked by V8b in both directions (declared ⇒ implemented **and** implemented ⇒ declared) | **Constraint for #149 and RUNTIME-006.** The composite requires every method, so every runtime implements all four capability interfaces, including one that answers projections with `ErrUnsupported` (#148). Runtime capabilities therefore **cannot be defined by method set**. RUNTIME-006 must use declaration-only capabilities for the runtime port, or V8b must skip the "implemented ⇒ declared" direction for that port; otherwise a method-set check would force a runtime to declare capabilities it does not have |
 | Lifecycle `Starter`/`Pinger`/`Close`, L1–L6 (§D4) | The runtime interface has no lifecycle; the provider side of the runtime follows #149's model when #11 designs it (#147, dependencies) |
 | `engine.go:883` behind `tenancy.FixedTenantOf` (SPI-5) | Not touched by S4. Both edit `engine.go`; serialize (§9) |
 | `compose/goakt` step 4 and `probeStores` (SPI-5) | S4-4 adds a method elsewhere in `app.go`; serialize |
 | O1: adapters must not import `compose` | S4 adds no import from an adapter module |
 
-No conflict needs a maintainer decision before S4-2.
+Nothing here blocks S4-2: #149 adds no runtime port today. The constraint in row 2 must be carried into #149 (or RUNTIME-006) before runtime capabilities are defined.
 
 ## 9. Slices
 
@@ -411,14 +426,14 @@ Each slice is one pull request with at most four tasks. About 400 authored lines
 
 ### S4-2 — Neutral types and options
 
-- **Owns:** `port/runtime/{doc.go,spawn.go,saga.go,errors.go}` and their tests, `port/runtime/runtime_architecture_test.go` (new); `spawn_config.go`, `spawn_config_test.go`, `supervisor.go`, `saga.go`, `engine.go` (the error `var` block, `engine.go:61-174`, only), `runtime_compat_test.go` (new).
-- **Tasks:** 1. RED tests (option resolution, adapter settings, nil option, `ErrUnsupported`, `errors.Is` table). 2. `port/runtime` types, options, `SpawnSettings`, sentinels, doc and architecture test. 3. Aliases and wrappers in `ego`; write-side options through adapter settings; `spawn_config_test.go` rewritten. 4. Evidence in the pull request: apidiff for `ego` and `port/runtime`, consumer program on base and head, nested-consumer check, archcheck.
+- **Owns:** `port/runtime/{doc.go,spawn.go,saga.go,errors.go}` and their tests, `port/runtime/runtime_architecture_test.go` (new); `spawn_config.go`, `spawn_config_test.go`, `supervisor.go`, `saga.go`, `engine.go` (the error `var` block, `engine.go:61-174`, only), `runtime_compat_test.go` (new), `CHANGELOG.md`.
+- **Tasks:** 1. RED tests (option resolution, adapter settings including a non-comparable key panicking at build time, nil option, `ErrUnsupported`, `errors.Is` table). 2. `port/runtime` types, options, `SpawnSettings`, sentinels, doc and architecture test. 3. Aliases and wrappers in `ego`; write-side options through adapter settings; `spawn_config_test.go` rewritten; `CHANGELOG.md` entry for what lands here (the new package, the old-to-new name table, the nil-option change, `%T` names, SemVer minor). 4. Evidence in the pull request: apidiff for `ego` and `port/runtime`, consumer program on base and head, nested-consumer check, archcheck.
 - **Checks:** `go test ./port/runtime/ .` (the root lane runs the full root suite for any root file); `go run ./internal/cmd/archcheck`; `golangci-lint run`; apidiff; consumer program.
 - **Serialization:** `engine.go` is shared with #149 SPI-5 (line 883) and #24's fixes; `saga.go` and `spawn_config.go` with nobody known. Rebase, do not run in parallel with an open `engine.go` writer.
 
 ### S4-3 — Interfaces, adapter assertion, test double
 
-- **Owns:** `port/runtime/runtime.go`, `port/runtime/double_test.go` (new); `engine_runtime.go` (new).
+- **Owns:** `port/runtime/runtime.go`, `port/runtime/double_test.go` (new); `engine_runtime.go` (new); `CHANGELOG.md` (one line: the interfaces).
 - **Tasks:** 1. RED: double and assertion that do not build. 2. The five interfaces with their contract documentation (§D1, §D4). 3. `engine_runtime.go`. 4. Double tests and the `-test` closure in the architecture test.
 - **Checks:** `go test ./port/runtime/`; root suite unchanged; archcheck; apidiff (`port/runtime` additions; `ego` unchanged).
 - **Serialization:** touches no hot file. Best after #146, so its two-node test confirms the adapter unchanged.
@@ -426,7 +441,7 @@ Each slice is one pull request with at most four tasks. About 400 authored lines
 ### S4-4 — Composition accessor and end-to-end consumer
 
 - **Owns:** `compose/goakt/app.go` (the new method and the package doc example only), `compose/goakt/app_test.go` (accessor tests), `compose/goakt/runtime_e2e_test.go` (new), `internal/runtimeconsumer/**` (new), `CHANGELOG.md`, `openspec/changes/ego-arch-001/design.md` §3, §4, §5.
-- **Tasks:** 1. RED accessor tests, including nil before `Start`. 2. `App.Runtime()` and the doc example. 3. `internal/runtimeconsumer` with its closure test, and the end-to-end test. 4. `CHANGELOG.md` (additions, the nil-option change, `%T` names, the old-to-new name table, SemVer minor) and ego-arch-001 §3 (`port/runtime` in the contract list), §4 (map rows), §5 (S4 done).
+- **Tasks:** 1. RED accessor tests, including nil before `Start`. 2. `App.Runtime()` and the doc example. 3. `internal/runtimeconsumer` with its closure test, and the end-to-end test. 4. `CHANGELOG.md` (extends S4-2's entry with the interfaces of S4-3 and `App.Runtime`) and ego-arch-001 §3 (`port/runtime` in the contract list), §4 (map rows), §5 (S4 done).
 - **Checks:** `go test ./compose/... ./internal/runtimeconsumer/`; closure test; #146's test; archcheck; apidiff (`compose/goakt` additions).
 - **Serialization:** after S4-1, which edits ego-arch-001 §2–§4. `app.go` is shared with #149 SPI-5 (different functions) and possibly #146's fixtures; `CHANGELOG.md` with IMPL-5 (PR #150) and S4-1. Best after #146.
 
@@ -442,10 +457,10 @@ ego-arch-001 §10 says every temporary alias is marked `Deprecated:`. The code d
 
 | Option | Consequence |
 |---|---|
-| (a) No marker in S4, as S1 and S3 did; #124's plan marks everything at once before the major | Consistent with the code; no staticcheck noise inside package `ego`, which uses these names everywhere |
+| (a) No marker in S4, as S1 and S3 did; #124's plan marks everything at once before the major | Consistent with the code; no staticcheck noise inside package `ego`, which uses these names everywhere. **Cost:** consumers get no staticcheck warning about the old names before #124 removes them; the `CHANGELOG.md` table and #124's migration guide are their only notice |
 | (b) Mark the aliases and the `ego.With*` wrappers `Deprecated:` in S4-4 | Follows §10 literally; every internal use needs a `//nolint:staticcheck` or a switch to `runtimeport` names in `engine.go` and the actors, a large diff in hot files |
 
-**Recommendation: (a)**, and S4-4 amends the §10 wording to say what the code does ("aliases of the same type are not marked; APIs with a different replacement are"), if the maintainer agrees.
+**Recommendation: (a).** ego-arch-001 §10's alias-deprecation wording is a maintainer decision (2026-09-26), so rewording it to what the code does ("aliases of the same type are not marked; APIs with a different replacement are") needs the maintainer's explicit sign-off; S4-4 changes §10 only if it is given.
 
 ### Q2 — Adapter settings as public API
 
@@ -453,7 +468,7 @@ ego-arch-001 §10 says every temporary alias is marked `Deprecated:`. The code d
 
 | Option | Consequence |
 |---|---|
-| (a) `WithAdapterSetting`, keyed by an unexported type, as `context.WithValue` | Keeps #12 open; the contract gains a small generic door, reversible by adding getters |
+| (a) `WithAdapterSetting`, keyed by an unexported type, as `context.WithValue` | Keeps #12 open; the contract gains a small generic door. Promoting a setting to a getter later is additive, but the door itself is public v4 API and cannot be removed inside v4 |
 | (b) Put the four write-side settings in `SpawnSettings` now | No generic door, but decides #12's question here, against decision 3 |
 | (c) Keep write-side options returning something other than `SpawnOption` | Incompatible: their result type is `SpawnOption` today |
 
