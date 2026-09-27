@@ -31,8 +31,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/publishing"
 )
 
 // EventsPublisher defines a Pulsar publisher.
@@ -44,8 +44,8 @@ type EventsPublisher struct {
 	started  *atomic.Bool
 }
 
-// ensure EventsPublisher implements ego.EventPublisher.
-var _ ego.EventPublisher = (*EventsPublisher)(nil)
+// ensure EventsPublisher implements publishing.EventPublisher.
+var _ publishing.EventPublisher = (*EventsPublisher)(nil)
 
 // NewEventsPublisher creates a new instance of EventsPublisher.
 //
@@ -112,7 +112,7 @@ func (x *EventsPublisher) ID() string {
 // Returns: An error if the event cannot be published.
 func (x *EventsPublisher) Publish(ctx context.Context, event *egopb.Event) error {
 	if !x.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.
@@ -147,8 +147,8 @@ type DurableStatePublisher struct {
 	started  *atomic.Bool
 }
 
-// ensure DurableStatePublisher implements ego.StatePublisher.
-var _ ego.StatePublisher = (*DurableStatePublisher)(nil)
+// ensure DurableStatePublisher implements publishing.StatePublisher.
+var _ publishing.StatePublisher = (*DurableStatePublisher)(nil)
 
 // NewDurableStatePublisher creates a new instance of DurableStatePublisher.
 //
@@ -215,7 +215,7 @@ func (x *DurableStatePublisher) ID() string {
 // Returns: An error if the event cannot be published.
 func (x *DurableStatePublisher) Publish(ctx context.Context, state *egopb.DurableState) error {
 	if !x.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.

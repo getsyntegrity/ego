@@ -30,8 +30,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/publishing"
 )
 
 // EventsPublisher defines a NATS publisher.
@@ -43,8 +43,8 @@ type EventsPublisher struct {
 	jetStream  nats.JetStream
 }
 
-// ensure EventsPublisher implements ego.EventPublisher.
-var _ ego.EventPublisher = (*EventsPublisher)(nil)
+// ensure EventsPublisher implements publishing.EventPublisher.
+var _ publishing.EventPublisher = (*EventsPublisher)(nil)
 
 // NewEventsPublisher creates a new instance of EventsPublisher.
 // It requires a configuration instance to create the publisher.
@@ -139,7 +139,7 @@ func (x *EventsPublisher) ID() string {
 // Returns: An error if the event fails to be sent.
 func (x *EventsPublisher) Publish(_ context.Context, event *egopb.Event) error {
 	if !x.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.
@@ -159,8 +159,8 @@ type DurableStatePublisher struct {
 	jetStream  nats.JetStream
 }
 
-// ensure DurableStatesPublisher implements ego.DurableStatePublisher.
-var _ ego.StatePublisher = (*DurableStatePublisher)(nil)
+// ensure DurableStatePublisher implements publishing.StatePublisher.
+var _ publishing.StatePublisher = (*DurableStatePublisher)(nil)
 
 // NewDurableStatePublisher creates a new instance of DurableStatePublisher.
 // It requires a configuration instance to create the publisher.
@@ -255,7 +255,7 @@ func (e *DurableStatePublisher) ID() string {
 // Returns: An error if the event fails to be sent.
 func (e *DurableStatePublisher) Publish(_ context.Context, state *egopb.DurableState) error {
 	if !e.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.

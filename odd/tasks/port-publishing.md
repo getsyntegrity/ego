@@ -68,7 +68,8 @@ mix two risks in one PR.
 3. `inmemory-runtime-conformance` — the remaining #103 criteria: an in-memory runtime / test double
    running the same domain as GoAkt. Likely shaped together with #11's runtime SPI.
 
-S1b (publishers import `port/publishing`) is blocked on #111.
+S1b (publishers import `port/publishing`) was blocked on #111; #111 landed in #120, and S1b is
+tracked in the section below.
 
 ## Progress and evidence
 
@@ -104,3 +105,47 @@ Check: structural readback.
 
 **Next step:** push and open the PR for S1a, then spec 2 of the chain, or #107 (S2) which the ADR
 allows in parallel.
+
+## S1b — publishers import `port/publishing`
+
+Branch: `feat/103-publishers-port-publishing` · Base: `origin/main` `c6b219c` (after #119 and #120).
+
+The four publisher modules still imported package `ego` only for `EventPublisher`,
+`StatePublisher` and `ErrPublisherNotStarted`, which pulled the whole GoAkt runtime into each
+publisher's build. #111 now builds, vets, lints and tests a nested module whenever a PR touches it,
+so the switch can land safely. Scope is the import switch only: no `go.mod` change, no public API
+change, the `ego` aliases stay as they are and are not deprecated (design.md §10 keeps that window
+open). #103's behavior contracts, #105 and the runtime SPI are out of scope.
+
+TDD: strict (user global configuration), runner `go test`, no `-race` locally.
+Route: direct inline — four one-line import switches, one baseline file and docs; no trigger fired.
+
+- [x] **T4** Compatibility test per publisher (`publisher/*/compat_test.go`): compile-time
+  assertions against `ego.*` and `publishing.*`, and `errors.Is` of a stopped publisher's
+  `Publish` error against both sentinels. Check: passes on the old code; a temporary mutation of
+  Kafka's sentinel makes it fail (RED), reverted before T5.
+- [x] **T5** Switch the four publishers to `port/publishing`, fix the related comments, and remove
+  the four publisher entries from `internal/cmd/archcheck/baseline.go` (keep `migration`).
+  Check: archcheck + tests; `scripts/ci/verify-module.sh` for each publisher; `go list -deps`.
+- [x] **T6** Update `design.md`, `docs/ci.md`, `CHANGELOG.md` and this document.
+  Check: structural readback.
+
+**Evidence (local, Go 1.27.1 linux/amd64 — CI uses 1.27.0; golangci-lint v2.13.1 built with
+Go 1.27.1, no `-race`).**
+
+- RED: with Kafka's `EventsPublisher.Publish` returning `errors.New(...)`, the test failed on both
+  `errors.Is` checks; the other three modules passed. Reverted.
+- `go run ./internal/cmd/archcheck`: 15 packages, 70 edges, 1 baselined, 0 violations, 0 stale.
+  `go test ./internal/cmd/archcheck/...`: ok.
+- `scripts/ci/verify-module.sh` exit 0 (build, vet, lint 0 issues, test ok) for the four
+  publishers, `benchmark` and `example/cluster`; `go build`/`go vet ./mocks/ego/`: ok.
+- `go list -deps ./...` (GOWORK=off): kafka 299, nats 256, pulsar 577, websocket 239 packages;
+  0 under `github.com/tochemey/goakt/v4` and none is the root package `ego`.
+- `go mod tidy -diff`: no change in any publisher.
+- Root: `go test -run TestPublisherContractsAliasPortPublishing .` ok. No root-package file
+  changed, so the S1a `apidiff` result for package `ego` stands.
+- `ciselect`: `publisher/kafka/kafka.go` alone → root mode `none`, `modules.json`
+  `["publisher/kafka"]`; the full change set → root mode `affected` (`internal/cmd/archcheck`),
+  modules = the four publishers.
+- Not proven here: a build against a root tag on the Go proxy. No tag exists yet; `release.yml`
+  runs `verify-published.sh` against the just-published root version before tagging a publisher.

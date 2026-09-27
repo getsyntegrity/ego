@@ -188,7 +188,7 @@ The fix is almost always to depend on a contract package instead of the runtime.
 
 Violations that cannot be fixed yet are listed in `internal/cmd/archcheck/baseline.go`. Every entry must name an owner, a justification and a removal criterion, or the tool refuses to run. An entry that no longer matches a real violation fails the check as **stale**, so the entry has to be deleted in the same change that fixes the violation. The baseline can shrink, but nothing can quietly stay in it after its violation is gone.
 
-At the start the baseline holds five entries: the four publishers importing package `ego` (removed by S1b, once #111 verifies nested modules in CI) and `migration` importing package `ego` (removed by S3/S4, #103 and #11).
+The baseline started with five entries. S1b removed the four publishers importing package `ego` once #111 verified nested modules in CI; they now import `port/publishing`. One entry remains: `migration` importing package `ego` (removed by S3/S4, #103 and #11).
 
 ### Adding a layer or changing a rule
 
@@ -376,7 +376,7 @@ pull the module into the root module's own build:
    `modules-download-mode: vendor`, since nested modules do not check in
    a `vendor/` directory
 5. `go test ./...` only when the module has at least one `*_test.go`
-   file; a module with none (every publisher today) reports "no tests"
+   file; a module with none (no nested module today) reports "no tests"
    in the job summary instead of running `go test` against nothing.
    `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
    sets; a local run leaves it off by default, per this repository's own

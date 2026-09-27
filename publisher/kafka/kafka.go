@@ -30,8 +30,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/egopb"
+	"github.com/pablogore/ego/v4/port/publishing"
 )
 
 // EventsPublisher defines a Kafka publisher.
@@ -42,8 +42,8 @@ type EventsPublisher struct {
 	started  *atomic.Bool
 }
 
-// ensure EventsPublisher implements ego.EventPublisher.
-var _ ego.EventPublisher = (*EventsPublisher)(nil)
+// ensure EventsPublisher implements publishing.EventPublisher.
+var _ publishing.EventPublisher = (*EventsPublisher)(nil)
 
 // NewEventsPublisher creates a new instance of EventsPublisher.
 // It requires a configuration instance to create the publisher.
@@ -69,7 +69,7 @@ func NewEventsPublisher(config *Config) (*EventsPublisher, error) {
 	}, nil
 }
 
-// Close implements ego.EventPublisher.
+// Close implements publishing.EventPublisher.
 func (x *EventsPublisher) Close(ctx context.Context) error {
 	// we give the publisher 3 seconds to close. This is an abitrary value.
 	// It helps to ensure that the publisher has enough time to close.
@@ -80,12 +80,12 @@ func (x *EventsPublisher) Close(ctx context.Context) error {
 	return x.producer.Close()
 }
 
-// ID implements ego.EventPublisher.
+// ID implements publishing.EventPublisher.
 func (x *EventsPublisher) ID() string {
 	return "ego-kafka"
 }
 
-// Publish implements ego.EventPublisher.
+// Publish implements publishing.EventPublisher.
 // It publishes an event to the Kafka broker.
 //
 // Parameters:
@@ -96,7 +96,7 @@ func (x *EventsPublisher) ID() string {
 //   - error: If an error occurs during event publication, it is returned.
 func (x *EventsPublisher) Publish(_ context.Context, event *egopb.Event) error {
 	if !x.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.
@@ -122,8 +122,8 @@ type DurableStatePublisher struct {
 	started  *atomic.Bool
 }
 
-// ensure DurableStatesPublisher implements ego.DurableStatePublisher.
-var _ ego.StatePublisher = (*DurableStatePublisher)(nil)
+// ensure DurableStatePublisher implements publishing.StatePublisher.
+var _ publishing.StatePublisher = (*DurableStatePublisher)(nil)
 
 // NewDurableStatePublisher creates a new instance of DurableStatePublisher.
 // It requires a configuration instance to create the publisher.
@@ -149,7 +149,7 @@ func NewDurableStatePublisher(config *Config) (*DurableStatePublisher, error) {
 	}, nil
 }
 
-// Close implements ego.StatePublisher.
+// Close implements publishing.StatePublisher.
 func (x *DurableStatePublisher) Close(ctx context.Context) error {
 	// we give the publisher 3 seconds to close. This is an abitrary value.
 	// It helps to ensure that the publisher has enough time to close.
@@ -160,12 +160,12 @@ func (x *DurableStatePublisher) Close(ctx context.Context) error {
 	return x.producer.Close()
 }
 
-// ID implements ego.StatePublisher.
+// ID implements publishing.StatePublisher.
 func (x *DurableStatePublisher) ID() string {
 	return "ego-kafka"
 }
 
-// Publish implements ego.StatePublisher.
+// Publish implements publishing.StatePublisher.
 // It publishes an event to the Kafka broker.
 //
 // Parameters:
@@ -176,7 +176,7 @@ func (x *DurableStatePublisher) ID() string {
 //   - error: If an error occurs during event publication, it is returned.
 func (x *DurableStatePublisher) Publish(_ context.Context, state *egopb.DurableState) error {
 	if !x.started.Load() {
-		return ego.ErrPublisherNotStarted
+		return publishing.ErrPublisherNotStarted
 	}
 
 	// serialize the event. No need to check for errors.
