@@ -23,13 +23,6 @@
 package websocket
 
 import (
-	"context"
-	"errors"
-	"testing"
-
-	"go.uber.org/atomic"
-
-	"github.com/pablogore/ego/v4/egopb"
 	"github.com/pablogore/ego/v4/port/publishing"
 )
 
@@ -40,29 +33,16 @@ import (
 // unreleased test/compat module (ADR ego-arch-006, slice S1; docs/ci.md,
 // "Compatibility checks: the test/compat module"), precisely so that this
 // module's tests never need to import `ego` (#122).
+//
+// The check that Publish on a closed publisher returns
+// publishing.ErrPublisherNotStarted used to live here. It is now PT-1 of
+// port/publishing/publishingtest, run in conformance_test.go against a
+// publisher that really was connected and closed. Together with
+// test/compat's TestEgoSentinelIsThePublishingSentinel, which checks that
+// ego.ErrPublisherNotStarted is this same error value, it still proves the
+// historical check that the error also matches ego.ErrPublisherNotStarted
+// (ADR ego-arch-006, §6 S1).
 var (
 	_ publishing.EventPublisher = (*EventsPublisher)(nil)
 	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)
 )
-
-// TestPublishBeforeStartMatchesPublishingSentinel checks that the error a
-// stopped publisher returns matches publishing.ErrPublisherNotStarted. The
-// publishers are built without a broker connection: Publish rejects the call
-// before touching the client. Together with test/compat's
-// TestEgoSentinelIsThePublishingSentinel, which checks that
-// ego.ErrPublisherNotStarted is this same error value, it proves the
-// historical check that the error also matches ego.ErrPublisherNotStarted
-// (ADR ego-arch-006, §6 S1).
-func TestPublishBeforeStartMatchesPublishingSentinel(t *testing.T) {
-	ctx := context.Background()
-	errs := map[string]error{
-		"events": (&EventsPublisher{started: atomic.NewBool(false)}).Publish(ctx, &egopb.Event{}),
-		"state":  (&DurableStatePublisher{started: atomic.NewBool(false)}).Publish(ctx, &egopb.DurableState{}),
-	}
-
-	for name, err := range errs {
-		if !errors.Is(err, publishing.ErrPublisherNotStarted) {
-			t.Errorf("%s: errors.Is(%v, publishing.ErrPublisherNotStarted) = false", name, err)
-		}
-	}
-}
