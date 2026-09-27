@@ -88,7 +88,7 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
-| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @36121d7 | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
+| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @d5693df (reviewer approved at 20142c2; last 2-line nit delta checked by orchestrator) | design writer | #128 | in review | reviewer: approve with nits (C1–C8 pass; spike proves no v4 break; GoAkt Inject panic pre-existing on main). Fixes 1,3,4,5-text,6,8,9 sent to writer; findings 2 (S3-4 vs IMPL-4, #125 consistency) and 7 (package name) wait for human; then human review before implementation |
 | W1b | #122 | ci/122-publisher-test-closures | writer | — | in progress | — |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
 | W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
