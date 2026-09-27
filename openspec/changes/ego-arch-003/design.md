@@ -14,7 +14,7 @@ A **composition root** is the one place in a program that builds concrete adapte
 
 Terms used below, each defined once:
 
-- **`Spec`** — a plain Go struct listing the already-constructed dependencies (stores, publishers, resolvers) and declarative settings (name, entity families used, projections to autostart) that a composition root needs. It is not itself a composition root; it is the input to one.
+- **`Spec`** — a plain Go struct listing the already-constructed dependencies (stores, publishers, resolvers) and declarative settings (name, entity families used, shutdown timeout) that a composition root needs. It is not itself a composition root; it is the input to one.
 - **Composition root** — here, one of `compose/goakt` or (future) `compose/inmem`: a package whose job is to validate a `Spec`, build the runtime-specific pieces, and expose a started `App` with deterministic `Start`/`Stop`.
 - **Service locator** — an anti-pattern where code looks up a dependency by type or name from a shared container at the point of use, instead of receiving it as a parameter. This design forbids it explicitly (D2).
 - **Entity family** — one of the three kinds of entity Ego supports: `EventSourcedBehavior`, `DurableStateBehavior`, `SagaBehavior`. Which families a deployment uses determines which stores are required (D3).
@@ -62,39 +62,87 @@ No box in this diagram validates the whole graph before something starts, and no
 
 ### D1 — Location
 
-Two new packages live in the root module: `compose` (runtime-neutral — the `Spec` struct and `Spec.Validate`) and `compose/goakt` (the GoAkt composition root — `New` and `App`). A future `compose/inmem` follows the same shape once its prerequisites (§5) are met. The sequencing logic both compositions share — validate, probe, start steps in order, roll back on failure, stop in order — lives in `internal/lifecycle`, which is unexported: it is an implementation detail of `compose/goakt` (and later `compose/inmem`), never a public container consumers construct or hold themselves.
+Two new packages live in the root module: `compose` (runtime-neutral — the `Spec` struct, `Spec.Validate` and the `StartError` type) and `compose/goakt` (the GoAkt composition root — `New` and `App`). A future `compose/inmem` follows the same shape once its prerequisites (§5.2) are met. The sequencing logic both compositions share — probe, start steps in order, roll back on failure, stop in order — lives in `compose/internal/lifecycle`. Go's `internal` rule makes that package importable only from `compose/...`, so it is an implementation detail of `compose/goakt` (and later `compose/inmem`), never a public container consumers construct or hold, and it may use `compose`'s error types without breaking the `composition-leaf` rule (D8).
 
-The name `compose` is itself an open decision (§9); `app` and `bootstrap` were considered and neither was clearly better, so the decision is left open rather than forced.
+The package name `compose` is kept (reviewed in #125; `app` and `bootstrap` were the alternatives).
 
-The existing manual path — `NewConfig`, `GoaktOptions`, `goakt.NewActorSystem`, `NewEngine`, `AddEventPublishers` — is unchanged and stays supported for v4 as the "advanced/manual composition" path, for consumers who need GoAkt options `compose/goakt` does not yet expose (custom cluster topology, remote configuration). `compose/goakt` is purely additive: a new package, no changed signature, no deprecation.
+The existing manual path — `NewConfig`, `GoaktOptions`, `goakt.NewActorSystem`, `NewEngine`, `AddEventPublishers` — is unchanged and stays supported for v4 as the "advanced/manual composition" path, for consumers who need GoAkt options `compose/goakt` does not expose (custom remoting, discovery or supervision settings). `compose/goakt` is additive: new packages plus two additive `ego` options (D3, D5), no changed signature, no deprecation.
 
 ### D2 — Dependency injection model
 
-Explicit constructor injection at the root only. `compose.Spec` is a plain struct of already-constructed instances, typed by the same contract packages the manual path already uses (`persistence.EventsStore`, `persistence.StateStore`, `persistence.SnapshotStore`, `offsetstore.OffsetStore`, named projection options, `eventadapter.EventAdapter`, `encryption.Encryptor`, `tenancy.TenantResolver`, and publishers from `port/publishing`), plus declarative settings (a name, which entity families are in use, which projections to autostart, a shutdown timeout). The consumer constructs every adapter; `compose` never instantiates a store or a publisher, and it does no auto-discovery of any kind — there is no scan for implementations, no tag-based registration, nothing resembling a plugin loader.
+Explicit constructor injection at the root only. `compose.Spec` (sketched in D3) is a plain struct of already-constructed instances, typed by the same contract packages the manual path already uses, plus declarative settings (a name, the entity families in use, a shutdown timeout). The consumer constructs every adapter; `compose` never instantiates a store or a publisher, and it does no auto-discovery of any kind — there is no scan for implementations, no tag-based registration, nothing resembling a plugin loader.
 
 Below the root, each internal component receives only its own dependencies as constructor parameters — the same discipline `NewEngine` already applies to the `Engine` struct's fields, extended to cover the pieces that today are assembled ad hoc in the consumer's `main`. GoAkt's extension registry (`internal/extensions`, wired through `ego.GoaktOptions`) remains an internal detail of the GoAkt adapter; it is never reachable from `compose`, from contracts, or from application code.
 
-This is checkable, not just a style preference. Forbidden, and checked by review and by the `composition-leaf` archcheck rule (D8): exported registry or container types anywhere, `compose/...` included; `Resolve`/`Get`-by-type functions; reflection-based wiring; passing a `Spec` value or a running `App` into any package under `ego`, `internal/extensions`, or a contract package. Runtime-specific settings — telemetry (`*ego.Telemetry`), the `kitlog.Logger`, GoAkt cluster configuration, or an extra `goakt.Option` — belong to `compose/goakt`'s own option functions, not to the neutral `Spec`, because `Spec` must mean the same thing for every runtime; telemetry stays runtime-specific for now because `#31` has not yet defined a neutral observability contract.
+This is checkable, not just a style preference. Forbidden, and checked by review and by the `composition-leaf` archcheck rule (D8): exported registry or container types anywhere, `compose/...` included; `Resolve`/`Get`-by-type functions; reflection-based wiring, meaning any use of `reflect` to find, construct or connect a dependency; passing a `Spec` value or a running `App` into any package under `ego`, `internal/extensions`, or a contract package. One use of `reflect` is explicitly allowed: V5's nil check (`reflect.ValueOf(v).IsNil()` on a value the consumer already placed in a named `Spec` field). It inspects a value; it does not wire anything.
 
-### D3 — Entity families
+Runtime-specific settings — telemetry (`*ego.Telemetry`), the `kitlog.Logger`, GoAkt cluster configuration and entity kinds, or an extra `goakt.Option` — belong to `compose/goakt`'s own option functions, not to the neutral `Spec`, because `Spec` must mean the same thing for every runtime; telemetry stays runtime-specific for now because `#31` has not yet defined a neutral observability contract.
 
-`Spec` declares which entity families a deployment uses: `EventSourced`, `DurableState`, `Saga`, as a small enum or set. The zero value is `EventSourced`, matching what every current example and test actually builds. Declaring families up front is what lets static validation (D4) know which stores are required without waiting for the first spawn to find out.
+### D3 — `Spec` and entity families
+
+`Spec` declares which entity families a deployment uses, so that static validation (D4) knows which stores are required without waiting for the first spawn. The shape, as a sketch (field names are settled in IMPL-2; the semantics below are not):
+
+```go
+package compose
+
+// Family is a bit set of the entity families a deployment runs.
+type Family uint8
+
+const (
+	EventSourced Family = 1 << iota
+	DurableState
+	Saga
+)
+
+type Spec struct {
+	Name     string // identifies the deployment; each runtime validates its own naming rules
+	Families Family // at least one bit; zero is a validation error (V1)
+
+	EventsStore   persistence.EventsStore
+	StateStore    persistence.StateStore
+	SnapshotStore persistence.SnapshotStore // optional
+	OffsetStore   offsetstore.OffsetStore   // required iff Projections is non-empty
+
+	Projections map[string]*projection.Options // key is the projection name, so names are unique by construction
+
+	EventAdapters  []eventadapter.EventAdapter // optional
+	Encryptor      encryption.Encryptor        // optional
+	TenantResolver tenancy.TenantResolver      // optional; one field, so "more than one resolver" cannot be expressed
+
+	EventPublishers []publishing.EventPublisher
+	StatePublishers []publishing.StatePublisher
+
+	ShutdownTimeout time.Duration // bounds rollback and Stop (D6, D7); zero means the default
+}
+```
+
+`Families` has no implicit member: `Families: compose.DurableState` means durable state only, and a zero value is rejected rather than defaulted, so nothing about the deployment is guessed. Every projection in `Projections` is started by `App.Start`; there is no separate autostart list.
+
+The engine must know the declared families to reject a spawn of an undeclared one (D4). `compose/goakt` passes them through a new additive `ego` option (first of the two `ego` options this design adds). A spawn of an undeclared family then returns a typed error instead of panicking or silently succeeding.
 
 ### D4 — Validation, in two phases
 
-**(a) Static, inside `New` — no I/O, no goroutines.** `New` returns one error that lists every problem found, built with `errors.Join` over typed errors that each name the offending field, rather than stopping at the first one:
+**(a) Static, before anything starts — no I/O, no goroutines.** Validation returns one error that lists every problem found, built with `errors.Join` over typed errors that each name the offending field, rather than stopping at the first one. It has two parts.
 
-- **V1** — `EventSourced`, `Saga`, or any projection declared ⇒ `EventsStore` must be non-nil.
-- **V2** — `DurableState` declared ⇒ `StateStore` must be non-nil.
-- **V3** — each projection needs a non-nil `OffsetStore`, a non-nil handler, and a name unique among the declared projections.
-- **V4** — a typed-nil interface value is rejected, not just a literal `nil` — the same class of bug behind the `eventsStore.Ping` panic in §2.2, caught here instead of at first spawn.
-- **V5** — at most one tenant resolver, reusing `NewEngine`'s existing `ErrAmbiguousTenantResolver` rule (`engine.go:240-242`).
-- **V6** — publishers, where configured, must be non-nil.
-- **V7**, GoAkt-specific — when cluster configuration is set, `ClusterKinds()` must be registered automatically, and the actor-system name must be valid.
+`compose.Spec.Validate()` — runtime-neutral, imports no runtime:
 
-**(b) Probe, at the first step of `Start`, before anything else starts.** Every configured store's `Ping(ctx)` is called; the three store contracts already expose it (`persistence/events_store.go:112`, `persistence/state_store.go:75-81`, `persistence/snapshot_store.go:65-71`, `offsetstore/offset_store.go:34-38`), so this reuses an existing method rather than inventing a new one. A failure names the store that failed.
+- **V1** — `Families` is non-zero.
+- **V2** — `EventSourced` or `Saga` declared, or `Projections` non-empty ⇒ `EventsStore` must be non-nil.
+- **V3** — `DurableState` declared ⇒ `StateStore` must be non-nil.
+- **V4** — `Projections` non-empty ⇒ `OffsetStore` must be non-nil, and every entry must have a non-nil `*projection.Options` with a non-nil `Handler`.
+- **V5** — a typed-nil interface value is rejected wherever a literal `nil` would be, not just a literal `nil` — the same class of bug behind the `eventsStore.Ping` panic in §2.2, caught here instead of at first spawn.
+- **V6** — every configured publisher is non-nil, and publisher IDs are unique per kind (events, states). `AddEventPublishers`/`AddStatePublishers` key publishers by `ID()` (`engine.go:1228`, `engine.go:1269`), so a duplicate overwrites the first entry and orphans its `sendEvent`/`sendState` goroutine; `Stop` never closes it.
 
-Two further, separate guarantees close the remaining gaps from §2.2: spawning an undeclared entity family through the composed `App`'s engine returns a typed error rather than panicking or silently succeeding (the engine only knows the declared families if `compose/goakt` passes them in, so IMPL-4 adds one additive `ego` option for it — a new exported symbol in package `ego`, no changed signature), and — independently of `compose`, as a compatible bugfix that can land first (IMPL-1) — `Engine.Entity` and `Engine.Saga` return a new `ErrEventsStoreRequired` instead of the current unguarded call chain, matching the guard `Engine.DurableStateEntity` already has (`engine.go:902`, `ErrDurableStateStoreRequired`).
+No tenant-resolver rule is needed: `NewEngine` rejects more than one resolver (`ErrAmbiguousTenantResolver`, `engine.go:80`, checked at `engine.go:240-242`) because `WithTenantResolver` can be called repeatedly (`option.go:435`), but `Spec` has a single `TenantResolver` field, so that state cannot be built.
+
+`compose/goakt.New` — GoAkt-specific, runs after `Spec.Validate`:
+
+- **G1** — when `WithCluster` is used, at least one entity kind is supplied. `compose/goakt` registers `ClusterKinds()` with the cluster configuration and passes the entity kinds to `ego.WithEntityKinds` (`option.go:359`); without kinds, spawns placed on a remote node cannot rebuild the behavior.
+- **G2** — `Spec.Name` is a valid GoAkt actor-system name.
+
+**(b) Probe, at the first step of `Start`, before anything else starts.** Every configured store's `Ping(ctx)` is called; the store contracts already expose it (`persistence/events_store.go:112`, `persistence/state_store.go:75-81`, `persistence/snapshot_store.go:65-71`, `offsetstore/offset_store.go:34-38`), so this reuses an existing method rather than inventing a new one. A failure names the store that failed.
+
+Separately, and independently of `compose`, `#126` (slice IMPL-1) makes the manual path safe too: `Engine.Entity` and `Engine.Saga` return a new `ErrEventsStoreRequired` instead of reaching the unguarded `Ping` (`event_sourced_actor.go:489`, `saga_actor.go:186`), matching the guard `Engine.DurableStateEntity` already has (`engine.go:902`), and duplicate publisher IDs are rejected at `AddEventPublishers`/`AddStatePublishers`.
 
 ### D5 — Ownership
 
@@ -103,32 +151,37 @@ Who constructs, connects, and closes each dependency needs to be unambiguous, be
 | Dependency | Constructed by | Started/connected by | Stopped/closed by |
 |---|---|---|---|
 | Stores (events, state, offset, snapshot) | Consumer | Consumer (before `New`) | Consumer (after `Stop` returns) — `App` only pings them; a caller-owned resource is never closed implicitly (`#24`'s stated principle) |
-| Actor system | `App` (`compose/goakt`) | `App`, inside `Start` | `App`, inside `Stop` |
-| Engine | `App` | `App` | `App` |
-| Event stream | `App` | `App`, allocated during `Start` — not at `New`, unlike today's `NewConfig` | `App`, inside `Stop` |
-| Publishers | Consumer | `App` attaches them at `Start` | `App` closes them at `Stop`, same semantics as today's `Engine.Stop`; ownership transfers to `App` once passed into `New` |
-| Projections | Declared in `Spec` | `App`, inside `Start` | `App`, inside `Stop` |
+| Actor system | `App` (`compose/goakt`) | `App`, step 2 of `Start` | `App`, in `Stop` or in rollback |
+| Engine | `App` | `App`, step 3 | `App`, in `Stop` or in rollback |
+| Event stream | `App`, step 2 of `Start`, handed to the config through a new additive `ego.WithEventStream` option (the second `ego` option) — today `NewConfig` allocates it internally with no override (`option.go:95`) | — | `App`: by `engine.Stop` once the engine exists; directly by rollback if `Start` fails before step 3 |
+| Publishers | Consumer | `App` attaches them at step 4 | `App`. Ownership transfers when `New` succeeds. After that, `App` closes every publisher it received on every terminal path: `Stop`, a failed `Start` (attached ones through `engine.Stop`, unattached ones directly), and `Stop` on an `App` that was never started |
+| Projections | Declared in `Spec` | `App`, step 5 | `App`, in `Stop` or in rollback |
 | Telemetry provider, logger | Consumer | — (used, not started) | Consumer |
+
+Transferring publisher ownership at `New`, rather than at attachment, keeps the rule simple for the consumer: once `New` returns without error, the consumer never closes a publisher it passed in. The consumer's only obligation is to call `Stop` on every `App` whose `New` succeeded, whether or not `Start` was called or succeeded.
 
 The manual composition path keeps today's semantics unchanged: the consumer still owns the actor system directly.
 
 ### D6 — Start order and rollback
 
-`App.Start(ctx)` runs five steps in order. On failure at step *k*, it undoes steps *k*−1 down to 1 in reverse, collecting every rollback error rather than stopping at the first one, and returns a `*StartError{Step string, Err error, Rollback error}` that names which step failed and what, if anything, went wrong undoing the earlier ones. This directly answers `#24`'s "startup failure identifies the responsible component."
+`App.Start(ctx)` runs five steps in order. On failure at step *k*, it undoes steps *k*−1 down to 1 in reverse, then closes every publisher that step 4 had not attached yet, collecting every rollback error rather than stopping at the first one. It returns a `*compose.StartError{Step string, Err error, Rollback error}` that names which step failed and what, if anything, went wrong undoing the earlier ones. This directly answers `#24`'s "startup failure identifies the responsible component."
 
 | Step | Action | Undo on later failure |
 |---|---|---|
-| 1 | Probe every configured store (D4b) | Nothing to undo — no I/O of consequence yet |
-| 2 | Build `ego.Config` and GoAkt options, create and start the actor system | `sys.Stop(ctx)` |
-| 3 | `NewEngine` + `engine.Start` | `engine.Stop(ctx)` |
-| 4 | Attach publishers | Covered by `engine.Stop`, which already closes attached publishers |
-| 5 | Start declared projections | Stop each projection that was actually started |
+| 1 | Probe every configured store (D4b) | Nothing to undo |
+| 2 | Allocate the event stream, build `ego.Config` (`WithEventStream`, families, `Spec` fields) and GoAkt options, create and start the actor system | `sys.Stop`, then close the event stream — the engine that would close it does not exist yet |
+| 3 | `NewEngine` + `engine.Start` | `engine.Stop`, which from here on also closes the event stream; step 2's undo then only stops the actor system |
+| 4 | Attach publishers | Attached publishers: closed by step 3's `engine.Stop`. Publishers not yet attached: closed directly |
+| 5 | Start every projection in `Spec.Projections` | Stop each projection that was actually started |
+| — | Any failure at steps 1–5 | After the undos, close every publisher that was never attached (D5) |
 
-Rollback runs under `context.WithoutCancel(ctx)`, bounded by `Spec`'s shutdown timeout (default suggested as 30s, left open in §9 pending a decision), so that a caller-cancelled `ctx` does not also abort the cleanup it triggered. `App` is single-use, moving through the states `New → Starting → Running → Stopping → Stopped`, plus a terminal `Failed`; calling `Start` again after `Failed` or `Stopped` returns an error rather than silently retrying, and `Start`/`Stop` are serialized by a mutex so concurrent callers cannot interleave them.
+`App` is single-use, moving through the states `New → Starting → Running → Stopping → Stopped`, plus a terminal `Failed`; calling `Start` again after `Failed` or `Stopped` returns an error rather than silently retrying, and `Start`/`Stop` are serialized by a mutex so concurrent callers cannot interleave them. `Stop` on a `Failed` `App` is a no-op, because rollback already released everything.
+
+**Context for cleanup.** Rollback and `Stop` use the same cleanup context: `context.WithoutCancel(ctx)` bounded by `Spec.ShutdownTimeout` (default suggested as 30s, left open in §9). Values from the caller's context are kept, but its cancellation is not. Both paths need this for the same reason: `Start` often fails because the caller's `ctx` was cancelled, and `Stop` is usually called from a signal handler whose `ctx` is already done; in either case, cleanup that inherited the cancellation would abort immediately and leak everything this design exists to release. The timeout, not the caller, bounds how long cleanup may take.
 
 ### D7 — Stop order
 
-`App.Stop(ctx)` runs four steps, and — unlike today's `Engine.Stop` — every step is attempted even if an earlier one fails; the resulting errors are joined rather than the first one short-circuiting the rest, which is exactly the fix for the leak in §2.2.
+`App.Stop(ctx)` runs four steps under the cleanup context defined in D6. Unlike today's `Engine.Stop`, every step is attempted even if an earlier one fails; the resulting errors are joined rather than the first one short-circuiting the rest, which is exactly the fix for the leak in §2.2.
 
 1. Mark the app stopping, so a concurrent `Start` or second `Stop` cannot interleave.
 2. Stop the projections that `Start` started. This must happen before step 3: `Engine.StopProjection` returns `ErrEngineNotStarted` once the engine is stopped (`engine.go:508-515`).
@@ -137,14 +190,14 @@ Rollback runs under `context.WithoutCancel(ctx)`, bounded by `Spec`'s shutdown t
 
 Command admission therefore closes at step 3, not at step 1: while projections stop, callers holding `app.Engine()` can still send commands. `App` hands out the `*ego.Engine` itself, so it cannot gate admission earlier without an engine-level admission switch. That switch is `#24`'s `LIFE-003` ("stop accepting new commands"); this design records the gap and does not add a second, `App`-level gate that the engine could bypass.
 
-`Stop` is idempotent, and calling it on an `App` that was never started is a no-op. One question is recorded rather than resolved here: events or state an actor emits while it is shutting down (durable-state actors persist their final state on shutdown, per `behavior.go`'s doc comment) could be dropped, because publishers close in step 3 before the actor system stops in step 4. This design adds a test for it in IMPL-4 (§6) to make the behavior observable, but the flush/drain policy itself belongs to `#24` (its `LIFE-004` item), not to this change. `Engine.Start`'s global OpenTelemetry propagator side effect (§2.1, step 5) is left as-is and documented as a known process-wide effect for `#31` to address.
+`Stop` is idempotent. On an `App` that was never started, it only closes the publishers it received (D5). One question is recorded rather than resolved here: events or state an actor emits while it is shutting down (durable-state actors persist their final state on shutdown, per `behavior.go`'s doc comment) could be dropped, because publishers close in step 3 before the actor system stops in step 4. This design adds a test for it in IMPL-4 (§6) to make the behavior observable, but the flush/drain policy itself belongs to `#24` (its `LIFE-004` item), not to this change. `Engine.Start`'s global OpenTelemetry propagator side effect (§2.1, step 5) is left as-is and documented as a known process-wide effect for `#31` to address.
 
 ### D8 — Architecture check
 
 Two additions to `internal/cmd/archcheck` (`internal/cmd/archcheck/rules/rules.go`), alongside the four existing rules (`contract-allowlist`, `application-no-runtime`, `external-adapter-no-runtime`, `no-cross-module-internal`):
 
-- `compose` is added to the packages the `application-no-runtime`-style check covers: it must not import `ego`, `internal/extensions`, or `github.com/tochemey/goakt/v4`, the same restriction `migration` already has (baselined exception at `internal/cmd/archcheck/baseline.go:33-42`, owner `@pablogore`, removal criterion S3/S4).
-- A new rule, `composition-leaf`: a root-module production package may import `compose` or `compose/...` only if it is itself under `compose/` (for example `compose/goakt` importing `compose`) or is a `main` package. Test files, examples and `benchmark` are consumers and stay free to import it. `compose/goakt` is itself classified as a composition root, so — symmetrically with the GoAkt runtime adapter layer — it may import anything it needs (contracts, `egopb`, GoAkt, `internal/lifecycle`).
+- `compose` and `compose/internal/lifecycle` are added to the packages `application-no-runtime` covers: they must not import `ego`, `internal/extensions`, or `github.com/tochemey/goakt/v4`. `migration` is covered by the same rule today but does not yet satisfy it; its import of `ego` is a baselined exception (`internal/cmd/archcheck/baseline.go:33-42`, owner `@pablogore`, removal criterion S3/S4). `compose` starts with no exception.
+- A new rule, `composition-leaf`: a root-module production package may import `compose` or anything under `compose/` only if it is itself under `compose/` (for example `compose/goakt` importing `compose` and `compose/internal/lifecycle`) or is a `main` package. Test files, examples and `benchmark` are consumers and stay free to import it. `compose/goakt` is classified as a composition root, so — symmetrically with the GoAkt runtime adapter layer — it may import anything it needs (contracts, `egopb`, `ego`, GoAkt, `compose/internal/lifecycle`).
 
 ## 4. Target graph
 
@@ -152,11 +205,11 @@ Two additions to `internal/cmd/archcheck` (`internal/cmd/archcheck/rules/rules.g
 flowchart TB
   subgraph target["Target: GoAkt composition (compose/goakt)"]
     main2["consumer main()"]
-    egoakt["egoakt.New(compose.Spec{...}, opts...)<br/>compose/goakt — static validation, nothing started"]
-    specv["compose.Spec.Validate()<br/>V1-V7, D4a"]
-    life["internal/lifecycle<br/>ordered Start/Stop, rollback — D6, D7"]
+    egoakt["egoakt.New(compose.Spec{...}, opts...)<br/>compose/goakt — static validation (V1-V6, G1-G2), nothing started"]
+    specv["compose.Spec.Validate()<br/>V1-V6, D4a"]
+    life["compose/internal/lifecycle<br/>ordered Start/Stop, rollback — D6, D7"]
     app["app.Start(ctx)<br/>probe stores, then steps 2-5"]
-    engref["app.Engine()<br/>for Entity/SendCommand"]
+    engref["app.Engine()<br/>*ego.Engine: Entity/SendCommand"]
     stopref["app.Stop(ctx)"]
 
     main2 --> egoakt --> specv
@@ -167,7 +220,7 @@ flowchart TB
   end
 
   contracts["contracts: persistence, offsetstore, tenancy,<br/>projection, eventadapter, encryption, port/publishing"]
-  ego["ego + internal/extensions<br/>(GoAkt runtime adapter, unchanged)"]
+  ego["ego + internal/extensions<br/>(GoAkt runtime adapter, plus two additive options)"]
   goakt["github.com/tochemey/goakt/v4"]
 
   specv --> contracts
@@ -175,11 +228,11 @@ flowchart TB
   life -.->|"runtime-neutral:<br/>imports no runtime"| contracts
 
   subgraph blocked["Target: in-memory composition (compose/inmem) — blocked"]
-    inmem["compose/inmem.New(compose.Spec{...})<br/>same Spec, same Validate, same internal/lifecycle"]
+    inmem["compose/inmem.New(compose.Spec{...})<br/>same Spec, same Validate, same compose/internal/lifecycle"]
   end
   specv -.->|"same Spec type"| inmem
   life -.->|"same sequencer"| inmem
-  inmem -.->|"needs #123 +<br/>an in-memory runtime"| contracts
+  inmem -.->|"needs #123, an in-memory runtime<br/>and a runtime-neutral engine API (#11)"| contracts
 ```
 
 The import alias `egoakt` avoids a name clash with the `goakt` module import itself in consumer code, the same way `kitlog` avoids clashing with the standard `log` package in existing examples.
@@ -211,14 +264,17 @@ _ = engine.Start(ctx)                       // LEAK 2: the one error Start can r
 ```go
 eventStore := testkit.NewEventsStore()
 if err := eventStore.Connect(ctx); err != nil { /* handle */ }
+defer eventStore.Disconnect(ctx) // consumer owns the store (D5); runs after app.Stop
 
 app, err := egoakt.New(compose.Spec{
     Name:        "Sample",
+    Families:    compose.EventSourced,
     EventsStore: eventStore,
 }, egoakt.WithLogger(logger))
 if err != nil {
     // static validation failed (D4a) — nothing was started, nothing to undo
 }
+defer app.Stop(ctx) // required once New succeeded (D5); idempotent; a no-op after a failed Start
 
 if err := app.Start(ctx); err != nil {
     // *compose.StartError names the failed step; rollback already ran (D6)
@@ -226,25 +282,23 @@ if err := app.Start(ctx); err != nil {
 
 if err := app.Engine().Entity(ctx, behavior); err != nil { /* ... */ }
 // ... app.Engine().SendCommand(...) as today ...
-
-if err := app.Stop(ctx); err != nil {
-    // every step was attempted; err joins whatever failed (D7)
-}
-_ = eventStore.Disconnect(ctx) // consumer still owns the store (D5)
 ```
 
-`New` performs only static validation (D4a): building the value costs nothing and starts nothing, so a configuration mistake is visible before any goroutine or connection exists. `Start` is the only place I/O happens, and it happens in the fixed order of D6. Cluster deployments add `egoakt.WithCluster(clusterConfig)`; `example/cluster/main.go` today calls `ClusterKinds()` and registers them by hand alongside `goakt.NewClusterConfig().WithKinds(...)` — the target composition root does this automatically as part of `WithCluster`, closing validation rule V7.
+`New` performs only static validation (D4a): building the value costs nothing and starts nothing, so a configuration mistake is visible before any goroutine or connection exists. `Start` is the only place I/O happens, and it happens in the fixed order of D6.
+
+Cluster deployments add `egoakt.WithCluster(clusterConfig, kinds...)`, where `kinds` are behavior prototypes — the same values `ego.WithEntityKinds` takes today (`option.go:359`). A cluster deployment needs two registrations. `ClusterKinds()` goes on the GoAkt cluster configuration, which `example/cluster/main.go:152` does by hand (`WithKinds(ego.ClusterKinds()...)`). The behavior types go through `WithEntityKinds`, whose doc comment (`option.go:340-358`) allows omitting it only for single-node deployments, because a remote node rebuilds a behavior from its registered type. `example/cluster` does not pass `WithEntityKinds` today; IMPL-4 checks whether its remote spawns work only because they happen to stay local. `WithCluster` does both registrations, and G1 rejects a cluster configuration with no entity kinds at `New`, instead of leaving it to the first remote spawn.
 
 ### 5.2 In-memory composition — where it stops today
 
-The point of designing `compose/inmem` alongside `compose/goakt` is to show that the same `Spec`, the same `Spec.Validate`, and the same `internal/lifecycle` sequencer are runtime-neutral; only the runtime step differs. In practice, handing the identical `Spec` and the identical behavior value to a hypothetical `compose/inmem.New` stops at two concrete points, both already true on `main` at `77beda6`:
+The point of designing `compose/inmem` alongside `compose/goakt` is that the same `Spec`, the same `Spec.Validate` and the same `compose/internal/lifecycle` sequencer carry over unchanged; only the runtime steps differ. The criterion in `#105` is stronger than that, though: the **domain and the consumer code that drives it** must run on both compositions without change. `Spec` itself carries no behaviors — in §5.1 they reach the runtime through `app.Engine().Entity(ctx, behavior)` — so the blockers are on that path, not in `Spec`. Three are true on `main` at `77beda6`:
 
-1. **The behavior parameter type itself requires GoAkt.** `Spec` would need an `EventSourcedBehavior` field typed `ego.EventSourcedBehavior` — the only public type that shape has. That interface embeds `extension.Dependency` (`behavior.go:48`), so `compose/inmem` would import the GoAkt module transitively through that single type reference, and the domain author's behavior would still have to implement a GoAkt interface (`MarshalBinary`/`UnmarshalBinary`/`ID`) purely to satisfy the type system, with no cluster to serialize for. This is exactly `#123`'s scope: remove the embed (or replace it with a neutral marker the GoAkt adapter bridges internally, at the actor spawn call sites — `engine.go:692`, `925`, `1326` already build `[]extension.Dependency{behavior, ...}` inside the runtime-adapter layer, where `design.md` (ego-arch-001) §3 already permits a GoAkt reference).
-2. **There is no in-memory runtime to run it on, even once the type is neutral.** The only engine that exists is `*ego.Engine`, and it is bound to `goakt.ActorSystem` throughout `engine.go` — there is no `Entity`/`SendCommand`/`Dispatch` implementation that does not go through GoAkt. `testkit/scenario.go:40-54` comes closest: it declares its own narrower structural interfaces (omitting `extension.Dependency` entirely, "because the testkit cannot import ego") and calls `HandleCommand`/`HandleEvent` directly with no actor system at all. That proves the pure command/event functions are already runtime-agnostic, but a direct function call is not a runtime — it has no `Dispatch`, no persistence, no publishers, no supervision, and nothing for `compose/inmem` to start or stop.
+1. **The behavior type requires GoAkt.** `Engine.Entity` takes an `ego.EventSourcedBehavior` (`engine.go:645`), and that interface embeds `extension.Dependency` (`behavior.go:48`; also `behavior.go:100` and `saga.go:42` for the other two families). Any consumer code that declares or passes a behavior is written against a GoAkt interface, and the domain author implements `MarshalBinary`/`UnmarshalBinary`/`ID` with no cluster to serialize for. This is `#123`'s scope: remove the embed and keep the GoAkt requirement inside the adapter, at the spawn call sites that already build `[]extension.Dependency{behavior, ...}` (`engine.go:692`, `925`, `1326`), where ego-arch-001 §3 permits a GoAkt reference.
+2. **There is no in-memory runtime.** The only engine is `*ego.Engine`, bound to `goakt.ActorSystem` throughout `engine.go`; no `Entity`/`SendCommand`/`Dispatch` implementation exists without GoAkt. `testkit/scenario.go:40-54` comes closest: it declares narrower structural interfaces without `extension.Dependency` ("because the testkit cannot import ego") and calls `HandleCommand`/`HandleEvent` directly. That proves the command/event functions are runtime-agnostic, but a direct call is not a runtime: it has no dispatch, persistence, publishers or supervision, and nothing for `compose/inmem` to start or stop.
+3. **There is no runtime-neutral engine API.** `App.Engine()` in §5.1 returns `*ego.Engine`, a concrete GoAkt-backed type. Even after (1) and (2), consumer code written as `app.Engine().Entity(...)` / `SendCommand(...)` against `compose/goakt` would not compile against `compose/inmem`, because `compose/inmem` cannot return an `*ego.Engine`. "The same domain, two runtimes" needs an interface for the operations consumers call — spawning entities, sending and dispatching commands, starting and stopping projections — that both runtimes implement. That interface is the application-facing side of `#11`'s runtime service provider interface (SPI) (its `RUNTIME-001` and `RUNTIME-002` items: runtime SPI, runtime-neutral entity references and invocation). Neither `#123` nor an in-memory runtime supplies it, so without naming it here the in-memory half would stall again after `#123` lands.
 
-Once both are resolved, `compose/inmem.New(spec)` would run the identical `spec.Validate()` from `compose`, drive the identical `internal/lifecycle` sequencer for start order, probe, and rollback, and differ from `compose/goakt` only in step 2 of D6 (build an in-memory runtime instead of a GoAkt actor system) and step 4 of D7 (stop that runtime instead of `sys.Stop`). That is the concrete, checkable meaning of "the same domain, two runtimes" from `#105`'s acceptance criteria.
+Until (3) exists, `compose/goakt.App.Engine()` returns `*ego.Engine` as designed; when `#11` defines the neutral interface, `App` gains an accessor for it (additive), and `compose/inmem` exposes the same accessor. Once all three are resolved, `compose/inmem.New(spec)` runs the identical `spec.Validate()`, drives the identical `compose/internal/lifecycle` sequencer, and differs from `compose/goakt` only in step 2 of D6 (build an in-memory runtime instead of a GoAkt actor system) and step 4 of D7 (stop that runtime instead of `sys.Stop`). That is the concrete, checkable meaning of "the same domain, two runtimes" in `#105`.
 
-**A reading to rule out explicitly:** running GoAkt with in-memory *stores* (`testkit`'s `EventsStore`/`StateStore`/etc., which already exist and already work today) is not the same thing and does not satisfy this criterion — that is still the GoAkt runtime, just backed by fakes instead of a real database. The criterion is about the *runtime* (the thing that spawns entities, delivers commands, supervises failure), not the stores behind it, and no in-memory runtime exists today regardless of which stores back it.
+**A reading to rule out explicitly:** running GoAkt with in-memory *stores* (`testkit`'s `EventsStore`/`StateStore`/etc., which already exist and already work today) is not the same thing and does not satisfy this criterion — that is still the GoAkt runtime, just backed by fakes instead of a real database. The criterion is about the *runtime* (the thing that spawns entities, delivers commands, supervises failure), not the stores behind it.
 
 ## 6. Implementation plan
 
@@ -252,12 +306,12 @@ Each row is its own pull request, sized as one reviewable work unit; later rows 
 
 | Slice | Content | Depends on | Tests / verification |
 |---|---|---|---|
-| IMPL-1 | Bugfix, independent, can land immediately: `Engine.Stop` attempts every shutdown step and joins errors instead of returning on the first failure; `Engine.Entity`/`Engine.Saga` return typed `ErrEventsStoreRequired` instead of the current unguarded panic path. | Nothing | A test where the first publisher's `Close` fails and later publishers and the event stream still close; a test that `Entity`/`Saga` return an error, not a panic, when no events store is configured. |
-| IMPL-2 | `compose.Spec` and `Spec.Validate` (D3, D4a); `composition-leaf` and the `compose` addition to `application-no-runtime` in archcheck (D8). | Nothing | One test per validation rule V1–V6 with everything else valid; one test with several problems at once asserting the joined error lists all of them; one test for a typed-nil interface (V4); an archcheck test asserting `compose` cannot import `ego`/GoAkt and nothing outside `compose/goakt` can import `compose/goakt`. |
-| IMPL-3 | `internal/lifecycle`, the ordered sequencer, tested against fake steps rather than real GoAkt (D6, D7). | IMPL-2 (uses `compose` error types) | Ordered-start test with fakes; a failure injected at each step rolls back exactly the steps already started, in reverse; best-effort stop order with a failure at each step still runs the rest; single-use state transitions (`New → Starting → Running → Stopping → Stopped/Failed`); `Stop` is idempotent and a no-op on a never-started app. |
-| IMPL-4 | `compose/goakt`: `New`, `App`, and its options (D1, D2, D5, D6, D7). | IMPL-2, IMPL-3 | End-to-end wiring test with `testkit` stores (valid `Spec` all the way to a running engine); a missing required dependency fails at `New` with nothing started; a startup failure injected at each of the five `Start` steps leaves no running actor system and every previously-started step already undone; shutdown order is recorded and matches D7; `Stop` after `Stop` is a no-op; a test that reproduces the D7 open question (does an event emitted during actor shutdown survive) and records the observed answer, without deciding the policy. |
+| IMPL-1 ([`#126`](https://github.com/getsyntegrity/ego/issues/126)) | Bugfix, independent, can land immediately: `Engine.Stop` attempts every shutdown step and joins errors instead of returning on the first failure; `Engine.Entity`/`Engine.Saga` return typed `ErrEventsStoreRequired` instead of reaching the unguarded `Ping`; `AddEventPublishers`/`AddStatePublishers` reject a duplicate publisher ID. | Nothing | Each test fails on `main` first: the first publisher's `Close` fails and later publishers and the event stream still close; `Entity`/`Saga` return an error, not a panic, with no events store; a duplicate ID is rejected and no goroutine is left behind. |
+| IMPL-2 | `compose.Spec`, `Spec.Validate` and `StartError` (D3, D4a); `composition-leaf` and the `application-no-runtime` additions in archcheck (D8). | Nothing | One test per rule V1–V6 with everything else valid; one test with several problems at once asserting the joined error lists all of them; typed-nil values (V5) for each interface field; duplicate publisher IDs per kind (V6); archcheck tests asserting that `compose` and `compose/internal/lifecycle` cannot import `ego`/`internal/extensions`/GoAkt, and that a non-`main` production package outside `compose/` cannot import `compose` or anything under it. |
+| IMPL-3 | `compose/internal/lifecycle`, the ordered sequencer, tested against fake steps rather than real GoAkt (D6, D7). | IMPL-2 (returns `compose.StartError`) | Ordered-start test with fakes; a failure injected at each step rolls back exactly the steps already started, in reverse, then releases the not-yet-attached resources; best-effort stop order with a failure at each step still runs the rest; cleanup runs under `WithoutCancel` plus the timeout even when the caller's context is already cancelled; single-use state transitions (`New → Starting → Running → Stopping → Stopped/Failed`); `Stop` is idempotent. |
+| IMPL-4 | `compose/goakt`: `New`, `App`, `WithCluster(cfg, kinds...)` and the other options (D1, D2, D5, D6, D7, G1, G2); the two additive `ego` options (declared families, `WithEventStream`). | IMPL-2, IMPL-3 | End-to-end wiring test with `testkit` stores (valid `Spec` all the way to a running engine); a missing required dependency fails at `New` with nothing started; a startup failure injected at each of the five `Start` steps leaves no running actor system, a closed event stream and every publisher closed; `Stop` on a never-started `App` closes its publishers; spawning an undeclared family returns the typed error; shutdown order is recorded and matches D7; `Stop` after `Stop` is a no-op; a cluster `Spec` without entity kinds fails G1; a test that reproduces the D7 open question (does an event emitted during actor shutdown survive) and records the observed answer, without deciding the policy. |
 | IMPL-5 | Migrate `example/eventssourced` (and its doc reference) to `compose/goakt`; other examples migrate only if useful, not required by this change. | IMPL-4 | The migrated example builds, runs, and shuts down cleanly with no `os.Exit` before cleanup; the two leaks in §2.2/§5.1 no longer reproduce. |
-| IMPL-6 | `compose/inmem` — blocked by `#123` and the unresolved in-memory runtime prerequisite (§5.2). | `#123`; the in-memory runtime prerequisite (owner open, §9) | Not yet specifiable; will reuse IMPL-2/IMPL-3 test shapes once unblocked. |
+| IMPL-6 | `compose/inmem` and the neutral engine accessor on both `App`s. | `#123`; the in-memory runtime (§9); the runtime-neutral engine API from `#11` (§5.2, blocker 3) | Not yet specifiable in detail; will reuse IMPL-2/IMPL-3 test shapes and add one test that runs the same behavior value, through the same consumer code, on both compositions. |
 
 ## 7. Acceptance mapping
 
@@ -266,32 +320,34 @@ Mapping `#105`'s stated acceptance criteria to the slice that delivers it and th
 | `#105` criterion | Slice | Verification |
 |---|---|---|
 | Explicit, documented composition root | IMPL-4 (and this design) | `compose/goakt` package exists with godoc; this document is the record of the decision. |
-| Core/application do not instantiate concrete adapters | IMPL-2, IMPL-4 | The existing `contract-allowlist` and `application-no-runtime` rules keep contracts and `migration` from importing adapters, so they cannot construct one; IMPL-2 puts `compose` under `application-no-runtime` too. `compose.Spec` holds only caller-constructed instances. In the composed path the event stream is allocated by `compose/goakt` (the composition root), not by `NewConfig`; the manual path keeps `NewConfig`'s `eventstream.New()`, which sits in the GoAkt adapter layer, not in core. |
-| An invalid graph fails at construction, not at first command | IMPL-2 | V1–V6 unit tests in IMPL-2; the typed-nil case (V4) specifically targeted at the `Ping`-panic class of bug from §2.2. |
-| Deterministic Start/Stop order with rollback on partial failure | IMPL-3, IMPL-4 | Ordered-fakes tests in IMPL-3; the five-step injected-failure tests in IMPL-4. |
+| Core/application do not instantiate concrete adapters | IMPL-2, IMPL-4 | The existing `contract-allowlist` and `application-no-runtime` rules keep contracts and `migration` from importing adapters, so they cannot construct one; IMPL-2 puts `compose` and `compose/internal/lifecycle` under `application-no-runtime` too. `compose.Spec` holds only caller-constructed instances. In the composed path the event stream is allocated by `compose/goakt` (the composition root) and handed in through `ego.WithEventStream`; the manual path keeps `NewConfig`'s `eventstream.New()`, which sits in the GoAkt adapter layer, not in core. |
+| An invalid graph fails at construction, not at first command | IMPL-2, IMPL-4 | V1–V6 unit tests in IMPL-2 and G1–G2 tests in IMPL-4; the typed-nil case (V5) specifically targets the `Ping`-panic class of bug from §2.2. |
+| Deterministic Start/Stop order with rollback on partial failure | IMPL-3, IMPL-4 | Ordered-fakes tests in IMPL-3; the five-step injected-failure tests in IMPL-4, including publisher and event-stream release. |
 | Tests cover valid wiring, missing dependency, startup failure, and shutdown | IMPL-2, IMPL-3, IMPL-4 | The test columns of those three rows, combined. |
-| At least one GoAkt composition and one in-memory composition without changing the domain | IMPL-4 (GoAkt half); IMPL-6 (in-memory half, blocked) | IMPL-4's end-to-end test proves the GoAkt half. The in-memory half is **not** met until IMPL-6 runs the same behavior value through `compose/inmem` with the same `Spec`; a design that only claims neutrality does not satisfy it. `#105` therefore stays open until IMPL-6 lands, or until maintainers explicitly split this criterion into a follow-up issue. |
-| No generic constructor passed through all layers as a covert service locator | IMPL-2, IMPL-4 | D2's forbidden-list, checked in review and by `composition-leaf`; no `Resolve`/`Get`-by-type function exists anywhere in `compose`. |
+| At least one GoAkt composition and one in-memory composition without changing the domain | IMPL-4 (GoAkt half); IMPL-6 (in-memory half, blocked) | IMPL-4's end-to-end test proves the GoAkt half. The in-memory half is **not** met until IMPL-6 runs the same behavior value, through the same consumer code, on `compose/inmem` with the same `Spec`; a design that only claims neutrality does not satisfy it. `#105` therefore stays open until IMPL-6 lands, or until maintainers explicitly split this criterion into a follow-up issue. |
+| No generic constructor passed through all layers as a covert service locator | IMPL-2, IMPL-4 | D2's forbidden list, checked in review and by `composition-leaf`; no `Resolve`/`Get`-by-type function exists anywhere in `compose`. |
 
 ## 8. Alternatives rejected
 
-- **A generic DI container or framework** (for example `uber/fx`, `dig`, or a hand-rolled registry). Rejected: out of scope per `#105`'s own acceptance criteria ("no mandatory DI framework"), it hides the dependency graph behind reflection instead of making it a plain struct literal, and a container is itself a service locator once anything looks a dependency up by type at the point of use.
+- **A generic DI container or framework** (for example `uber/fx`, `dig`, or a hand-rolled registry). Rejected: out of scope per `#105` ("choosing a mandatory DI framework" is excluded), it hides the dependency graph behind reflection instead of making it a plain struct literal, and a container is itself a service locator once anything looks a dependency up by type at the point of use.
 - **Code generation** (for example `google/wire`). Rejected: Ego's composition graph is small — a handful of stores, publishers, and settings — and a generator adds a build step and a generated-file convention for a graph that a plain constructor already expresses clearly.
-- **Composition inside package `ego`** (an `ego.Assemble` function). Rejected: package `ego` **is** the GoAkt adapter (§2, and `design.md` (ego-arch-001) §4's classification), and `#11` intends to split it behind a runtime SPI. A composition root that lived inside the GoAkt adapter could never select a different runtime — it would already be committed to one.
+- **Composition inside package `ego`** (an `ego.Assemble` function). Rejected: package `ego` **is** the GoAkt adapter (§2, and ego-arch-001 §4's classification), and `#11` intends to split it behind a runtime SPI. A composition root that lived inside the GoAkt adapter could never select a different runtime — it would already be committed to one.
 - **Keep consumer `main` as the root, add only validation helpers.** Rejected: this is close to what exists today, and §2.2's leaks are the direct evidence that leaving ordering and rollback to every consumer goes wrong in practice — four examples in this repository alone get some part of it wrong.
 - **Make `NewEngine` own and start the actor system itself.** Rejected: this would break the documented v4 contract that the caller owns the actor system's lifecycle (`engine.go:211-213`, `353-360`), which downstream consumers may already depend on for things like sharing one actor system across other, non-Ego actors.
 - **Functional options for `Spec`, instead of a struct.** Rejected: options apply one at a time, in call order, which makes it impossible to validate the whole set at once or to inspect what was configured after the fact — exactly the two properties D4's static validation needs.
-- **Build the in-memory composition now, on top of GoAkt-coupled behaviors.** Rejected: this is the architectural block documented in §5.2, not a design choice — a `Spec` field typed `ego.EventSourcedBehavior` pulls in GoAkt's `extension.Dependency` regardless of which runtime consumes it.
+- **Transfer publisher ownership only when a publisher is attached** (the other option for D5). Rejected: the consumer would then own publishers after a failed `Start` but not after a successful one, and would need to know which step failed to know what to close. Transferring at `New` gives one rule: after `New` succeeds, always call `Stop`, never close a publisher yourself.
+- **An `App`-level command admission gate** in front of the engine. Rejected: `App.Engine()` returns the engine itself, so callers could bypass the gate; admission belongs in the engine (`#24`, `LIFE-003`).
+- **Build the in-memory composition now, on top of GoAkt-coupled behaviors and `*ego.Engine`.** Rejected: this is the architectural block documented in §5.2, not a design choice — consumer code typed against `ego.EventSourcedBehavior` and `*ego.Engine` is GoAkt code, whichever runtime executes it.
 
 ## 9. Open decisions
 
 | Decision | Why it is open | Who closes it |
 |---|---|---|
-| Package name `compose` | `app` and `bootstrap` were both considered; neither is clearly better, and renaming later is cheap while the package is new and unreleased. | Implementer, recorded in the IMPL-2 pull request |
-| Default shutdown timeout for rollback (`context.WithoutCancel` bound, D6) | No measurement exists yet for how long store/publisher/actor-system teardown typically takes; 30s is a starting suggestion, not a measured value. | Implementer, together with `#24` |
-| Owner of the in-memory runtime prerequisite | Two candidates exist and neither has claimed it: reopening `#103` for its orphaned criteria 4–5, or a new child issue under `#11`'s `RUNTIME-005` ("a deterministic in-memory runtime"), which already implies the same deliverable. This design does not invent an issue number for either option. | Maintainers |
+| Default shutdown timeout for cleanup (`context.WithoutCancel` bound, D6/D7) | No measurement exists yet for how long store/publisher/actor-system teardown typically takes; 30s is a starting suggestion, not a measured value. | Implementer, together with `#24` |
+| Owner of the in-memory runtime prerequisite | Recommendation from the #125 review: a child issue under `#11` for its `RUNTIME-005` ("deterministic in-memory runtime"), not a reopened `#103` — `#103` is about contracts, the runtime belongs with `#11`, and the neutral engine API (§5.2, blocker 3) lands there too. Not created yet. | Maintainers, when `#11` is broken down |
+| Owner of the runtime-neutral engine API (§5.2, blocker 3) | Falls inside `#11`'s `RUNTIME-001`/`RUNTIME-002`; `#11` has no child issues yet. | `#11` |
 | Deprecation of the manual composition path | The manual path (`NewConfig`/`GoaktOptions`/`NewEngine`) stays supported for v4 regardless; whether it is ever marked `Deprecated:` once `compose/goakt` covers the same ground is not decided here. | A later ADR, once `compose/goakt` has real usage to compare against |
 | Whether consumers may later hand stores over as owned by `App` | D5 keeps stores consumer-owned throughout. A future option to transfer ownership (`#24`, `LIFE-006`) is not ruled out, but is not designed here. | `#24` |
 | Flush/drain policy for events or state emitted during actor-system shutdown (D7) | This design records the risk and adds a test to observe current behavior (IMPL-4), but the policy itself is `#24`'s (`LIFE-004`). | `#24` |
-| Relationship with `#35` (typed configuration) | `compose.Spec` is an in-code Go shape built by the consumer's own code; binding it from environment variables or a config file is a distinct concern `#35` owns. | `#35`, when it exists |
-| Relationship with `#106` (adapter SPI) | `internal/lifecycle` stays unexported and internal to `compose/goakt` until `#106` defines what a public adapter lifecycle looks like; promoting it to a public API before then would risk designing it twice. | `#106` |
+| Relationship with `#35` (typed configuration) | `compose.Spec` is an in-code Go shape built by the consumer's own code; binding it from environment variables or a config file is a distinct concern `#35` owns. | `#35` |
+| Relationship with `#106` (adapter SPI) | `compose/internal/lifecycle` stays internal to `compose/...` until `#106` defines what a public adapter lifecycle looks like; promoting it to a public API before then would risk designing it twice. | `#106` |

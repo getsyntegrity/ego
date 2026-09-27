@@ -8,7 +8,8 @@
 | Tracker | [`#105`](https://github.com/getsyntegrity/ego/issues/105), parent [`#10`](https://github.com/getsyntegrity/ego/issues/10) |
 | Baseline | `main` at `77beda6` |
 | Evidence | [`design.md`](./design.md) (composition-root walkthroughs, decisions D1–D8, diagrams, slices) |
-| Blocked by (in-memory composition only) | [`#123`](https://github.com/getsyntegrity/ego/issues/123) neutral behavior contracts (S3), and an in-memory runtime prerequisite whose owner is an open decision |
+| Blocked by (in-memory composition only) | [`#123`](https://github.com/getsyntegrity/ego/issues/123) neutral behavior contracts (S3); an in-memory runtime; a runtime-neutral engine API from [`#11`](https://github.com/getsyntegrity/ego/issues/11) |
+| Independent bugfix | [`#126`](https://github.com/getsyntegrity/ego/issues/126) (IMPL-1): `Engine.Stop` leak, `Entity`/`Saga` panic without events store, duplicate publisher IDs |
 | Related | [`#104`](https://github.com/getsyntegrity/ego/issues/104) ADR ego-arch-001 (hands this decision to #105); [`#103`](https://github.com/getsyntegrity/ego/issues/103) neutral behavior contracts (closed, partially delivered); [`#11`](https://github.com/getsyntegrity/ego/issues/11) runtime SPI epic; [`#106`](https://github.com/getsyntegrity/ego/issues/106) adapter SPI/capabilities; [`#24`](https://github.com/getsyntegrity/ego/issues/24) lifecycle epic; [`#35`](https://github.com/getsyntegrity/ego/issues/35) typed config; [`#31`](https://github.com/getsyntegrity/ego/issues/31) observability |
 
 ## Why now
@@ -28,12 +29,12 @@ Give Ego one explicit, documented composition root per runtime, built from a run
 
 ## In scope (decisions this proposal closes)
 
-- **Location and package split**: a runtime-neutral `compose` package (a plain `Spec` struct and its `Validate` method) plus a GoAkt-specific `compose/goakt` package, with the sequencing logic that both compositions share kept in an unexported `internal/lifecycle`.
+- **Location and package split**: a runtime-neutral `compose` package (a plain `Spec` struct and its `Validate` method) plus a GoAkt-specific `compose/goakt` package, with the sequencing logic that both compositions share kept in an unexported `compose/internal/lifecycle`.
 - **The dependency-injection model**: explicit constructor injection at the root only, with a closed, checkable list of what is forbidden (exported registries, `Resolve`/`Get`-by-type functions, reflection-based wiring, passing `Spec` or the running app into contracts).
 - **Static and probe-time validation** of the dependency graph, replacing today's silent acceptance of a nil events store or an unpaired projection.
 - **Deterministic Start/Stop ordering with rollback** on partial startup failure, and best-effort, fully-attempted shutdown instead of `Stop`'s current early return.
 - **Ownership of every dependency** (who constructs it, who connects/disconnects it, who closes it), so the composition root never silently takes over a resource the consumer owns.
-- **An architecture-check rule (`archcheck`)** that keeps `compose` itself out of the contract/application layers it composes.
+- **An architecture-check rule (`archcheck`)** that keeps the runtime out of `compose` and keeps `compose` out of every production package except `main` packages and `compose/...` itself.
 - **A vertical-slice implementation plan**, ordered so each slice is independently reviewable, and a table mapping every #105 acceptance criterion to a slice and a concrete check.
 
 ## Out of scope (MUST NOT in this change)
@@ -44,7 +45,7 @@ Give Ego one explicit, documented composition root per runtime, built from a run
 - Typed configuration and environment/file binding, owned by `#35`. `compose.Spec` is an in-code shape; binding it from configuration is a separate concern.
 - The flush/drain policy for events or state emitted while an actor system shuts down, owned by `#24` (LIFE-004), and an engine-level switch that stops admitting commands before projections stop (`#24`, LIFE-003); this design records both gaps and defers them.
 - Removing `extension.Dependency` from the public behavior contracts — that is `#123` (S3), a prerequisite this change is blocked by for its in-memory half, not a task it performs.
-- Building the in-memory runtime or test double itself. Its owner is an open decision recorded below.
+- Building the in-memory runtime or test double itself, and the runtime-neutral engine API consumers would call on both runtimes. Both belong to `#11` (see Dependencies).
 
 ## Approach
 
@@ -66,12 +67,14 @@ Two composition roots are designed against the same runtime-neutral `compose.Spe
 
 What actually shipped under `#103`'s number was the `port/publishing` extraction (S1a/S1b, `#116`/`#121`), which answers none of the seven criteria above — it only moved `EventPublisher`, `StatePublisher` and `ErrPublisherNotStarted` out of package `ego`. `odd/tasks/port-publishing.md:63-72` records that the remaining scope was split into two follow-up specs, `neutral-behavior-contracts` and `inmemory-runtime-conformance`, neither of which was ever started; epic `#10` still lists `#103` unchecked for that reason. `#123`, opened alongside this proposal, is the minimal slice of `neutral-behavior-contracts` needed here: it removes `extension.Dependency` from the three public behavior interfaces. It does not by itself supply an in-memory actor runtime — that is a second, currently unowned prerequisite (see Open decisions).
 
-**Consequence for this proposal:** `compose/inmem` is designed at the same level of detail as `compose/goakt` in `design.md`, using the same `compose.Spec`, the same `Spec.Validate`, and the same `internal/lifecycle` sequencer, so that only the runtime step differs. It cannot be implemented until `#123` lands and an in-memory runtime exists. It is recorded as slice IMPL-6, blocked. The design alone does not satisfy `#105`'s in-memory criterion: `#105` stays open until IMPL-6 runs the same behavior on both compositions, unless maintainers split that criterion into its own issue.
+**Consequence for this proposal:** `compose/inmem` is designed at the same level of detail as `compose/goakt` in `design.md`, using the same `compose.Spec`, the same `Spec.Validate`, and the same `compose/internal/lifecycle` sequencer, so that only the runtime step differs. It cannot be implemented until three things exist: `#123`'s neutral behavior contracts, an in-memory runtime, and a runtime-neutral engine API, because consumer code written against `App.Engine()` returns `*ego.Engine` today (`design.md` §5.2). It is recorded as slice IMPL-6, blocked. The design alone does not satisfy `#105`'s in-memory criterion: `#105` stays open until IMPL-6 runs the same behavior on both compositions, unless maintainers split that criterion into its own issue.
 
 ## Dependencies and sequencing
 
-- **`#123`** must land before `compose/inmem` can be implemented; it does not block `compose/goakt`, `compose.Spec`, or `internal/lifecycle`, none of which touch behavior contracts.
-- **The in-memory runtime prerequisite** (a runtime, not just stores, that can run an `EventSourcedBehavior` without GoAkt) also blocks `compose/inmem`. Its owner is an open decision: either `#103` is reopened for its orphaned criteria 4–5, or `#11` gains a child issue for its own `RUNTIME-005` ("a deterministic in-memory runtime"), which already implies the same deliverable. This proposal does not create that issue; it names the gap.
+- **`#123`** must land before `compose/inmem` can be implemented; it does not block `compose/goakt`, `compose.Spec`, or `compose/internal/lifecycle`, none of which touch behavior contracts.
+- **The in-memory runtime prerequisite** (a runtime, not just stores, that can run an `EventSourcedBehavior` without GoAkt) also blocks `compose/inmem`. Recommended owner, per the #125 review: a child issue under `#11` for its `RUNTIME-005` ("deterministic in-memory runtime") rather than a reopened `#103`, which is about contracts. The issue is not created yet; it belongs to the breakdown of `#11`.
+- **A runtime-neutral engine API** also blocks `compose/inmem`: consumers call `Entity`/`SendCommand` on `*ego.Engine`, a GoAkt-backed type. The interface both runtimes implement is the application-facing side of `#11`'s runtime SPI (`RUNTIME-001`/`RUNTIME-002`).
+- **`#126`** (IMPL-1) is independent of everything else here and can land first.
 - **`#11`** owns the runtime SPI. This design's criterion "the composition root selects the runtime explicitly" is satisfied by having two separate `compose/<runtime>` packages rather than one generic constructor; `#11`'s SPI shape does not need to exist first.
 - **`#106`** (adapter SPI, capabilities, lifecycle hooks) depends on this change; it is not a prerequisite for it.
 - **`#24`** owns the drain/flush policy referenced in D7 (design.md); this proposal records the open question but does not resolve it here.
@@ -80,26 +83,27 @@ What actually shipped under `#103`'s number was the `port/publishing` extraction
 
 This change adds new packages; it does not change any existing signature except one bugfix:
 
-- New: `compose.Spec`, `compose.Spec.Validate`, `compose.StartError`; `compose/goakt.New`, `compose/goakt.App` and its options; one additive `ego` option through which `compose/goakt` tells the engine which entity families were declared (IMPL-4).
-- Bugfix (IMPL-1, independent of the rest): `Engine.Entity` and `Engine.Saga` return a typed `ErrEventsStoreRequired` instead of panicking when no events store is configured — today `Engine.Entity` (`engine.go:645`) has no such guard, unlike `Engine.DurableStateEntity` (`engine.go:902`), which already returns `ErrDurableStateStoreRequired`. `Engine.Stop` is changed to attempt every shutdown step and join errors instead of returning on the first failure; its signature is unchanged.
+- New: `compose.Spec`, `compose.Family`, `compose.Spec.Validate`, `compose.StartError`; `compose/goakt.New`, `compose/goakt.App` and its options (including `WithCluster(cfg, kinds...)`).
+- Two additive `ego` options (IMPL-4): one through which `compose/goakt` tells the engine which entity families were declared, and `WithEventStream`, so the composition root allocates the event stream it owns instead of `NewConfig` allocating it internally. No existing signature changes.
+- Bugfix (IMPL-1, `#126`, independent of the rest): `Engine.Entity` and `Engine.Saga` return a typed `ErrEventsStoreRequired` instead of panicking when no events store is configured — today `Engine.Entity` (`engine.go:645`) has no such guard, unlike `Engine.DurableStateEntity` (`engine.go:902`), which already returns `ErrDurableStateStoreRequired`. `Engine.Stop` attempts every shutdown step and joins errors instead of returning on the first failure. `AddEventPublishers`/`AddStatePublishers` reject a duplicate publisher ID, which today silently orphans the first publisher's goroutine (`engine.go:1228`, `engine.go:1269`). No signature changes.
 - The existing manual composition path (`NewConfig`, `GoaktOptions`, `goakt.NewActorSystem`, `NewEngine`, `AddEventPublishers`) is unchanged and stays supported as the "advanced/manual composition" path for v4. `compose/goakt` is additive.
 
 ## Rollback
 
-This change is documentation only; rolling it back means reverting the files in `openspec/changes/ego-arch-003/`. For the implementation slices once they land: `compose` and `compose/goakt` are new, additive packages with no existing consumer, so any slice can be reverted up to the point of a release with no compatibility obligation. The `Engine.Stop`/`Entity` bugfix in IMPL-1 changes a panic into a typed error and makes `Stop` attempt more work than before; both are backward compatible (a caller that never hit the panic or the early return sees no behavior change) and revertible independently of the rest.
+This change is documentation only; rolling it back means reverting the files in `openspec/changes/ego-arch-003/`. For the implementation slices once they land: `compose` and `compose/goakt` are new, additive packages with no existing consumer, so any slice can be reverted up to the point of a release with no compatibility obligation. The IMPL-1 bugfix changes a panic into a typed error, makes `Stop` attempt more work than before, and turns a silent duplicate-ID leak into an error; all three are backward compatible for callers that never hit those paths, and revertible independently of the rest.
 
 ## Risks
 
 - **A second composition root could re-introduce the coupling it removes** if `compose/goakt` reached into `internal/extensions` types directly instead of going through the same contracts consumers already use. Mitigation: D2 in `design.md` keeps the GoAkt extension registry an internal detail of the GoAkt adapter, never passed through `compose.Spec`.
-- **Rollback ordering is easy to get wrong** (undoing steps in the wrong order, or not at all, on partial failure). Mitigation: `internal/lifecycle` is designed and tested in isolation (IMPL-3) with fake steps before `compose/goakt` uses it.
+- **Rollback ordering is easy to get wrong** (undoing steps in the wrong order, or not at all, on partial failure). Mitigation: `compose/internal/lifecycle` is designed and tested in isolation (IMPL-3) with fake steps before `compose/goakt` uses it.
 - **Events or state emitted while the actor system shuts down could be silently dropped**, because publishers close (engine.Stop, step 3) before the actor system stops (step 4). This is recorded as an open question owned by `#24`, verified by a test in IMPL-4, not resolved by this design.
-- **The in-memory composition may never land** if neither `#103` nor `#11` claims the runtime prerequisite. Mitigation: this proposal names the gap explicitly instead of assuming it will be picked up implicitly.
+- **The in-memory composition may never land** if `#11` is never broken down into the in-memory runtime and the neutral engine API. Mitigation: this proposal names both gaps and their recommended owner instead of assuming they will be picked up implicitly, and `#105` stays open until IMPL-6 lands.
+- **Publisher ownership is easy to misread.** A consumer might close a publisher it passed into `New`, or forget `Stop` after a failed `Start`. Mitigation: D5 states one rule (after `New` succeeds, always call `Stop`, never close a publisher yourself), and `Stop` is safe in every state.
 
 ## Open decisions (see `design.md` §9 for the full table)
 
-- The package name `compose` itself (alternatives considered: `app`, `bootstrap`).
-- The default shutdown timeout used for rollback context (`design.md` suggests 30s).
-- The owner of the in-memory runtime prerequisite: reopen `#103`, or a new `#11` child.
+- The default shutdown timeout bounding rollback and `Stop` (`design.md` suggests 30s).
+- Creating the `#11` child issues for the in-memory runtime (`RUNTIME-005`) and the runtime-neutral engine API (`RUNTIME-001`/`RUNTIME-002`); recommended owner is `#11`, not a reopened `#103`.
 - Whether the manual composition path is ever deprecated.
 - The flush policy for in-flight events during shutdown (`#24`, LIFE-004).
 
@@ -107,7 +111,7 @@ This change is documentation only; rolling it back means reverting the files in 
 
 - [ ] A normative design with two composition-root walkthroughs (GoAkt and in-memory), diagrams, and MUST-level decisions exists (`design.md`).
 - [ ] `#103`'s acceptance criteria are re-verified against `main` and recorded as a table, not assumed from the issue's checkboxes.
-- [ ] The in-memory composition's exact blocker is identified (`extension.Dependency` in the public behavior contracts) and named against `#123`.
+- [ ] The in-memory composition's blockers are identified: `extension.Dependency` in the public behavior contracts (`#123`), the missing in-memory runtime, and the missing runtime-neutral engine API (`#11`).
 - [ ] Decisions on location, DI model, validation, ownership, and Start/Stop ordering are stated as closed (D1–D8 in `design.md`).
 - [ ] An implementation slice plan (IMPL-1 through IMPL-6) maps to every `#105` acceptance criterion.
 - [ ] Alternatives (DI frameworks, code generation, composing inside package `ego`, options-based `Spec`) are recorded with rejection reasons.
