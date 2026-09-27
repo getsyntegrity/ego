@@ -88,6 +88,13 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
    `go mod tidy -diff` as a nested-module CI gate in a separate PR after
    #130 merges; (c) keep #99 open, narrowed to the root cause, with a
    comment drafted for approval after W0b2 merges.
+9. (2026-09-27) #133: narrow R1 (import filter when root manifest unchanged)
+   and R2 (`-base` flag; go.mod edit ≠ add/remove) in #133 itself, after
+   amending #132 §5.2 and the fixture; nits included; CI + review repeated
+   before merge. #39: draft an issue for the unresolvable publisher module
+   paths, show it before creating. D1–D8 approved to guide S2/S3; D1 needs
+   an explicit target path + migration plan confirmed before execution; D8
+   waits for F4.
 5. Pace: two or three active agents; critical path #125 → #123 → S4 (#11)
    → #102 extraction. #122, #101 and #112 run alongside without touching the
    root package.
