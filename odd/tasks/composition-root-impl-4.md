@@ -111,8 +111,23 @@ See the PR description for the command outputs; summary:
 - `scripts/ci/verify-module.sh` exit 0 for all 7 nested modules: `benchmark`, `example/cluster`,
   `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`.
 - Evidence commits: `823b08c` (T1, T2), `c612311` (T3), `53c2727` (T4), plus this document's update.
-- Engram mirror `odd/composition-root-impl-4/tasks`: pending (the writer agent has no Engram access in
-  this run).
+- Engram mirror `odd/composition-root-impl-4/tasks`: saved (see "Decisions after the first PR round").
+
+## Decisions after the first PR round (maintainer, 2026-09-27)
+
+- V7 keeps its name. `design.md` §D4a now lists V7 too, and the §4 diagram and §7 row say V1–V7, so the
+  design and the code list the same rules.
+- G1 stays as two sentinels (`ErrClusterConfigRequired`, `ErrClusterKindsRequired`); G2 stays a
+  `*compose.ValidationError` on `Name`.
+- The undeclared-family error stays `ErrEntityFamilyNotDeclared`, wrapped with the family name and checked
+  with `errors.Is`.
+- One PR, not split by line count, if independent review can follow the diff and CI is green.
+- Cluster scope: this slice verifies the cluster conditions **at `New` only** (G1, and `New` accepting
+  a config with kinds). It does **not** claim that a real cluster was started through `compose/goakt`.
+  A cluster integration test is left for a later slice.
+- Design §5.1's `example/cluster` check is satisfied by
+  [#144](https://github.com/getsyntegrity/ego/pull/144) (`#123` S3-5), which added
+  `ego.WithBehaviorKinds(new(AccountBehavior))` to that example; `design.md` §5.1 now says so.
 
 ## Next step
 
