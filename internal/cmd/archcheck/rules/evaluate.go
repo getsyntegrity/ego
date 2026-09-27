@@ -83,6 +83,9 @@ type Result struct {
 	// RuleStats is one entry per rule in the ruleset Evaluate was called
 	// with, in that order.
 	RuleStats []RuleStat
+	// ModulesChecked is how many in-repository modules the graph's module
+	// table held (Graph.Modules), the set no-module-cycle checks.
+	ModulesChecked int
 }
 
 // edgeKey identifies one (importer, import) pair for EdgesChecked's
@@ -128,11 +131,46 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 	ruleStats := make([]RuleStat, len(ruleset))
 	var emptyRules []string
 
+	modules := NewModuleIndex(graph.Modules)
+	record := func(v Violation) {
+		key := keyOf(v.Importer, v.Import, v.Rule)
+		if _, ok := baselineByKey[key]; ok {
+			used[key] = true
+			return
+		}
+		violations = append(violations, v)
+	}
+
 	for i, rule := range ruleset {
 		matched := 0
+		if rule.CheckModules != nil {
+			matched = len(graph.Modules)
+			if matched > 0 {
+				for _, v := range rule.CheckModules(graph.Modules) {
+					v.Rule = rule.ID
+					record(v)
+				}
+			}
+			ruleStats[i] = RuleStat{RuleID: rule.ID, Layer: rule.Layer.Name, PackagesMatched: matched}
+			if matched == 0 {
+				emptyRules = append(emptyRules, fmt.Sprintf("%s (layer %q)", rule.ID, rule.Layer.Name))
+			}
+			continue
+		}
 		for _, pkg := range graph.Packages {
 			if !rule.Layer.Match(pkg) {
 				continue
+			}
+			if rule.ForbidsEdge != nil {
+				if len(graph.Modules) == 0 {
+					// No module table: this rule cannot place anything, so it
+					// matches nothing and the zero-match check below fails
+					// the run.
+					continue
+				}
+				if modules.Owner(pkg.ImportPath) == "" {
+					return Result{}, fmt.Errorf("rule %s: package %s belongs to no module in the graph's module table; the loaders and the module table disagree", rule.ID, pkg.ImportPath)
+				}
 			}
 			matched++
 			packagesChecked[pkg.ImportPath] = true
@@ -157,19 +195,15 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 					continue
 				}
 				edgesChecked[edgeKey{Importer: pkg.ImportPath, Import: imp}] = true
-				if !rule.Forbids(imp) {
+				forbidden, reason := decide(rule, modules, pkg.ImportPath, imp)
+				if !forbidden {
 					continue
 				}
-				key := keyOf(pkg.ImportPath, imp, rule.ID)
-				if _, ok := baselineByKey[key]; ok {
-					used[key] = true
-					continue
-				}
-				violations = append(violations, Violation{
+				record(Violation{
 					Importer: pkg.ImportPath,
 					Import:   imp,
 					Rule:     rule.ID,
-					Reason:   reasonFor(rule, imp),
+					Reason:   reason,
 				})
 			}
 		}
@@ -200,7 +234,20 @@ func Evaluate(graph Graph, ruleset []Rule, baseline []BaselineEntry) (Result, er
 		PackagesChecked: len(packagesChecked),
 		EdgesChecked:    len(edgesChecked),
 		RuleStats:       ruleStats,
+		ModulesChecked:  len(graph.Modules),
 	}, nil
+}
+
+// decide applies rule to one non-stdlib import edge: through ForbidsEdge
+// for a module-aware rule, otherwise through Forbids and reasonFor.
+func decide(rule Rule, modules ModuleIndex, importer, importPath string) (bool, string) {
+	if rule.ForbidsEdge != nil {
+		return rule.ForbidsEdge(modules, importer, importPath)
+	}
+	if !rule.Forbids(importPath) {
+		return false, ""
+	}
+	return true, reasonFor(rule, importPath)
 }
 
 // reasonFor gives a short, human explanation of why a rule forbids an

@@ -98,7 +98,7 @@ buckets, checked in this order:
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
 | Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
-| Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
+| Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
 | No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
 | Unknown          | Anything else                                                                                                                                                                                | Forces mode `full`, with the offending path in the reason |
@@ -165,7 +165,8 @@ Both workflows run `go run ./internal/cmd/archcheck` right after dependencies ar
 The tool reads the import graph in two ways:
 
 - **Root module:** `go list -e -json ./...`, which gives each package's production imports with build constraints resolved. A package that fails to load fails the check (fail closed).
-- **Nested modules** (`publisher/*`, `benchmark`, `example/cluster`): every non-test `.go` file is parsed in imports-only mode with `go/parser`. No module download or network is needed, which keeps the step at well under a second.
+- **Nested modules** (`publisher/*`, `benchmark`, `example/cluster`, `test/compat`): every non-test `.go` file is parsed in imports-only mode with `go/parser`. No module download or network is needed, which keeps the step at well under a second.
+- **Module table** (#102, ego-arch-006 slice S1): every module's path and its `require` lines, read with `go mod edit -json` in the root and in every nested module directory (offline, the same reader `ciselect` uses), narrowed to requirements that name another in-repository module. A package belongs to the module with the longest path that prefixes its import path. The two module-aware rules below need this table; without it they match nothing, and the zero-match check fails the run.
 
 Each rule applies to one layer and checks the direct import edges of every package in it. Contract layers use a closed allowlist, and every allowed target is itself runtime-free, so a transitive path to GoAkt cannot open without adding a new direct edge that the check sees. `rules.Evaluate` counts how many packages each rule's layer actually matched, and fails the whole run — naming the empty rule and its layer — if any rule matched zero packages: that is almost always a sign the root module path or a layer definition is wrong, not that the layer is genuinely empty, since a check that matches nothing passes vacuously instead of catching anything.
 
@@ -176,7 +177,8 @@ Each rule applies to one layer and checks the direct import edges of every packa
 | `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` — and stdlib itself excludes `net/http`, `net/rpc`, `database/sql` and everything under them |
 | `application-no-runtime` | `migration` | Must not import package `ego`, `internal/extensions` or GoAkt |
 | `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `ego` or GoAkt |
-| `no-cross-module-internal` | every nested module | Must not import root-module `internal/...` |
+| `no-cross-module-internal` | every package of every module, root and nested | Must not import an `internal/...` package that belongs to a different in-repository module, in either direction (generalized in ego-arch-006 slice S1 from "nested module to root `internal/`") |
+| `no-module-cycle` | the module table (`go.mod` requirements) | No in-repository module may require, directly or through other in-repository modules, a module that requires it back; every requirement edge on a cycle is reported (ego-arch-001 design §3, ego-arch-006 slice S1) |
 | `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `ego`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
 | `composition-leaf` | root-module packages outside `compose/`, except `main` packages and `example/...` | Must not import `compose` or anything under it (ego-arch-003 design §D8) |
 
@@ -187,6 +189,10 @@ github.com/pablogore/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: 
 ```
 
 The fix is almost always to depend on a contract package instead of the runtime. Do not add a baseline entry to silence a new violation.
+
+A module-cycle failure names the requiring module as the importer and the required module as the import, and its reason spells out the cycle, for example `requires github.com/pablogore/ego/v4/contracts, which requires it back: github.com/pablogore/ego/v4 -> github.com/pablogore/ego/v4/contracts -> github.com/pablogore/ego/v4`. The go toolchain accepts module cycles, and `ciselect` does not check for them (a cycle there would only widen a selection), so archcheck is where one fails the build. Likewise, Go does not stop a module from importing another in-repository module's `internal/` package, because every module here shares the root module's path prefix; `no-cross-module-internal` does.
+
+The summary line counts modules too. On the S1 branch: `archcheck: 8 modules checked, 44 packages checked, 182 edges checked, 1 baselined, 0 violation(s), 0 stale entries` (before S1: `37 packages checked, 157 edges checked, 1 baselined`; the generalized `no-cross-module-internal` now also inspects root-module packages, and `test/compat` adds one package).
 
 **Stdlib transport and database packages are forbidden in contracts.** `contract-allowlist` also denies `net/http`, `net/rpc` and `database/sql`, and everything under them, matched by whole path segment (`net/http/httptest` is forbidden; a hypothetical `net/httpx` would not be). gRPC and other third-party transports are already excluded by the closed allowlist; this stdlib denylist closes the remaining gap, and the rest of the standard library — including `net` itself, for value types such as `net.IP` — stays allowed. It applies to direct imports only: the standard library is not a closed set the way the allowlist's third-party targets are, so a transitive path such as `expvar` importing `net/http` internally is possible and is not enforced (design.md §3).
 
@@ -302,7 +308,8 @@ feature document (`odd/tasks/affected-package-fast-lane.md`).
 ## Nested module CI (#111)
 
 `benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`,
-`publisher/pulsar` and `publisher/websocket` each carry their own `go.mod`
+`publisher/pulsar`, `publisher/websocket` and `test/compat` (#102 S1) each
+carry their own `go.mod`
 and are not reached by `go list ./...` from the root module, so they sit
 outside `internal/cmd/ciselect`'s own package graph entirely (see
 "How the selector decides" above). Before #111, a change confined to one
@@ -348,8 +355,9 @@ imports-only mode (#111's approach: tests included, build constraints
 ignored, `testdata/` and nested modules' files skipped) and keeps the
 imports that belong to *another* in-repository module. That import set
 never creates an edge; it **filters** one (step 5). Parsing matters here:
-`go list` resolves build tags, so it would miss a `//go:build compat`
-importer such as the publishers' #130 compatibility tests.
+`go list` resolves build tags, so it would miss a build-tagged importer
+such as the `//go:build compat` files the publishers carried until #102
+S1 moved those checks into `test/compat`.
 
 **Algorithm**, in order:
 
@@ -362,7 +370,7 @@ importer such as the publishers' #130 compatibility tests.
    empty changed-file list are treated the same way. The root `go.mod`
    and `go.sum` are deliberately **not** global: they send the root lane
    to `full`, and step 5 then selects every module that requires the
-   root (today, all six).
+   root (today, all seven).
 2. **Ownership.** Each changed file belongs to the module with the
    longest directory prefix. Root-owned files go through the root
    classifier described in "How the selector decides", unchanged, so the
@@ -458,6 +466,28 @@ edit is treated as a boundary change and runs the full root lane with all
 six modules. The coverage denominator (`coverpkg`) is identical in every
 row and in `-all`.
 
+**Measured selection after S1 (`test/compat`, the first nested-to-nested
+edge).** `test/compat` requires the root and the four publishers through
+local `replace`, so it now has four in-repository edges besides the root.
+`ciselect -changed <file> -base origin/main` on the S1 branch
+(`origin/main` = `9084b80`, `GOFLAGS=-mod=vendor` as in CI):
+
+| Changed path | Root lane | Selected modules | `test/compat` reason (chain) |
+|---|---|---|---|
+| `port/publishing/publishing.go` | `affected` | all seven | `test/compat ← .` (it imports the affected root package `ego` directly, so the walk reaches it from the root first) |
+| `publisher.go` (the root file holding the aliases) | `full` | all seven | `test/compat ← .` |
+| `publisher/kafka/kafka.go` | `none` | `publisher/kafka`, `test/compat` | `test/compat ← publisher/kafka` (unfiltered: the publisher is a fully changed nested module) |
+| `migration/migration.go`, `compose/spec.go` | `affected` | none | not selected: "requires `.` but imports none of its affected packages" |
+| `docs/ci.md` | `none` | none | not selected |
+
+The design (ego-arch-006 §6, S1 checks) expected the chain
+`test/compat ← publisher/… ← .` for a `port/publishing` change. The
+selection is the same; the recorded chain is the shorter one because the
+walk records the first chain that reaches a module, and `test/compat`
+imports package `ego`, which the root lane selects. The nested-to-nested
+edge itself is the `publisher/kafka/kafka.go` row. A leaf publisher change
+now also verifies `test/compat`: one more module job on such a PR.
+
 ### `modules.json` and the job summary
 
 `ciselect` writes the selected module directories to
@@ -510,11 +540,8 @@ change what the module builds against):
    module's `go.mod`/`go.sum` do not already match what `go mod tidy`
    would write (#122 follow-up: this was an acceptance criterion of #122
    itself but was never actually wired into CI until this check). `go mod
-   tidy` has no `-tags` flag, so it already considers every file in the
-   module, including one gated behind the `compat` build tag (step 6
-   below) — no separate `-tags compat` tidiness pass is needed; see "What
-   did *not* change: `go.mod`, `go.sum`, the module graph" below for the
-   empirical confirmation.
+   tidy` has no `-tags` flag, so it considers every file in the module,
+   whatever its build tags.
 3. `go build ./...` (into a scratch directory when the module has a
    `main` package, so a verification run never leaves a stray binary in
    the module's own working tree)
@@ -530,12 +557,11 @@ change what the module builds against):
    `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
    sets; a local run leaves it off by default, per this repository's own
    rule against running the race detector locally.
-7. When the module has any file gated behind the `compat` build tag,
-   `go vet -tags compat ./...`, `golangci-lint run --build-tags compat`
-   and (only when the module has tests) `go test -tags compat ./...` run
-   too, right after their untagged equivalents — the compatibility lane;
-   see "Compatibility lane (#122)" below. A module with no compat-tagged
-   file skips this step entirely.
+
+There is no build-tag lane any more. #122 added one (a `-tags compat`
+vet, lint and test pass for modules with a `//go:build compat` file); #102
+S1 removed it together with the last such files, because the checks it
+ran now live in their own module, `test/compat` (next section but one).
 
 Any of these steps failing fails the module's own job, and therefore the
 whole check — a Kafka build error, an untidy Kafka `go.mod`/`go.sum`, a
@@ -558,7 +584,86 @@ list is never hand-maintained: it comes from `modules.json`, so a new
 nested module is picked up the moment its `go.mod` exists, with no
 workflow edit.
 
-### Compatibility lane (#122)
+### Compatibility checks: the `test/compat` module (#102, S1)
+
+The historical alias and sentinel checks between the four publishers and
+package `ego` (`ego.EventPublisher`, `ego.StatePublisher`,
+`ego.ErrPublisherNotStarted`, ADR `ego-arch-001` §5, S1 criterion 3, kept
+until [#124](https://github.com/getsyntegrity/ego/issues/124)) live in
+`test/compat`, a nested module that is **never released** (ADR
+`ego-arch-006`, slice S1, decision D5). It requires the root module and the
+four publishers, each through a local `replace` (Go honors `replace` only in
+the main module, so it lists its whole in-repository closure), and nothing
+requires it. Its module path follows the current scheme,
+`github.com/pablogore/ego/v4/test/compat`, like `benchmark`: nothing outside
+the repository ever resolves it, so it needs none of the module-path
+decisions (D1–D3) the contracts module waits for.
+
+Each publisher's `compat_test.go` held two kinds of checks. They moved as
+follows:
+
+- **The eight compile-time alias assertions** move to `test/compat`
+  unchanged: `_ ego.EventPublisher = (*<pub>.EventsPublisher)(nil)` and
+  `_ ego.StatePublisher = (*<pub>.DurableStatePublisher)(nil)`, for kafka,
+  nats, pulsar and websocket.
+- **The runtime sentinel check** ("`Publish` on a stopped publisher returns
+  an error that matches `ego.ErrPublisherNotStarted`", events and state, per
+  publisher) is split in two:
+  - inside each publisher module, `TestPublishBeforeStartMatchesPublishingSentinel`
+    in `publisher_contract_test.go` checks that `Publish` before `Start`
+    returns an error matching `publishing.ErrPublisherNotStarted`, for
+    events and state. It builds the stopped publisher with a struct
+    literal, which only code inside the package can do;
+  - in `test/compat`, `TestEgoSentinelIsThePublishingSentinel` checks that
+    `ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
+    `errors.Is` in both directions.
+
+  Together the two halves prove the original check: `ego.ErrPublisherNotStarted`
+  is defined as `publishing.ErrPublisherNotStarted`, so any error that matches
+  one matches the other. The split was a maintainer decision on PR #142
+  (recorded in `openspec/changes/ego-arch-006/design.md` §6 S1). It keeps
+  `test/compat` free of `reflect`/`unsafe`: a module outside the publisher
+  packages cannot build a stopped publisher any other way, because every
+  constructor dials its broker and Pulsar has no embeddable server.
+
+What this changes for the publishers: `compat_test.go` is gone, so no file
+in a publisher imports package `ego` any more, in any build. `go mod tidy`
+therefore drops every indirect requirement that only `ego`'s import needed
+(GoAkt, Olric, OpenTelemetry and their dependencies) from each publisher's
+`go.mod` and `go.sum`. It also **adds** a few `// indirect` lines that pin
+versions the publisher already resolved through the root's requirements:
+`github.com/prometheus/client_golang` in `publisher/kafka`, and twelve
+modules in `publisher/pulsar` (`testcontainers-go`, the `moby` and `docker`
+clients, `gopsutil` and their dependencies, plus `golang.org/x/crypto`).
+`publisher/nats` and `publisher/websocket` only lose lines. The versions a
+publisher actually builds and tests with do not change: the module
+versions behind `go list -deps -test ./...` are identical to `main` in all
+four publishers (kafka 21 modules, nats 13, pulsar 72, websocket 7). The
+publishers still require the root module itself for `egopb` and
+`port/publishing` until slice S3. Each publisher keeps
+`publisher_contract_test.go` (the `publishing`-only assertions, including
+the runtime half of the sentinel check above) and
+`TestUnitTestClosureExcludesRuntimeAndRoot`.
+
+`test/compat` is verified like any other nested module: the `modules` job
+discovers it from its `go.mod` (no workflow change), and
+`verify-module.sh test/compat` runs download, `go mod tidy -diff`, build,
+vet, lint and `go test ./...`. The selector picks it for any change that
+reaches the root packages it imports or any publisher (see "Measured
+selection after S1" above).
+
+**Cost.** `test/compat` builds all four publishers plus the root package
+`ego` with GoAkt, so it is now the slowest module job: about 195 s in PR
+run 36331397582 (`publisher/pulsar` took about 154 s, the other modules 30
+to 64 s). It runs on every leaf publisher PR, because a change to any
+publisher selects it (`test/compat ← publisher/<name>`).
+
+### Compatibility lane (#122) — historical, superseded by S1
+
+*This section records how #122 worked. Since #102 S1 the `compat` build
+tag, the four `compat_test.go` files and `verify-module.sh`'s tag lane no
+longer exist; see the previous section. The measurements below are from
+#122.*
 
 S1b (above) switched the four publishers' *production* build to
 `port/publishing`, but each module's *tests* still imported package `ego`
@@ -739,10 +844,13 @@ checks both, separately:
   one's `github.com/pablogore/ego/v4` requirement to the just-published
   root tag, runs `verify-published.sh` against it, and only then tags
   `publisher/<name>/vX.Y.Z`.
-- `benchmark` and `example/cluster` are never released. They exist only
-  as integrated-verification consumers (`verify-module.sh` covers them
-  in the PR and `main` lanes) and keep their `replace` directive
-  permanently.
+- `benchmark`, `example/cluster` and `test/compat` are never released.
+  They exist only as integrated-verification consumers (`verify-module.sh`
+  covers them in the PR and `main` lanes) and keep their `replace`
+  directives permanently. Under ADR `ego-arch-006` decision D5 an
+  unreleased module is allowed only while no released module requires it
+  and while it is listed here; `release.yml` only releases
+  `publisher/*`.
 
 ### Toolchain requirements
 
@@ -751,7 +859,7 @@ module — with Go 1.27.0 (`actions/setup-go`'s `go-version` input). The
 root module's own `go.mod` declares `go 1.26.0`; the nested modules
 declare `go 1.26.0` (`benchmark`, `example/cluster`, `publisher/kafka`,
 `publisher/nats`, `publisher/websocket`) or `go 1.26.2`
-(`publisher/pulsar`), and none of them pins a `toolchain` line, so the
+(`publisher/pulsar`, and `test/compat`, which requires it), and none of them pins a `toolchain` line, so the
 installed 1.27.0 toolchain satisfies every one of them without
 downloading anything else. `golangci-lint` is pinned to the same version,
 `v2.13.1`, for the root lane and for every nested module's own lint step.
