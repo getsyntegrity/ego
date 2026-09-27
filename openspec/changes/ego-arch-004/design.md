@@ -175,7 +175,7 @@ ego-arch-003 §9 left this to #106. The recommendation is to keep it internal. A
 `compose.Spec.Validate` gains one rule, reported as a `*compose.ValidationError` with `Rule: "V8"` like the others (`compose/errors.go:30-50`):
 
 - **V8a** — an adapter that declares a descriptor must list the port of the slot it sits in among its `Ports` (a membership check, `Descriptor.Serves`). A value placed in `Spec.StateStore` whose descriptor lists only `persistence.EventsStore` is a wiring mistake. A value that lists both `EventsStore` and `SnapshotStore` is valid in either slot.
-- **V8b** — declaration and implementation agree **in both directions** for every optional capability `compose` knows for that slot's port: declared ⇒ implemented, and implemented ⇒ declared. In this change that is `CapStart` and `CapReady` for publishers, checked through `adapter.StarterOf`/`PingerOf`, and `CapFixedTenant` for the tenant resolver, checked through `tenancy.AsFixedTenantResolver`. So a declared resolver that implements `FixedTenantResolver` without declaring it fails V8b; it does not pass silently. Capabilities implied by the port (`CapReady` on stores) are skipped. A declared capability that `compose` does not know (one added later by another issue) is accepted here and checked by the adapter's own conformance tests (AT-1). A mismatch names the slot, the adapter type and the capability.
+- **V8b** — declaration and implementation agree **in both directions** for every optional capability `compose` knows for that slot's port: declared ⇒ implemented, and implemented ⇒ declared. In this change that is `CapStart` and `CapReady` for publishers, checked through `adapter.StarterOf`/`PingerOf`, and `CapFixedTenant` for the tenant resolver, checked through `tenancy.AsFixedTenantResolver`. So a declared resolver that implements `FixedTenantResolver` without declaring it fails V8b; it does not pass silently. Capabilities implied by the port (`CapReady` on stores) are skipped. A declared capability that `compose` does not know (one added later by another issue) is accepted here and checked by the adapter's own conformance tests (AT-1, through `Target.Capabilities`). A mismatch names the slot, the adapter type and the capability.
 - **V8c** — a slot's required capabilities are met. **In v4 no slot requires an optional capability**, so V8c starts empty. It exists so #11 (runtime negotiation) and #24 (for example, a drain policy that needs publishers able to flush) can add a requirement as a table entry with a test, instead of a type assertion at the point of use.
 
 V8 runs only on adapters that declare a descriptor, so every `Spec` that validates today still validates. That is deliberate for v4 compatibility: an undeclared resolver that implements `FixedTenantResolver` keeps working as today and is reported by inspection as undeclared. O7 asks whether #124 makes declaring mandatory.
@@ -227,7 +227,7 @@ Two new packages, both standard-library-only so they pass `contract-allowlist` a
 
 | Package | Tests | Used by |
 |---|---|---|
-| `port/adapter/adaptertest` | Lifecycle and descriptor rules any adapter must meet: **AT-1** a declared descriptor is stable across calls and its `Ports` include the one the caller expects; declared capabilities and implemented interfaces agree in both directions (V8b, in the adapter's own tests). **AT-2** a failed acquire (`Start`, or `Connect` for a borrowed adapter) releases resources (L1). It is driven by a failure hook the caller supplies. **AT-3** release twice, release without acquire, and release after a failed acquire (L2). **AT-4** release returns within a short deadline while the backend is stalled (L3). It is driven by a caller-supplied `Stall` hook; without the hook AT-4 cannot fail, so it is reported as not exercised (§D8 "Hooks"). **AT-5** `Ping` after acquire succeeds for a reachable adapter (L4) | any adapter: publishers, stores, future adapters |
+| `port/adapter/adaptertest` | Lifecycle and descriptor rules any adapter must meet: **AT-1** a declared descriptor is stable across calls and its `Ports` include the one the caller expects; declared capabilities and implemented interfaces agree in both directions (V8b, in the adapter's own tests). `adaptertest` knows only `CapStart` and `CapReady` itself; any other capability is checked through `Target.Capabilities`, which the adapter's test fills (§D8 "Target"). **AT-2** a failed acquire (`Start`, or `Connect` for a borrowed adapter) releases resources (L1). It is driven by a failure hook the caller supplies. **AT-3** release twice, release without acquire, and release after a failed acquire (L2). **AT-4** release returns within a short deadline while the backend is stalled (L3). It is driven by a caller-supplied `Stall` hook; without the hook AT-4 cannot fail, so it is reported as not exercised (§D8 "Hooks"). **AT-5** `Ping` after acquire succeeds for a reachable adapter (L4) | any adapter: publishers, stores, future adapters |
 | `port/publishing/publishingtest` | Publisher-specific rules: **PT-1** `Publish` after `Close` returns `publishing.ErrPublisherNotStarted` (L5, generalizing today's four `publisher_contract_test.go` copies); **PT-2** `ID()` is non-empty and stable; **PT-3** a published event reaches the caller-supplied observer | the four publishers |
 
 Stores keep `persistence/conformance` for their data semantics. It is canonical (EGO-TENANT-003), and #106 says not to redesign existing persistence contracts without evidence. They add `adaptertest` for lifecycle only.
@@ -244,14 +244,19 @@ type Target struct {
 	Ownership Ownership                     // Owned: acquire = Start (if StarterOf), release = Close
 	                                        // Borrowed: acquire = Connect, release = Disconnect
 	New       func(t *testing.T) (any, error) // fresh value; wrap ErrUnreachable to skip
-	FailStart func(t *testing.T) (any, error) // optional: a value whose acquire fails (AT-2)
+	FailStart func(t *testing.T) (any, error) // optional: a value whose separate acquire fails (AT-2)
+	// Capabilities maps each port-specific capability to its implements-check,
+	// e.g. {tenancy.CapFixedTenant: func(v any) bool { _, ok := tenancy.AsFixedTenantResolver(v.(tenancy.TenantResolver)); return ok }}.
+	Capabilities map[adapter.Capability]func(v any) bool
 	Stall     func(t *testing.T)              // optional: make the backend stop answering (AT-4)
 }
 ```
 
 `adaptertest` finds `Close`, `Connect` and `Disconnect` through small structural interfaces it owns, and finds `Start`/`Ping` through `adapter.StarterOf`/`PingerOf`.
 
-**Hooks.** `FailStart` and `Stall` exist because a suite cannot make a real backend fail or hang by itself. Without `FailStart`, AT-2 is not exercised; without `Stall`, AT-4 is not exercised. Each is logged as "not exercised: no hook", never as passed. The websocket adopter supplies both, through an `httptest` handler that refuses the upgrade (`FailStart`) or stops reading (`Stall`). The in-memory `testkit` stores have no backend that can stall, so AT-4 is not exercised for them; the conformance summary lists that explicitly.
+**Hooks.** `FailStart` and `Stall` exist because a suite cannot make a real backend fail or hang by itself. Without `FailStart`, AT-2 is not exercised; without `Stall`, AT-4 is not exercised. Each is logged as "not exercised: no hook", never as passed. `FailStart` only makes sense for an adapter whose acquire is separate from its constructor (a `Starter`, or a borrowed adapter with `Connect`). A publisher that dials in its constructor, as all four do today and O5 keeps, has no value left after a failed dial, so for it AT-2 and the "release after a failed acquire" case of AT-3 are reported as "not exercised: acquire happens in the constructor", the same way a missing hook is. The websocket adopter therefore supplies only `Stall`, through an `httptest` handler that stops reading; its AT-2 becomes exercisable once it gains a `Start` (O5 (b) or F-A). The in-memory `testkit` stores have no backend that can stall, so AT-4 is not exercised for them; the conformance summary lists that explicitly.
+
+**Capability checks beyond `CapStart`/`CapReady`.** `adaptertest` imports only the standard library and `port/adapter`, so it cannot check `tenancy.CapFixedTenant` or any capability added later by itself. The adapter's own test supplies an implements-check per such capability in `Target.Capabilities`, built from the owning package's accessor (`tenancy.AsFixedTenantResolver` for `CapFixedTenant`). AT-1 then checks both directions for every capability in that map. A declared capability that is neither `CapStart`, `CapReady` nor in the map fails AT-1 with "no check supplied", so a new capability cannot pass unchecked. At composition time the same capability is checked by V8b in `compose`, which does import `tenancy`.
 
 ```go
 // in publisher/websocket's own tests
@@ -262,7 +267,6 @@ func TestConformance(t *testing.T) {
 		Port:      publishing.PortEventPublisher,
 		Ownership: adaptertest.Owned,
 		New:       func(t *testing.T) (any, error) { return websocket.NewEventsPublisher(&websocket.Config{URL: wsURL(srv)}) },
-		FailStart: refuseUpgrade(srv),
 		Stall:     stopReading(srv),
 	})
 	publishingtest.RunEvents(t, /* same factory, plus an observer on srv */)
@@ -333,14 +337,14 @@ Each row is one pull request with at most five tasks. The authored-line counts a
 ### SPI-3 — Conformance packages
 
 - **Owns:** `port/adapter/adaptertest/**`, `port/publishing/publishingtest/**` (new).
-- **Tasks:** 1. `adaptertest` AT-1…AT-5 with `Target` (ownership, `FailStart`, `Stall`), the `ErrUnreachable` sentinel as the only skip, and "not exercised" reporting for missing hooks. 2. `publishingtest` PT-1…PT-3. 3. Self-checks in the style of `persistence/conformance`'s capture mode: a deliberately broken fake (non-idempotent `Close`, a `Close` that ignores the deadline, a descriptor that lies) must make each check fail. 4. Architecture tests keeping both packages standard-library-only.
+- **Tasks:** 1. `adaptertest` AT-1…AT-5 with `Target` (ownership, `FailStart`, `Stall`, `Capabilities`), the `ErrUnreachable` sentinel as the only skip, and "not exercised" reporting for missing hooks. 2. `publishingtest` PT-1…PT-3. 3. Self-checks in the style of `persistence/conformance`'s capture mode: a deliberately broken fake (non-idempotent `Close`, a `Close` that ignores the deadline, a descriptor that lies) must make each check fail. 4. Architecture tests keeping both packages standard-library-only.
 - **Checks:** `go test ./port/...`; archcheck; apidiff additions only.
 - **Depends on:** SPI-1.
 
 ### SPI-4 — Two adopters (a publisher and a store)
 
 - **Owns:** `publisher/websocket/**` except `closure_test.go` (owned by SPI-2), `testkit/eventstore.go`, `testkit/durablestore.go`, `testkit/offsetstore.go` and their tests.
-- **Tasks:** 1. Make websocket `Close` idempotent (L2): RED with a double `Close` on a value built against `httptest`, then guard it (for example with the existing `started` flag or a `sync.Once`) so a second call returns nil (`websocket.go:79-82`, `:144-147`). 2. `websocket.EventsPublisher`/`DurableStatePublisher` implement `Describe`. 3. Their tests run `adaptertest` (with `FailStart` and `Stall`) and `publishingtest` against an `httptest` server; the existing `publisher_contract_test.go` check folds into PT-1. 4. `testkit` stores implement `Describe` with no capabilities (`CapReady` is implied by the store ports) and run `adaptertest` as `Borrowed` next to `persistence/conformance`. 5. Record per publisher that `go list -deps -test ./...` still has no GoAkt and no root package.
+- **Tasks:** 1. Make websocket `Close` idempotent (L2): RED with a double `Close` on a value built against `httptest`, then guard it (for example with the existing `started` flag or a `sync.Once`) so a second call returns nil (`websocket.go:79-82`, `:144-147`). 2. `websocket.EventsPublisher`/`DurableStatePublisher` implement `Describe`. 3. Their tests run `adaptertest` (with `Stall`; AT-2 and the failed-acquire case of AT-3 are reported "not exercised" because websocket dials in its constructor) and `publishingtest` against an `httptest` server; the existing `publisher_contract_test.go` check folds into PT-1. 4. `testkit` stores implement `Describe` with no capabilities (`CapReady` is implied by the store ports) and run `adaptertest` as `Borrowed` next to `persistence/conformance`. 5. Record per publisher that `go list -deps -test ./...` still has no GoAkt and no root package.
 - **Checks:** `scripts/ci/verify-module.sh publisher/websocket`; root lane for `testkit`; `go test -v -run Conformance` output has no `SKIP` for either adopter; apidiff.
 - **Depends on:** SPI-3. **If ego-arch-006 S3 has landed first,** the websocket half is blocked on O2 (placing `port/adapter` in the contracts module); the `testkit` half is not.
 
