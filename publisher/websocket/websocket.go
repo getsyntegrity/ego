@@ -75,9 +75,13 @@ func (x *EventsPublisher) ID() string {
 	return "ego-websocket"
 }
 
-// Close implements publishing.EventPublisher.
+// Close implements publishing.EventPublisher. It is idempotent: only the
+// first call closes the connection, and every later call returns nil
+// (ego-arch-004 design §D4, rule L2).
 func (x *EventsPublisher) Close(context.Context) error {
-	x.started.Store(false)
+	if !x.started.CompareAndSwap(true, false) {
+		return nil
+	}
 	return x.connection.Close()
 }
 
@@ -140,9 +144,13 @@ func (x *DurableStatePublisher) ID() string {
 	return "ego-websocket"
 }
 
-// Close implements publishing.StatePublisher.
+// Close implements publishing.StatePublisher. It is idempotent: only the
+// first call closes the connection, and every later call returns nil
+// (ego-arch-004 design §D4, rule L2).
 func (x *DurableStatePublisher) Close(context.Context) error {
-	x.started.Store(false)
+	if !x.started.CompareAndSwap(true, false) {
+		return nil
+	}
 	return x.connection.Close()
 }
 
