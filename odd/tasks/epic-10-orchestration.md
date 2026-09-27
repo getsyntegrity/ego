@@ -126,7 +126,7 @@ history of this file.
 | W1b2 | #122 tidy -diff gate | ci/122-nested-tidy-gate @1f8bee9 | #138 | in review | all six modules tidy on main; no workflow change |
 | W1c-1 | #105 IMPL-1 (#126) | — | — | planned | after S3-2 (Entity/Saga in engine.go) |
 | W1c-2 | #105 IMPL-2 | feat/105-impl-2-compose-spec @30d70cb | #135 @48e2ccb | merged (27848da) | nested adapters → follow-up on #106 (issuecomment-5856629314) | archcheck 36/156/1/0/0; V5 strict reading (typed nil rejected in optional fields too) and docs/ci.md rule rows (after #133) pending human |
-| W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @c428425 | #137 | in review | DefaultShutdownTimeout 30s only when unset (open question with #24) |
+| W1c-3 | #105 IMPL-3 | feat/105-impl-3-lifecycle @c428425 | #137 | approved with nits (fixing) | DefaultShutdownTimeout 30s only when unset (open question with #24) |
 | W1c-4 | #105 IMPL-4 | — | — | planned | after S3-2, S3-3, S3-4 and IMPL-2/3 |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
