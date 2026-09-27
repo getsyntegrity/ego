@@ -45,6 +45,10 @@ import (
 //     never reports a transient failure: a runtime that provides the operation
 //     but cannot reach its store returns the store's error.
 //
+// When both rules apply, ErrUnsupported comes first: whether a runtime
+// provides an operation does not depend on whether it has started, so an
+// unsupported operation reports ErrUnsupported in every lifecycle state.
+//
 // Whether a runtime provides an operation cannot be read from its method set,
 // since every runtime implements every method; only the call's error says so.
 
@@ -165,7 +169,7 @@ type Projections interface {
 
 	// RebuildProjection stops the named projection, resets its offset to
 	// from, and starts it again, so it reprocesses every event from that
-	// point on. The zero time.Time (ego.ZeroTime) replays from the beginning.
+	// point on. The zero time.Time, time.Time{}, replays from the beginning.
 	// It requires an offset store.
 	RebuildProjection(ctx context.Context, name string, from time.Time) error
 

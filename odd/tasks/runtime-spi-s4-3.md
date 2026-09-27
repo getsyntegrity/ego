@@ -95,6 +95,20 @@ that for S4-4's consumer (`internal/runtimeconsumer`), which needs a production 
 - **Nested modules**: `scripts/ci/verify-module.sh` OK for `benchmark`, `example/cluster`,
   `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`
   (go1.26.6 SDK, `GO_TEST_RACE` unset).
+## Review follow-up (PR #160)
+
+The independent review approved with two doc-only nits, applied in a follow-up commit:
+
+- `RebuildProjection`'s doc names the zero `time.Time` (`time.Time{}`) instead of `ego.ZeroTime`, so
+  the contract does not point at package `ego`. `ego.ZeroTime` is `time.Time{}` (`engine.go:174`), so
+  the meaning is the same.
+- **Contract point for #148:** when a runtime has not started (or has stopped) *and* lacks the
+  operation, `ErrUnsupported` comes first. Whether an operation is supported does not depend on
+  lifecycle, so an unsupported operation reports `ErrUnsupported` in every state. `compose/inmem`
+  must follow this order. `*ego.Engine` supports every operation, so nothing changes for it. The
+  alternative, `ErrEngineNotStarted` first, was rejected: callers would see a different error for the
+  same unsupported call depending on when they made it.
+
 ## Next step
 
 Open the PR. S4-4 (`App.Runtime()`, `internal/runtimeconsumer`, end-to-end test) follows after merge.
