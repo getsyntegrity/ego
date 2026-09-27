@@ -83,12 +83,12 @@ open), #106, #112 (slices 2+), #122, #123, #124, #99 (partial), #101
 
 | ID | Issue | Branch | Agent | PR | State | Blocking reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| W0a | #105 design review | docs/propose-ego-arch-003 @7fe40b5 | reviewer | #125 | ready to merge (pending human) | approve with nits; CI build green, modules skipped (docs-only) |
+| W0a | #105 design review | docs/propose-ego-arch-003 @fb51c6b | reviewer | #125 | in review | findings fixed in fb51c6b (landing order #123 S3-2 → IMPL-4; citations); re-review + CI pending |
 | W0b | #99 | fix/99-prestart-assertion-audit | writer | — | in progress | — |
 | W0c | #101 | — | orchestrator | — | done | closed 2026-09-27 with evidence comment (issuecomment-5851642665) |
 | W0d | #112 slice 2 | test/112-async-waits-slice2 | writer | — | in progress | — |
 | W0e | #10 body | — | orchestrator | — | done | applied 2026-09-27 01:32 UTC after updatedAt check; only "Issues hijos" (+#11, PR refs) and two criteria ticks changed, rest byte-identical |
-| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 | design writer | — | in progress | implementation waits for human review of the design |
+| W1a | #123 (S3) design | docs/propose-ego-arch-002-s3 @29327a7 | design writer | #128 | in review | independent reviewer running; then human review before any implementation (slices S3-1..S3-5; S3-2 before #105 IMPL-4) |
 | W1b | #122 | — | — | — | planned | none (can start after Wave 0 frees a writer slot) |
 | W1c | #105 impl | — | — | — | planned | #125 merge; serialize with W1a on engine.go/option.go |
 | W1d | #102 explore/ADR | — | — | — | planned | none for exploration; module path + first version before extraction |
