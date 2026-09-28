@@ -69,7 +69,7 @@ func run(ctx context.Context, logger kitlog.Logger) error {
 	// after app.Stop, per Go's LIFO defer order.
 	defer func() { _ = eventStore.Disconnect(ctx) }()
 
-	// egoakt.New validates the Spec (V1-V7) with no I/O and starts nothing:
+	// egoakt.New validates the Spec (V1-V8) with no I/O and starts nothing:
 	// a configuration mistake is visible before any goroutine or connection
 	// exists. Import compose/goakt as egoakt so it doesn't clash with the
 	// goakt module.

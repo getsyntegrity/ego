@@ -30,7 +30,9 @@ import "fmt"
 type ValidationError struct {
 	// Rule is the validation rule that failed: "V1" through "V6" for
 	// Spec.Validate, as defined in openspec/changes/ego-arch-003/design.md
-	// §D4a, plus "V7" (a non-negative ShutdownTimeout, added in IMPL-4), or
+	// §D4a, plus "V7" (a non-negative ShutdownTimeout, added in IMPL-4)
+	// and "V8" (declared adapters, openspec/changes/ego-arch-004/design.md
+	// §D6), or
 	// a runtime-specific rule about a Spec field that a composition root
 	// checks on top of them, such as compose/goakt's "G2" on Name.
 	// compose/goakt reports G1, which is about an option rather than a
