@@ -47,7 +47,7 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 - **Maintainer decisions recorded:**
   - passivation is implemented (new spec 4, three tasks, with a manual clock for determinism);
   - saga delivery order is not part of the contract, and a reversed-order run checks that no test depends on it;
-  - `EraseEntity` follows #166, which blocks spec 2.
+  - `EraseEntity` follows #166, which blocks spec 2 (historical: since round 2, #166 blocks only spec 7).
 - **Chain:** now six specs (5, 5, 5, 3, 5, 5 tasks).
 
 ## Review round 2 (2026-09-27, head `4bccf2e`)
@@ -60,6 +60,18 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 - **N6:** saga options are measured in spec 0.
 - **N9:** the nits are fixed.
 - **Chain:** 0 (4 tasks), 1 (5), 2 (5), 3 (5), 4 (3), 5 (5), 6 (4), 7 (3).
+
+## Review round 3 (2026-09-27, head `03c0d35`)
+
+- **M1:** D12 and spec 0 now say that a measurement contradicting a maintainer decision (or a recommendation the maintainer relied on) is recorded in the pull request and the affected rule is marked "blocked on maintainer"; spec 1 then waits.
+- **M2:** the passivation measurement uses `d ≥ 1 s`, spaces messages more than 100 ms apart, and asserts elapsed time ≥ `d − 100 ms`. §2.5 and D11 record that GoAkt does not re-check activity at the deadline, while the in-memory runtime does (stricter, within the 100 ms tolerance).
+- **m1–m4 and nits:**
+  - the ordering risk is reworded;
+  - spec 7 adds a CHANGELOG line and a shared-table scenario;
+  - the rebase of `port/runtime/runtime.go` is coordinated with FU-E and #166;
+  - the public docs point to #166;
+  - spec 0 fixes the stale `closure_test.go` comment;
+  - this file's historical #166 line is marked.
 
 ## Findings worth keeping
 
