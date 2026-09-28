@@ -32,17 +32,20 @@ import (
 	"strings"
 )
 
-// skipDirs are directories the module scan never descends into, mirroring
-// internal/cmd/ciselect/main.go's skipDirs: they are either huge
-// (module/build caches), reserved for fixtures the go command itself
-// ignores, or hold tooling state that cannot contain a Go module relevant
-// to a release.
+// skipDirs are directories the module scan never descends into:
+// internal/cmd/ciselect/main.go's own skipDirs list (huge module/build
+// caches, fixtures the go command itself ignores, or tooling state that
+// cannot hold a Go module relevant to a release — .atl among them), plus
+// ".claude", where this repository's local git worktrees live
+// (.claude/worktrees/<name>) and could otherwise surface an extra copy of
+// every go.mod.
 var skipDirs = map[string]bool{
 	".git":         true,
 	"vendor":       true,
 	"testdata":     true,
 	"node_modules": true,
 	".codegraph":   true,
+	".atl":         true,
 	".claude":      true,
 	"odd":          true,
 }

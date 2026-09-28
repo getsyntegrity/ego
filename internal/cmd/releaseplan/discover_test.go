@@ -76,6 +76,24 @@ func TestDiscoverGraph_DirOfPath(t *testing.T) {
 	}
 }
 
+// TestDiscoverGraph_SkipsWorktreeAndAtlDirs covers PR #169 review finding
+// 5: skipDirs must be the union of ciselect's own list (which includes
+// .atl) and .claude, where this repository's local git worktrees live —
+// a go.mod under either must never be discovered as a module of its own.
+func TestDiscoverGraph_SkipsWorktreeAndAtlDirs(t *testing.T) {
+	g, err := discoverGraph("testdata/skip-worktree-dirs")
+	if err != nil {
+		t.Fatalf("discoverGraph: %v", err)
+	}
+	var dirs []string
+	for _, m := range g.Modules {
+		dirs = append(dirs, m.Dir)
+	}
+	if want := []string{"."}; !equalStrings(dirs, want) {
+		t.Fatalf("dirs = %v, want %v (go.mod under .atl/ and .claude/ must not be discovered)", dirs, want)
+	}
+}
+
 func TestDiscoverGraph_MissingRoot(t *testing.T) {
 	if _, err := discoverGraph("testdata/does-not-exist"); err == nil {
 		t.Fatal("expected an error for a repository root with no go.mod")
