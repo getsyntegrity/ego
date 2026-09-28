@@ -61,7 +61,7 @@ type Module struct {
 type Graph struct {
 	// Modules holds every discovered module, the root (".") first, then
 	// nested modules sorted by directory.
-	Modules []Module
+	Modules   []Module
 	dirOfPath map[string]string
 }
 
