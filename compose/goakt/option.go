@@ -30,8 +30,8 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/engine"
 )
 
 var (
@@ -50,41 +50,41 @@ type Option func(*options)
 
 type options struct {
 	logger       kitlog.Logger
-	telemetry    *ego.Telemetry
+	telemetry    *engine.Telemetry
 	clusterSet   bool
 	cluster      *actor.ClusterConfig
-	kinds        []ego.BehaviorKind
+	kinds        []engine.BehaviorKind
 	actorOptions []actor.Option
 }
 
 // WithLogger sets the logger the engine and the actor system log through.
-// Without it, Ego's default logger is used (see ego.WithLogger).
+// Without it, Ego's default logger is used (see engine.WithLogger).
 func WithLogger(logger kitlog.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
 
-// WithTelemetry enables OpenTelemetry instrumentation (see ego.WithTelemetry).
+// WithTelemetry enables OpenTelemetry instrumentation (see engine.WithTelemetry).
 // The consumer keeps owning the telemetry providers. Starting the engine
-// sets the process-wide OpenTelemetry propagator, as ego.Engine.Start does.
-func WithTelemetry(telemetry *ego.Telemetry) Option {
+// sets the process-wide OpenTelemetry propagator, as engine.Engine.Start does.
+func WithTelemetry(telemetry *engine.Telemetry) Option {
 	return func(o *options) { o.telemetry = telemetry }
 }
 
 // WithCluster runs the actor system in cluster mode with cfg. It registers
-// ego.ClusterKinds() on cfg and the given behavior kinds with
-// ego.WithBehaviorKinds, the two registrations a cluster node needs
+// engine.ClusterKinds() on cfg and the given behavior kinds with
+// engine.WithBehaviorKinds, the two registrations a cluster node needs
 // (design §5.1). cfg is modified when App.Start runs, not by New.
 //
 // kinds are behavior prototypes, one pointer per behavior type this node
 // may host, for example new(AccountBehavior); at least one is required, or
 // New fails with ErrClusterKindsRequired (rule G1). A value of the
-// deprecated ego.EntityKind type is assignable to ego.BehaviorKind; a
-// []ego.EntityKind slice has to be converted element by element.
+// deprecated engine.EntityKind type is assignable to engine.BehaviorKind; a
+// []engine.EntityKind slice has to be converted element by element.
 //
 // Cluster mode also needs remoting, which is passed through
 // WithActorSystemOptions, for example
 // WithActorSystemOptions(actor.WithRemote(remote.NewConfig(host, port))).
-func WithCluster(cfg *actor.ClusterConfig, kinds ...ego.BehaviorKind) Option {
+func WithCluster(cfg *actor.ClusterConfig, kinds ...engine.BehaviorKind) Option {
 	return func(o *options) {
 		o.clusterSet = true
 		o.cluster = cfg
@@ -126,55 +126,55 @@ func (o *options) validate(spec compose.Spec) []error {
 	return errs
 }
 
-// egoOptions translates the Spec and these options into the ego.Config
+// egoOptions translates the Spec and these options into the engine.Config
 // options step 2 builds the engine's configuration from.
-func (o *options) egoOptions(spec compose.Spec) []ego.Option {
-	var opts []ego.Option
+func (o *options) egoOptions(spec compose.Spec) []engine.Option {
+	var opts []engine.Option
 	if o.logger != nil {
-		opts = append(opts, ego.WithLogger(o.logger))
+		opts = append(opts, engine.WithLogger(o.logger))
 	}
 	if o.telemetry != nil {
-		opts = append(opts, ego.WithTelemetry(o.telemetry))
+		opts = append(opts, engine.WithTelemetry(o.telemetry))
 	}
 	if len(o.kinds) > 0 {
-		opts = append(opts, ego.WithBehaviorKinds(o.kinds...))
+		opts = append(opts, engine.WithBehaviorKinds(o.kinds...))
 	}
-	opts = append(opts, ego.WithEntityFamilies(entityFamilies(spec.Families)))
+	opts = append(opts, engine.WithEntityFamilies(entityFamilies(spec.Families)))
 	if spec.StateStore != nil {
-		opts = append(opts, ego.WithStateStore(spec.StateStore))
+		opts = append(opts, engine.WithStateStore(spec.StateStore))
 	}
 	if spec.SnapshotStore != nil {
-		opts = append(opts, ego.WithSnapshotStore(spec.SnapshotStore))
+		opts = append(opts, engine.WithSnapshotStore(spec.SnapshotStore))
 	}
 	if spec.OffsetStore != nil {
-		opts = append(opts, ego.WithOffsetStore(spec.OffsetStore))
+		opts = append(opts, engine.WithOffsetStore(spec.OffsetStore))
 	}
 	for _, name := range projectionNames(spec) {
-		opts = append(opts, ego.WithProjection(name, spec.Projections[name]))
+		opts = append(opts, engine.WithProjection(name, spec.Projections[name]))
 	}
 	if len(spec.EventAdapters) > 0 {
-		opts = append(opts, ego.WithEventAdapters(spec.EventAdapters...))
+		opts = append(opts, engine.WithEventAdapters(spec.EventAdapters...))
 	}
 	if spec.Encryptor != nil {
-		opts = append(opts, ego.WithEncryptor(spec.Encryptor))
+		opts = append(opts, engine.WithEncryptor(spec.Encryptor))
 	}
 	if spec.TenantResolver != nil {
-		opts = append(opts, ego.WithTenantResolver(spec.TenantResolver))
+		opts = append(opts, engine.WithTenantResolver(spec.TenantResolver))
 	}
 	return opts
 }
 
 // entityFamilies maps compose's runtime-neutral families onto the engine's.
-func entityFamilies(families compose.Family) ego.EntityFamily {
-	var out ego.EntityFamily
+func entityFamilies(families compose.Family) engine.EntityFamily {
+	var out engine.EntityFamily
 	if families&compose.EventSourced != 0 {
-		out |= ego.EventSourcedFamily
+		out |= engine.EventSourcedFamily
 	}
 	if families&compose.DurableState != 0 {
-		out |= ego.DurableStateFamily
+		out |= engine.DurableStateFamily
 	}
 	if families&compose.Saga != 0 {
-		out |= ego.SagaFamily
+		out |= engine.SagaFamily
 	}
 	return out
 }

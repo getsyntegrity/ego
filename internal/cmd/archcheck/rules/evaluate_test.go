@@ -29,6 +29,10 @@ import (
 
 const root = "github.com/getsyntegrity/ego/v4"
 
+// engine is the runtime engine package the runtime-neutral rules forbid
+// importing; the module root itself holds no Go files.
+const engine = root + "/engine"
+
 // repoRoot is root with its "/v4" major-version suffix removed: the path a
 // nested publisher module keeps as its own module path since D1 (#134).
 // Root-module package fixtures use root; publisher/* package and module-path
@@ -147,7 +151,7 @@ func allowedGraph() Graph {
 			ImportPath: root + "/compose/goakt",
 			Name:       "goakt",
 			Kind:       RootModule,
-			Imports:    []string{root, root + "/compose", "github.com/tochemey/goakt/v4"},
+			Imports:    []string{engine, root + "/compose", "github.com/tochemey/goakt/v4"},
 		},
 		{
 			// A main package may import the composition root.
@@ -334,7 +338,7 @@ func TestEvaluate_EmptyBaselineOnCleanGraphReportsZero(t *testing.T) {
 func TestValidateBaseline_DuplicateEntryRejected(t *testing.T) {
 	entry := BaselineEntry{
 		Importer:         repoRoot + "/publisher/kafka",
-		Import:           root,
+		Import:           engine,
 		Rule:             "external-adapter-no-runtime",
 		Owner:            "@pablogore",
 		Justification:    "test fixture",
@@ -357,7 +361,7 @@ func TestValidateBaseline_DuplicateEntryDifferentRuleIsNotADuplicate(t *testing.
 	// once, e.g. a nested module's root-package import).
 	a := BaselineEntry{
 		Importer:         repoRoot + "/publisher/kafka",
-		Import:           root,
+		Import:           engine,
 		Rule:             "external-adapter-no-runtime",
 		Owner:            "@pablogore",
 		Justification:    "test fixture",
@@ -442,12 +446,12 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
-		{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{root, root + "/egopb"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{engine, root + "/egopb"}},
 	}}
 	baseline := []BaselineEntry{
 		{
 			Importer:         repoRoot + "/publisher/kafka",
-			Import:           root,
+			Import:           engine,
 			Rule:             "external-adapter-no-runtime",
 			Owner:            "@pablogore",
 			Justification:    "test fixture",
@@ -494,10 +498,10 @@ func TestEvaluate_ViolationReasonNamesForbiddenPrefix(t *testing.T) {
 			name:   "application-no-runtime root import",
 			ruleID: "application-no-runtime",
 			graph: Graph{Packages: []Package{
-				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root}},
+				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{engine}},
 			}},
-			wantImport: root,
-			wantSubstr: root,
+			wantImport: engine,
+			wantSubstr: engine,
 		},
 		{
 			name:   "application-no-runtime internal/extensions import",
@@ -681,7 +685,7 @@ func TestEvaluate_OutputOrderingIsDeterministic(t *testing.T) {
 		{
 			ImportPath: root + "/migration",
 			Kind:       RootModule,
-			Imports:    []string{root, "github.com/tochemey/goakt/v4"},
+			Imports:    []string{engine, "github.com/tochemey/goakt/v4"},
 		},
 		{
 			ImportPath: root + "/command",
@@ -722,7 +726,7 @@ func TestApplicationNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
 		{
 			ImportPath: root + "/migration",
 			Kind:       RootModule,
-			Imports:    []string{root, root + "/internal/extensions", "github.com/tochemey/goakt/v4"},
+			Imports:    []string{engine, root + "/internal/extensions", "github.com/tochemey/goakt/v4"},
 		},
 	}}
 	result, err := Evaluate(graph, rulesFor(t, "application-no-runtime"), nil)
@@ -739,7 +743,7 @@ func TestExternalAdapterNoRuntime_ForbidsRootAndGoAktOnly(t *testing.T) {
 		{
 			ImportPath: repoRoot + "/publisher/kafka",
 			Kind:       NestedModule,
-			Imports:    []string{root, "github.com/tochemey/goakt/v4/actor", root + "/egopb"},
+			Imports:    []string{engine, "github.com/tochemey/goakt/v4/actor", root + "/egopb"},
 		},
 	}}
 	result, err := Evaluate(graph, rulesFor(t, "external-adapter-no-runtime"), nil)

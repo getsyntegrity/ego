@@ -36,8 +36,8 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/port/publishing"
@@ -102,7 +102,7 @@ func (n *clusterNode) hosts(t *testing.T, ctx context.Context, id string) bool {
 //
 // Both nodes find each other through staticDiscovery on dynamic ports and
 // use GoAkt's default RoundRobin placement, which spawnOnPeer relies on.
-func newClusterNodes(t *testing.T, kindsA, kindsB []ego.BehaviorKind) (a, b *clusterNode) {
+func newClusterNodes(t *testing.T, kindsA, kindsB []engine.BehaviorKind) (a, b *clusterNode) {
 	t.Helper()
 	const host = "127.0.0.1"
 	// Three ports per node: gossip, peers and remoting.
@@ -112,7 +112,7 @@ func newClusterNodes(t *testing.T, kindsA, kindsB []ego.BehaviorKind) (a, b *clu
 		net.JoinHostPort(host, strconv.Itoa(ports[3])),
 	}
 
-	newNode := func(name string, kinds []ego.BehaviorKind, gossipPort, peersPort, remotingPort int) *clusterNode {
+	newNode := func(name string, kinds []engine.BehaviorKind, gossipPort, peersPort, remotingPort int) *clusterNode {
 		events, states, _ := connected(t)
 		n := &clusterNode{
 			name:  name,
@@ -250,8 +250,8 @@ func spawnOnPeer(t *testing.T, ctx context.Context, from, to *clusterNode, id st
 func TestApp_TwoNodeClusterPlacesAndStopsCleanly(t *testing.T) {
 	ctx := context.Background()
 	nodeA, nodeB := newClusterNodes(t,
-		[]ego.BehaviorKind{new(wallet)},
-		[]ego.BehaviorKind{new(ledger)},
+		[]engine.BehaviorKind{new(wallet)},
+		[]engine.BehaviorKind{new(ledger)},
 	)
 	startCluster(t, ctx, nodeA, nodeB)
 

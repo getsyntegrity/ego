@@ -45,10 +45,10 @@ func TestCompositionRules_SourceCitesArch003(t *testing.T) {
 }
 
 // composition-no-runtime rejects compose and compose/internal/lifecycle
-// importing package ego, internal/extensions or GoAkt — the same denylist
+// importing the engine package, internal/extensions or GoAkt — the same denylist
 // as application-no-runtime.
 func TestCompositionNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
-	forbidden := []string{root, root + "/internal/extensions", "github.com/tochemey/goakt/v4/actor"}
+	forbidden := []string{engine, root + "/internal/extensions", "github.com/tochemey/goakt/v4/actor"}
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: forbidden},
 		{ImportPath: root + "/compose/internal/lifecycle", Name: "lifecycle", Kind: RootModule, Imports: forbidden},
@@ -77,7 +77,7 @@ func TestCompositionNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
 func TestCompositionNoRuntime_AllowsContractsAndLeavesGoAktRootAlone(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{root + "/persistence", root + "/port/publishing", "reflect"}},
-		{ImportPath: root + "/compose/goakt", Name: "goakt", Kind: RootModule, Imports: []string{root, root + "/compose", "github.com/tochemey/goakt/v4/actor"}},
+		{ImportPath: root + "/compose/goakt", Name: "goakt", Kind: RootModule, Imports: []string{engine, root + "/compose", "github.com/tochemey/goakt/v4/actor"}},
 	}}
 	result, err := Evaluate(graph, rulesFor(t, "composition-no-runtime"), nil)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestApplicationNoRuntime_StillMatchesOnlyMigration(t *testing.T) {
 // that is not main must not import compose or anything under it.
 func TestCompositionLeaf_RejectsNonMainImporterOutsideCompose(t *testing.T) {
 	graph := Graph{Packages: []Package{
-		{ImportPath: root, Name: "ego", Kind: RootModule, Imports: []string{root + "/compose"}},
+		{ImportPath: engine, Name: "engine", Kind: RootModule, Imports: []string{root + "/compose"}},
 		{ImportPath: root + "/testkit", Name: "testkit", Kind: RootModule, Imports: []string{root + "/compose/goakt"}},
 		{ImportPath: root + "/internal/runner", Name: "runner", Kind: RootModule, Imports: []string{root + "/compose/internal/lifecycle"}},
 	}}
@@ -187,7 +187,7 @@ func TestCompositionLeaf_AllowsComposeMainExamplesAndBenchmark(t *testing.T) {
 func TestCompositionRules_MatchWholePathSegments(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/tenancy", Name: "tenancy", Kind: RootModule, Imports: []string{root + "/composer"}},
-		{ImportPath: root + "/composer", Name: "composer", Kind: RootModule, Imports: []string{root}},
+		{ImportPath: root + "/composer", Name: "composer", Kind: RootModule, Imports: []string{engine}},
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
 	}}
 	result, err := Evaluate(graph, rulesFor(t, "composition-leaf", "composition-no-runtime"), nil)

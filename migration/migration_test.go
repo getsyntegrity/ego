@@ -38,8 +38,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	ego "github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	"github.com/getsyntegrity/ego/v4/tenancy"
 	"github.com/getsyntegrity/ego/v4/testkit"
@@ -138,7 +138,7 @@ func TestMigratorRun(t *testing.T) {
 		// Run migration
 		migrator := mustNew(t, eventStore, snapshotStore,
 			WithPageSize(10),
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 		require.NoError(t, migrator.Run(ctx))
 
@@ -178,7 +178,7 @@ func TestMigratorRun(t *testing.T) {
 
 		migrator := mustNew(t, eventStore, snapshotStore,
 			WithPageSize(10),
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 		require.NoError(t, migrator.Run(ctx))
 
@@ -210,7 +210,7 @@ func TestMigratorRun(t *testing.T) {
 
 		migrator := mustNew(t, eventStore, snapshotStore,
 			WithPageSize(2),
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 		require.NoError(t, migrator.Run(ctx))
 
@@ -244,7 +244,7 @@ func TestMigratorRun(t *testing.T) {
 
 		migrator := mustNew(t, eventStore, snapshotStore,
 			WithPageSize(10),
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 
 		// Run twice
@@ -270,7 +270,7 @@ func TestMigratorRun(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 
 		migrator := mustNew(t, eventStore, snapshotStore,
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 		// Ping will auto-connect the testkit store, so this will actually succeed.
 		// That's fine — testkit stores auto-connect on Ping.
@@ -290,7 +290,7 @@ func TestMigratorRun(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 
 		migrator := mustNew(t, eventStore, snapshotStore,
-			WithLogger(ego.DiscardLogger),
+			WithLogger(engine.DiscardLogger),
 		)
 		require.NoError(t, migrator.Run(ctx))
 
@@ -382,7 +382,7 @@ func TestMigratorOptions(t *testing.T) {
 	})
 
 	t.Run("WithLogger", func(t *testing.T) {
-		logger := ego.DiscardLogger
+		logger := engine.DiscardLogger
 		m := mustNew(t, nil, nil, WithLogger(logger))
 		assert.Equal(t, logger, m.logger)
 	})
@@ -395,13 +395,13 @@ func TestMigratorOptions(t *testing.T) {
 
 	t.Run("WithLogger(nil) falls back to the default logger", func(t *testing.T) {
 		m := mustNew(t, nil, nil, WithLogger(nil))
-		assert.Same(t, ego.DefaultLogger(), m.logger)
+		assert.Same(t, engine.DefaultLogger(), m.logger)
 	})
 
 	t.Run("WithLogger with a typed-nil logger falls back to the default logger", func(t *testing.T) {
 		var typedNil *kitlogtest.MockLogger
 		m := mustNew(t, nil, nil, WithLogger(typedNil))
-		assert.Same(t, ego.DefaultLogger(), m.logger)
+		assert.Same(t, engine.DefaultLogger(), m.logger)
 	})
 }
 
@@ -454,9 +454,9 @@ func messagesAt(logger *kitlogtest.MockLogger, level slog.Level) []string {
 }
 
 func TestMigratorUsesKitLogger(t *testing.T) {
-	t.Run("defaults to ego.DefaultLogger()", func(t *testing.T) {
+	t.Run("defaults to engine.DefaultLogger()", func(t *testing.T) {
 		m := mustNew(t, nil, nil)
-		assert.Same(t, ego.DefaultLogger(), m.logger)
+		assert.Same(t, engine.DefaultLogger(), m.logger)
 	})
 
 	t.Run("WithLogger injects a custom kit-logger Logger", func(t *testing.T) {

@@ -74,7 +74,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/testkit"
@@ -98,7 +98,7 @@ func main() {
 	// the engine. cfg.GoaktOptions() wires the extensions eGo needs (events
 	// store, event stream, default supervisor, pubsub, logger adapter) at
 	// construction time.
-	cfg := ego.NewConfig(eventStore, ego.WithLogger(logger))
+	cfg := engine.NewConfig(eventStore, engine.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("FundTransferExample", cfg.GoaktOptions()...)
 	if err != nil {
 		logger.Error("failed to build actor system", "error", err)
@@ -110,7 +110,7 @@ func main() {
 	}
 
 	// Plug eGo into the running actor system.
-	engine, err := ego.NewEngine(sys, cfg)
+	engine, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err)
 		os.Exit(1)
@@ -257,14 +257,14 @@ func (a *AccountBehavior) ID() string {
 	return a.id
 }
 
-func (a *AccountBehavior) InitialState() ego.State {
+func (a *AccountBehavior) InitialState() engine.State {
 	return new(samplepb.Account)
 }
 
-func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, priorState ego.State) ([]ego.Event, error) {
+func (a *AccountBehavior) HandleCommand(_ context.Context, command engine.Command, priorState engine.State) ([]engine.Event, error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCreated{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetAccountBalance(),
@@ -272,7 +272,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 		}, nil
 
 	case *samplepb.CreditAccount:
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCredited{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetBalance(),
@@ -285,7 +285,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 			return nil, fmt.Errorf("insufficient funds: have %.2f, need %.2f",
 				account.GetAccountBalance(), cmd.GetBalance())
 		}
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountDebited{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetBalance(),
@@ -297,7 +297,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 	}
 }
 
-func (a *AccountBehavior) HandleEvent(_ context.Context, event ego.Event, priorState ego.State) (ego.State, error) {
+func (a *AccountBehavior) HandleEvent(_ context.Context, event engine.Event, priorState engine.State) (engine.State, error) {
 	switch evt := event.(type) {
 	case *samplepb.AccountCreated:
 		return &samplepb.Account{
@@ -367,7 +367,7 @@ func (s *FundTransferSaga) ID() string {
 }
 
 // InitialState returns the saga's initial state — an empty TransferState.
-func (s *FundTransferSaga) InitialState() ego.State {
+func (s *FundTransferSaga) InitialState() engine.State {
 	return &samplepb.TransferState{
 		TransferId:           s.transferID,
 		SourceAccountId:      s.sourceID,
@@ -379,7 +379,7 @@ func (s *FundTransferSaga) InitialState() ego.State {
 // HandleEvent is called when an event from the event stream is received.
 // The saga listens for AccountDebited events from the source account to
 // kick off the credit step.
-func (s *FundTransferSaga) HandleEvent(_ context.Context, event ego.Event, state ego.State) (*ego.SagaAction, error) {
+func (s *FundTransferSaga) HandleEvent(_ context.Context, event engine.Event, state engine.State) (*engine.SagaAction, error) {
 	transfer := state.(*samplepb.TransferState)
 
 	switch evt := event.(type) {
@@ -395,14 +395,14 @@ func (s *FundTransferSaga) HandleEvent(_ context.Context, event ego.Event, state
 		}
 
 		// Record that the source was debited and send a credit to the destination.
-		return &ego.SagaAction{
-			Events: []ego.Event{
+		return &engine.SagaAction{
+			Events: []engine.Event{
 				&samplepb.SourceDebited{
 					SourceAccountId: s.sourceID,
 					Amount:          s.amount,
 				},
 			},
-			Commands: []ego.SagaCommand{
+			Commands: []engine.SagaCommand{
 				{
 					EntityID: s.destinationID,
 					Command: &samplepb.CreditAccount{
@@ -421,12 +421,12 @@ func (s *FundTransferSaga) HandleEvent(_ context.Context, event ego.Event, state
 }
 
 // HandleResult is called when a command sent to an entity returns successfully.
-func (s *FundTransferSaga) HandleResult(_ context.Context, entityID string, _ ego.State, _ ego.State) (*ego.SagaAction, error) {
+func (s *FundTransferSaga) HandleResult(_ context.Context, entityID string, _ engine.State, _ engine.State) (*engine.SagaAction, error) {
 	if entityID == s.destinationID {
 		// Destination was credited — record and complete the saga.
 		s.logger.Info("saga: destination account credited successfully, completing transfer", "transfer_id", s.transferID)
-		return &ego.SagaAction{
-			Events: []ego.Event{
+		return &engine.SagaAction{
+			Events: []engine.Event{
 				&samplepb.DestinationCredited{
 					DestinationAccountId: s.destinationID,
 					Amount:               s.amount,
@@ -440,16 +440,16 @@ func (s *FundTransferSaga) HandleResult(_ context.Context, entityID string, _ eg
 
 // HandleError is called when a command sent to an entity fails.
 // The saga triggers compensation to undo completed steps.
-func (s *FundTransferSaga) HandleError(_ context.Context, entityID string, err error, _ ego.State) (*ego.SagaAction, error) {
+func (s *FundTransferSaga) HandleError(_ context.Context, entityID string, err error, _ engine.State) (*engine.SagaAction, error) {
 	s.logger.Error("saga: command failed, triggering compensation", "transfer_id", s.transferID, "entity_id", entityID, "error", err)
-	return &ego.SagaAction{
+	return &engine.SagaAction{
 		Compensate: true,
 	}, nil
 }
 
 // ApplyEvent applies a saga event to update the saga's internal state.
 // This is a pure function used during event persistence and recovery.
-func (s *FundTransferSaga) ApplyEvent(_ context.Context, event ego.Event, state ego.State) (ego.State, error) {
+func (s *FundTransferSaga) ApplyEvent(_ context.Context, event engine.Event, state engine.State) (engine.State, error) {
 	transfer := proto.Clone(state.(*samplepb.TransferState)).(*samplepb.TransferState)
 
 	switch event.(type) {
@@ -464,15 +464,15 @@ func (s *FundTransferSaga) ApplyEvent(_ context.Context, event ego.Event, state 
 
 // Compensate returns the commands needed to undo completed steps.
 // In this case, if the source was debited, we refund by crediting it back.
-func (s *FundTransferSaga) Compensate(_ context.Context, state ego.State) ([]ego.SagaCommand, error) {
+func (s *FundTransferSaga) Compensate(_ context.Context, state engine.State) ([]engine.SagaCommand, error) {
 	transfer := state.(*samplepb.TransferState)
 
-	var commands []ego.SagaCommand
+	var commands []engine.SagaCommand
 
 	// If the source was debited, refund it.
 	if transfer.GetSourceDebited() {
 		s.logger.Info("saga: compensating, refunding source account", "transfer_id", s.transferID, "amount", s.amount)
-		commands = append(commands, ego.SagaCommand{
+		commands = append(commands, engine.SagaCommand{
 			EntityID: s.sourceID,
 			Command: &samplepb.CreditAccount{
 				AccountId: s.sourceID,

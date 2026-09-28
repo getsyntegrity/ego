@@ -77,17 +77,17 @@ func TestRuntimeDependsOnlyOnContracts(t *testing.T) {
 	require.NotZero(t, checked, "no non-standard dependency was checked, so this test proves nothing")
 }
 
-// rootPackage is package ego, the GoAkt adapter; goaktPrefix covers every
+// enginePackage is the engine package, the GoAkt adapter; goaktPrefix covers every
 // GoAkt package.
 const (
-	rootPackage   = "github.com/getsyntegrity/ego/v4"
+	enginePackage = "github.com/getsyntegrity/ego/v4/engine"
 	goaktPrefix   = "github.com/tochemey/goakt/"
 	externalTests = "github.com/getsyntegrity/ego/v4/port/runtime_test"
 )
 
 // TestRuntimeTestClosureExcludesGoAktAndRoot walks the test build of
 // port/runtime, which includes the runtime double of double_test.go
-// (design §D7, §D9), and rejects GoAkt and package ego in it: the double
+// (design §D7, §D9), and rejects GoAkt and the engine package in it: the double
 // implements runtime.Runtime with neither.
 func TestRuntimeTestClosureExcludesGoAktAndRoot(t *testing.T) {
 	goBin, err := exec.LookPath("go")
@@ -103,8 +103,8 @@ func TestRuntimeTestClosureExcludesGoAktAndRoot(t *testing.T) {
 		if line == externalTests {
 			sawExternalTests = true
 		}
-		require.NotEqualf(t, rootPackage, line,
-			"port/runtime's test build must not depend on package ego (design §D7)")
+		require.NotEqualf(t, enginePackage, line,
+			"port/runtime's test build must not depend on the engine package (design §D7)")
 		require.Falsef(t, strings.HasPrefix(line, goaktPrefix),
 			"port/runtime's test build must not depend on GoAkt package %q (design §D7)", line)
 	}

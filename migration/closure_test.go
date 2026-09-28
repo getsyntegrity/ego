@@ -49,10 +49,10 @@ func hermeticGoEnv() []string {
 
 // TestProductionClosureExcludesRootAndGoAkt guards the S4-1 removal of the
 // last archcheck baseline entry (#147, ego-arch-001 §3): migration's
-// production build must never again reach the root package `ego` or the
+// production build must never again reach the engine package or the
 // GoAkt runtime. Only `go list -deps .` (no -test) is checked — migration's
-// tests may still import `ego` (archcheck's application-no-runtime rule
-// evaluates production edges only), so a test-only import of `ego` here is
+// tests may still import the engine (archcheck's application-no-runtime rule
+// evaluates production edges only), so a test-only import of the engine here is
 // not a regression this guard cares about.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps", ".")
@@ -66,8 +66,8 @@ func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 		switch {
 		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
 			t.Errorf("migration's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == "github.com/getsyntegrity/ego/v4":
-			t.Errorf("migration's production closure must not reach the root package ego; got %q", dep)
+		case dep == "github.com/getsyntegrity/ego/v4/engine":
+			t.Errorf("migration's production closure must not reach the engine package; got %q", dep)
 		}
 	}
 }
