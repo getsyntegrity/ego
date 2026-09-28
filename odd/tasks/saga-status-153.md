@@ -77,7 +77,20 @@ meaning of an existing field.
 the running case waits on a channel the behavior closes, the other cases poll with
 `require.EventuallyWithT` (10s bound, 20ms tick).
 
-**T4** see the PR body for apidiff, archcheck, lint, ciselect and suite results.
+**T4**:
+
+- apidiff (base `beed644`): `ego` no changes; `port/runtime` no changes; `egopb` compatible
+  additions only (`SagaLifecycleStatus` and its constants/maps, `StateReply.SagaStatus`,
+  `(*StateReply).GetSagaStatus`); `-incompatible` empty.
+- `buf lint` clean; `buf breaking` against `origin/main`'s `ego.proto`: exit 0.
+- archcheck: 8 modules, 51 packages, 209 edges, 0 baselined, 0 violations, 0 stale.
+- golangci-lint `--new-from-rev=origin/main` (go1.26.6, `--modules-download-mode=readonly`): 0 issues.
+- ciselect `-base origin/main`: mode `full` (protos changed, global) — every module selected.
+- Full root suite (`scripts/ci/go-test.sh`, `GO_TEST_RACE=0`): 29 packages ok, 0 FAIL.
+- `scripts/ci/verify-module.sh` for benchmark, example/cluster, publisher/{kafka,nats,pulsar,websocket},
+  test/compat: all exit 0.
+
+Commit: `d1c2cd9` `fix(saga): report the saga lifecycle status from SagaStatus (#153)`.
 
 ## Next step
 
