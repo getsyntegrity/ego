@@ -109,3 +109,35 @@ jobs:
         env:
           GO_TEST_RACE: "1"
         run: scripts/ci/verify-module.sh "${{ matrix.module }}"
+
+  ci-gate:
+    name: CI Gate
+    needs: [build, modules]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded, or been legitimately skipped
+        shell: bash
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          MODULES_RESULT: ${{ needs.modules.result }}
+        run: |
+          echo "build:   $BUILD_RESULT"
+          echo "modules: $MODULES_RESULT"
+          status=0
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::error::build job did not succeed ($BUILD_RESULT)"
+            status=1
+          fi
+          # modules only ever skips because build's own outputs.modules was
+          # "[]" (see modules' if:); when build succeeded, that is the only
+          # way modules can be "skipped", so it is not a failure here. Any
+          # other outcome (failure, cancelled) fails the gate.
+          case "$MODULES_RESULT" in
+            success | skipped) ;;
+            *)
+              echo "::error::modules job did not succeed ($MODULES_RESULT)"
+              status=1
+              ;;
+          esac
+          exit "$status"

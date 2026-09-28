@@ -587,6 +587,30 @@ list is never hand-maintained: it comes from `modules.json`, so a new
 nested module is picked up the moment its `go.mod` exists, with no
 workflow edit.
 
+### The `ci-gate` job: one required status check
+
+Before this change, neither workflow had a single status check that branch
+protection could require: the `modules` job is *skipped* (not green, not
+red) whenever `modules.json` is `[]`, and GitHub branch protection cannot
+require a check that a run sometimes never reports at all. `ci-gate` fixes
+this. It is the last job in both `pull_request.yml` and `build.yml`,
+`needs: [build, modules]`, and runs with `if: always()` so it still runs
+even when an earlier job failed. Its one step reads `needs.build.result`
+and `needs.modules.result` and fails if `build` did not succeed, or if
+`modules` finished as anything other than `success` or `skipped` — a
+`skipped` `modules` job is only ever caused by `build` selecting zero
+nested modules (`modules`'s own `if: needs.build.outputs.modules != '[]'`),
+so once `build` itself succeeded, that is the only way `modules` can be
+skipped, never a hidden failure. This makes `ci-gate` pass whether the
+matrix fanned out to zero, one, or many modules, and fail visibly whenever
+`build`, or a real `modules` failure/cancellation, would otherwise have
+left branch protection with nothing to require.
+
+**Required check name: `CI Gate`.** Configure branch protection to require
+this one check (the job's `name:`, not its `ci-gate` id) on `main`; no
+other job needs to be listed, because `ci-gate` already depends on
+everything that must pass.
+
 ### Compatibility checks: the `test/compat` module (#102, S1)
 
 The historical alias and sentinel checks between the four publishers and

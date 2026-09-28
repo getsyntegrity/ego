@@ -45,7 +45,7 @@ matrix is empty, the `modules` job is *skipped*, not green.
 
 ## Tasks
 
-- [ ] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
+- [x] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
 - [ ] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
 - [ ] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
 - [ ] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
@@ -62,3 +62,20 @@ matrix is empty, the `modules` job is *skipped*, not green.
 ## Progress and evidence
 
 - Mapping done by a delegated read-only mapper (workflows, `ciselect`, helpers).
+- **T1 done** (commit below): added a `ci-gate` job to `pull_request.yml` and
+  `build.yml`, `needs: [build, modules]`, `if: always()`. It fails when
+  `build` did not succeed, or when `modules` finished as anything other than
+  `success`/`skipped` (a skipped `modules` is only ever caused by `build`
+  selecting zero modules, once `build` itself succeeded, so it is not a
+  failure). Documented in `docs/ci.md` under "The `ci-gate` job: one
+  required status check"; the required check name for branch protection is
+  `CI Gate`. Verification: YAML parse OK for both workflows (`actionlint`
+  unavailable — `go run .../actionlint@latest` hit a local Go toolchain
+  version mismatch, see below); `go vet`/`go test` for `internal/cmd/ciselect`
+  untouched by this task and green.
+  - Environment note (not part of this change): this worktree's ambient
+    `GOROOT` env var points at a Go 1.26.6 SDK while `go` itself resolves to
+    a downloaded 1.27.1 toolchain, which breaks `go build`/`vet`/`test`
+    ("compile: version ... does not match go tool version ..."). Running
+    with `GOROOT` unset works around it; this is pre-existing and outside
+    this feature's scope.
