@@ -33,8 +33,6 @@ import (
 	"github.com/flowchartsman/retry"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -44,6 +42,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/encryption"
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/internal/ticker"
 	"github.com/getsyntegrity/ego/v4/offsetstore"
 	"github.com/getsyntegrity/ego/v4/persistence"
@@ -125,7 +124,7 @@ type projectionRunner struct {
 	eventAdapters []eventadapter.EventAdapter
 
 	// metrics holds pre-created metric instruments for recording projection metrics.
-	metrics *metrics
+	metrics *instrumentation.Instruments
 
 	// encryptor decrypts event payloads before handing them to the handler.
 	encryptor encryption.Encryptor
@@ -584,21 +583,11 @@ func (x *projectionRunner) doProcess(ctx context.Context, shard uint64) error {
 		x.sawFullBatch.Store(true)
 	}
 
-	var attrs attribute.Set
-	if x.metrics != nil {
-		attrs = attribute.NewSet(
-			attribute.String("projection_name", x.name),
-			attribute.Int64("shard", int64(shard)),
-		)
-	}
+	gauges := x.metrics.Shard(x.name, shard)
 
 	if len(events) == 0 {
 		// Projection is caught up — reset gauges so Grafana doesn't show stale values.
-		if x.metrics != nil {
-			x.metrics.projectionLag.Record(ctx, 0, metric.WithAttributeSet(attrs))
-			x.metrics.projectionOffset.Record(ctx, currOffset, metric.WithAttributeSet(attrs))
-			x.metrics.projectionBehind.Record(ctx, 0, metric.WithAttributeSet(attrs))
-		}
+		gauges.Record(ctx, 0, currOffset, 0)
 		return nil
 	}
 
@@ -611,9 +600,7 @@ func (x *projectionRunner) doProcess(ctx context.Context, shard uint64) error {
 		if lagMs < 0 || currOffset == 0 {
 			lagMs = 0
 		}
-		x.metrics.projectionLag.Record(ctx, lagMs, metric.WithAttributeSet(attrs))
-		x.metrics.projectionOffset.Record(ctx, currOffset, metric.WithAttributeSet(attrs))
-		x.metrics.projectionBehind.Record(ctx, int64(len(events)), metric.WithAttributeSet(attrs))
+		gauges.Record(ctx, lagMs, currOffset, int64(len(events)))
 	}
 
 	if err := x.processEvents(ctx, shard, events, nextOffset); err != nil {
@@ -623,10 +610,8 @@ func (x *projectionRunner) doProcess(ctx context.Context, shard uint64) error {
 	// A partial buffer means the shard is now caught up. Record that here:
 	// caught-up shards are skipped by subsequent pulls, so the gauges would
 	// otherwise retain the pre-processing values.
-	if x.metrics != nil && len(events) < x.maxBufferSize {
-		x.metrics.projectionLag.Record(ctx, 0, metric.WithAttributeSet(attrs))
-		x.metrics.projectionOffset.Record(ctx, nextOffset, metric.WithAttributeSet(attrs))
-		x.metrics.projectionBehind.Record(ctx, 0, metric.WithAttributeSet(attrs))
+	if len(events) < x.maxBufferSize {
+		gauges.Record(ctx, 0, nextOffset, 0)
 	}
 
 	return nil
@@ -705,9 +690,7 @@ func (x *projectionRunner) processEnvelope(ctx context.Context, envelope *egopb.
 		return err
 	}
 
-	if x.metrics != nil {
-		x.metrics.projectionHandled.Add(ctx, 1)
-	}
+	x.metrics.ProjectionEventHandled(ctx)
 
 	return nil
 }

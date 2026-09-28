@@ -64,7 +64,7 @@ tags; merge.
   Route: inline.
 - [x] T2 `internal/instrumentation` with its own tests (RED first) and a neutrality guard.
   Route: inline (one package, already mapped).
-- [ ] T3 Rewire `engine` call sites; reduce `engine/telemetry.go` to the public type.
+- [x] T3 Rewire `engine` call sites; reduce `engine/telemetry.go` to the public type.
   Route: inline (mechanical, mapped call sites).
 - [ ] T4 Gates: contract diff main vs branch, full tests, race on touched packages,
   archcheck, lint, apidiff, external consumer; open PR.

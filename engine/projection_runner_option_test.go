@@ -32,6 +32,7 @@ import (
 
 	"github.com/getsyntegrity/ego/v4/encryption"
 	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/projection"
 	"github.com/getsyntegrity/ego/v4/testkit"
 )
@@ -104,7 +105,7 @@ func TestWithEventAdaptersEmpty(t *testing.T) {
 }
 
 func TestWithMetrics(t *testing.T) {
-	m := &metrics{}
+	m := &instrumentation.Instruments{}
 	var r projectionRunner
 	withMetrics(m).Apply(&r)
 	assert.Equal(t, m, r.metrics)

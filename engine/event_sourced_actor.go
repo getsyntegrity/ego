@@ -32,7 +32,6 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -43,6 +42,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/internal/runner"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
@@ -137,7 +137,7 @@ type EventSourcedActor struct {
 	retentionPolicy  *RetentionPolicy
 	encryptor        encryption.Encryptor
 	tracer           trace.Tracer
-	metrics          *metrics
+	metrics          *instrumentation.Instruments
 
 	eventsWriter    *goakt.PID
 	snapshotsWriter *goakt.PID
@@ -315,9 +315,7 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 
-	if entity.metrics != nil {
-		entity.metrics.entitiesActive.Add(ctx.Context(), 1)
-	}
+	entity.metrics.EntityStarted(ctx.Context())
 
 	return nil
 }
@@ -370,9 +368,7 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 // PostStop releases resources and resets counters when the actor shuts down.
 // nolint
 func (entity *EventSourcedActor) PostStop(ctx *goakt.Context) error {
-	if entity.metrics != nil {
-		entity.metrics.entitiesActive.Add(ctx.Context(), -1)
-	}
+	entity.metrics.EntityStopped(ctx.Context())
 	entity.stopFlushTimer()
 	entity.resetBatch()
 	return nil
@@ -414,7 +410,7 @@ func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) erro
 	}
 	if telemetryExt != nil {
 		entity.tracer = telemetryExt.Tracer()
-		entity.metrics = newMetrics(telemetryExt.Meter())
+		entity.metrics = instrumentation.New(telemetryExt.Meter())
 	}
 
 	return nil
@@ -919,18 +915,8 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	goCtx := ctx.Context()
 	startTime := time.Now()
 
-	var span trace.Span
-	if entity.tracer != nil {
-		goCtx, span = entity.tracer.Start(goCtx, "ego.command",
-			trace.WithAttributes(
-				attribute.String("ego.persistence_id", entity.persistenceID),
-				attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
-			))
-	}
-
-	if entity.metrics != nil {
-		entity.metrics.commandsTotal.Add(goCtx, 1)
-	}
+	goCtx, span := instrumentation.StartCommandSpan(goCtx, entity.tracer, entity.persistenceID, command)
+	entity.metrics.CommandReceived(goCtx)
 
 	// Pre-handler gate (T4-A): in tenant-aware mode, HandleCommand must never
 	// run without a TenantContext already attached by Engine.SendCommand.
@@ -1046,10 +1032,7 @@ func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trac
 	if span != nil {
 		span.End()
 	}
-	if entity.metrics != nil {
-		duration := float64(time.Since(startTime).Milliseconds())
-		entity.metrics.commandsDuration.Record(goCtx, duration)
-	}
+	entity.metrics.CommandCompleted(goCtx, startTime)
 }
 
 // persistAsync dispatches envelopes to the eventsWriter asynchronously via
@@ -1322,9 +1305,7 @@ func (entity *EventSourcedActor) applyConfirmedState(goCtx context.Context, stat
 	entity.cachedStateAny, _ = anypb.New(state) // eagerly cache for the reply that follows
 	entity.lastCommandTime = ts
 
-	if entity.metrics != nil {
-		entity.metrics.eventsPersisted.Add(goCtx, int64(numEvents))
-	}
+	entity.metrics.EventsPersisted(goCtx, numEvents)
 }
 
 // triggerSnapshotAndRetention fires an asynchronous snapshot request to the
@@ -1433,18 +1414,8 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	goCtx := ctx.Context()
 	startTime := time.Now()
 
-	var span trace.Span
-	if entity.tracer != nil {
-		goCtx, span = entity.tracer.Start(goCtx, "ego.command",
-			trace.WithAttributes(
-				attribute.String("ego.persistence_id", entity.persistenceID),
-				attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
-			))
-	}
-
-	if entity.metrics != nil {
-		entity.metrics.commandsTotal.Add(goCtx, 1)
-	}
+	goCtx, span := instrumentation.StartCommandSpan(goCtx, entity.tracer, entity.persistenceID, command)
+	entity.metrics.CommandReceived(goCtx)
 
 	state := entity.latestState()
 	counter := entity.latestCounter()
@@ -1816,10 +1787,7 @@ func (entity *EventSourcedActor) replyFromBatch(ctx *goakt.ReceiveContext) {
 		entry.span = nil
 	}
 
-	if entity.metrics != nil {
-		duration := float64(time.Since(entry.startTime).Milliseconds())
-		entity.metrics.commandsDuration.Record(ctx.Context(), duration)
-	}
+	entity.metrics.CommandCompleted(ctx.Context(), entry.startTime)
 
 	ctx.Response(entry.reply)
 	entity.remainingReplies--

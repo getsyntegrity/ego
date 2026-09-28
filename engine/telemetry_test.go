@@ -26,30 +26,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 )
-
-func TestNewMetrics_NilMeter(t *testing.T) {
-	m := newMetrics(nil)
-	assert.Nil(t, m)
-}
-
-func TestNewMetrics_WithMeter(t *testing.T) {
-	meter := noopmetric.NewMeterProvider().Meter("test")
-	m := newMetrics(meter)
-	require.NotNil(t, m)
-	assert.NotNil(t, m.commandsTotal)
-	assert.NotNil(t, m.commandsDuration)
-	assert.NotNil(t, m.eventsPersisted)
-	assert.NotNil(t, m.projectionHandled)
-	assert.NotNil(t, m.entitiesActive)
-	assert.NotNil(t, m.projectionsActive)
-	assert.NotNil(t, m.projectionLag)
-	assert.NotNil(t, m.projectionOffset)
-	assert.NotNil(t, m.projectionBehind)
-}
 
 func TestTelemetryFields(t *testing.T) {
 	tracer := nooptrace.NewTracerProvider().Tracer("test")

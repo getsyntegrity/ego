@@ -44,6 +44,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/encryption"
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/internal/pause"
 	mockencryption "github.com/getsyntegrity/ego/v4/mocks/encryption"
 	mockadapter "github.com/getsyntegrity/ego/v4/mocks/eventadapter"
@@ -1374,7 +1375,7 @@ func TestRunner(t *testing.T) {
 		handler := projection.NewDiscardHandler()
 
 		meter := noopmetric.NewMeterProvider().Meter("test")
-		m := newMetrics(meter)
+		m := instrumentation.New(meter)
 
 		event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
 		require.NoError(t, err)
@@ -1641,7 +1642,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 
 		handler := projection.NewDiscardHandler()
 		meter := noopmetric.NewMeterProvider().Meter("test")
-		m := newMetrics(meter)
+		m := instrumentation.New(meter)
 
 		event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
 		require.NoError(t, err)
@@ -1697,7 +1698,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 
 		handler := projection.NewDiscardHandler()
 		meter := noopmetric.NewMeterProvider().Meter("test")
-		m := newMetrics(meter)
+		m := instrumentation.New(meter)
 
 		// Write an event with a timestamp 2 seconds in the past.
 		pastTimestamp := time.Now().Unix() - 2
