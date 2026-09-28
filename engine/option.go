@@ -37,6 +37,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 	"github.com/getsyntegrity/ego/v4/offsetstore"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	"github.com/getsyntegrity/ego/v4/projection"
@@ -128,7 +129,7 @@ func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 // whenever the corresponding Option was set on this Config.
 func (c *Config) GoaktOptions() []goakt.Option {
 	opts := []goakt.Option{
-		goakt.WithLogger(newLoggerAdapter(c.logger)),
+		goakt.WithLogger(goaktlog.New(c.logger)),
 		goakt.WithActorInitMaxRetries(5),
 		goakt.WithPubSub(),
 		goakt.WithDefaultSupervisor(

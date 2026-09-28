@@ -37,6 +37,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/egopb"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/tenancy"
@@ -212,7 +213,7 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 	case *goakt.PostStart:
 		// Capture stable references before the ReceiveContext is returned to the pool.
 		s.actorSystem = ctx.ActorSystem()
-		s.logger = kitLoggerFrom(ctx.Logger())
+		s.logger = goaktlog.Backend(ctx.Logger())
 		s.self = ctx.Self()
 		// Start consuming events from the stream
 		go s.consumeEvents()

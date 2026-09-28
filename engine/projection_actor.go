@@ -32,6 +32,7 @@ import (
 	"github.com/tochemey/goakt/v4/supervisor"
 
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 )
 
 // runnerFailed is the internal message the projection runner sends to its
@@ -96,7 +97,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 	}
 
 	opts := []runnerOption{
-		withLogger(kitLoggerFrom(ctx.ActorSystem().Logger())),
+		withLogger(goaktlog.Backend(ctx.ActorSystem().Logger())),
 		withRecoveryStrategy(options.Recovery),
 		withStartOffset(options.StartOffset),
 		withResetOffset(options.ResetOffset),

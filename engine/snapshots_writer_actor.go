@@ -34,6 +34,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/egopb"
 	"github.com/getsyntegrity/ego/v4/encryption"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 	"github.com/getsyntegrity/ego/v4/persistence"
 )
 
@@ -92,7 +93,7 @@ func newSnapshotsWriterActor() *snapshotsWriterActor {
 // either extension ID is (see optionalExtension in extension_lookup.go and
 // issue #99).
 func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
-	a.logger = kitLoggerFrom(ctx.Logger())
+	a.logger = goaktlog.Backend(ctx.Logger())
 
 	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {

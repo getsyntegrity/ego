@@ -35,7 +35,7 @@ import (
 // loggerSeamFile is the one first-party file allowed to speak GoAkt's logging
 // API: it defines the adapter that presents kit-logger to the actor system.
 // The path is relative to the module root, where the scan starts.
-const loggerSeamFile = "engine/logger.go"
+const loggerSeamFile = "internal/goaktlog/adapter.go"
 
 // bannedLoggerConstructs are logging constructs first-party production code
 // must not contain anywhere. eGo logs through kit-logger, so no default may be
