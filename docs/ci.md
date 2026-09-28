@@ -617,10 +617,11 @@ follows:
     returns an error matching `publishing.ErrPublisherNotStarted`, for
     events and state. It builds the stopped publisher with a struct
     literal, which only code inside the package can do. `publisher/websocket`
-    no longer has this test: since ego-arch-004 spec 2 (#158) the same
-    check is PT-1 of `port/publishing/publishingtest`, run in its
-    `conformance_test.go` against a publisher that really was connected and
-    closed;
+    no longer has this test: since ego-arch-004 spec 2 (#158) the equivalent
+    sentinel check is PT-1 of `port/publishing/publishingtest`, run in its
+    `conformance_test.go`: `Publish` after `Close`, on a publisher that
+    really was connected and closed, returns an error matching the same
+    sentinel;
   - in `test/compat`, `TestEgoSentinelIsThePublishingSentinel` checks that
     `ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
     `errors.Is` in both directions.
