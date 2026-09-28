@@ -70,3 +70,23 @@ func TestDetectCycle(t *testing.T) {
 		t.Fatalf("cycle error %q does not name both modules", err.Error())
 	}
 }
+
+// TestDetectCycle_ThreeNodeCycle covers a cycle longer than two modules
+// (PR #169 review finding 2): "." -> moda -> modb -> "." All three
+// directories the cycle passes through must be named in the error.
+func TestDetectCycle_ThreeNodeCycle(t *testing.T) {
+	g, err := discoverGraph("testdata/cycle-3node")
+	if err != nil {
+		t.Fatalf("discoverGraph: %v", err)
+	}
+	err = detectCycle(g)
+	if err == nil {
+		t.Fatal("expected a cycle error")
+	}
+	if !strings.Contains(err.Error(), "moda") || !strings.Contains(err.Error(), "modb") {
+		t.Fatalf("cycle error %q does not name all three modules in the cycle", err.Error())
+	}
+	if strings.Count(err.Error(), "->") < 3 {
+		t.Fatalf("cycle error %q does not read as a 3+-node cycle (want at least 3 arrows for a return to the start)", err.Error())
+	}
+}

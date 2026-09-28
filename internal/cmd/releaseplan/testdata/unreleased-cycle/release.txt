@@ -1,0 +1,5 @@
+# released: only the root. modx and mody are never released, but they
+# cycle with each other, and buildPlan's cycle check (detectCycle) runs
+# over the whole discovered graph, not only the released subset — so a
+# cycle confined to unreleased modules must still be refused here.
+.

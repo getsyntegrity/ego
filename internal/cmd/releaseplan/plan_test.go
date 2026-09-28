@@ -73,6 +73,26 @@ func TestBuildPlan_Cycle(t *testing.T) {
 	}
 }
 
+// TestBuildPlan_CycleConfinedToUnreleasedModules covers PR #169 review
+// finding 2's second case: modx and mody cycle with each other, but only
+// the root is released. buildPlan must still refuse, because detectCycle
+// runs over the whole discovered graph (not only the released subset)
+// before releasedSet is ever consulted — a cycle nobody released is still
+// a cycle the repository's module graph cannot honor a release order for.
+func TestBuildPlan_CycleConfinedToUnreleasedModules(t *testing.T) {
+	g, err := discoverGraph("testdata/unreleased-cycle")
+	if err != nil {
+		t.Fatalf("discoverGraph: %v", err)
+	}
+	_, err = buildPlan(g, []string{"."}, nil, "patch")
+	if err == nil {
+		t.Fatal("expected a cycle error even though modx and mody are never released")
+	}
+	if !strings.Contains(err.Error(), "modx") || !strings.Contains(err.Error(), "mody") {
+		t.Fatalf("cycle error %q does not name the unreleased modules that cycle", err.Error())
+	}
+}
+
 func TestBuildPlan_ReleasedRequiresUnreleased(t *testing.T) {
 	g, err := discoverGraph("testdata/released-requires-unreleased")
 	if err != nil {
