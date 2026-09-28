@@ -162,7 +162,7 @@ but pushing/PR is out of scope for this session regardless).
   ego v4.4.3 today) with a clear message — capture that output — and a
   `testdata`-fixture run is expected to PASS.
 
-- [ ] **T4 — New `release-publishers.yml` workflow.** `workflow_dispatch`
+- [x] **T4 — New `release-publishers.yml` workflow.** `workflow_dispatch`
   only, inputs `sha` (required), `ego_version` (required), `bump`
   (patch|minor|major, default patch), `dry_run` (boolean, default true).
   Steps a–h per the request, using T2's `releasegate` (step c) and T3's
@@ -178,6 +178,94 @@ but pushing/PR is out of scope for this session regardless).
   no raw `${{ }}` inside any `run:` body (show the scan); `rg` confirms no
   `push origin HEAD:main` and no `gh pr create` outside an echoed/quoted
   string.
+  **Done.** New file `.github/workflows/release-publishers.yml`, 11 steps
+  in one job (`release-publishers`): checkout `main` with `fetch-depth: 0`
+  and `fetch-tags: true` (matching `build.yml`'s `release-plan` job, so
+  `origin/main` and every existing tag are local without relying on git's
+  default tag auto-follow); step (a) `-continuation-check-sha` +
+  `-continuation-check-version` in one invocation (confirmed by reading
+  `continuation.go`'s `runContinuation` that both flags can combine), then
+  a `git rev-parse`/`git merge-base --is-ancestor` check that the
+  `ego_version` tag exists and is on `origin/main`; step (b) the same
+  `git rev-parse`/`merge-base` pattern for `sha`; step (c) `releasegate`
+  invoked exactly like `release.yml`'s `gate` job (`-on-main "true"` hard-
+  coded since step (b) already proved it, `-timeout 20m -interval 30s`,
+  token/repo/sha via `env:`); step (d) `git checkout --quiet "$SHA"` then
+  `-continuation-check-required-version` against the *unfiltered*
+  `scripts/ci/release-modules.txt` (it already skips `.` itself); steps
+  (e)+(f) one `compute-tags` step: builds a combined `git tag -l` +
+  `git ls-remote --tags origin` file (stripping `refs/tags/` and peeled
+  `^{}` suffixes), a publishers-only release list (`grep -v '^\.$'` over
+  `release-modules.txt`), then one `-continuation-plan-publishers
+  -continuation-check-tag-conflicts` invocation into `$RUNNER_TEMP/
+  release-publishers/plan`, publishing `tags` and `publishers` step
+  outputs (`tags` read from `plan.json` via `jq -r '.modules[].nextTag'`);
+  step (g) — only `if: inputs.dry_run == false` — re-fetches `origin/main`,
+  re-checks the same ancestor condition, re-gathers a fresh combined tag
+  list, re-runs the identical plan+conflict-check invocation into
+  `plan-recheck`, and additionally diffs the two plans' `dir`+`nextTag`
+  pairs, failing if origin state drifted between planning and tagging
+  (judgement call — the task only asked for a re-run of the same checks;
+  the diff is a low-cost addition since a drifted recompute would
+  otherwise silently tag different versions than what was shown); step
+  (h), `dry_run == false`: `git tag "$TAG" "$SHA"` per computed tag
+  (lightweight, matching the pre-T1 job's `git tag "${TAG}"` — confirmed
+  by reading `git show 4cb7cf0^:.github/workflows/release.yml`) then
+  `git push --atomic origin $TAGS`, then the `gh release create` block
+  copied verbatim from the same pre-T1 revision (only `EGO_VERSION`/
+  `PUBLISHERS` moved from inline `${{ }}` to `env:`); step (h),
+  `dry_run == true`: prints `plan/summary.md` to `$GITHUB_STEP_SUMMARY`
+  and stdout, no other step in the `if: dry_run == false` branch runs.
+  Permissions: `contents: write` + `actions: read` at workflow level.
+  Token choice: `secrets.GITHUB_TOKEN` for checkout, tag push and
+  `gh release create` (`GH_TOKEN` via `env:`) — not `secrets.RELEASE_PAT`
+  as the pre-T1 job used. Reasoning: (1) `gh release create` needs
+  `contents: write`, which the job's declared `permissions:` already grants
+  `GITHUB_TOKEN`; (2) tag pushes are not pushes to `main` — branch
+  protection (the actual reason `RELEASE_PAT` was needed, per T1's own
+  reasoning) does not apply to tags, and this repository has no tag
+  protection rule on `publisher/*/v*` (checked: `rg` found no
+  `RELEASE_PAT`/tag-protection mention anywhere in `docs/*.md` beyond the
+  one now-stale line this task's docs pass — T5 — will resolve); (3) no
+  other workflow in `.github/workflows/` triggers on a `publisher/*/v*` or
+  any tag push (`rg -n "publisher/" .github/workflows/*.yml` only matches
+  comments in `build.yml`/`pull_request.yml`), so `GITHUB_TOKEN`'s
+  "doesn't trigger other workflows" limitation — the other classic reason
+  a PAT gets used — has no effect here either.
+  Verification (literal output):
+  `python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/release-publishers.yml'))"`
+  → parsed clean, no output. `bash -n` on all 11 extracted `run:` blocks
+  (via a small inline Python/yaml script, same technique T1 used) → all
+  `[OK]`, `ALL_OK`. `rg -n '\$\{\{' .github/workflows/release-publishers.yml`
+  → every match sits in a `with:`/`env:`/`if:` mapping or a `#` comment
+  (line "`${{ }}` interpolation inside the run: body." describing the
+  design, not executable) — none inside a `run:` body.
+  `rg -n 'push origin HEAD:main' .github/workflows/release-publishers.yml`
+  → no matches (exit 1). `rg -n 'gh pr create'
+  .github/workflows/release-publishers.yml` → no matches (exit 1; the
+  workflow-header comment originally said "`gh pr create` command" and was
+  reworded to "pull-request-creation command" specifically so this grep
+  has nothing to match at all, closing even the doubt a comment-only hit
+  would raise).
+  `GOROOT= GOWORK=off GOFLAGS=-mod=mod /home/pablog/sdk/go1.26.6/bin/go run
+  github.com/rhysd/actionlint/cmd/actionlint@latest
+  .github/workflows/release-publishers.yml` → no output, exit 0 (0
+  findings; `shellcheck` is not installed in this sandbox, consistent with
+  how T1 also got 0 findings on `release.yml`'s similar unquoted
+  `for PUB in $PUBLISHERS` loops).
+  Other judgement calls: filtered the publishers-only release list with
+  `grep -v '^\.$'` rather than hand-maintaining a second file, reusing the
+  one real `scripts/ci/release-modules.txt` as the single source of truth
+  (per this task's own instruction); derived the `gh release create` loop's
+  `$PUBLISHERS` from that same filtered list's `basename`s (mirroring the
+  removed job's own "Discover publishers" derivation) instead of adding a
+  further `releaseplan` flag for it, since it is pure shell string
+  manipulation with no decision logic to test. Did not add `git config
+  user.name/user.email` before tagging: lightweight tags need no commit
+  identity, and this workflow creates no commits.
+  Commit: see repo `git log -1` on this branch (single Conventional
+  Commit, no AI-attribution trailer; only
+  `.github/workflows/release-publishers.yml` and this task file staged).
 
 - [ ] **T5 — Docs.** `docs/ci.md`: rewrite the "Version policy" description
   of the flow (two-stage: prepare-branch job stops before tagging,
@@ -312,4 +400,11 @@ but pushing/PR is out of scope for this session regardless).
   Commit: see repo `git log -1` on this branch (single Conventional
   Commit, no AI-attribution trailer; only files under
   `internal/cmd/releaseplan/` and this task file staged).
-- Next: T4.
+- **T4 done.** New file `.github/workflows/release-publishers.yml`
+  (`workflow_dispatch`-only, steps a-h, T2's `releasegate` + T3's
+  `releaseplan` continuation flags). Full detail, verification output and
+  judgement calls (token choice, step-g drift check, tag style) are in
+  T4's own task entry above. Commit: see repo `git log -1` on this branch
+  (single Conventional Commit, no AI-attribution trailer; only
+  `.github/workflows/release-publishers.yml` and this task file staged).
+- Next: T5.
