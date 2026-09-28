@@ -23,8 +23,11 @@
 package compose
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +35,7 @@ import (
 	"github.com/pablogore/ego/v4/eventadapter"
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/port/adapter"
 	"github.com/pablogore/ego/v4/port/publishing"
 	"github.com/pablogore/ego/v4/projection"
 	"github.com/pablogore/ego/v4/tenancy"
@@ -382,4 +386,337 @@ func TestStartError(t *testing.T) {
 			t.Errorf("errors.As did not recover the step: %+v", se)
 		}
 	})
+}
+
+// The fakes below declare an adapter.Descriptor. Each embeds the matching
+// undeclared fake, so it satisfies its port without implementing any
+// method, and adds only Describe plus the optional methods its name says.
+type described struct{ desc adapter.Descriptor }
+
+func (d described) Describe() adapter.Descriptor { return d.desc }
+
+type (
+	declaredEventsStore struct {
+		fakeEventsStore
+		described
+	}
+	declaredStateStore struct {
+		fakeStateStore
+		described
+	}
+	declaredSnapshotStore struct {
+		fakeSnapshotStore
+		described
+	}
+	declaredEncryptor struct {
+		fakeEncryptor
+		described
+	}
+	declaredTenantResolver struct {
+		fakeTenantResolver
+		described
+	}
+	// declaredFixedTenantResolver implements tenancy.FixedTenantResolver.
+	declaredFixedTenantResolver struct{ declaredTenantResolver }
+	// undeclaredFixedTenantResolver implements FixedTenantResolver and no
+	// Describe.
+	undeclaredFixedTenantResolver struct{ fakeTenantResolver }
+	declaredEventPublisher        struct {
+		fakeEventPublisher
+		described
+	}
+	declaredStatePublisher struct {
+		fakeStatePublisher
+		described
+	}
+	// startingEventPublisher implements adapter.Starter.
+	startingEventPublisher struct{ declaredEventPublisher }
+	// pingingStatePublisher implements adapter.Pinger.
+	pingingStatePublisher struct{ declaredStatePublisher }
+	// undeclaredStartingEventPublisher implements Starter and no Describe.
+	undeclaredStartingEventPublisher struct{ fakeEventPublisher }
+)
+
+func (declaredFixedTenantResolver) FixedTenant() (tenancy.TenantID, bool)   { return "", false }
+func (undeclaredFixedTenantResolver) FixedTenant() (tenancy.TenantID, bool) { return "", false }
+func (*startingEventPublisher) Start(context.Context) error                 { return nil }
+func (*pingingStatePublisher) Ping(context.Context) error                   { return nil }
+func (*undeclaredStartingEventPublisher) Start(context.Context) error       { return nil }
+
+func descriptor(port adapter.Port, capabilities ...adapter.Capability) adapter.Descriptor {
+	return adapter.Descriptor{Ports: []adapter.Port{port}, Name: "fake", Capabilities: capabilities}
+}
+
+func eventPublisher(id string, desc adapter.Descriptor) *declaredEventPublisher {
+	return &declaredEventPublisher{fakeEventPublisher: fakeEventPublisher{id: id}, described: described{desc}}
+}
+
+func startingPublisher(id string, desc adapter.Descriptor) *startingEventPublisher {
+	return &startingEventPublisher{declaredEventPublisher: *eventPublisher(id, desc)}
+}
+
+func statePublisher(id string, desc adapter.Descriptor) *declaredStatePublisher {
+	return &declaredStatePublisher{fakeStatePublisher: fakeStatePublisher{id: id}, described: described{desc}}
+}
+
+func pingingPublisher(id string, desc adapter.Descriptor) *pingingStatePublisher {
+	return &pingingStatePublisher{declaredStatePublisher: *statePublisher(id, desc)}
+}
+
+// requireV8 asserts err holds exactly one problem, a V8 on field, whose
+// message names the adapter type and every string in mentions.
+func requireV8(t *testing.T, err error, field string, mentions ...string) {
+	t.Helper()
+	requireOneProblem(t, err, "V8", field)
+	for _, m := range append([]string{`"fake"`}, mentions...) {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("V8 error %q does not mention %q", err, m)
+		}
+	}
+}
+
+// Declared adapters that tell the truth pass, in every slot V8 inspects.
+func TestSpecValidate_V8_TruthfulDeclarationsPass(t *testing.T) {
+	spec := validSpec()
+	spec.EventsStore = &declaredEventsStore{described: described{descriptor(persistence.PortEventsStore)}}
+	spec.StateStore = &declaredStateStore{described: described{descriptor(persistence.PortStateStore)}}
+	spec.Encryptor = &declaredEncryptor{described: described{descriptor(encryption.PortEncryptor)}}
+	spec.TenantResolver = &declaredFixedTenantResolver{declaredTenantResolver{described: described{descriptor(tenancy.PortTenantResolver, tenancy.CapFixedTenant)}}}
+	spec.EventPublishers = []publishing.EventPublisher{
+		eventPublisher("plain", descriptor(publishing.PortEventPublisher)),
+		startingPublisher("starts", descriptor(publishing.PortEventPublisher, adapter.CapStart)),
+	}
+	spec.StatePublishers = []publishing.StatePublisher{pingingPublisher("pings", descriptor(publishing.PortStatePublisher, adapter.CapReady))}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// Undeclared adapters validate exactly as before V8, whatever optional
+// methods they have (design §D6).
+func TestSpecValidate_V8_UndeclaredAdaptersAreNotInspected(t *testing.T) {
+	spec := validSpec()
+	spec.TenantResolver = &undeclaredFixedTenantResolver{}
+	spec.EventPublishers = []publishing.EventPublisher{&undeclaredStartingEventPublisher{fakeEventPublisher{id: "starts"}}}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// V8a: the slot's port must be one of the descriptor's Ports. A value that
+// serves several ports is valid in any of their slots.
+func TestSpecValidate_V8a_SlotPortMustBeDeclared(t *testing.T) {
+	t.Run("state store declaring only the events store port", func(t *testing.T) {
+		spec := validSpec()
+		spec.StateStore = &declaredStateStore{described: described{descriptor(persistence.PortEventsStore)}}
+		requireV8(t, spec.Validate(), "StateStore", persistence.PortStateStore)
+	})
+	t.Run("publisher declaring the other publisher port", func(t *testing.T) {
+		spec := validSpec()
+		spec.EventPublishers[0] = eventPublisher("events-a", descriptor(publishing.PortStatePublisher))
+		requireV8(t, spec.Validate(), "EventPublishers[0]", publishing.PortEventPublisher)
+	})
+	t.Run("one value serving two ports fits either slot", func(t *testing.T) {
+		both := adapter.Descriptor{Ports: []adapter.Port{persistence.PortEventsStore, persistence.PortSnapshotStore}, Name: "fake"}
+		spec := validSpec()
+		spec.EventsStore = &declaredEventsStore{described: described{both}}
+		spec.SnapshotStore = &declaredSnapshotStore{described: described{both}}
+		if err := spec.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+}
+
+// V8b: declaration and method set agree in both directions for every
+// optional capability compose knows for the slot's port.
+func TestSpecValidate_V8b_DeclarationMatchesMethods(t *testing.T) {
+	cases := []struct {
+		name       string
+		adjust     func(*Spec)
+		field      string
+		capability string
+	}{
+		{
+			name: "declares CapStart without Start",
+			adjust: func(s *Spec) {
+				s.EventPublishers[0] = eventPublisher("events-a", descriptor(publishing.PortEventPublisher, adapter.CapStart))
+			},
+			field: "EventPublishers[0]", capability: string(adapter.CapStart),
+		},
+		{
+			name: "implements Start without declaring CapStart",
+			adjust: func(s *Spec) {
+				s.EventPublishers[1] = startingPublisher("events-b", descriptor(publishing.PortEventPublisher))
+			},
+			field: "EventPublishers[1]", capability: string(adapter.CapStart),
+		},
+		{
+			name: "declares CapReady without Ping",
+			adjust: func(s *Spec) {
+				s.StatePublishers[0] = statePublisher("states-a", descriptor(publishing.PortStatePublisher, adapter.CapReady))
+			},
+			field: "StatePublishers[0]", capability: string(adapter.CapReady),
+		},
+		{
+			name: "implements Ping without declaring CapReady",
+			adjust: func(s *Spec) {
+				s.StatePublishers[0] = pingingPublisher("states-a", descriptor(publishing.PortStatePublisher))
+			},
+			field: "StatePublishers[0]", capability: string(adapter.CapReady),
+		},
+		{
+			// Spec 3 scenario "undeclared-but-implemented fixed tenant".
+			name: "implements FixedTenantResolver without declaring CapFixedTenant",
+			adjust: func(s *Spec) {
+				s.TenantResolver = &declaredFixedTenantResolver{declaredTenantResolver{described: described{descriptor(tenancy.PortTenantResolver)}}}
+			},
+			field: "TenantResolver", capability: tenancy.CapFixedTenant,
+		},
+		{
+			name: "declares CapFixedTenant without implementing FixedTenantResolver",
+			adjust: func(s *Spec) {
+				s.TenantResolver = &declaredTenantResolver{described: described{descriptor(tenancy.PortTenantResolver, tenancy.CapFixedTenant)}}
+			},
+			field: "TenantResolver", capability: tenancy.CapFixedTenant,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec := validSpec()
+			c.adjust(&spec)
+			requireV8(t, spec.Validate(), c.field, c.capability)
+		})
+	}
+}
+
+// Capabilities the port already implies are never checked: Ping is part of
+// every store port, so a store that declares CapReady, or does not, is
+// fine either way.
+func TestSpecValidate_V8b_ImpliedCapabilitiesAreSkipped(t *testing.T) {
+	spec := validSpec()
+	spec.EventsStore = &declaredEventsStore{described: described{descriptor(persistence.PortEventsStore, adapter.CapReady)}}
+	spec.StateStore = &declaredStateStore{described: described{descriptor(persistence.PortStateStore)}}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// A declared capability compose does not know for the slot's port (one a
+// later issue adds) is accepted by V8; the adapter's own conformance tests
+// check it (AT-1).
+func TestSpecValidate_V8b_UnknownCapabilityIsAccepted(t *testing.T) {
+	const future adapter.Capability = "publishing.flush"
+	spec := validSpec()
+	spec.EventPublishers[0] = eventPublisher("events-a", descriptor(publishing.PortEventPublisher, future))
+	spec.EventsStore = &declaredEventsStore{described: described{descriptor(persistence.PortEventsStore, adapter.CapStart)}}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// A capability marked declaration-only (the rule design §D6 fixes for the
+// runtime port, F-E) is checked in one direction: declared ⇒ implemented.
+func TestSpecValidate_V8b_DeclarationOnlyCapabilityIsOneDirectional(t *testing.T) {
+	const port adapter.Port = publishing.PortEventPublisher
+	const capability adapter.Capability = "test.declaration-only"
+	implemented := false
+	saved := knownCapabilities[port]
+	knownCapabilities[port] = append(slices.Clone(saved), capabilityCheck{
+		capability:      capability,
+		implemented:     func(any) bool { return implemented },
+		declarationOnly: true,
+	})
+	t.Cleanup(func() { knownCapabilities[port] = saved })
+
+	implemented = true
+	spec := validSpec()
+	spec.EventPublishers[0] = eventPublisher("events-a", descriptor(port))
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("implemented, undeclared: Validate() = %v, want nil", err)
+	}
+
+	implemented = false
+	spec.EventPublishers[0] = eventPublisher("events-a", descriptor(port, capability))
+	requireV8(t, spec.Validate(), "EventPublishers[0]", string(capability))
+}
+
+// V8c: a slot's required capabilities must be declared. The table is empty
+// in v4; the test adds an entry the way #11 or #24 would.
+func TestSpecValidate_V8c_RequiredCapabilities(t *testing.T) {
+	if len(requiredCapabilities) != 0 {
+		t.Fatalf("requiredCapabilities = %v, want empty in v4 (design §D6)", requiredCapabilities)
+	}
+	const port adapter.Port = publishing.PortEventPublisher
+	requiredCapabilities[port] = []adapter.Capability{adapter.CapStart}
+	t.Cleanup(func() { delete(requiredCapabilities, port) })
+
+	spec := validSpec()
+	spec.EventPublishers = []publishing.EventPublisher{
+		startingPublisher("events-a", descriptor(port, adapter.CapStart)),
+		eventPublisher("events-b", descriptor(port)),
+	}
+	requireV8(t, spec.Validate(), "EventPublishers[1]", string(adapter.CapStart))
+}
+
+// describeCalls counts Describe calls on countingDescribePublisher, whose
+// Describe works on a nil receiver.
+var describeCalls atomic.Int32
+
+type countingDescribePublisher struct{ fakeEventPublisher }
+
+func (*countingDescribePublisher) Describe() adapter.Descriptor {
+	describeCalls.Add(1)
+	return adapter.Descriptor{Name: "fake"}
+}
+
+// Spec 3 scenario "typed nil is reported once": V5 reports a typed-nil
+// publisher and V8 does not call Describe on it. A value V6 rejected (a
+// duplicate ID) is skipped by V8 too, so one problem gives one error.
+func TestSpecValidate_V8_SkipsValuesV5AndV6Rejected(t *testing.T) {
+	t.Run("typed-nil publisher", func(t *testing.T) {
+		describeCalls.Store(0)
+		spec := validSpec()
+		spec.EventPublishers[1] = (*countingDescribePublisher)(nil)
+		requireOneProblem(t, spec.Validate(), "V5", "EventPublishers[1]")
+		if n := describeCalls.Load(); n != 0 {
+			t.Fatalf("Describe called %d time(s) on a typed nil, want 0", n)
+		}
+	})
+	t.Run("duplicate ID", func(t *testing.T) {
+		spec := validSpec()
+		spec.EventPublishers = []publishing.EventPublisher{
+			eventPublisher("dup", descriptor(publishing.PortEventPublisher)),
+			eventPublisher("dup", descriptor(publishing.PortStatePublisher)), // also a V8a mismatch
+		}
+		requireOneProblem(t, spec.Validate(), "V6", "EventPublishers[1]")
+	})
+	t.Run("typed-nil tenant resolver", func(t *testing.T) {
+		spec := validSpec()
+		spec.TenantResolver = (*declaredFixedTenantResolver)(nil)
+		requireOneProblem(t, spec.Validate(), "V5", "TenantResolver")
+	})
+}
+
+// V8 problems appear in Spec field order among the others, and one value
+// can produce several (V8a and V8b both).
+func TestSpecValidate_V8_ReportsInFieldOrder(t *testing.T) {
+	spec := validSpec()
+	spec.EventsStore = &declaredEventsStore{described: described{descriptor(persistence.PortStateStore)}}
+	spec.TenantResolver = &declaredFixedTenantResolver{declaredTenantResolver{described: described{descriptor(persistence.PortStateStore)}}}
+	spec.ShutdownTimeout = -1
+	got := problems(t, spec.Validate())
+	want := []struct{ rule, field string }{
+		{"V8", "EventsStore"},
+		{"V8", "TenantResolver"}, // V8a: wrong port
+		{"V8", "TenantResolver"}, // V8b: FixedTenantResolver undeclared
+		{"V7", "ShutdownTimeout"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Validate() reported %d problems, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Rule != w.rule || got[i].Field != w.field {
+			t.Errorf("problem %d = {%q, %q}, want {%q, %q}", i, got[i].Rule, got[i].Field, w.rule, w.field)
+		}
+	}
 }
