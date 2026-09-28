@@ -40,7 +40,7 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
 - [x] T1 RED — add `scripts/ci/verify-consumer.sh` and observe it fail on the unmigrated tree (reproduces #134). Route: delegated writer (T1–T3 together; 2+ non-trivial files).
 - [x] T2 GREEN — mechanical rename per the table, `buf` regeneration of the two `.pb.go`, badges, `golangci-lint fmt`; `verify-consumer.sh` passes; build/vet/test/lint/archcheck in every module.
 - [x] T3 CHANGELOG entry, `docs/ci.md`, and CI wiring: a consumer job in `pull_request.yml` (when the plan is `full`) and `build.yml` (always), included in `CI Gate`.
-- [ ] T4 Push the branch, open the PR, update #134 (acceptance criteria: `go list -m` alone does not count; the public-proxy check is pending until the root tag). Route: inline (`gh`).
+- [x] T4 Push the branch, open the PR, update #134 (acceptance criteria: `go list -m` alone does not count; the public-proxy check is pending until the root tag). Route: inline (`gh`).
 
 ## Acceptance criteria
 
@@ -63,7 +63,7 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
   `GOPRIVATE` pointed at the local clone — no public proxy/sumdb traffic
   for this repo's own paths.
 - RED evidence, run on unmigrated `50c4a4f` (env:
-  `PATH=/home/pablog/sdk/go1.26.6/bin:/home/pablog/go/bin:...
+  `PATH=<go1.26 toolchain>/bin:$GOPATH/bin:...
   GOROOT= GOWORK=off ./scripts/ci/verify-consumer.sh`):
   ```
   go: creating new go.mod: module example.com/verifyconsumer
@@ -122,7 +122,7 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
   covers its `replace` block, since dropping `/v4` from the four
   publisher paths moved them ahead of the root's own `v4`-suffixed path
   too.
-- Verification, `PATH=/home/pablog/sdk/go1.26.6/bin:/home/pablog/go/bin:...
+- Verification, `PATH=<go1.26 toolchain>/bin:$GOPATH/bin:...
   GOROOT= GOWORK=off`, all commands reported per instructions:
   - root: `GOFLAGS=-mod=mod go build ./...` → clean. `go vet ./...` →
     clean. `go run ./internal/cmd/archcheck` →
@@ -211,6 +211,12 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
   '!odd/**' -g '!CHANGELOG.md' -g '!docs/ci/baseline-159-a1.md'` now
   finds nothing.
 
+### T4 — done
+
+- Branch pushed; PR #174 opened against `main` (label `enhancement`, `Refs #134`, not `Closes`: the public-proxy check stays pending).
+- Parent-side independent checks before opening it: `scripts/ci/verify-consumer.sh` re-run on the branch head (OK); `ciselect` decision identical on `main` and the branch for 8 synthetic changes; `git tag -l` empty.
+- #134 body: acceptance criteria rewritten (`go list -m` alone is not acceptance; local-remote check via `verify-consumer.sh`; public-proxy check pending until the root tag; no tag published; `v4.0.1` vs `v4.4.3` resolved separately before the first release). A comment links #174.
+
 ## Next step
 
-None — T1–T3 complete. T4 (push branch, open PR, update #134) is inline/`gh` work outside this delegation's scope.
+CI on #174, maintainer review and merge. The first `v*` tag stays on hold until the public-proxy check can run after the root tag, and the `v4.0.1` vs `v4.4.3` question is settled.
