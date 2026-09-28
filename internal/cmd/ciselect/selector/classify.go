@@ -104,6 +104,8 @@ var fullFallbackExactFiles = map[string]bool{
 //     generated from.
 //   - internal/cmd/ciselect/: the selector's own source; a bug here must
 //     not be trusted to select its own fix.
+//   - internal/cmd/vulngate/: decides every module's govulncheck result, so
+//     a change to it is verified against every module.
 //   - scripts/ci/: the CI scripts the workflows invoke.
 //   - egopb/: generated protobuf types that nearly every package imports
 //     directly or transitively; a shared-core package.
@@ -111,6 +113,7 @@ var fullFallbackPrefixDirs = []string{
 	".github",
 	"protos",
 	"internal/cmd/ciselect",
+	"internal/cmd/vulngate",
 	"scripts/ci",
 	"egopb",
 }

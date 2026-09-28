@@ -140,7 +140,7 @@ buckets, checked in this order:
 
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
-| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
+| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
 | Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
 | No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
@@ -444,7 +444,8 @@ S1 moved those checks into `test/compat`.
    "global: `<path>` changed". The global paths are `go.work`,
    `go.work.sum`, `.golangci.yml`, `Makefile`, `Dockerfile.ci`,
    `buf.yaml`, `buf.gen.yaml`, and everything under `.github/`,
-   `scripts/ci/`, `internal/cmd/ciselect/` and `protos/`. `-all` and an
+   `scripts/ci/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/` (it
+   decides every module's govulncheck result) and `protos/`. `-all` and an
    empty changed-file list are treated the same way. The root `go.mod`
    and `go.sum` are deliberately **not** global: they send the root lane
    to `full`, and step 5 then selects every module that requires the

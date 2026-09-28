@@ -146,6 +146,7 @@ func TestSelect_Modules_CIPathChangeSelectsEveryModule(t *testing.T) {
 		".github/workflows/pull_request.yml",
 		"scripts/ci/go-test.sh",
 		"internal/cmd/ciselect/main.go",
+		"internal/cmd/vulngate/main.go",
 		".golangci.yml",
 	} {
 		res := Select(g, []string{path}, moduleFixtureOpts())

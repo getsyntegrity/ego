@@ -102,6 +102,14 @@ func TestSelect_SelectorSourceChangeIsFull(t *testing.T) {
 	assertFull(t, g, res)
 }
 
+// vulngate decides every module's govulncheck result, so a change to it must
+// be verified against every module, not only against the root lane.
+func TestSelect_VulngateSourceChangeIsFull(t *testing.T) {
+	g := fixtureGraph()
+	res := Select(g, []string{"internal/cmd/vulngate/main.go"}, satelliteOpts())
+	assertFull(t, g, res)
+}
+
 func TestSelect_DocsOnlyIsNone(t *testing.T) {
 	g := fixtureGraph()
 	res := Select(g, []string{"README.md", "docs/guide.md"}, satelliteOpts())

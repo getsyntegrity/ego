@@ -59,6 +59,7 @@ var globalPrefixDirs = []string{
 	".github",
 	"scripts/ci",
 	"internal/cmd/ciselect",
+	"internal/cmd/vulngate",
 	"protos",
 }
 
