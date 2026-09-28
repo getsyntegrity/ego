@@ -216,7 +216,9 @@ mkdir -p "$consumer_dir"
   echo "import ("
   echo "	\"fmt\""
   echo
-  echo "	_ \"$root_module_path\""
+  # The module root holds no Go files, so the root module is imported through
+  # its engine package.
+  echo "	_ \"$root_module_path/engine\""
   for p in "${publisher_paths[@]}"; do
     echo "	_ \"$p\""
   done

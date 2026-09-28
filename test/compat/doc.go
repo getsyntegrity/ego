@@ -22,12 +22,12 @@
 
 // Package compat is an unreleased integration module (ADR ego-arch-006, slice
 // S1, decision D5). It holds the historical compatibility checks between the
-// four publisher modules and the aliases package ego still exports for them
-// (ADR ego-arch-001, S1 criterion 3: ego.EventPublisher, ego.StatePublisher
-// and ego.ErrPublisherNotStarted, kept until #124 by #121). Those checks used
+// four publisher modules and the aliases package engine still exports for them
+// (ADR ego-arch-001, S1 criterion 3: engine.EventPublisher, engine.StatePublisher
+// and engine.ErrPublisherNotStarted, kept until #124 by #121). Those checks used
 // to live in each publisher as compat_test.go behind a `compat` build tag
 // (#130, #122). Here they need no build tag, and the publishers' own tests no
-// longer import package ego at all.
+// longer import package engine at all.
 //
 // No released module may require this one; docs/ci.md lists it as
 // unreleased. The package has no code of its own: the checks are its tests.

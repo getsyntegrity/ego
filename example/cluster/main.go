@@ -53,7 +53,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/projection"
@@ -124,16 +124,16 @@ func main() {
 
 	// Build the eGo Config once; the same instance is passed to both the
 	// actor system (for extension wiring) and the engine.
-	cfg := ego.NewConfig(eventStore,
-		ego.WithLogger(logger),
-		ego.WithOffsetStore(offsetStore),
-		ego.WithTelemetry(tel),
+	cfg := engine.NewConfig(eventStore,
+		engine.WithLogger(logger),
+		engine.WithOffsetStore(offsetStore),
+		engine.WithTelemetry(tel),
 		// Every node must register the behavior kinds it may host, so it can
 		// decode a spawn a peer places on it (design ego-arch-002-s3 §5.5):
 		// with RoundRobin placement through SpawnOn, a pod that never spawned
 		// an AccountBehavior itself still needs to be able to reconstruct one.
-		ego.WithBehaviorKinds(new(AccountBehavior)),
-		ego.WithProjection(projectionName, &projection.Options{
+		engine.WithBehaviorKinds(new(AccountBehavior)),
+		engine.WithProjection(projectionName, &projection.Options{
 			Handler:      projectionHandler,
 			BufferSize:   500,
 			StartOffset:  time.Time{},
@@ -155,7 +155,7 @@ func main() {
 		WithMinimumPeersQuorum(1).
 		WithDiscoveryPort(discoveryPort).
 		WithPeersPort(peersPort).
-		WithKinds(ego.ClusterKinds()...)
+		WithKinds(engine.ClusterKinds()...)
 
 	goaktOpts := append(cfg.GoaktOptions(),
 		goakt.WithCluster(clusterCfg),
@@ -172,12 +172,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	engine, err := ego.NewEngine(sys, cfg)
+	eng, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err)
 		os.Exit(1)
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		logger.Error("failed to start engine", "error", err)
 		os.Exit(1)
 	}
@@ -185,7 +185,7 @@ func main() {
 	// Start the projection runner.
 	// In cluster mode, StartProjection automatically runs it as a singleton on the
 	// oldest node. If that node leaves, it migrates to the new oldest node.
-	if err := engine.StartProjection(ctx, projectionName); err != nil {
+	if err := eng.StartProjection(ctx, projectionName); err != nil {
 		logger.Error("failed to add projection", "error", err)
 		os.Exit(1)
 	}
@@ -217,7 +217,7 @@ func main() {
 		}
 
 		behavior := NewAccountBehavior(accountID)
-		if err := entityWithRetry(r.Context(), engine, behavior); err != nil {
+		if err := entityWithRetry(r.Context(), eng, behavior); err != nil {
 			http.Error(w, fmt.Sprintf("entity error: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -226,7 +226,7 @@ func main() {
 			AccountId:      accountID,
 			AccountBalance: body.Balance,
 		}
-		reply, _, err := sendCommandWithRetry(r.Context(), engine, accountID, cmd, 10*time.Second)
+		reply, _, err := sendCommandWithRetry(r.Context(), eng, accountID, cmd, 10*time.Second)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -246,7 +246,7 @@ func main() {
 			return
 		}
 
-		reply, _, err := sendCommandWithRetry(r.Context(), engine, accountID, &samplepb.CreditAccount{
+		reply, _, err := sendCommandWithRetry(r.Context(), eng, accountID, &samplepb.CreditAccount{
 			AccountId: accountID,
 			Balance:   body.Amount,
 		}, 10*time.Second)
@@ -269,7 +269,7 @@ func main() {
 			return
 		}
 
-		reply, _, err := sendCommandWithRetry(r.Context(), engine, accountID, &samplepb.DebitAccount{
+		reply, _, err := sendCommandWithRetry(r.Context(), eng, accountID, &samplepb.DebitAccount{
 			AccountId: accountID,
 			Balance:   body.Amount,
 		}, 10*time.Second)
@@ -361,7 +361,7 @@ func main() {
 	defer shutdownCancel()
 
 	_ = server.Shutdown(shutdownCtx)
-	_ = engine.Stop(shutdownCtx)
+	_ = eng.Stop(shutdownCtx)
 	_ = sys.Stop(shutdownCtx)
 	logger.Info("shutdown complete")
 }
@@ -392,11 +392,11 @@ func envInt(key string, defaultVal int) int {
 // transient cluster errors (e.g. olric state query timeouts under concurrent
 // load on the projection-leader pod). ErrActorAlreadyExists is always treated
 // as success.
-func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior behaviorport.EventSourced) error {
+func entityWithRetry(ctx context.Context, eng *engine.Engine, behavior behaviorport.EventSourced) error {
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := range maxAttempts {
-		err := engine.SpawnEventSourced(ctx, behavior)
+		err := eng.SpawnEventSourced(ctx, behavior)
 		if err == nil || errors.Is(err, gerrors.ErrActorAlreadyExists) {
 			return nil
 		}
@@ -412,10 +412,10 @@ func entityWithRetry(ctx context.Context, engine *ego.Engine, behavior behaviorp
 // After SpawnOn places an entity on a remote peer, the cluster's distributed
 // state (olric) may not have propagated the actor's location yet. A short
 // retry loop lets the state converge before giving up.
-func sendCommandWithRetry(ctx context.Context, engine *ego.Engine, entityID string, cmd ego.Command, timeout time.Duration) (ego.State, uint64, error) {
+func sendCommandWithRetry(ctx context.Context, eng *engine.Engine, entityID string, cmd engine.Command, timeout time.Duration) (engine.State, uint64, error) {
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
-		state, revision, err := engine.SendCommand(ctx, entityID, cmd, timeout)
+		state, revision, err := eng.SendCommand(ctx, entityID, cmd, timeout)
 		if err == nil {
 			return state, revision, nil
 		}
@@ -426,7 +426,7 @@ func sendCommandWithRetry(ctx context.Context, engine *ego.Engine, entityID stri
 			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
 		}
 	}
-	return engine.SendCommand(ctx, entityID, cmd, timeout)
+	return eng.SendCommand(ctx, entityID, cmd, timeout)
 }
 
 // spanNameFromRequest returns a clean span name for HTTP requests.

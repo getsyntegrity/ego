@@ -30,31 +30,31 @@ import (
 	"github.com/getsyntegrity/ego/publisher/nats"
 	"github.com/getsyntegrity/ego/publisher/pulsar"
 	"github.com/getsyntegrity/ego/publisher/websocket"
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/port/publishing"
 )
 
-// The publishers still satisfy the compatibility aliases in package ego (ADR
+// The publishers still satisfy the compatibility aliases in package engine (ADR
 // ego-arch-001, S1 criterion 3), which existing consumers may still name them
 // through. These are the eight compile-time assertions each publisher's
 // compat_test.go used to hold, two per publisher.
 var (
-	_ ego.EventPublisher = (*kafka.EventsPublisher)(nil)
-	_ ego.StatePublisher = (*kafka.DurableStatePublisher)(nil)
+	_ engine.EventPublisher = (*kafka.EventsPublisher)(nil)
+	_ engine.StatePublisher = (*kafka.DurableStatePublisher)(nil)
 
-	_ ego.EventPublisher = (*nats.EventsPublisher)(nil)
-	_ ego.StatePublisher = (*nats.DurableStatePublisher)(nil)
+	_ engine.EventPublisher = (*nats.EventsPublisher)(nil)
+	_ engine.StatePublisher = (*nats.DurableStatePublisher)(nil)
 
-	_ ego.EventPublisher = (*pulsar.EventsPublisher)(nil)
-	_ ego.StatePublisher = (*pulsar.DurableStatePublisher)(nil)
+	_ engine.EventPublisher = (*pulsar.EventsPublisher)(nil)
+	_ engine.StatePublisher = (*pulsar.DurableStatePublisher)(nil)
 
-	_ ego.EventPublisher = (*websocket.EventsPublisher)(nil)
-	_ ego.StatePublisher = (*websocket.DurableStatePublisher)(nil)
+	_ engine.EventPublisher = (*websocket.EventsPublisher)(nil)
+	_ engine.StatePublisher = (*websocket.DurableStatePublisher)(nil)
 )
 
 // TestEgoSentinelIsThePublishingSentinel is the module-crossing half of the
 // historical runtime check "a stopped publisher's error matches
-// ego.ErrPublisherNotStarted" (ADR ego-arch-006, §6 S1). The other half runs
+// engine.ErrPublisherNotStarted" (ADR ego-arch-006, §6 S1). The other half runs
 // inside each publisher module: TestPublishBeforeStartMatchesPublishingSentinel
 // in publisher_contract_test.go checks that Publish before Start returns an
 // error matching publishing.ErrPublisherNotStarted, for events and state.
@@ -62,14 +62,14 @@ var (
 // matches one matches the other, so together the two checks prove the
 // original assertion for every publisher.
 func TestEgoSentinelIsThePublishingSentinel(t *testing.T) {
-	if ego.ErrPublisherNotStarted != publishing.ErrPublisherNotStarted {
-		t.Errorf("ego.ErrPublisherNotStarted (%p) is not the same value as publishing.ErrPublisherNotStarted (%p)",
-			ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted)
+	if engine.ErrPublisherNotStarted != publishing.ErrPublisherNotStarted {
+		t.Errorf("engine.ErrPublisherNotStarted (%p) is not the same value as publishing.ErrPublisherNotStarted (%p)",
+			engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted)
 	}
-	if !errors.Is(ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) {
-		t.Error("errors.Is(ego.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) = false")
+	if !errors.Is(engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) {
+		t.Error("errors.Is(engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) = false")
 	}
-	if !errors.Is(publishing.ErrPublisherNotStarted, ego.ErrPublisherNotStarted) {
-		t.Error("errors.Is(publishing.ErrPublisherNotStarted, ego.ErrPublisherNotStarted) = false")
+	if !errors.Is(publishing.ErrPublisherNotStarted, engine.ErrPublisherNotStarted) {
+		t.Error("errors.Is(publishing.ErrPublisherNotStarted, engine.ErrPublisherNotStarted) = false")
 	}
 }

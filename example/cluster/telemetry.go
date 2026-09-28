@@ -37,16 +37,16 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 )
 
 // setupTelemetry initializes OpenTelemetry with OTLP gRPC exporters for
-// traces and metrics. It returns the ego.Telemetry config and a shutdown
+// traces and metrics. It returns the engine.Telemetry config and a shutdown
 // function that flushes and closes the providers.
 //
 // The OTLP endpoint is read from the OTEL_EXPORTER_OTLP_ENDPOINT env var
 // (defaults to the OTel Collector service in the cluster).
-func setupTelemetry(ctx context.Context, serviceName string) (*ego.Telemetry, func(context.Context) error, error) {
+func setupTelemetry(ctx context.Context, serviceName string) (*engine.Telemetry, func(context.Context) error, error) {
 	hostname, _ := os.Hostname()
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
@@ -93,7 +93,7 @@ func setupTelemetry(ctx context.Context, serviceName string) (*ego.Telemetry, fu
 	)
 	otel.SetMeterProvider(mp)
 
-	tel := &ego.Telemetry{
+	tel := &engine.Telemetry{
 		Tracer: tp.Tracer(serviceName),
 		Meter:  mp.Meter(serviceName),
 	}
