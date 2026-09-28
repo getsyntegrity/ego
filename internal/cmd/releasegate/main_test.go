@@ -234,3 +234,69 @@ func TestRun_MissingRequiredFlags(t *testing.T) {
 		}
 	}
 }
+
+// --- PR #171 review fixes ----------------------------------------------
+
+// TestRun_TransientFetchErrorsThenPass covers R2 (MAJOR): a fetch error
+// from ListBuildRuns (a transient GitHub API failure, e.g. a 503 or a
+// network blip) must not fail the gate outright — it is retried inside
+// the bounded wait exactly like a pending run, and a later successful
+// fetch can still resolve to Pass.
+func TestRun_TransientFetchErrorsThenPass(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `{"message":"temporarily unavailable"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successRunBody())
+	}))
+	defer srv.Close()
+
+	args := []string{"-repo", "getsyntegrity/ego", "-sha", sha, "-on-main", "true", "-timeout", "5m", "-interval", "1m"}
+	var stdout, stderr bytes.Buffer
+	clk := &fakeClock{now: time.Now()}
+	slp := &fakeSleeper{clock: clk}
+	err := run(args, &stdout, &stderr, fakeGetenv(map[string]string{"GITHUB_TOKEN": "tok"}), clk, slp, srv.URL)
+	if err != nil {
+		t.Fatalf("run: %v; stdout=%s", err, stdout.String())
+	}
+	if calls != 3 {
+		t.Fatalf("GitHub API was called %d times, want 3 (2 transient errors then a successful fetch)", calls)
+	}
+	if !strings.Contains(stdout.String(), "PASS") {
+		t.Fatalf("stdout = %q, want it to mention PASS", stdout.String())
+	}
+}
+
+// TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError covers R2's
+// other half: if ListBuildRuns keeps failing all the way to the deadline,
+// the gate must still fail closed — never Pass without ever having
+// completed a successful fetch — and the timeout error must name the
+// fetch error so an operator can tell "GitHub API is down" apart from
+// "still waiting on a pending run".
+func TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"message":"temporarily unavailable"}`)
+	}))
+	defer srv.Close()
+
+	args := []string{"-repo", "getsyntegrity/ego", "-sha", sha, "-on-main", "true", "-timeout", "2m", "-interval", "1m"}
+	var stdout, stderr bytes.Buffer
+	clk := &fakeClock{now: time.Now()}
+	slp := &fakeSleeper{clock: clk}
+	err := run(args, &stdout, &stderr, fakeGetenv(map[string]string{"GITHUB_TOKEN": "tok"}), clk, slp, srv.URL)
+	if err == nil {
+		t.Fatal("run: want a timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("error = %v, want it to say timed out", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("error = %v, want it to name the last fetch error (503)", err)
+	}
+}

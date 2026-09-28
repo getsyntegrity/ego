@@ -148,32 +148,69 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 // cfg.timeout <= 0 means "check exactly once, never wait": this is what
 // docs/ci.md's dry-test instructions use, so a read-only check against the
 // real repository never blocks for up to 20 minutes.
+//
+// A ListBuildRuns error (a transient GitHub outage, rate limit, or network
+// blip) is treated as retryable, exactly like a Wait verdict, rather than
+// failing the gate outright (PR #171 review, R2/MAJOR) — a single flaky
+// API call must not sink an otherwise-green release. This stays
+// fail-closed: Pass is returned only immediately after a successful fetch
+// whose Decide result is itself Pass, never as a fallback for "we
+// couldn't tell". lastErr and lastReason each track the most recent
+// evidence of their own kind (an error clears on the next successful
+// fetch; a decision reason is kept until a newer one replaces it), so a
+// deadline reached after a run of errors following an earlier Wait still
+// reports both, not just whichever happened last.
 func waitForGate(ctx context.Context, client *Client, cfg config, clk clock, slp sleeper, stdout io.Writer) error {
 	if !cfg.onMain {
 		return fmt.Errorf("release gate: %s", Decide(cfg.sha, false, nil).Reason)
 	}
 
 	deadline := clk.Now().Add(cfg.timeout)
+	var lastErr error
+	var lastReason string
+
 	for attempt := 1; ; attempt++ {
 		runs, err := client.ListBuildRuns(ctx, cfg.repo, cfg.sha)
 		if err != nil {
-			return fmt.Errorf("listing build.yml runs: %w", err)
+			lastErr = err
+			fmt.Fprintf(stdout, "release gate: fetch error (attempt %d) — %v\n", attempt, err)
+		} else {
+			lastErr = nil
+			res := Decide(cfg.sha, true, runs)
+			lastReason = res.Reason
+			switch res.Verdict {
+			case Pass:
+				fmt.Fprintf(stdout, "release gate: %s — %s\n", res.Verdict, res.Reason)
+				return nil
+			case Fail:
+				return fmt.Errorf("release gate: %s — %s", res.Verdict, res.Reason)
+			case Wait:
+				fmt.Fprintf(stdout, "release gate: %s (attempt %d) — %s\n", res.Verdict, attempt, res.Reason)
+			}
 		}
 
-		res := Decide(cfg.sha, true, runs)
-		switch res.Verdict {
-		case Pass:
-			fmt.Fprintf(stdout, "release gate: %s — %s\n", res.Verdict, res.Reason)
-			return nil
-		case Fail:
-			return fmt.Errorf("release gate: %s — %s", res.Verdict, res.Reason)
-		case Wait:
-			now := clk.Now()
-			if cfg.timeout <= 0 || !now.Before(deadline) {
-				return fmt.Errorf("release gate timed out after %s waiting for commit %s: %s", cfg.timeout, cfg.sha, res.Reason)
-			}
-			fmt.Fprintf(stdout, "release gate: %s (attempt %d) — %s; polling again in %s\n", res.Verdict, attempt, res.Reason, cfg.interval)
-			slp.Sleep(cfg.interval)
+		now := clk.Now()
+		if cfg.timeout <= 0 || !now.Before(deadline) {
+			return errors.New(timeoutMessage(cfg.sha, cfg.timeout, lastErr, lastReason))
 		}
+		fmt.Fprintf(stdout, "release gate: polling again in %s\n", cfg.interval)
+		slp.Sleep(cfg.interval)
+	}
+}
+
+// timeoutMessage composes waitForGate's deadline-reached error from
+// whichever of the last fetch error and the last Decide reason are
+// available. Both are included when both exist, since either one alone
+// can be misleading: a lone error hides that the gate previously saw a
+// concrete pending state, and a lone stale reason hides that the most
+// recent attempts were actually failing to even reach GitHub.
+func timeoutMessage(sha string, timeout time.Duration, lastErr error, lastReason string) string {
+	switch {
+	case lastErr != nil && lastReason != "":
+		return fmt.Sprintf("release gate timed out after %s waiting for commit %s: last fetch error: %v; last known decision: %s", timeout, sha, lastErr, lastReason)
+	case lastErr != nil:
+		return fmt.Sprintf("release gate timed out after %s waiting for commit %s: last fetch error: %v", timeout, sha, lastErr)
+	default:
+		return fmt.Sprintf("release gate timed out after %s waiting for commit %s: %s", timeout, sha, lastReason)
 	}
 }

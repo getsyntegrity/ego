@@ -1289,12 +1289,29 @@ yet, when `release.yml`'s tag-triggered run starts. The `gate` job polls
 every 30 seconds (`-interval`) for up to 20 minutes (`-timeout`) before
 giving up, via `internal/cmd/releasegate/main.go`'s bounded wait loop
 (`waitForGate`). Once the timeout expires, the gate fails with a clear
-message naming the SHA and the last known state (still pending, or no run
-found at all) — it never hangs the workflow indefinitely, and it never
+message naming the SHA and the last known state — a fetch error, a
+decision reason (still pending, or no run found at all), or both when the
+loop saw one of each before giving up — it never hangs the workflow
+indefinitely, and it never
 silently treats "still waiting" as success. The off-main case is checked
 once, up front, without ever calling GitHub's API: main reachability
 cannot change while the job runs, so polling for it would only waste time
 and API calls.
+
+**A transient GitHub API error does not fail the gate outright.** A
+`ListBuildRuns` call can fail for reasons that have nothing to do with the
+tagged commit's CI state — a `5xx` from GitHub, a rate limit, a network
+blip. Before PR #171's review, `waitForGate` treated any such error as an
+immediate, terminal failure, which meant a single flaky API call could
+sink an otherwise-green release. It is now treated exactly like a pending
+run: logged, and retried on the same bounded-wait schedule (clamped
+sleep included) until either a fetch succeeds or the deadline passes.
+This stays fail-closed — `Pass` is only ever returned immediately after a
+fetch that succeeded AND whose `Decide` result was itself `Pass`; a run
+of errors can only ever lead to `Fail` at the deadline, never to a `Pass`
+by default. The deadline message names the last fetch error, the last
+decision reason `Decide` produced, or both, so an operator can tell "GitHub
+was unreachable" apart from "still genuinely waiting on a pending run".
 
 **How to test the gate without publishing anything.** Every call the gate
 makes is a read-only GitHub API request; it creates nothing, tags

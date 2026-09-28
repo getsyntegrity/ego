@@ -218,15 +218,22 @@ rather than growing the original 5-task plan past its cap.
   Updated docs/ci.md's "most recent completed run governs" section with
   the corrected tie-break and the real run-35120281495 evidence. Commit:
   (recorded below).
-- [ ] **R2 (MAJOR) — transient API errors.** `waitForGate` returned
+- [x] **R2 (MAJOR) — transient API errors.** `waitForGate` returned
   immediately on any `ListBuildRuns` error. Now treated as retryable
-  inside the bounded wait: log it, sleep (clamped, see R3), retry until
-  the deadline; at the deadline, fail naming the last fetch error and/or
-  the last verdict reason, whichever is available. Still fail-closed:
-  `Pass` is only ever returned right after a successful fetch whose
-  `Decide` result is `Pass`. Tests: N transient errors then a successful
-  `Pass` fetch → `Pass`; errors persisting past the deadline → `Fail`
-  naming the error.
+  inside the bounded wait: log it, sleep, retry until the deadline; at
+  the deadline, fail naming the last fetch error and/or the last verdict
+  reason via the new `timeoutMessage()` helper (both when both exist —
+  neither alone tells the full story). Still fail-closed: `Pass` is only
+  ever returned immediately after a fetch that both succeeded and whose
+  `Decide` result was itself `Pass`. RED observed:
+  `TestRun_TransientFetchErrorsThenPass` failed with the raw fetch error
+  instead of retrying; `TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError`
+  failed the same way instead of timing out. GREEN: both new tests pass,
+  full suite 32/32 PASS, no regressions (`TestRun_WaitThenTimeout`'s exact
+  3-call/2-sleep count and `TestRun_TimeoutZeroIsSingleCheckNoSleep`'s
+  1-call/0-sleep count both still hold). `go vet` clean, `staticcheck` 0
+  findings, `gofmt -l` clean. Updated docs/ci.md's bounded-wait section
+  and added a new "transient GitHub API error" paragraph.
 - [ ] **R3 (minor) — clamp sleep to the deadline.** Each poll's sleep is
   now clamped to whatever time remains before the deadline, so a large
   `-interval` can never sleep past it. Test: `-timeout 1m -interval 10m`
