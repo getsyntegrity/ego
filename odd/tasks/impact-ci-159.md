@@ -336,3 +336,4 @@ matrix is empty, the `modules` job is *skipped*, not green.
     "The govulncheck exception gate (vulngate)" section (what blocks, the
     allow-file fields, matching rules, how to add or retire an entry, the
     exact wiring).
+- **T3 follow-up `d440ffa`:** `internal/cmd/vulngate/` added to both global path lists (root lane full-fallback and module graph), so a change to the gate is verified against every module. RED: `TestModuleGraph_GlobalChange/internal/cmd/vulngate/main.go` and `TestSelect_Modules_CIPathChangeSelectsEveryModule` failed; GREEN after the change. `go test -count=1 ./internal/cmd/ciselect/... ./internal/cmd/vulngate/...` ok.
