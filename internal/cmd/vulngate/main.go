@@ -385,7 +385,7 @@ func evaluate(moduleDir string, blocking map[findingID]bool, allow []allowEntry,
 		if blocking[key] {
 			continue
 		}
-		res.Stale = append(res.Stale, staleItem{ID: key.ID, Module: key.Module})
+		res.Stale = append(res.Stale, staleItem(key))
 	}
 
 	return res
