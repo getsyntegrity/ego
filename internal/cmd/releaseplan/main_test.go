@@ -151,6 +151,10 @@ func TestRun_RealRepository(t *testing.T) {
 		if err := json.Unmarshal(planBytes, &doc); err != nil {
 			t.Fatalf("decoding plan.json: %v", err)
 		}
+		// The hard-coded 5 is intentional (PR #169 review finding 4): this
+		// test must fail loudly the moment scripts/ci/release-modules.txt
+		// gains or loses an entry, rather than silently keep passing
+		// against whatever count the file happens to hold that day.
 		if len(doc.Modules) != 5 {
 			t.Fatalf("len(modules) = %d, want 5 (root + 4 publishers)", len(doc.Modules))
 		}
