@@ -25,8 +25,10 @@ patch`, `git tag -l`) therefore advertises v4.0.1 to anyone reading the job summ
   SemVer-dishonest, because `CHANGELOG.md`'s `[Unreleased]` section already carries
   breaking changes against upstream v4.4.3 (module path, `migration.New` signature,
   the removed logger seam) — and a v5 bump is blocked by D1 (root path must stay
-  `/v4`). Upstream also already published its own, different v4.5.0, so v4.4.3 is
-  taken for other content. v4.0.1 would imply a v4.0.0 release that never happened.
+  `/v4`). Upstream tags do not constrain the choice: the module path distinguishes
+  the artifacts, and Go, the proxy and the checksum database key every version by
+  module path (maintainer decision, 2026-09-28; this first draft wrongly argued
+  that upstream numbers were "taken"). v4.0.1 would imply a v4.0.0 release that never happened.
   So numbering restarts under the new module identity at v4.0.0; publishers start
   their own v0.x line the same way (first tag `publisher/<name>/v0.1.0`).
 - **Code fix:** `nextTag` in `internal/cmd/releaseplan/tags.go` special-cases the
@@ -159,8 +161,8 @@ patch`, `git tag -l`) therefore advertises v4.0.1 to anyone reading the job summ
 - `CHANGELOG.md`: added one new bullet under `[Unreleased]` → `💥 Breaking
   Changes`, directly after the existing #134 module-path-move bullet, recording
   that the first release will be v4.0.0, why (breaking changes already listed
-  above it, D1 forbidding a `/v5` path, upstream's own `[v4.4.3]`/`v4.5.0` being
-  taken), that `[v4.4.3]` and everything below it is upstream `tochemey/ego`
+  above it, D1 forbidding a `/v5` path; the "upstream numbers are taken" argument
+  originally recorded here was withdrawn, see above), that `[v4.4.3]` and everything below it is upstream `tochemey/ego`
   history, and that each publisher starts its own line at
   `publisher/<name>/v0.1.0`. `git diff CHANGELOG.md` is a pure two-line addition
   (`1 file changed, 2 insertions(+)`) — no existing entry touched.
