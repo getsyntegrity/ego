@@ -1239,3 +1239,197 @@ declare `go 1.26.0` (`benchmark`, `example/cluster`, `publisher/kafka`,
 installed 1.27.0 toolchain satisfies every one of them without
 downloading anything else. `golangci-lint` is pinned to the same version,
 `v2.13.1`, for the root lane and for every nested module's own lint step.
+
+> **Note (#159, F4).** If PR #169 (branch `feat/159-f4a-releaseplan`, the
+> `internal/cmd/releaseplan` module-and-tag planner) merges before this
+> section does, this file will need a small rebase: that PR appends its
+> own new section here too, at the same end-of-file location.
+
+### Release gate (#159, F4 PR-B)
+
+Before this change, pushing a tag matching `v*` immediately created a
+GitHub Release and started bumping and tagging the four `publisher/*`
+modules — nothing checked that the tagged commit had ever actually passed
+CI. A human could tag a broken, unreviewed, or simply wrong commit and the
+whole publish chain would run anyway.
+
+`.github/workflows/release.yml` now runs a `gate` job first, before
+`release-ego` (which creates the GitHub Release) and before
+`release-publishers` (which needs `release-ego` and does the publisher
+bumps and tags): `gate → release-ego → release-publishers`. `gate` fails
+the whole workflow — nothing downstream ever starts — unless the exact
+tagged commit both is on `main` and has a `build.yml` run that completed
+with conclusion `success`.
+
+**Why the exact SHA, not "a recent green build."** A green `build.yml` run
+on a *different* commit — an earlier commit on the same branch, or a
+commit that has since been amended or rebased away — says nothing about
+whether the code actually being tagged builds and passes. The gate only
+ever asks GitHub for runs whose `head_sha` equals the tagged commit's own
+SHA (`GET
+/repos/{owner}/{repo}/actions/workflows/build.yml/runs?head_sha=<sha>`),
+never a run on a nearby commit and never the branch's latest run.
+
+**Dereferencing the tag.** A lightweight tag already points straight at a
+commit. An *annotated* tag (the kind `git tag -a` creates, carrying its
+own message, tagger, and date) points at a separate tag object, which in
+turn points at a commit — possibly through a chain of more than one tag
+object. `git rev-parse "$TAG^{commit}"` (the `gate` job's first step,
+`Resolve the tagged commit and its main membership`) dereferences either
+shape down to the actual commit in one call; a bare `git rev-parse "$TAG"`
+would instead return an annotated tag's own object SHA, which `build.yml`
+never runs against and which `head_sha` would therefore never match.
+
+**Main membership.** The tagged commit must also be reachable from
+`origin/main` — a tag on a commit that was never merged (a stray local
+commit, a force-pushed-away commit, a commit only on some other branch) is
+rejected outright, independent of anything `build.yml` ever reported.
+This is computed with plain `git`, not the GitHub compare API: `git fetch
+origin main --quiet` followed by `git merge-base --is-ancestor <sha>
+origin/main` inside the same job that already checked out the repository
+with `fetch-depth: 0`, needing no extra API call, no pagination, and no
+extra permission scope beyond `contents: read`. The compare API
+(`GET /repos/{owner}/{repo}/compare/main...<sha>`) was the rejected
+alternative: it would work too, but it needs its own error handling for a
+commit GitHub has never indexed, and it adds a second API surface for no
+benefit over a `git` command the job already has the history for.
+
+**The most recent completed run governs.** Among the runs matching the
+exact SHA, `internal/cmd/releasegate`'s pure decision function,
+`Decide` (`internal/cmd/releasegate/decision.go`), looks only at the most
+recent one — ordered by GitHub's `run_started_at` (when this run's current
+attempt actually started), not `created_at` (when the run object was
+first recorded), falling back to `created_at` only when `run_started_at`
+is absent; ties broken by the higher `run_attempt`, then by the higher
+run ID (GitHub Actions run IDs are assigned monotonically instance-wide).
+`created_at` alone is not enough: **re-running** a workflow run (from the
+Actions UI, the API, or `gh run rerun`) keeps the same run ID and the same
+`created_at`, but advances `run_started_at` and `run_attempt` — verified
+against real run
+[35120281495](https://github.com/getsyntegrity/ego/actions/runs/35120281495)
+(`run_attempt: 2`, `created_at` 2026-09-16T16:11:21Z, `run_started_at`
+2026-09-16T16:22:19Z, eleven minutes later). A run that was re-run *after*
+another run's `created_at` is the fresher evidence even though its own
+`created_at` is older; sorting by `created_at` alone would rank the two
+backwards and let a stale re-run's original, superseded result outvote
+the real most recent one.
+
+- If that latest run has not completed yet (`status` is `queued`,
+  `in_progress`, `waiting`, `pending`, or `requested`), the gate **waits**
+  and polls again.
+- If it completed with conclusion `success`, the gate **passes**.
+- If it completed with any other conclusion (`failure`, `cancelled`,
+  `skipped`, `timed_out`, ...), the gate **fails**, naming the conclusion
+  and the run's URL.
+- If no run at all exists yet for the SHA, the gate **waits**.
+
+Two alternative rules were considered and rejected. "Any run for this SHA
+ever succeeded" would let a commit pass even after a later re-run
+regressed it — the same SHA can genuinely be re-run more than once (a
+manual `workflow_dispatch` re-run, most commonly), and a newer failure on
+the exact commit being tagged is exactly the signal this gate exists to
+catch. "The oldest completed run governs" has the opposite, equally wrong
+problem: it would keep failing a commit whose first CI run was flaky and
+failed, even after a later re-run on the very same SHA turned green. Only
+"the most recent completed run governs" treats a later, more-informed
+signal about the same commit as authoritative in both directions.
+
+**`workflow_dispatch` runs count too.** `build.yml` also triggers on
+`workflow_dispatch` (see "What each workflow runs" above), and the gate's
+GitHub query filters by `head_sha` only — never by `branch` or `event`
+(see `internal/cmd/releasegate/client.go`'s `ListBuildRuns` doc comment).
+A green manually-triggered re-run against the exact tagged SHA is judged
+just as strong evidence that `build.yml` passed for that commit as an
+automatic push-triggered run would be; filtering it out at the API layer
+would only create a confusing case where the gate says "no run found" for
+a commit an operator can see is green in the Actions tab.
+
+**The bounded wait.** A tag is typically pushed for a commit that just
+landed on `main`, so its `build.yml` run (triggered by that same push to
+`main`) may still be in flight, or GitHub's API may not have indexed it
+yet, when `release.yml`'s tag-triggered run starts. The `gate` job polls
+every 30 seconds (`-interval`) for up to 20 minutes (`-timeout`) before
+giving up, via `internal/cmd/releasegate/main.go`'s bounded wait loop
+(`waitForGate`). Each sleep between polls is clamped to whatever time is
+actually left before the deadline (PR #171 review, R3/minor): `-interval`
+is an operator-set flag, and nothing stops it from being configured
+larger than `-timeout`; without the clamp, that single sleep would run
+past the deadline before the loop ever got to check it again, silently
+turning a short `-timeout` into a much longer real wait. Once the timeout
+expires, the gate fails with a clear message naming the SHA and the last
+known state — a fetch error, a decision reason (still pending, or no run
+found at all), or both when the loop saw one of each before giving up —
+it never hangs the workflow indefinitely, and it never
+silently treats "still waiting" as success. The off-main case is checked
+once, up front, without ever calling GitHub's API: main reachability
+cannot change while the job runs, so polling for it would only waste time
+and API calls.
+
+**A transient GitHub API error does not fail the gate outright.** A
+`ListBuildRuns` call can fail for reasons that have nothing to do with the
+tagged commit's CI state — a `5xx` from GitHub, a rate limit, a network
+blip. Before PR #171's review, `waitForGate` treated any such error as an
+immediate, terminal failure, which meant a single flaky API call could
+sink an otherwise-green release. It is now treated exactly like a pending
+run: logged, and retried on the same bounded-wait schedule (clamped
+sleep included) until either a fetch succeeds or the deadline passes.
+This stays fail-closed — `Pass` is only ever returned immediately after a
+fetch that succeeded AND whose `Decide` result was itself `Pass`; a run
+of errors can only ever lead to `Fail` at the deadline, never to a `Pass`
+by default. The deadline message names the last fetch error, the last
+decision reason `Decide` produced, or both, so an operator can tell "GitHub
+was unreachable" apart from "still genuinely waiting on a pending run".
+
+**How to test the gate without publishing anything.** Every call the gate
+makes is a read-only GitHub API request; it creates nothing, tags
+nothing, and pushes nothing. Run it directly, from a checkout with a full
+history (`git fetch --all` or an equivalent clone) and a token that can
+read Actions runs:
+
+```sh
+GITHUB_TOKEN=$(gh auth token) go run ./internal/cmd/releasegate \
+  -repo getsyntegrity/ego \
+  -sha <full 40-character commit SHA> \
+  -on-main=true \
+  -timeout 0
+```
+
+`-timeout 0` makes it check exactly once and return immediately instead
+of waiting — the right mode for a manual dry run. `-on-main` is not
+computed for you by this command; pass `true` or `false` yourself (or
+compute it first with `git merge-base --is-ancestor <sha> origin/main`).
+`-timeout` and `-interval` accept any Go duration (`20m`, `90s`, ...).
+
+Observed against the real `getsyntegrity/ego` repository (2026-09-28, read
+only, nothing published):
+
+| Case | SHA | `-on-main` | Result |
+|---|---|---|---|
+| Green run on main | `8b3962acc109ac06da3a4ada4c3186be7d46cfa5` | `true` | **PASS** — run [36420765355](https://github.com/getsyntegrity/ego/actions/runs/36420765355), conclusion `success` |
+| PR-branch commit, off main | `743692a7804005408355e5066d165debc885f9f4` (branch `feat/159-f4a-releaseplan`, PR #169) | `false` | **FAIL** — "not reachable from origin/main" (checked before any GitHub call) |
+| Same commit, `-on-main` forced `true` (illustration only — it is not really on main) | `743692a7804005408355e5066d165debc885f9f4` | `true` | **FAIL** ("timed out after 0s ... no build.yml run found yet") — `build.yml` never runs on a PR branch, only on push to `main` or `workflow_dispatch` |
+| Real failed run on main | `ddf9337092a5b4e43a6d90897914f34ed52f453f` | `true` | **FAIL** — run [35120281495](https://github.com/getsyntegrity/ego/actions/runs/35120281495), conclusion `failure` |
+
+No `cancelled` `build.yml` run on `main` was found to test the same way
+(`gh api ".../runs?branch=main&status=cancelled"` returned none) — that
+path is covered by `internal/cmd/releasegate`'s own unit test fixtures
+instead (`TestDecide_CancelledConclusionFails`,
+`decision_test.go`), which do not depend on any particular commit's real
+CI history continuing to exist.
+
+**A known, pre-existing limitation this gate does not fix.** After
+`release-ego`, the `release-publishers` job (`release.yml:169-170` before
+this change, an existing step this change does not touch) commits each
+publisher's bumped `go.mod`/`go.sum` and runs `git push origin HEAD:main`
+directly. `main` is a protected branch with a required, strict status
+check ("CI Gate," see "The `ci-gate` job" above) and
+`enforce_admins: true`. A direct push of a brand-new commit that has never
+run through "CI Gate" is rejected by GitHub with `GH006: Protected branch
+update failed`. This gate does not change that step's logic or order —
+the maintainer asked for it to stay untouched — so this conflict remains
+open and needs a maintainer decision (for example: route that commit
+through a short-lived branch and a fast-forward-only merge, or grant the
+release workflow's token a documented, audited bypass of the required
+check for that one push). Filed here rather than silently worked around,
+since silently bypassing branch protection was explicitly out of scope
+for this change.
