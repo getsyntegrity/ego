@@ -152,15 +152,106 @@ buckets, checked in this order:
 
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
-| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
+| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/` (except the allow-list below), `protos/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
 | Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
-| No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
+| No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`, and the `.github/` allow-list below                                                                                                  | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
 | Unknown          | Anything else                                                                                                                                                                                | Forces mode `full`, with the offending path in the reason |
 
-Every path in `.github/` forces `full`, including `.github/CODEOWNERS`
-(which has no file extension and would otherwise fall through to
-"unknown" — the `.github/` directory rule catches it first).
+Every path in `.github/` forces `full` unless it is on the explicit
+allow-list in "`.github/` classification" below, which is checked first.
+An unlisted extension-less file such as a new `.github/FUNDING` would
+otherwise fall through to "unknown"; the `.github/` directory rule catches
+it and forces `full` as well.
+
+### `.github/` classification
+
+A change under `.github/` forces the full suite because a workflow, a
+composite action or a helper can change how every module is built, linted
+and tested. Some files cannot, and making a release-workflow tweak pay for
+the whole matrix only slows review down. So `internal/cmd/ciselect/selector`
+keeps a short **allow-list of files that cannot change module
+verification**; everything else under `.github/` (including files that do
+not exist yet) stays on the safe side and forces `full`.
+
+| Path | Why it cannot change verification | On a PR |
+|------|-----------------------------------|---------|
+| `.github/workflows/release.yml` | `on: push: tags: v*` only; never runs for a PR or a branch push | no-test |
+| `.github/workflows/release-publishers.yml` | `on: workflow_dispatch` only | no-test |
+| `.github/workflows/stale.yml` | `on: schedule` / `workflow_dispatch` only; manages issues | no-test |
+| `.github/CODEOWNERS` | routes review requests | no-test |
+| `.github/ISSUE_TEMPLATE/**` | rendered by GitHub's UI, read by no job | no-test |
+| `.github/workflows/build.yml`, `pull_request.yml`, any `.github/actions/**`, any other `.github/` file | can change what runs for every module | `full`, all modules |
+
+The allow-list matches exact file names (plus the `ISSUE_TEMPLATE/`
+directory boundary), so `release.yml.bak` or `ISSUE_TEMPLATE-x/` do not
+qualify. Other verification-relevant files were already global and are
+unchanged: `scripts/ci/**` (used by both workflows),
+`internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `.golangci.yml`,
+`Makefile`, `Dockerfile.ci`, `go.work*`, `buf*.yaml` and `protos/`.
+
+A PR that only touches allow-listed files ends in `none` mode with no
+selected modules. What still runs: `plan` (which writes the explanatory
+summary), and `CI Gate`, which passes because `modules` and `consumer` are
+legitimately skipped. `Verify clean consumer` only runs in `full` mode, so
+it is skipped too. `release-plan` exists only in `build.yml` and runs on
+every push to `main` (and, once it exists, `develop`), never on a PR.
+Trade-off: a mistake inside a release-only workflow is not caught by PR CI
+(and this repository does not run `actionlint`); it surfaces on the tag
+push or the manual dispatch.
+
+Measured with the real `ciselect` binary on `b0b00de` (before) and with
+this change (after), as `pull_request.yml` invokes it (`-changed`, `-base`;
+nested modules always include `test/compat`, the compatibility consumer):
+
+| Changed file | Before | After |
+|--------------|--------|-------|
+| `publisher/kafka/kafka.go` | `none`; `publisher/kafka`, `test/compat` | unchanged |
+| `port/publishing/publishingtest/*.go` (leaf) | `affected`; `.`, `publisher/websocket`, `test/compat` | unchanged |
+| `port/publishing/publishing.go` (widely imported) | `affected`; `.` plus all 7 nested modules | unchanged |
+| `.github/workflows/release-publishers.yml` (also `release.yml`, `stale.yml`, `CODEOWNERS`, `ISSUE_TEMPLATE/**`) | `full`, global; all 8 modules | `none`; no modules |
+| `.github/workflows/build.yml` (also `pull_request.yml`, `scripts/ci/**`, unknown `.github/*`) | `full`, global; all 8 modules | unchanged |
+| push to `main`/`develop` (`-all`) | `full`, global; `.` plus all 7 nested modules | unchanged |
+
+## Selection policy by event
+
+The policy keys on the event and the target branch, not on "a merge
+happened": a push to `main` runs the full gate whether it came from a merge,
+a direct push or an administrator override.
+
+| Event | Workflow | Selection | What runs |
+|-------|----------|-----------|-----------|
+| Pull request to `main`, `develop` or `docs/propose-*` | `pull_request.yml` | `ciselect -changed … -base <merge-base>`: changed modules plus dependents, `affected` root packages | `plan`, the `modules` matrix for the selected modules only, `consumer` only when the plan is `full`, `CI Gate` |
+| Push to `main` or `develop` | `build.yml` | `ciselect -all`: root `.` plus every nested module, `full` | `plan`, `release-plan`, `modules` matrix (all modules, once each), `consumer`, `CI Gate` |
+| `workflow_dispatch` on `build.yml` | `build.yml` | same as a push to `main` | same |
+| Push to any other branch | none | no workflow has a push trigger for work branches; without a PR nothing runs | nothing |
+| Tag `v*` | `release.yml` | not CI selection | release gate and publish |
+| `workflow_dispatch` on `release-publishers.yml` | `release-publishers.yml` | not CI selection | publisher tagging (currently disabled on the remote) |
+
+`develop` is listed in both triggers ahead of time. It is inactive until
+the branch exists; nothing else needs to change when it is created.
+
+The full push suite is not run twice. Root tests only run in the `.` entry
+of the `modules` matrix (`go test ./...` at the root never enters nested
+modules, which each run in their own matrix entry through
+`scripts/ci/verify-module.sh`), and no job outside the matrix repeats them.
+The matrix is kept for parallelism.
+
+### Fallbacks and the gate
+
+The selector widens, never narrows, when it cannot decide safely: an empty
+change list, an unrecognized path, a package graph or `go.mod` load error,
+or a failing `-base` all end in `full`. In `pull_request.yml`, a `ciselect`
+process error is caught by the workflow and re-run as `ciselect -all
+-reason "selector failed; full-suite fallback"`. If `git diff` itself fails
+the `plan` job fails and `CI Gate` fails with it, which is safe but red.
+
+`CI Gate` needs `plan`, `modules` and `consumer` (plus `release-plan` in
+`build.yml`), runs `if: always()`, requires `plan` to be `success`, and
+accepts `skipped` for `modules` (empty matrix) and, in `pull_request.yml`,
+for `consumer`. Any `failure` or `cancelled` fails it. In `build.yml`
+`modules` may only be skipped for an empty matrix, which `-all` never
+produces, and `release-plan` and `consumer` must be `success`.
 
 ### Reverse-dependency expansion
 
@@ -458,8 +549,8 @@ S1 moved those checks into `test/compat`.
    selected and the root lane runs `full`, with the reason
    "global: `<path>` changed". The global paths are `go.work`,
    `go.work.sum`, `.golangci.yml`, `Makefile`, `Dockerfile.ci`,
-   `buf.yaml`, `buf.gen.yaml`, and everything under `.github/`,
-   `scripts/ci/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/` (it
+   `buf.yaml`, `buf.gen.yaml`, and everything under `.github/` except the
+   allow-list in "`.github/` classification", `scripts/ci/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/` (it
    decides every module's govulncheck result) and `protos/`. `-all` and an
    empty changed-file list are treated the same way. The root `go.mod`
    and `go.sum` are deliberately **not** global: they send the root lane
