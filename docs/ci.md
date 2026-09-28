@@ -112,7 +112,10 @@ package selected (`-all`'s `full` mode), `govulncheck -format json ./...`
 gated by `internal/cmd/vulngate`, and appends the same coverage summary to
 the job summary. This is the mandatory gate and always runs the complete
 suite, root and every nested module — `main` and `workflow_dispatch` never
-run in `affected` mode.
+run in `affected` mode. `build.yml` also has a third, independent job,
+`release-plan` — a dry run of `internal/cmd/releaseplan` computing the
+release order and next tag of every released module, with no publish and
+no tag — see "Release plan dry run (releaseplan)" below.
 
 ### `scripts/ci/go-test.sh`
 
@@ -868,25 +871,75 @@ library only, so this works with no network access and with no `vendor/`
 directory present, which matters for a nested-module job: unlike the root
 entry, it never runs `go mod vendor` for the root module first.
 
+### Release plan dry run (releaseplan) (#159, F4 PR-A)
+
+`build.yml` has a third job, `release-plan`, alongside `plan` and
+`modules` (no `needs:` between them — it runs in parallel, so it never
+holds back the actual test/build gate). It runs `internal/cmd/
+releaseplan` as a pure dry run: given every `go.mod` in the repository
+and the explicit list of released module directories in
+`scripts/ci/release-modules.txt` (today `.` and the four `publisher/*`
+directories — read off `.github/workflows/release.yml`'s own publisher
+discovery, kept here instead of duplicating that shell logic), it
+computes the release order and the next tag of each released module and
+writes `plan.json` and `summary.md`. It never calls git to *decide*
+anything (only `git tag -l`, piped to a file, to hand it the existing
+tags an actual release would see), never publishes, and never creates a
+tag — that remains `release.yml`'s job (a separate workflow, triggered by
+a real `v*` tag push, PR-B). The job:
+
+1. Checks out with `fetch-depth: 0` and `fetch-tags: true` (a shallow
+   clone would hide the tags `releaseplan` needs to compute the *next*
+   version, not just the first one).
+2. Writes `git tag -l` to a temp file and runs `go run ./internal/cmd/
+   releaseplan -repo-root . -release scripts/ci/release-modules.txt -tags
+   <that file> -bump patch -out-dir "$RUNNER_TEMP/releaseplan"`.
+3. Appends `summary.md` to the job summary (`$GITHUB_STEP_SUMMARY`), the
+   same pattern `plan`'s own step uses for `ciselect`'s summary.
+4. Uploads `plan.json` (and `summary.md`) as the `release-plan` artifact.
+
+The job's own `permissions: contents: read` is the most that step needs
+(checkout and `git tag -l` are both read-only); it does not inherit
+whatever broader default the workflow would otherwise have. Every `${{
+}}` this job's steps need lives in a `with:` field or an `env:` mapping,
+never spliced directly into a `run:` shell body — the same rule
+`pull_request.yml`/`build.yml` already follow elsewhere in this repository
+(a raw `${{ }}` inside a shell script is a script-injection vector: a
+value containing shell metacharacters would be interpolated as source,
+not passed as data).
+
+**Why `ci-gate` requires it.** `release-plan`'s only purpose is to catch a
+broken release plan before anyone relies on it for a real release — a
+newly nested module missing from `release-modules.txt`, a cycle, a tag
+scheme violation. A dry run nobody has to look at is not a dry run
+anyone benefits from, so its failure fails `CI Gate` on `main` exactly
+like `plan` or `modules` failing does (see below); unlike `modules`,
+`release-plan` has no matrix and no legitimate skip condition, so
+`success` is the only acceptable outcome.
+
 ### The `ci-gate` job: one required status check
 
 Before this change, neither workflow had a single status check that branch
 protection could require: the `modules` job is *skipped* (not green, not
 red) whenever `modules.json` is `[]`, and GitHub branch protection cannot
 require a check that a run sometimes never reports at all. `ci-gate` fixes
-this. It is the last job in both `pull_request.yml` and `build.yml`,
-`needs: [plan, modules]`, and runs with `if: always()` so it still runs
-even when an earlier job failed. Its one step reads `needs.plan.result` and
-`needs.modules.result`, and fails if `plan` did not succeed, or if
-`modules` finished as anything other than `success` or `skipped`. Once
+this. It is the last job in both `pull_request.yml` and `build.yml` (on
+`build.yml`, `needs: [plan, modules, release-plan]`; `pull_request.yml`
+has no `release-plan` job, see "Release plan dry run" above), and runs
+with `if: always()` so it still runs even when an earlier job failed. Its
+one step reads `needs.plan.result`, `needs.modules.result` and, on
+`build.yml`, `needs.release-plan.result`, and fails if `plan` did not
+succeed, if `modules` finished as anything other than `success` or
+`skipped`, or if `release-plan` (on `build.yml`) did not succeed. Once
 `plan` itself succeeded, `modules` can only be "skipped" because `plan`'s
 own `modules.json` was `[]` — never a hidden failure. If `plan` itself
 fails, `modules` is skipped too (its `needs: plan` was not satisfied), but
 `ci-gate` already failed on `plan`'s own result, so that skip changes
 nothing. This makes `ci-gate` pass whether the matrix fanned out to zero,
-one, or many modules (root included), and fail visibly whenever `plan`, or
-a real `modules` failure/cancellation, would otherwise have left branch
-protection with nothing to require.
+one, or many modules (root included), and fail visibly whenever `plan`, a
+real `modules` failure/cancellation, or (on `build.yml`) a broken release
+plan, would otherwise have left branch protection with nothing to
+require.
 
 **Required check name: `CI Gate`.** Configure branch protection to require
 this one check (the job's `name:`, not its `ci-gate` id) on `main`; no
@@ -1165,6 +1218,15 @@ checks both, separately:
   unreleased module is allowed only while no released module requires it
   and while it is listed here; `release.yml` only releases
   `publisher/*`.
+
+This section describes what `release.yml` does today, unchanged by this
+PR (#159, F4 PR-A): it hard-codes the root module path and has no
+explicit notion of release order or of a tag's major version matching its
+module path's `/vN` suffix. `internal/cmd/releaseplan` (see "Release plan
+dry run (releaseplan)" above) computes the same root-first order and the
+D2 (a) tag scheme from `scripts/ci/release-modules.txt` and each
+module's own `go.mod`, but only as a dry run on `main` — it does not yet
+drive a real release; that remains a later PR.
 
 ### Toolchain requirements
 

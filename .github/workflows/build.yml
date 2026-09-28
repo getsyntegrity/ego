@@ -46,6 +46,48 @@ jobs:
           path: ${{ runner.temp }}/ci
           retention-days: 7
 
+  # release-plan is a dry run of internal/cmd/releaseplan: it computes the
+  # release order and next tag of every module scripts/ci/release-modules.txt
+  # lists, and appends the result to the job summary. It never publishes,
+  # tags, or touches release.yml's actual release path (PR-B) — see
+  # docs/ci.md, "Release plan dry run (releaseplan)". It runs independently
+  # of plan/modules (no needs:) so it never holds back the test/build gate,
+  # but ci-gate below still requires it to succeed: a broken release plan on
+  # main is exactly the kind of regression this dry run exists to surface
+  # before anyone relies on it for a real release.
+  release-plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache-dependency-path: "**/*.sum"
+      - name: Compute the release plan (dry run)
+        shell: bash
+        run: |
+          git tag -l > "$RUNNER_TEMP/release-plan-tags.txt"
+          go run ./internal/cmd/releaseplan \
+            -repo-root . \
+            -release scripts/ci/release-modules.txt \
+            -tags "$RUNNER_TEMP/release-plan-tags.txt" \
+            -bump patch \
+            -out-dir "$RUNNER_TEMP/releaseplan"
+          cat "$RUNNER_TEMP/releaseplan/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the release plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/releaseplan
+          retention-days: 7
+
   # modules fans out one job per selected module directory, root (".")
   # included (with -all every run here): the root module runs in the same
   # per-module job shape as every nested one, with its root-only steps
@@ -216,7 +258,7 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    needs: [plan, modules]
+    needs: [plan, modules, release-plan]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -225,9 +267,11 @@ jobs:
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
+          RELEASE_PLAN_RESULT: ${{ needs.release-plan.result }}
         run: |
-          echo "plan:    $PLAN_RESULT"
-          echo "modules: $MODULES_RESULT"
+          echo "plan:         $PLAN_RESULT"
+          echo "modules:      $MODULES_RESULT"
+          echo "release-plan: $RELEASE_PLAN_RESULT"
           status=0
           if [ "$PLAN_RESULT" != "success" ]; then
             echo "::error::plan job did not succeed ($PLAN_RESULT)"
@@ -244,4 +288,10 @@ jobs:
               status=1
               ;;
           esac
+          # release-plan is a dry run with no matrix skip condition, so
+          # (unlike modules) "success" is the only acceptable outcome here.
+          if [ "$RELEASE_PLAN_RESULT" != "success" ]; then
+            echo "::error::release-plan job did not succeed ($RELEASE_PLAN_RESULT)"
+            status=1
+          fi
           exit "$status"
