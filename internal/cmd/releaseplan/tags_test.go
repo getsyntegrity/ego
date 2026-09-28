@@ -55,12 +55,14 @@ func TestNextTag_NoExistingTags_PatchSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pub nextTag: %v", err)
 	}
-	if pubNext.String() != "1.0.1" {
-		t.Fatalf("pub next = %s, want 1.0.1", pubNext.String())
+	// An untagged suffix-less module starts at 0.0.0, as release.yml does
+	// today (release.yml: CURRENT="0.0.0" when no publisher tag exists).
+	if pubNext.String() != "0.0.1" {
+		t.Fatalf("pub next = %s, want 0.0.1", pubNext.String())
 	}
 }
 
-func TestNextTag_NoExistingTags_MajorRefusesBoth(t *testing.T) {
+func TestNextTag_NoExistingTags_MajorRefusesRootAllowsV1(t *testing.T) {
 	g, err := discoverGraph("testdata/tagscheme")
 	if err != nil {
 		t.Fatalf("discoverGraph: %v", err)
@@ -76,12 +78,14 @@ func TestNextTag_NoExistingTags_MajorRefusesBoth(t *testing.T) {
 		t.Fatalf("root refusal %q does not mention the offending major", err.Error())
 	}
 
-	_, _, err = nextTag("pub", pub.Path, nil, "major")
-	if err == nil {
-		t.Fatal("expected pub major bump (v1 -> v2) to be refused: pub has no /vN suffix")
+	// 0.0.0 -> 1.0.0 is legal for a path without a /vN suffix; the refusal
+	// of v2+ is covered from a v1 tag by TestNextTag_ExistingMajorRefusal.
+	_, pubNext, err := nextTag("pub", pub.Path, nil, "major")
+	if err != nil {
+		t.Fatalf("pub major bump from no tag: %v, want 1.0.0", err)
 	}
-	if !strings.Contains(err.Error(), "pub") {
-		t.Fatalf("pub refusal %q does not name the module", err.Error())
+	if pubNext.String() != "1.0.0" {
+		t.Fatalf("pub next = %s, want 1.0.0", pubNext.String())
 	}
 }
 

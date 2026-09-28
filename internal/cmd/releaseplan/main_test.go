@@ -112,8 +112,8 @@ func TestRun_MissingRequiredFlags(t *testing.T) {
 // repository (internal/cmd/releaseplan/../../.. is the repo root),
 // mirroring the feature document's "Real run on this repository" check:
 // a patch bump succeeds and orders the root before every publisher; a
-// major bump refuses both the root (v4 path suffix) and every publisher
-// (no /vN suffix, still at their pre-1.0 ceiling with zero tags).
+// major bump is refused because the root's path ends in /v4 (an untagged
+// publisher's first major, v1.0.0, would be legal on its own).
 func TestRun_RealRepository(t *testing.T) {
 	repoRoot := filepath.Join("..", "..", "..")
 	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {

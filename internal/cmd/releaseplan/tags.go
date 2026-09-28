@@ -121,27 +121,21 @@ func latestTag(dir string, tags []string) (v semver, tag string, found bool) {
 }
 
 // noTagBaseline is the synthetic "current version" nextTag bumps from
-// when no existing tag matches a module's prefix: the largest major the
-// D2 (a) scheme allows for that module's path before a bump would need a
-// path-suffix change — the root's own forced major (equality with its
-// path's "/vN" leaves only one legal value), or 1 for a path with no
-// "/vN" suffix (the top of the {0,1} range Go permits there).
+// when no existing tag matches a module's prefix. A path with a "/vN"
+// suffix starts at vN.0.0, the only major D2 (a) allows for it. A path
+// without a suffix starts at 0.0.0, which is what release.yml does today
+// for a publisher with no tag (CURRENT="0.0.0"), so a first patch is
+// v0.0.1 and a first major is v1.0.0, both legal without a suffix.
 //
-// Starting at that ceiling, rather than at 0, means a bare "-bump major"
-// against a never-tagged module is refused exactly the way it would be
-// once a real tag already sits at the ceiling — instead of silently
-// succeeding once (0 -> 1 is always legal) and only failing on a second
-// major bump. The rejected alternative was starting every module at
-// "0.0.0" regardless of its path: simpler, but it hides the same major
-// bump's refusal for a whole release cycle for any module without a path
-// suffix, which is more surprising, not less. Overriding this baseline
-// for a real first release is as trivial as seeding -tags with the
-// desired starting tag; no separate flag was added for it.
+// Rejected: starting a suffix-less module at 1.0.0, so that an untagged
+// "-bump major" is refused at once. It would make every first release a
+// v1, which declares a stable API, and it would diverge from release.yml
+// without anyone deciding it.
 func noTagBaseline(modPath string) semver {
 	if major, ok := moduleSuffixMajor(modPath); ok {
 		return semver{major: major}
 	}
-	return semver{major: 1}
+	return semver{}
 }
 
 // bumpVersion returns v with kind ("patch", "minor" or "major") applied.

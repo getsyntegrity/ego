@@ -86,17 +86,19 @@ A new command, `internal/cmd/releaseplan`, reads every `go.mod` in the repositor
 - Files: `internal/cmd/releaseplan/tags.go`, `tags_test.go` (reuses the
   `testdata/tagscheme` fixture from T1: root `example.com/repo/v4`,
   nested `pub` at `example.com/repo/v4/pub` with no suffix).
-- **Judgement call — the no-tag baseline.** With no existing tag,
-  `noTagBaseline` starts a module at the *largest* major D2 (a) allows
-  before a bump would need a path-suffix change: the root's own forced
-  major (its path's `/vN`, here 4), or `1` for a suffix-less path (the
-  top of the `{0,1}` range). Rejected alternative: starting every module
-  at `0.0.0` regardless of path. That alternative is simpler but hides a
-  suffix-less module's major-bump refusal for a whole cycle (`0 -> 1` is
-  always legal), and it cannot reproduce the required behavior of a bare
-  `-bump major` against a truly untagged repository refusing immediately
-  — verified below against this repository's own `.` and `publisher/*`
-  with zero tags. No override flag was added: seeding `-tags` with a
+- **Judgement call — the no-tag baseline (corrected by the coordinator
+  after T4).** With no existing tag, `noTagBaseline` starts a module with
+  a `/vN` suffix at `vN.0.0` (the only major D2 (a) allows for it) and a
+  suffix-less module at `0.0.0`, which is what `release.yml:117-121` does
+  today for a publisher without a tag (`CURRENT="0.0.0"`). So a first
+  patch is `v0.0.1` and a first major is `v1.0.0`, both legal without a
+  suffix; v2+ is still refused, from a v1 tag. The writer's first version
+  started suffix-less modules at `1.0.0` so an untagged `-bump major`
+  would be refused at once. Rejected: `v1.0.0` is legal for a suffix-less
+  path, and starting at v1 would make every first publisher release
+  declare a stable API, diverging from `release.yml` without a decision.
+  RED: `pub next = 1.0.1, want 0.0.1` and an untagged pub major refused as
+  v2; GREEN after the change. No override flag: seeding `-tags` with a
   starting tag is already a trivial override.
 - `nextTag(dir, modPath, tags, bumpKind)` returns the current tag (empty
   if none) and the next version, or an error naming the module directory,
@@ -141,7 +143,8 @@ A new command, `internal/cmd/releaseplan`, reads every `go.mod` in the repositor
     used as data outside tests/fixtures.
   - Real run, `-bump patch -tags /dev/null -release scripts/ci/
     release-modules.txt`: exit 0, order `.` (→ `v4.0.1`),
-    `publisher/kafka` (→ `publisher/kafka/v1.0.1`), `publisher/nats`,
+    `publisher/kafka` (→ `publisher/kafka/v0.0.1` after the baseline
+    correction; `v1.0.1` before it), `publisher/nats`,
     `publisher/pulsar`, `publisher/websocket` (root first, then every
     publisher, each `Requires: [github.com/pablogore/ego/v4]`).
   - Real run, `-bump major`, same inputs: exit 1,
@@ -219,11 +222,11 @@ A new command, `internal/cmd/releaseplan`, reads every `go.mod` in the repositor
   `run:` body.
 - Real run on this repository, `-bump patch -tags /dev/null -release
   scripts/ci/release-modules.txt`: exit 0, root (`v4.0.1`) ordered before
-  all four publishers (each `v1.0.1`, `Requires:
-  [github.com/pablogore/ego/v4]`). `-bump major`, same inputs: exit 1,
-  refused (root: v4 path suffix vs. requested v5; isolating a publisher
-  confirmed its own refusal too: v1 ceiling vs. requested v2, no `/v2`
-  suffix).
+  all four publishers (each `publisher/<name>/v0.0.1` after the baseline
+  correction, `Requires: [github.com/pablogore/ego/v4]`). `-bump major`,
+  same inputs: exit 1, root refused (v4 path suffix vs. requested v5). An
+  untagged publisher's first major is `v1.0.0` (legal); v2+ from a v1 tag
+  is refused (`TestNextTag_ExistingMajorRefusal`).
 - `rg -n 'pablogore/ego' internal/cmd/releaseplan -g '!*_test.go' -g
   '!**/testdata/**'` → no matches: no hard-coded module path used as data
   outside tests/fixtures (the package's own `import` lines are excluded
