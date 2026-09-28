@@ -118,8 +118,26 @@ steps+=("golangci-lint run")
 
 echo "::group::govulncheck ($module_dir)"
 if command -v govulncheck >/dev/null 2>&1; then
-  govulncheck ./...
-  steps+=("govulncheck ./...")
+  # -format json always exits 0 even when it finds vulnerabilities (the exit
+  # code alone cannot gate CI), so a plain `govulncheck ./...` scan runs
+  # first and `set -e` above fails the step immediately if the scan itself
+  # fails; only once that succeeds does internal/cmd/vulngate decide whether
+  # the report's findings are covered by scripts/ci/govulncheck-allow.json
+  # (ego-arch-006 spec 1, C2 follow-up; see docs/ci.md, "The govulncheck
+  # exception gate (vulngate)"). GOVULNCHECK_REPORT, when set (the CI matrix
+  # job always sets it), is a stable path the workflow uploads as an
+  # artifact with `if: always()`, so a failed scan still keeps its report;
+  # a local run without it falls back to a throwaway temp file that is not
+  # explicitly cleaned up here (a second `trap ... EXIT` here would silently
+  # replace the go-build step's own trap above for a module with a main
+  # package), which is harmless for a one-off local check.
+  report="${GOVULNCHECK_REPORT:-$(mktemp)}"
+  govulncheck -format json ./... >"$report"
+  go -C "$repo_root" run ./internal/cmd/vulngate \
+    -module "$module_dir" \
+    -report "$report" \
+    -allow "$repo_root/scripts/ci/govulncheck-allow.json"
+  steps+=("govulncheck ./... (gated by scripts/ci/govulncheck-allow.json)")
 else
   # CI always installs govulncheck (see the "Install govulncheck" step in
   # pull_request.yml/build.yml) before this script runs; only a local run

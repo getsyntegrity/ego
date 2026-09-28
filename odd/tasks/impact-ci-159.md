@@ -47,7 +47,7 @@ matrix is empty, the `modules` job is *skipped*, not green.
 
 - [x] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
 - [x] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
-- [x] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
+- [x] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification, gated by a reviewed, expiring exception list (C2).
 - [x] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
 - [x] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6). Evidence:
   `docs/ci/baseline-159-a1.md` (measured by a delegated read-only agent at `57c4b11`, local paths and
@@ -66,6 +66,12 @@ matrix is empty, the `modules` job is *skipped*, not green.
   A6 (#124, needs a major version).
 
 ## Progress and evidence
+
+- **Draft PR #167, first real run `36371025289`:** `plan` ok (25s), matrix of 8 entries incl. `.`
+  (root 7m20s), `CI Gate` read `plan: success`, `modules: failure` and failed, as designed. The failure
+  is `publisher/pulsar`'s new `govulncheck` step: GO-2026-5046/5047/5048 in `github.com/hamba/avro/v2`
+  v2.31.0 (transitive), reachable, "Fixed in: N/A". Pre-existing; surfaced by C2. Pending the user's
+  decision on how `govulncheck` treats findings with no available fix.
 
 - Mapping done by a delegated read-only mapper (workflows, `ciselect`, helpers).
 - **T1 done** (commit below): added a `ci-gate` job to `pull_request.yml` and
@@ -199,3 +205,134 @@ matrix is empty, the `modules` job is *skipped*, not green.
     (both new tests plus the full existing suite), `GOWORK=off go vet
     ./internal/cmd/ciselect/...` clean (`GOROOT` unset, per the T1
     environment note).
+- **T3 reopened, then re-closed** (commit below): draft PR #167's first real
+  run (`36371025289`) turned the "Draft PR #167" note above from a
+  hypothesis into a real finding — `publisher/pulsar` failed a bare
+  `govulncheck ./...` on three pre-existing, unfixable vulnerabilities
+  (GO-2026-5046/5047/5048, `github.com/hamba/avro/v2`, pulled in indirectly
+  through `github.com/apache/pulsar-client-go`) — so T3's `govulncheck`
+  addition was incomplete: it had no way to accept a specific, reviewed
+  finding, only "fail every PR touching pulsar forever" or "drop the check
+  and lose future coverage too". The user reviewed the three findings and
+  approved a bounded, reviewed, expiring exception policy (four conditions:
+  every entry names module + ID + owner + reason + exposed surface +
+  removal criterion + a review date that expires it; the gate processes
+  `govulncheck`'s structured `-format json` output rather than trusting its
+  exit code, since that exit code is always 0; any unlisted ID, or the same
+  ID under a different dependency module, still blocks; only these three
+  IDs for `publisher/pulsar`, nothing broader). This correction reopened T3
+  to add that gate.
+  - **New package `internal/cmd/vulngate`** (root module, standard library
+    only): decodes a `govulncheck -format json` report
+    (`{"config":...}`/`{"progress":...}`/`{"osv":...}`/`{"finding":...}`
+    stream) with `json.Decoder`, and matches each blocking finding against
+    `scripts/ci/govulncheck-allow.json`. **TDD (RED → GREEN)**: wrote
+    `internal/cmd/vulngate/main_test.go` first (26 table-driven/unit tests)
+    against a package containing only a license header and an empty
+    `main()`; RED confirmed by compile failure (`undefined: parseReport`,
+    `undefined: loadAllowList`, ...; `go test` reported "too many errors"
+    and `FAIL ... [build failed]`). Implemented `parseReport`,
+    `loadAllowList`, `evaluate` and `formatSummary` in `main.go`; all 26
+    tests then passed (GREEN), confirmed by
+    `GOWORK=off go test -v ./internal/cmd/vulngate/...`.
+  - **What counts as "called"**: `golang.org/x/vuln/internal/govulncheck`'s
+    JSON types are an internal package and not importable, and the
+    `-format json` schema is not otherwise documented, so this was verified
+    empirically: `GOWORK=off govulncheck -format json ./...` was run for
+    real against `publisher/pulsar` (after reinstalling `govulncheck@v1.8.0`
+    with `GOROOT` unset — the previously-installed binary was built with
+    go1.26.6 and could not parse a go1.27-syntax file in
+    `k8s.io/apimachinery`, a transitive dependency, an unrelated instance of
+    this worktree's T1-documented ambient-`GOROOT` problem). Each OSV ID
+    appears as up to three findings of increasing detail — module-only
+    (`trace: [{module, version}]`), package-only (adds `package`), and one
+    finding per call chain once actually called (adds `function` on every
+    frame, frame 0 being the vulnerable symbol and the last frame the
+    scanned module's own code, e.g. `pulsar.go:161:25:
+    pulsar.NewDurableStatePublisher calls fmt.Errorf, which eventually
+    calls avro.Freeze`) — exactly matching the rule "blocks when trace[0]
+    has a non-empty `function`", and matching `govulncheck`'s own text mode,
+    which put exactly the three call-level IDs under "=== Symbol Results
+    ===" / "Your code is affected by 3 vulnerabilities". `publisher/nats`
+    real output confirmed the negative case: one real `golang.org/x/crypto`
+    finding with no `function` (required, never called), correctly excluded
+    from blocking and confirmed by `govulncheck`'s own text mode ("0
+    vulnerabilities... your code doesn't appear to call these").
+  - **`scripts/ci/govulncheck-allow.json`** (new): the three approved
+    entries for `publisher/pulsar` (`vulnerable_module`
+    `github.com/hamba/avro/v2`, `owner` `@pablogore`, `review_by`
+    `2026-12-28`), each with the reason (no fixed version exists; only the
+    fork `github.com/iskorotkov/avro/v2` is fixed, from 2.33.0), the
+    exposure (package-level OSV record with no listed affected symbols;
+    ego's pulsar publisher only produces protobuf payloads and never uses
+    Pulsar's Avro schema support), and the removal criterion (bump
+    `hamba/avro/v2` once fixed, or once `pulsar-client-go` drops it; the
+    gate fails the entry as stale on its own once that happens).
+  - **Wiring**: `scripts/ci/verify-module.sh` now runs
+    `govulncheck -format json ./... > "$report"` then
+    `go -C "$repo_root" run ./internal/cmd/vulngate -module "$module_dir"
+    -report "$report" -allow "$repo_root/scripts/ci/govulncheck-allow.json"`
+    (unchanged local-skip behavior when `govulncheck` is not installed).
+    Both workflows' "govulncheck (root)" step does the same from the repo
+    root directly. A new "Compute the govulncheck report path" step
+    sanitizes `matrix.module` (GitHub Actions expressions have no
+    string-replace function) into a stable report path and artifact name,
+    and a new "Upload the govulncheck report" step, `if: always()`, uploads
+    it so a failed scan or a failed gate still leaves the report as
+    evidence. `Install govulncheck` is now pinned to `@v1.8.0` in both
+    workflows instead of `@latest`.
+  - **Judgement call**: staleness is keyed only on (scanned module, ID),
+    ignoring `vulnerable_module` — an entry whose ID is still present but
+    now surfaces through a different dependency module counts as *blocked*
+    (the entry no longer matches), not stale, and is not silently dropped
+    from the summary. Rejected alternative: also require
+    `vulnerable_module` to match before considering an ID "present", which
+    would make that case simultaneously stale and blocked for the same
+    root cause, double-reporting one problem.
+  - **Judgement call**: `review_by` is inclusive of its own day (`today >
+    review_by` is expired, `today == review_by` is not) — the date names
+    the last day the exception is still assumed valid, not the first day it
+    lapses. Covered by
+    `TestEvaluate_ReviewDateOnTheDayItselfStillPasses`.
+  - Verification: `GOROOT= GOWORK=off go test -count=1
+    ./internal/cmd/vulngate/... ./internal/cmd/ciselect/...` green (26
+    vulngate tests plus the untouched ciselect suite); `GOROOT= GOWORK=off
+    go vet ./internal/cmd/vulngate/...` clean; `GOROOT= GOWORK=off go build
+    ./...` green. `govulncheck@v1.8.0` (matching the pin) was installed
+    locally and run for real against `publisher/pulsar` and
+    `publisher/nats` (network available in this environment); against the
+    real `publisher/pulsar` report, `vulngate` passed with all three
+    exceptions (0 blocked/stale/expired), removing one entry made it fail
+    as blocked (1 blocked), and `-today 2026-12-29` made it fail as expired
+    (3 expired, `review_by 2026-12-28`); against the real `publisher/nats`
+    report (module-only finding, no allow entries for that module), it
+    passed with nothing flagged — proving no stale false-positive. The
+    exact `verify-module.sh` wiring (`govulncheck -format json` then
+    `go -C <repo_root> run ./internal/cmd/vulngate ...`, cwd inside the
+    nested module) was reproduced by hand for `publisher/pulsar` and
+    passed. `go -C <repo_root> run ./internal/cmd/vulngate` was also
+    confirmed to work with `GOPROXY=off` (vulngate is stdlib-only, so it
+    never needs network or a `vendor/` directory, which matters for a
+    nested-module job that never vendors the root module) and separately
+    under `GOFLAGS=-mod=vendor` for the root case's own logic (module `.`).
+    Both workflows parse as YAML (`python3 -c "import yaml; ...`) and pass
+    `go run github.com/rhysd/actionlint/cmd/actionlint@latest` with zero
+    findings — unlike the T1/T2 environment note, `actionlint` was
+    reachable via `go run` this time. Every inline `run:` block of both
+    workflows parses with `bash -n` (26 steps checked). `bash -n` OK for the
+    modified `verify-module.sh`.
+  - **Partial/blocked**: `golangci-lint run` against the new package was
+    attempted and hit the same pre-existing repo-wide vendor/go.mod drift
+    T3's original evidence already documented ("inconsistent vendoring...
+    not marked as explicit in vendor/modules.txt") — not part of the
+    required verification list, and out of scope to fix here (unrelated to
+    this change; would mean running `go mod vendor` and touching `vendor/`
+    broadly). The same drift also makes `GOFLAGS=-mod=vendor go run
+    ./internal/cmd/vulngate -module . ...` fail locally in this worktree
+    before `vulngate` itself ever runs (Go's own vendor-consistency check
+    rejects it); in the real CI job this is a non-issue because the
+    preceding "Vendoring and Tidy" step (`go mod tidy && go mod vendor`)
+    regenerates a consistent `vendor/` first. `docs/ci.md` gained a new
+    "The govulncheck exception gate (vulngate)" section (what blocks, the
+    allow-file fields, matching rules, how to add or retire an entry, the
+    exact wiring).

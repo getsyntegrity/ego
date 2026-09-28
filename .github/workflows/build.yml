@@ -80,7 +80,20 @@ jobs:
             | sh -s -- -b "$(go env GOPATH)/bin" v2.13.1
       - name: Install govulncheck
         shell: bash
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      # A stable report path per matrix entry, computed once so the root and
+      # nested-module steps below and the "Upload govulncheck report" step
+      # all agree on where the JSON report lives; artifact names cannot
+      # contain "/", so matrix.module ("." or "publisher/pulsar") is
+      # sanitized here rather than in a workflow expression (GitHub Actions
+      # expressions have no string-replace function).
+      - name: Compute the govulncheck report path
+        id: govulncheck-report
+        shell: bash
+        run: |
+          safe="$(printf '%s' "${{ matrix.module }}" | tr '/' '-')"
+          echo "name=govulncheck-${safe}" >> "$GITHUB_OUTPUT"
+          echo "path=${RUNNER_TEMP}/govulncheck-${safe}.json" >> "$GITHUB_OUTPUT"
       - name: Download the selection plan
         if: matrix.module == '.'
         uses: actions/download-artifact@v4
@@ -139,13 +152,36 @@ jobs:
         shell: bash
         env:
           GOFLAGS: -mod=vendor
-        run: govulncheck ./...
+        # -format json always exits 0 even when it finds vulnerabilities, so
+        # the scan's own exit code is checked here (this step fails
+        # immediately if it is non-zero) and internal/cmd/vulngate then
+        # decides whether the report's findings are covered by
+        # scripts/ci/govulncheck-allow.json (docs/ci.md, "The govulncheck
+        # exception gate (vulngate)").
+        run: |
+          govulncheck -format json ./... > "${{ steps.govulncheck-report.outputs.path }}"
+          go run ./internal/cmd/vulngate \
+            -module . \
+            -report "${{ steps.govulncheck-report.outputs.path }}" \
+            -allow scripts/ci/govulncheck-allow.json
       - name: Verify module
         if: matrix.module != '.'
         shell: bash
         env:
           GO_TEST_RACE: "1"
+          GOVULNCHECK_REPORT: ${{ steps.govulncheck-report.outputs.path }}
         run: scripts/ci/verify-module.sh "${{ matrix.module }}"
+      # if: always() so a module whose govulncheck step (or the exception
+      # gate) failed still keeps its report as evidence for the reviewer
+      # deciding whether a new allow-list entry is warranted.
+      - name: Upload the govulncheck report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.govulncheck-report.outputs.name }}
+          path: ${{ steps.govulncheck-report.outputs.path }}
+          retention-days: 7
+          if-no-files-found: ignore
 
   ci-gate:
     name: CI Gate

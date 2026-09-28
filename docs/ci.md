@@ -77,7 +77,9 @@ request that never needs the root module's own checks never pays for them:
    then downloads `ciselect-plan` and **runs tests**:
    `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`, with
    `GO_TEST_RACE=1` (the race detector stays on for pull requests), plus
-   `govulncheck ./...` (see "Root module in the matrix" below).
+   `govulncheck -format json ./...` gated by `internal/cmd/vulngate` (see
+   "Root module in the matrix" and "The govulncheck exception gate
+   (vulngate)" below).
 5. **Coverage summary**: when `coverage.out` was produced, the root entry
    runs `go tool cover -func=coverage.out`, takes its final `total:` line,
    and appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
@@ -97,7 +99,8 @@ always the full suite, no change detection — appends the summary to the
 job summary the same way, and uploads it as `ciselect-plan`. `-all` always
 selects the root module (mode `full`, never `none`), so the root entry of
 `modules` always runs here too: it downloads `ciselect-plan`, then runs
-`scripts/ci/go-test.sh` with the race detector on, `govulncheck ./...`, and
+`scripts/ci/go-test.sh` with the race detector on,
+`govulncheck -format json ./...` gated by `internal/cmd/vulngate`, and
 appends the same coverage summary to the job summary. This is the
 mandatory gate and always runs the complete suite, root and every nested
 module.
@@ -633,11 +636,14 @@ builds against):
    `--modules-download-mode=mod`, overriding the root config's
    `modules-download-mode: vendor`, since nested modules do not check in
    a `vendor/` directory
-6. `govulncheck ./...` (ego-arch-006 spec 1, C2) — scans the module's
-   resolved dependency graph for known vulnerabilities reachable from its
-   code. CI always installs `govulncheck` first (the workflow's "Install
-   govulncheck" step, `go install golang.org/x/vuln/cmd/govulncheck@latest`),
-   so this step always runs there; a local run of `verify-module.sh` without
+6. `govulncheck -format json ./...` (ego-arch-006 spec 1, C2), gated by
+   `internal/cmd/vulngate` against a reviewed, expiring exception list
+   (`scripts/ci/govulncheck-allow.json`) — see "The govulncheck exception
+   gate (vulngate)" below for what the gate does and why a bare
+   `govulncheck ./...` was not enough. CI always installs `govulncheck`
+   first, pinned to a fixed version (the workflow's "Install govulncheck"
+   step, `go install golang.org/x/vuln/cmd/govulncheck@v1.8.0`), so this
+   step always runs there; a local run of `verify-module.sh` without
    `govulncheck` on `PATH` prints one line and skips it instead of failing
    a contributor's machine for a tool they have not installed.
 7. `go test ./...` only when the module has at least one `*_test.go`
@@ -721,7 +727,105 @@ manually for it, are `if: matrix.module != '.'`. `govulncheck` is
 installed once per matrix job unconditionally (both the root and every
 nested module need it), then run against the root with
 `GOFLAGS=-mod=vendor` right after its own coverage summary, and against
-each nested module inside `verify-module.sh` (see above).
+each nested module inside `verify-module.sh` (see above). Both scans write
+`-format json` to a per-matrix-entry report path (`Compute the govulncheck
+report path`, which also sanitizes `matrix.module` into an artifact name,
+since an artifact name cannot contain `/`) and hand that report to
+`internal/cmd/vulngate`, which decides pass or fail (see the next section).
+A separate `Upload the govulncheck report` step, `if: always()`, keeps the
+report as a build artifact even when the scan or the gate fails, so a
+reviewer deciding whether a new exception is warranted does not have to
+reproduce the scan locally.
+
+### The govulncheck exception gate (vulngate)
+
+The first real run of this pipeline (draft PR #167, run `36371025289`)
+failed `publisher/pulsar`'s new `govulncheck` step on three findings with no
+available fix: GO-2026-5046, GO-2026-5047 and GO-2026-5048, all in
+`github.com/hamba/avro/v2` (pulled in indirectly through
+`github.com/apache/pulsar-client-go`). A bare `govulncheck ./...` step has
+no way to accept a specific, reviewed finding without either failing every
+PR that touches `publisher/pulsar` forever, or dropping the check entirely
+and losing coverage for every *future* finding too. `internal/cmd/vulngate`
+is the narrow fix: it reads a `govulncheck -format json` report and decides
+pass or fail against a small, reviewed, expiring exception list,
+`scripts/ci/govulncheck-allow.json`.
+
+**Why `-format json` and not the plain text/exit code.** `govulncheck
+-format json` always exits `0`, even when it finds vulnerabilities — the
+exit code alone cannot gate CI. The workflow step and `verify-module.sh`
+therefore capture the scan's own exit code first (a real scan failure, for
+example a network error talking to the vulnerability database, fails the
+step immediately, before `vulngate` ever runs) and only then hand the
+report to `vulngate`, which is the one that turns "these vulnerabilities
+were found" into pass or fail.
+
+**What counts as a blocking finding.** `govulncheck`'s JSON report is a
+stream of objects (`{"config":...}`, `{"progress":...}`, `{"osv":...}`,
+`{"finding":...}`); `vulngate` decodes it with `json.Decoder` and looks only
+at `finding` messages. Each `finding.trace` lists call frames from the
+vulnerable symbol itself (frame 0) to the entry point in the scanned
+module's own code (the last frame) — verified against a real
+`govulncheck -format json` run in this repository, since the format is
+undocumented outside `golang.org/x/vuln`'s own internal packages. A finding
+blocks only when frame 0 names a function: that is exactly the set
+`govulncheck`'s text mode reports under "Your code is affected". A
+vulnerability that is only required (frame 0 names just a module) or only
+imported (frame 0 also names a package, but no function) never blocks —
+this repository's own `publisher/nats` module has exactly such a
+`golang.org/x/crypto` finding today, and it correctly never appears in the
+gate's summary.
+
+**The allow file.** Every entry in `scripts/ci/govulncheck-allow.json` is a
+JSON object with eight required fields — `module` (repo-relative, `.` for
+the root), `id` (the OSV identifier), `vulnerable_module` (the dependency
+the finding is actually in, which can differ from `module` when the
+vulnerability arrives transitively), `owner`, `reason`, `exposure`,
+`removal` and `review_by` (`YYYY-MM-DD`). The file is decoded with
+`json.Decoder.DisallowUnknownFields`, and every field is validated
+non-empty with `review_by` parsed as a real date, so a typo'd field name or
+a missing field fails the load loudly instead of silently granting less (or
+more) than a reviewer intended.
+
+**Matching.** A blocking finding is excepted only when an allow-file entry
+matches on all three of `module` (the directory `vulngate -module` was
+given), `id`, and `vulnerable_module`; an entry for a different module, or
+the same `id` surfacing through a different dependency, does not apply and
+the finding blocks. An excepted entry whose `review_by` has passed (`today
+> review_by`, `today` defaulting to now in UTC or overridden with `-today`
+for tests) fails as expired instead of excepted — an exception cannot
+silently outlive its review. An entry scoped to the module being scanned
+whose `id` no longer appears among that module's blocking findings fails as
+stale, forcing its removal once the underlying vulnerability is gone. An
+entry scoped to a module this run did not scan is ignored entirely: never
+matched, and never reported stale (a `publisher/kafka` scan never
+evaluates, and never flags as stale, an entry written for
+`publisher/pulsar`).
+
+**Adding or retiring an entry.** To accept a new, reviewed finding, add an
+entry naming the exact scanned module, OSV ID and vulnerable dependency
+module, with a real `owner`, a `reason` explaining why no fix is available
+(or why the fix cannot be adopted yet), an `exposure` statement about
+whether and how this codebase actually reaches the vulnerable code, a
+`removal` criterion (what change makes the entry obsolete), and a
+`review_by` date no more than a few months out. To retire an entry, delete
+it — the gate does not need to be told to stop excepting something. If the
+gate's summary reports the entry stale (the finding is already gone) or
+expired (`review_by` has passed with the finding still present), that is
+the gate telling you the entry needs a human decision, not an automatic
+extension.
+
+**Wiring.** Both `verify-module.sh` (nested modules) and the workflows'
+"govulncheck (root)" step run `govulncheck -format json ./... > "$report"`
+and then `go -C "$repo_root" run ./internal/cmd/vulngate -module
+<module-dir> -report "$report" -allow
+"$repo_root/scripts/ci/govulncheck-allow.json"` — always invoked with the
+repository root as `go`'s working directory (`-C`, or already being there
+for the root step), never the current module's own directory, since
+`internal/cmd/vulngate` lives in the root module. `vulngate` is standard
+library only, so this works with no network access and with no `vendor/`
+directory present, which matters for a nested-module job: unlike the root
+entry, it never runs `go mod vendor` for the root module first.
 
 ### The `ci-gate` job: one required status check
 
