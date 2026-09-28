@@ -168,6 +168,14 @@ trap cleanup EXIT
 bare_repo="$work_dir/repo.git"
 git clone -q --bare "$repo_root" "$bare_repo"
 
+# The bare clone inherits every tag of the repository it was cloned from:
+# the real release tags once they exist (v4.0.0, publisher/<name>/v0.1.0),
+# and, in a local clone, any upstream tags fetched into it. Drop them all,
+# so the only tags the consumer can resolve are the ones created below and
+# `git tag` cannot collide with a real release tag of the same name (#134).
+git -C "$bare_repo" for-each-ref --format='delete %(refname)' refs/tags |
+  git -C "$bare_repo" update-ref --stdin
+
 # Tags are created only in this temporary bare clone, never in the real
 # repository: the root tag is the version every released publisher
 # already requires; each publisher gets "<dir>/<publisher_tag_version>";
