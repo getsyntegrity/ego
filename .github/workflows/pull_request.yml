@@ -247,9 +247,39 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # consumer proves that every published module path resolves the way an
+  # outside consumer resolves it — a plain `go get`, no local `replace` —
+  # against the exact tags a release would create (docs/ci.md, "Verify
+  # clean consumer"; #134). It only needs plan, not modules, and only runs
+  # when plan already selected the full suite: any change that could affect
+  # module-path resolution (go.mod, a workflow, or anything under
+  # scripts/ci/) already forces `full` mode on its own (docs/ci.md, "Modes
+  # and fail-safe rules"), so this keeps a PR confined to one nested
+  # module's business logic from paying for an extra git clone and module
+  # download on every run.
+  consumer:
+    name: Verify clean consumer
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache-dependency-path: "**/*.sum"
+      - run: go version
+      - name: Verify clean consumer
+        shell: bash
+        run: scripts/ci/verify-consumer.sh
+
   ci-gate:
     name: CI Gate
-    needs: [plan, modules]
+    needs: [plan, modules, consumer]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -258,9 +288,11 @@ jobs:
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
+          CONSUMER_RESULT: ${{ needs.consumer.result }}
         run: |
-          echo "plan:    $PLAN_RESULT"
-          echo "modules: $MODULES_RESULT"
+          echo "plan:     $PLAN_RESULT"
+          echo "modules:  $MODULES_RESULT"
+          echo "consumer: $CONSUMER_RESULT"
           status=0
           if [ "$PLAN_RESULT" != "success" ]; then
             echo "::error::plan job did not succeed ($PLAN_RESULT)"
@@ -274,6 +306,17 @@ jobs:
             success | skipped) ;;
             *)
               echo "::error::modules job did not succeed ($MODULES_RESULT)"
+              status=1
+              ;;
+          esac
+          # consumer only ever skips because plan's own outputs.mode was not
+          # "full" (see consumer's if:); when plan succeeded, that is the
+          # only way consumer can be "skipped", so it is not a failure here.
+          # Any other outcome (failure, cancelled) fails the gate.
+          case "$CONSUMER_RESULT" in
+            success | skipped) ;;
+            *)
+              echo "::error::consumer job did not succeed ($CONSUMER_RESULT)"
               status=1
               ;;
           esac

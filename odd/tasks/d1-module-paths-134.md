@@ -39,7 +39,7 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
 
 - [x] T1 RED — add `scripts/ci/verify-consumer.sh` and observe it fail on the unmigrated tree (reproduces #134). Route: delegated writer (T1–T3 together; 2+ non-trivial files).
 - [x] T2 GREEN — mechanical rename per the table, `buf` regeneration of the two `.pb.go`, badges, `golangci-lint fmt`; `verify-consumer.sh` passes; build/vet/test/lint/archcheck in every module.
-- [ ] T3 CHANGELOG entry, `docs/ci.md`, and CI wiring: a consumer job in `pull_request.yml` (when the plan is `full`) and `build.yml` (always), included in `CI Gate`.
+- [x] T3 CHANGELOG entry, `docs/ci.md`, and CI wiring: a consumer job in `pull_request.yml` (when the plan is `full`) and `build.yml` (always), included in `CI Gate`.
 - [ ] T4 Push the branch, open the PR, update #134 (acceptance criteria: `go list -m` alone does not count; the public-proxy check is pending until the root tag). Route: inline (`gh`).
 
 ## Acceptance criteria
@@ -156,11 +156,53 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
     2026-12-28 — untouched by this change), tests `ok`.
   - `rg --hidden 'pablogore/ego' -g '!openspec/**' -g '!odd/**' -g
     '!docs/ci/baseline-159-a1.md' -g '!CHANGELOG.md'` → no matches.
-  - `verify-consumer.sh` on the migrated tree: pending the T2 commit (it
-    verifies committed `HEAD`); GREEN evidence recorded once committed,
-    below.
-- Commit: `refactor!: migrate module paths to github.com/getsyntegrity/ego (#134)` — SHA `<filled after commit>`.
+  - `verify-consumer.sh` on committed HEAD `04a61f8` (GREEN): resolves
+    root `github.com/getsyntegrity/ego/v4@v4.4.3` and all four publishers
+    at `v0.1.0` with no local `replace`, runs the consumer binary
+    (`verify-consumer: resolved, built and ran every published module
+    path with no local replace`), and correctly rejects the negative
+    `publisher/kafka@v2.0.0` tag. Ends `verify-consumer.sh: OK`.
+- Commit: `refactor!: migrate module paths to github.com/getsyntegrity/ego (#134)` — SHA `04a61f8`.
+
+### T3 — done
+
+- `CHANGELOG.md`: added a new `[Unreleased]` → `💥 Breaking Changes` entry
+  at the top (existing entries, including the older fork-move entry,
+  left untouched — confirmed `git diff CHANGELOG.md` has no `-` lines
+  besides the diff header). States the D1 table, that a publisher path
+  could never resolve before this change, that a root pseudo-version pin
+  keeps building but must rewrite imports to upgrade, and that no root
+  tag exists yet.
+- `docs/ci.md`: expanded "Release verification: two different questions"
+  to three (integrated / clean-consumer / published), and added a new
+  "Verify clean consumer" section: what it proves, why `go list -m`
+  alone is insufficient, the 5-step mechanism, `VERIFY_CONSUMER_PUBLISHER_VERSION`,
+  and the CI wiring. Updated "The `ci-gate` job" section for the new
+  `consumer` need. Every literal `pablogore` path already inside the file
+  had been mechanically renamed in T2 (it matched the same repo-wide
+  regex); this task only added new prose and fixed the two subsequent
+  cross-references.
+- CI wiring: added a `consumer` job (`name: Verify clean consumer`) to
+  both `.github/workflows/pull_request.yml` (`needs: plan`, `if:
+  needs.plan.outputs.mode == 'full'`) and `.github/workflows/build.yml`
+  (`needs: plan`, unconditional — `plan` there always selects `full`).
+  Both use the same checkout (`fetch-depth: 0`) and `actions/setup-go@v7`
+  (`go-version: "1.27.0"`, `cache-dependency-path: "**/*.sum"`) shape as
+  the existing jobs, then run `scripts/ci/verify-consumer.sh`. Added
+  `consumer` to `ci-gate`'s `needs` in both workflows and to its result
+  check, treated like `modules` (success or `skipped` — `skipped` only on
+  `pull_request.yml`, since `build.yml`'s `consumer` has no skip
+  condition, so only `success` is accepted there); updated both gate
+  step's echoed labels and comments to match.
+- Verification:
+  - `python3 -c 'import yaml,sys;yaml.safe_load(open(sys.argv[1]))' .github/workflows/pull_request.yml` → OK (parses).
+  - Same for `.github/workflows/build.yml` → OK.
+  - `actionlint`: not installed in this environment; skipped per
+    instructions ("if actionlint is available run it").
+  - No Go code changed in this task; root/nested build-vet-test suites
+    are unaffected and were not re-run for T3 alone.
+- Commit: `ci: verify a clean consumer resolves the published module paths (#134)` — SHA `<filled after commit>`.
 
 ## Next step
 
-T2's `verify-consumer.sh` GREEN evidence, then T3 (CHANGELOG, docs/ci.md, CI wiring).
+None — T1–T3 complete. T4 (push branch, open PR, update #134) is inline/`gh` work outside this delegation's scope.
