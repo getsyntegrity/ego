@@ -23,7 +23,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -32,60 +31,63 @@ import (
 // "example.com/repo/v4/pub" (no suffix of its own, so major is only ever
 // 0 or 1).
 
-func TestNextTag_NoExistingTags_PatchSucceeds(t *testing.T) {
+func TestNextTag_NoExistingTags_SuffixedModuleGetsBaselineForEveryBumpKind(t *testing.T) {
 	g, err := discoverGraph("testdata/tagscheme")
 	if err != nil {
 		t.Fatalf("discoverGraph: %v", err)
 	}
 	root, _ := g.ByDir(".")
-	pub, _ := g.ByDir("pub")
 
-	rootCur, rootNext, err := nextTag(".", root.Path, nil, "patch")
-	if err != nil {
-		t.Fatalf("root nextTag: %v", err)
-	}
-	if rootCur != "" {
-		t.Fatalf("root current = %q, want none (no existing tags)", rootCur)
-	}
-	if rootNext.String() != "4.0.1" {
-		t.Fatalf("root next = %s, want 4.0.1", rootNext.String())
-	}
-
-	_, pubNext, err := nextTag("pub", pub.Path, nil, "patch")
-	if err != nil {
-		t.Fatalf("pub nextTag: %v", err)
-	}
-	// An untagged suffix-less module starts at 0.0.0, as release.yml does
-	// today (release.yml: CURRENT="0.0.0" when no publisher tag exists).
-	if pubNext.String() != "0.0.1" {
-		t.Fatalf("pub next = %s, want 0.0.1", pubNext.String())
+	// The root module's path carries a /v4 suffix (D2 (a) forces major 4)
+	// and has no tag at all: there is no earlier v4 release to bump from,
+	// so every valid bump kind lands on the same first release, v4.0.0 —
+	// never v4.0.1, v4.1.0 or v5.0.0.
+	for _, kind := range []string{"patch", "minor", "major"} {
+		t.Run(kind, func(t *testing.T) {
+			cur, next, err := nextTag(".", root.Path, nil, kind)
+			if err != nil {
+				t.Fatalf("nextTag(%q): %v", kind, err)
+			}
+			if cur != "" {
+				t.Fatalf("current = %q, want none (no existing tags)", cur)
+			}
+			if next.String() != "4.0.0" {
+				t.Fatalf("next = %s, want 4.0.0", next.String())
+			}
+		})
 	}
 }
 
-func TestNextTag_NoExistingTags_MajorRefusesRootAllowsV1(t *testing.T) {
+func TestNextTag_NoExistingTags_SuffixlessModuleBumpsFromZero(t *testing.T) {
 	g, err := discoverGraph("testdata/tagscheme")
 	if err != nil {
 		t.Fatalf("discoverGraph: %v", err)
 	}
-	root, _ := g.ByDir(".")
 	pub, _ := g.ByDir("pub")
 
-	_, _, err = nextTag(".", root.Path, nil, "major")
-	if err == nil {
-		t.Fatal("expected root major bump (v4 -> v5) to be refused: path suffix is /v4")
+	// "pub" has no path suffix, so it keeps today's release.yml baseline
+	// (CURRENT="0.0.0" when no publisher tag exists): the first patch is
+	// v0.0.1, the first minor v0.1.0, and the first major v1.0.0 (legal
+	// without a suffix; v2+ still needs one, covered from a v1 tag by
+	// TestNextTag_ExistingMajorRefusal).
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{"patch", "0.0.1"},
+		{"minor", "0.1.0"},
+		{"major", "1.0.0"},
 	}
-	if !strings.Contains(err.Error(), "v5") && !strings.Contains(err.Error(), "5") {
-		t.Fatalf("root refusal %q does not mention the offending major", err.Error())
-	}
-
-	// 0.0.0 -> 1.0.0 is legal for a path without a /vN suffix; the refusal
-	// of v2+ is covered from a v1 tag by TestNextTag_ExistingMajorRefusal.
-	_, pubNext, err := nextTag("pub", pub.Path, nil, "major")
-	if err != nil {
-		t.Fatalf("pub major bump from no tag: %v, want 1.0.0", err)
-	}
-	if pubNext.String() != "1.0.0" {
-		t.Fatalf("pub next = %s, want 1.0.0", pubNext.String())
+	for _, c := range cases {
+		t.Run(c.kind, func(t *testing.T) {
+			_, next, err := nextTag("pub", pub.Path, nil, c.kind)
+			if err != nil {
+				t.Fatalf("nextTag(%q): %v", c.kind, err)
+			}
+			if next.String() != c.want {
+				t.Fatalf("next = %s, want %s", next.String(), c.want)
+			}
+		})
 	}
 }
 

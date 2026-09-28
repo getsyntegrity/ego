@@ -120,7 +120,11 @@ func TestBuildPlan_MajorRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverGraph: %v", err)
 	}
-	_, err = buildPlan(g, []string{".", "pub"}, nil, "major")
+	// An untagged root would now legally reach v4.0.0 on a major bump
+	// (#134), so the refusal here needs an existing tag already at the
+	// /v4 boundary: v4.0.0 -bump major asks for v5.0.0, which the path
+	// suffix does not allow.
+	_, err = buildPlan(g, []string{".", "pub"}, []string{"v4.0.0"}, "major")
 	if err == nil {
 		t.Fatal("expected a major-bump refusal")
 	}
