@@ -9,8 +9,8 @@ This document records what the CI does on each kind of branch, how `main` is pro
 | Event | Workflow | What it verifies |
 |---|---|---|
 | Push to a feature or hotfix branch | nothing | A push alone triggers no workflow. `pull_request.yml` listens only to `pull_request`, and `build.yml` only to pushes to `main`. |
-| Pull request opened or updated towards `main` | `pull_request.yml` | The `plan` job runs `internal/cmd/ciselect` on the diff. The `modules` matrix runs the changed modules and every module that depends on them, transitively, including dependencies used only by tests. `CI Gate` aggregates the result. |
-| Push to `main` (every merge) | `build.yml` | `ciselect -all`: the root module and every nested module, the full suite. |
+| Pull request opened or updated towards `main` (or towards a `docs/propose-*` branch, which `pull_request.yml` also targets) | `pull_request.yml` | The `plan` job runs `internal/cmd/ciselect` on the diff. The `modules` matrix runs the changed modules and every module that depends on them, transitively, including dependencies used only by tests. `CI Gate` aggregates the result. |
+| Push to `main` (every merge, except one that only touches `**/readme.md` or `**/renovate.json`, which `build.yml` ignores through `paths-ignore`) | `build.yml` | `ciselect -all`: the root module and every nested module, the full suite. |
 | Tag `v*` | `release.yml` | Publishes a release. See "Releases and a red `main`" below. |
 
 **When the root module runs in a pull request.** The matrix entry `modules (.)` appears only when the plan selects the root, because the change touches it or something it depends on. The branch name plays no part: no workflow reads it. When the root runs, `Build (root)` and `Vet (root)` cover the whole root module, while `Run tests (root)` runs only the packages the plan selected, with `-race` (`GO_TEST_RACE: "1"`). A change to a global path (for example anything under `.github/` or `scripts/ci/`) selects everything.
@@ -43,7 +43,7 @@ Allowed merge methods are unchanged: squash, merge commit and rebase are all ena
 
 **Consequence of `strict`.** When one pull request merges, every other open pull request must be updated with `main` and pass `CI Gate` again before it can merge. That is the price of verifying the exact merge result without a merge queue.
 
-**Known conflict with `release.yml`.** `release.yml:169-170` commits the publishers' `go.mod` bumps and pushes them directly to `main` (`git push origin HEAD:main`) with the Actions token. With `CI Gate` required, GitHub rejects a direct push of a commit that has no `CI Gate` result (error `GH006`, "Required status check … is expected"). This has been true since `CI Gate` became required, and `enforce_admins` does not change it, because the Actions bot is not an administrator. The release has never run (the repository has no tags), so it has not surfaced yet. How the bump should reach `main` is an open maintainer decision.
+**Known conflict with `release.yml`.** `release.yml:169-170` commits the publishers' `go.mod` bumps and pushes them directly to `main` (`git push origin HEAD:main`) with the Actions token. With `CI Gate` required, GitHub rejects a direct push of a commit that has no `CI Gate` result (error `GH006`, "Required status check … is expected"). This is inferred from how required status checks work and corroborated by community reports of that exact message; the official GitHub pages we could reach quote `GH006` only for required reviews, and the release has never run here to observe it. This has been true since `CI Gate` became required, and `enforce_admins` does not change it, because the Actions bot is not an administrator. The release has never run (the repository has no tags), so it has not surfaced yet. How the bump should reach `main` is an open maintainer decision.
 
 ## Releases and a red `main`
 
