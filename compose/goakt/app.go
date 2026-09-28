@@ -72,6 +72,7 @@ import (
 	"github.com/pablogore/ego/v4/compose/internal/adapters"
 	"github.com/pablogore/ego/v4/compose/internal/lifecycle"
 	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/port/adapter"
 	runtimeport "github.com/pablogore/ego/v4/port/runtime"
 )
 
@@ -255,12 +256,13 @@ func (a *App) Runtime() runtimeport.Runtime {
 }
 
 // probeStores is step 1: it pings every configured store and names each
-// one that fails.
+// one that fails. Ping is part of every store port (CapReady is implied),
+// so adapter.PingerOf finds it on every store that is set; a store left
+// out is skipped. The stores stay the consumer's: this step only pings.
 func (a *App) probeStores(ctx context.Context) error {
-	type pinger interface{ Ping(context.Context) error }
 	stores := []struct {
 		name  string
-		store pinger
+		store any
 	}{
 		{"EventsStore", a.spec.EventsStore},
 		{"StateStore", a.spec.StateStore},
@@ -269,10 +271,11 @@ func (a *App) probeStores(ctx context.Context) error {
 	}
 	var errs []error
 	for _, s := range stores {
-		if s.store == nil {
+		pinger, ok := adapter.PingerOf(s.store)
+		if !ok {
 			continue
 		}
-		if err := s.store.Ping(ctx); err != nil {
+		if err := pinger.Ping(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("compose/goakt: ping %s: %w", s.name, err))
 		}
 	}

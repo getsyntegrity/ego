@@ -120,6 +120,53 @@ func TestOptionalInterfacesAreAssertedOnlyInTheirAccessors(t *testing.T) {
 	}
 }
 
+// TestNoPrivateCopiesOfOptionalInterfaces requires that no production file
+// outside port/adapter declares its own interface made only of the
+// optional methods (for example a private `pinger`): a value is then used
+// through it without any accessor, which is the scattered-assertion
+// problem in another form. Only port/adapter/adapter.go declares such
+// interfaces (Describer, Starter, Pinger).
+func TestNoPrivateCopiesOfOptionalInterfaces(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owners []string
+	walkErr := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != repoRoot && skipDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !isProductionGoFile(path) {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		if len(localOptionalInterfaces(file)) == 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
+		owners = append(owners, filepath.ToSlash(rel))
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
+	}
+	if !slices.Equal(owners, []string{"port/adapter/adapter.go"}) {
+		t.Fatalf("files declaring an interface made only of %v = %v, want only port/adapter/adapter.go: use adapter.Describer, Starter or Pinger through their accessors", optionalMethods, owners)
+	}
+}
+
 // TestAssertionSitesNegativeControl proves the scan reports every form of
 // the forbidden assertion and nothing else, on a synthetic source.
 func TestAssertionSitesNegativeControl(t *testing.T) {
