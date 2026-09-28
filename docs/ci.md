@@ -1226,8 +1226,10 @@ before any root tag exists to make the public-proxy check meaningful.
 only asks the VCS whether *some* module exists at that path and tag; it
 succeeds even when the tagged commit's own `go.mod` declares a different
 module path — exactly the defect #134 was filed for, where every
-publisher's `go.mod` still declared `github.com/pablogore/ego/v4/publisher/<name>`,
-a path with no corresponding directory. It also never executes a single
+publisher's `go.mod` still declared the root module's own path with
+`/publisher/<name>` appended (repeating the root's `/v4` segment in the
+middle of the nested module's path), a path with no corresponding
+directory. It also never executes a single
 line of the module's code, so a corrupted generated file compiles but is
 never caught: a hand-edited protobuf `go_package` is one such case — the
 path sits inside a length-prefixed serialized descriptor, so a text
