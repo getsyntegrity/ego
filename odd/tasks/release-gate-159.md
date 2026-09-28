@@ -123,14 +123,27 @@ bounded, independently-verified unit.
   `client.go`'s `toRun` (hand-written struct literal instead of a type
   conversion — apiRun and Run share identical fields/order/types); fixed
   to `return Run(a)`; re-run: 0 findings.
-- [ ] **T4 — `release.yml` gate job.** Add `gate` (permissions
-  `contents: read`, `actions: read`; `fetch-depth: 0`; dereference tag;
-  `git merge-base --is-ancestor`; run `releasegate`); `release-ego` gains
-  `needs: gate`. No publisher step touched. Check: `actionlint
-  .github/workflows/release.yml` (0 findings); `bash -n` on every changed
-  `run:` block; no `${{` inside a `run:` body; `git diff
-  origin/main...HEAD -- .github/workflows/release.yml` shows only the new
-  job and the `needs` line.
+- [x] **T4 — `release.yml` gate job.** Added `gate` (permissions
+  `contents: read`, `actions: read`; checkout `fetch-depth: 0`; dereference
+  the tag with `git rev-parse "$TAG^{commit}"`; `git merge-base
+  --is-ancestor` against `origin/main`; run `go run
+  ./internal/cmd/releasegate -repo -sha -on-main -timeout 20m -interval
+  30s`); `release-ego` gained `needs: gate` (chain is now
+  `gate → release-ego → release-publishers`). No publisher step's logic,
+  order, or content touched. Every `${{ }}` used goes through `env:` in
+  the second step (`GITHUB_TOKEN`, `GATE_REPO`, `GATE_SHA`,
+  `GATE_ON_MAIN`); the first step uses only the automatic `$GITHUB_REF`
+  env var, no `${{ }}` at all. One actionlint finding hit and fixed along
+  the way: a code comment that literally contained `${{ }}` (empty) was
+  itself parsed as a GitHub Actions expression and failed to parse;
+  reworded the comment to avoid the literal brace sequence.
+  Check: `actionlint .github/workflows/release.yml` → 0 findings (after
+  the fix above). YAML parses (`python3 -c "import yaml; yaml.safe_load(...)"`
+  → OK). `bash -n` on both new `run:` bodies → both exit 0. Grepping for
+  `${{` over both extracted run bodies → no matches (confirmed nothing
+  leaked outside `env:`). `git diff -- .github/workflows/release.yml`
+  reviewed line by line: only the new `gate` job and the `needs: gate`
+  line; every publisher step byte-for-byte unchanged.
 - [ ] **T5 — Docs + real dry-run.** `docs/ci.md` "Release gate" section
   (what it checks, why exact SHA, bounded wait, how to test without
   publishing, the lightweight-tag dereference note, the GH006 limitation,
