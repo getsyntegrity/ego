@@ -97,12 +97,17 @@ bounded, independently-verified unit.
   once T3 adds `func main`; expected, standard `package main` multi-file
   layout (matches `internal/cmd/archcheck`'s loader.go/baseline.go split).
   Commit: (recorded after commit below).
-- [ ] **T2 — GitHub REST client.** `internal/cmd/releasegate/client.go`:
+- [x] **T2 — GitHub REST client.** `internal/cmd/releasegate/client.go`:
   `Client.ListBuildRuns(ctx, repo, sha)` against
   `/repos/{owner}/{repo}/actions/workflows/build.yml/runs?head_sha=...`,
-  paginated, `httptest.Server`-testable via `Client.BaseURL`. Tests: single
-  page, pagination, non-200 status, malformed JSON. Check: `go test -run
-  TestClient -v ./internal/cmd/releasegate/...` RED then GREEN.
+  paginated, `httptest.Server`-testable via `Client.BaseURL`. Filters by
+  `head_sha` only (not `branch`/`event`) — see client.go's doc comment and
+  docs/ci.md for why. RED observed: compile failure, `Client`/`NewClient`/
+  `DefaultBaseURL` undefined. GREEN: `go test -count=1 -v
+  ./internal/cmd/releasegate/...` — 18/18 PASS (6 new client tests: single
+  page, pagination across 2 pages/101 runs, 401 non-OK status, malformed
+  JSON, no-token omits Authorization header, NewClient defaults). `gofmt
+  -l` clean.
 - [ ] **T3 — CLI with bounded wait.** `internal/cmd/releasegate/main.go`:
   flags `-repo -sha -on-main -timeout -interval`, `GITHUB_TOKEN` env,
   injectable clock/sleeper. Tests: pass, fail, wait-then-timeout (fake
