@@ -36,6 +36,7 @@ import (
 	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/compose"
 	"github.com/pablogore/ego/v4/eventstream"
+	"github.com/pablogore/ego/v4/port/adapter"
 	"github.com/pablogore/ego/v4/port/publishing"
 	"github.com/pablogore/ego/v4/projection"
 	testpb "github.com/pablogore/ego/v4/test/data/testpb"
@@ -543,5 +544,216 @@ func TestEngine_UndeclaredFamilyReturnsTypedError(t *testing.T) {
 	}
 	if err := app.Engine().SpawnEventSourced(ctx, &account{id: "acc-declared"}); err != nil {
 		t.Fatalf("SpawnEventSourced of a declared family = %v", err)
+	}
+}
+
+// callLog records Start and Ping calls across publishers, in order.
+type callLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (l *callLog) add(call string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, call)
+}
+
+func (l *callLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.calls)
+}
+
+// startingEventPublisher is an undeclared events publisher that implements
+// adapter.Starter and adapter.Pinger. onStart, when set, runs inside Start.
+type startingEventPublisher struct {
+	*eventPublisher
+	log      *callLog
+	startErr error
+	pingErr  error
+	onStart  func()
+}
+
+func newStartingEventPublisher(id string, log *callLog) *startingEventPublisher {
+	return &startingEventPublisher{eventPublisher: newEventPublisher(id), log: log}
+}
+
+func (p *startingEventPublisher) Start(context.Context) error {
+	if p.onStart != nil {
+		p.onStart()
+	}
+	p.log.add("start " + p.id)
+	return p.startErr
+}
+
+func (p *startingEventPublisher) Ping(context.Context) error {
+	p.log.add("ping " + p.id)
+	return p.pingErr
+}
+
+// pingingStatePublisher is a declared state publisher that implements only
+// adapter.Pinger, and says so.
+type pingingStatePublisher struct {
+	*statePublisher
+	log     *callLog
+	pingErr error
+}
+
+func (p *pingingStatePublisher) Ping(context.Context) error {
+	p.log.add("ping " + p.id)
+	return p.pingErr
+}
+
+func (p *pingingStatePublisher) Describe() adapter.Descriptor {
+	return adapter.Descriptor{
+		Ports:        []adapter.Port{publishing.PortStatePublisher},
+		Name:         "fake-broker",
+		Capabilities: []adapter.Capability{adapter.CapReady},
+	}
+}
+
+// TestStart_AttachStepStartsAndProbesPublishersFirst: step 4 starts and
+// probes every publisher, in Spec order (events publishers, then state
+// publishers), before it attaches any (ego-arch-004 design §D4).
+func TestStart_AttachStepStartsAndProbesPublishersFirst(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, "start-and-probe")
+	log := &callLog{}
+	first := newStartingEventPublisher("events-1", log)
+	second := newStartingEventPublisher("events-2", log)
+	state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log}
+	f.spec.EventPublishers = []publishing.EventPublisher{first, f.evPub, second}
+	f.spec.StatePublishers = []publishing.StatePublisher{state}
+	app := mustNew(t, f.spec)
+	var attachedAtStart []bool
+	first.onStart = func() { attachedAtStart = append(attachedAtStart, app.eventsAttached || app.statesAttached) }
+	second.onStart = first.onStart
+
+	if err := app.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	want := []string{"start events-1", "ping events-1", "start events-2", "ping events-2", "ping states-1"}
+	if got := log.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("Start/Ping calls = %v, want %v", got, want)
+	}
+	if !slices.Equal(attachedAtStart, []bool{false, false}) {
+		t.Fatalf("attached when Start ran = %v, want no publisher attached before every Start", attachedAtStart)
+	}
+	if !app.eventsAttached || !app.statesAttached {
+		t.Fatal("step 4 must still attach both kinds of publisher")
+	}
+}
+
+// TestStart_PublisherFailureAtK is the spec 3 scenario "failure at
+// publisher k": the second of three publishers fails Start, so step 4
+// fails naming it, the third is never started, the earlier steps are
+// undone, and every publisher is closed exactly once (ego-arch-003 §D6).
+func TestStart_PublisherFailureAtK(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, "publisher-k-fails")
+	log := &callLog{}
+	pubs := []*startingEventPublisher{
+		newStartingEventPublisher("events-1", log),
+		newStartingEventPublisher("events-2", log),
+		newStartingEventPublisher("events-3", log),
+	}
+	injected := errors.New("broker unreachable")
+	pubs[1].startErr = injected
+	f.spec.EventPublishers = []publishing.EventPublisher{pubs[0], pubs[1], pubs[2]}
+	app := mustNew(t, f.spec)
+
+	err := app.Start(ctx)
+
+	var se *compose.StartError
+	if !errors.As(err, &se) || se.Step != StepAttachPublishers || !errors.Is(se.Err, injected) || se.Rollback != nil {
+		t.Fatalf("Start = %v, want a StartError for %q carrying the injected error and a clean rollback", err, StepAttachPublishers)
+	}
+	if msg := se.Err.Error(); !strings.Contains(msg, `"events-2"`) || !strings.Contains(msg, "start") || strings.Contains(msg, `"events-3"`) {
+		t.Fatalf("step error %q must name the second publisher's failed Start, and nothing after it", msg)
+	}
+	if got, want := log.snapshot(), []string{"start events-1", "ping events-1", "start events-2"}; !slices.Equal(got, want) {
+		t.Fatalf("Start/Ping calls = %v, want %v", got, want)
+	}
+	for _, p := range pubs {
+		if n := p.closed.Load(); n != 1 {
+			t.Errorf("publisher %s closed %d time(s), want exactly 1", p.id, n)
+		}
+	}
+	if n := f.stPub.closed.Load(); n != 1 {
+		t.Errorf("state publisher closed %d time(s), want exactly 1", n)
+	}
+	if app.sys == nil || app.sys.Running() {
+		t.Fatal("a failed step 4 must leave no running actor system")
+	}
+	if app.Engine() != nil {
+		t.Fatal("Engine() after a failed Start must be nil")
+	}
+	if err := app.Stop(ctx); err != nil {
+		t.Fatalf("Stop after a failed Start = %v, want nil (no-op)", err)
+	}
+	for _, p := range pubs {
+		if n := p.closed.Load(); n != 1 {
+			t.Errorf("Stop after a failed Start closed publisher %s again (%d closes)", p.id, n)
+		}
+	}
+}
+
+// TestStart_PublisherPingFailureNamesTheAdapter: a failed Ping fails step
+// 4 the same way, and a declared publisher is named by its descriptor too.
+func TestStart_PublisherPingFailureNamesTheAdapter(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, "publisher-ping-fails")
+	log := &callLog{}
+	injected := errors.New("not ready")
+	state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log, pingErr: injected}
+	f.spec.StatePublishers = []publishing.StatePublisher{state}
+	app := mustNew(t, f.spec)
+
+	err := app.Start(ctx)
+
+	var se *compose.StartError
+	if !errors.As(err, &se) || se.Step != StepAttachPublishers || !errors.Is(se.Err, injected) {
+		t.Fatalf("Start = %v, want a StartError for %q carrying the ping error", err, StepAttachPublishers)
+	}
+	for _, s := range []string{"ping", `state publisher "states-1"`, `"fake-broker"`} {
+		if !strings.Contains(se.Err.Error(), s) {
+			t.Errorf("step error %q does not mention %q", se.Err, s)
+		}
+	}
+	if f.evPub.closed.Load() != 1 || state.closed.Load() != 1 {
+		t.Fatalf("publisher closes = (%d, %d), want every publisher closed exactly once", f.evPub.closed.Load(), state.closed.Load())
+	}
+}
+
+// lyingStatePublisher declares CapStart without implementing Start.
+type lyingStatePublisher struct{ *statePublisher }
+
+func (p *lyingStatePublisher) Describe() adapter.Descriptor {
+	return adapter.Descriptor{
+		Ports:        []adapter.Port{publishing.PortStatePublisher},
+		Name:         "liar",
+		Capabilities: []adapter.Capability{adapter.CapStart},
+	}
+}
+
+// TestNew_V8RejectsALyingPublisherWithNothingStarted: New runs rule V8, so
+// a declared adapter whose declaration and methods disagree fails before
+// anything starts, and the consumer keeps owning its publishers.
+func TestNew_V8RejectsALyingPublisherWithNothingStarted(t *testing.T) {
+	f := newFixture(t, "lying-publisher")
+	liar := &lyingStatePublisher{statePublisher: newStatePublisher("states-1")}
+	f.spec.StatePublishers = []publishing.StatePublisher{liar}
+	app, err := New(f.spec)
+	if app != nil {
+		t.Fatal("New must not return an App when V8 fails")
+	}
+	var ve *compose.ValidationError
+	if !errors.As(err, &ve) || ve.Rule != "V8" || ve.Field != "StatePublishers[0]" {
+		t.Fatalf("New = %v, want a V8 ValidationError on StatePublishers[0]", err)
+	}
+	if f.events.pings.Load() != 0 || liar.closed.Load() != 0 {
+		t.Fatal("a failed New must not ping stores or close publishers")
 	}
 }

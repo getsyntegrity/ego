@@ -69,6 +69,7 @@ import (
 
 	"github.com/pablogore/ego/v4"
 	"github.com/pablogore/ego/v4/compose"
+	"github.com/pablogore/ego/v4/compose/internal/adapters"
 	"github.com/pablogore/ego/v4/compose/internal/lifecycle"
 	"github.com/pablogore/ego/v4/eventstream"
 	runtimeport "github.com/pablogore/ego/v4/port/runtime"
@@ -84,7 +85,9 @@ const (
 	StepStartActorSystem = "start actor system"
 	// StepStartEngine creates and starts the ego.Engine.
 	StepStartEngine = "start engine"
-	// StepAttachPublishers attaches the Spec's events and state publishers.
+	// StepAttachPublishers starts and probes the Spec's events and state
+	// publishers that implement adapter.Starter or adapter.Pinger, then
+	// attaches them.
 	StepAttachPublishers = "attach publishers"
 	// StepStartProjections starts every projection in the Spec.
 	StepStartProjections = "start projections"
@@ -129,7 +132,7 @@ type hooks struct {
 }
 
 // New validates spec and opts and returns an App ready to Start. It does no
-// I/O and starts nothing (design §D4a). It runs spec.Validate (V1–V7) and
+// I/O and starts nothing (design §D4a). It runs spec.Validate (V1–V8) and
 // the GoAkt rules G1 (WithCluster needs a configuration and at least one
 // entity kind) and G2 (spec.Name is a valid GoAkt actor-system name), and
 // returns every problem at once, joined with errors.Join.
@@ -364,11 +367,18 @@ func (a *App) stopEngine(ctx context.Context) error {
 	return nil
 }
 
-// attachPublishers is step 4. Each kind is attached in one call, which the
-// engine accepts or rejects as a whole. Attached publishers are closed by
-// the engine's Stop; those never attached are closed by releasePublishers.
-// The step has nothing of its own to undo.
-func (a *App) attachPublishers(context.Context) error {
+// attachPublishers is step 4 (ego-arch-004 design §D4). It first starts
+// and probes every publisher, in Spec order: for each one, Start when it
+// implements adapter.Starter, then Ping when it implements adapter.Pinger.
+// Only then does it attach each kind in one call, which the engine accepts
+// or rejects as a whole. Attached publishers are closed by the engine's
+// Stop; those never attached — started or not, including one whose Start
+// or Ping failed — are closed by releasePublishers. The step has nothing
+// of its own to undo.
+func (a *App) attachPublishers(ctx context.Context) error {
+	if err := adapters.StartAndProbe(ctx, a.ownedPublishers()); err != nil {
+		return fmt.Errorf("compose/goakt: %w", err)
+	}
 	if len(a.spec.EventPublishers) > 0 {
 		if err := a.engine.AddEventPublishers(a.spec.EventPublishers...); err != nil {
 			return fmt.Errorf("compose/goakt: attach events publishers: %w", err)
@@ -382,6 +392,19 @@ func (a *App) attachPublishers(context.Context) error {
 		a.statesAttached = true
 	}
 	return a.afterStep(StepAttachPublishers)
+}
+
+// ownedPublishers lists the Spec's publishers in Spec order, events
+// publishers first, named as step 4's errors name them.
+func (a *App) ownedPublishers() []adapters.Owned {
+	owned := make([]adapters.Owned, 0, len(a.spec.EventPublishers)+len(a.spec.StatePublishers))
+	for _, p := range a.spec.EventPublishers {
+		owned = append(owned, adapters.Owned{Kind: "events publisher", ID: p.ID(), Value: p})
+	}
+	for _, p := range a.spec.StatePublishers {
+		owned = append(owned, adapters.Owned{Kind: "state publisher", ID: p.ID(), Value: p})
+	}
+	return owned
 }
 
 // startProjections is step 5: it starts every projection in the Spec, in
