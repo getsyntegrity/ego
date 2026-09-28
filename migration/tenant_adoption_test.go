@@ -40,8 +40,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	ego "github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	"github.com/getsyntegrity/ego/v4/tenancy"
 	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
@@ -170,7 +170,7 @@ func fixedAssignment(assignments map[string]tenancy.TenantID) TenantAssignment {
 	}
 }
 
-// adoptionAccountBehavior is a minimal ego.EventSourcedBehavior used only by
+// adoptionAccountBehavior is a minimal engine.EventSourcedBehavior used only by
 // TestTenantAdopterEndToEndRecoveryThroughRealActor to prove a real,
 // tenant-bound EventSourcedActor recovers migrated data. It is not exported
 // from the root package, so this test defines its own copy rather than
@@ -179,23 +179,23 @@ type adoptionAccountBehavior struct {
 	id string
 }
 
-var _ ego.EventSourcedBehavior = (*adoptionAccountBehavior)(nil)
+var _ engine.EventSourcedBehavior = (*adoptionAccountBehavior)(nil)
 
 func (x *adoptionAccountBehavior) ID() string { return x.id }
 
-func (x *adoptionAccountBehavior) InitialState() ego.State { return new(testpb.Account) }
+func (x *adoptionAccountBehavior) InitialState() engine.State { return new(testpb.Account) }
 
-func (x *adoptionAccountBehavior) HandleCommand(_ context.Context, command ego.Command, _ ego.State) ([]ego.Event, error) {
+func (x *adoptionAccountBehavior) HandleCommand(_ context.Context, command engine.Command, _ engine.State) ([]engine.Event, error) {
 	cmd, ok := command.(*testpb.CreditAccount)
 	if !ok || cmd.GetAccountId() != x.id {
 		return nil, errors.New("unhandled command")
 	}
-	return []ego.Event{
+	return []engine.Event{
 		&testpb.AccountCredited{AccountId: cmd.GetAccountId(), AccountBalance: cmd.GetBalance()},
 	}, nil
 }
 
-func (x *adoptionAccountBehavior) HandleEvent(_ context.Context, event ego.Event, priorState ego.State) (ego.State, error) {
+func (x *adoptionAccountBehavior) HandleEvent(_ context.Context, event engine.Event, priorState engine.State) (engine.State, error) {
 	switch evt := event.(type) {
 	case *testpb.AccountCreated:
 		return &testpb.Account{AccountId: evt.GetAccountId(), AccountBalance: evt.GetAccountBalance()}, nil
@@ -466,13 +466,13 @@ func TestTenantAdopterEndToEndRecoveryThroughRealActor(t *testing.T) {
 	resolver, err := tenancy.WithSingleTenant("acme")
 	require.NoError(t, err)
 
-	cfg := ego.NewConfig(eventsStore, ego.WithTenantResolver(resolver))
+	cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver))
 	sys, err := goakt.NewActorSystem("TenantAdoptionE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
 	require.NoError(t, err)
 	require.NoError(t, sys.Start(ctx))
 	t.Cleanup(func() { _ = sys.Stop(context.Background()) })
 
-	engine, err := ego.NewEngine(sys, cfg)
+	engine, err := engine.NewEngine(sys, cfg)
 	require.NoError(t, err)
 	require.NoError(t, engine.Start(ctx))
 	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
@@ -2222,12 +2222,12 @@ func TestScopedMigratorSnapshotRecoversThroughTenantAwareActor(t *testing.T) {
 
 	resolver, err := tenancy.WithSingleTenant("acme")
 	require.NoError(t, err)
-	cfg := ego.NewConfig(eventsStore, ego.WithTenantResolver(resolver), ego.WithSnapshotStore(snapshotStore))
+	cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver), engine.WithSnapshotStore(snapshotStore))
 	sys, err := goakt.NewActorSystem("ScopedMigratorE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
 	require.NoError(t, err)
 	require.NoError(t, sys.Start(ctx))
 	t.Cleanup(func() { _ = sys.Stop(context.Background()) })
-	engine, err := ego.NewEngine(sys, cfg)
+	engine, err := engine.NewEngine(sys, cfg)
 	require.NoError(t, err)
 	require.NoError(t, engine.Start(ctx))
 	t.Cleanup(func() { _ = engine.Stop(context.Background()) })

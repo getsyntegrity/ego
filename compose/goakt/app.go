@@ -53,7 +53,7 @@
 // started). So once New returns an App, always call Stop and never close a
 // publisher yourself.
 //
-// The manual path — ego.NewConfig, goakt.NewActorSystem, ego.NewEngine —
+// The manual path — engine.NewConfig, goakt.NewActorSystem, engine.NewEngine —
 // stays supported for deployments that need GoAkt settings this package
 // does not expose; WithActorSystemOptions covers most of them.
 package goakt
@@ -67,10 +67,10 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/compose"
 	"github.com/getsyntegrity/ego/v4/compose/internal/adapters"
 	"github.com/getsyntegrity/ego/v4/compose/internal/lifecycle"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/port/adapter"
 	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
@@ -84,7 +84,7 @@ const (
 	// StepStartActorSystem allocates the event stream, builds the engine's
 	// configuration and creates and starts the GoAkt actor system.
 	StepStartActorSystem = "start actor system"
-	// StepStartEngine creates and starts the ego.Engine.
+	// StepStartEngine creates and starts the engine.Engine.
 	StepStartEngine = "start engine"
 	// StepAttachPublishers starts and probes the Spec's events and state
 	// publishers that implement adapter.Starter or adapter.Pinger, then
@@ -109,15 +109,15 @@ type App struct {
 	hooks hooks
 
 	// published is the engine Engine returns: set once Start succeeded.
-	published atomic.Pointer[ego.Engine]
+	published atomic.Pointer[engine.Engine]
 
 	// The fields below are only touched by the start steps, their undos
 	// and the release function, which the lifecycle sequence runs one at
 	// a time under its own mutex.
 	stream         eventstream.Stream
-	config         *ego.Config
+	config         *engine.Config
 	sys            actor.ActorSystem
-	engine         *ego.Engine
+	engine         *engine.Engine
 	eventsAttached bool
 	statesAttached bool
 	projections    []string // started projections, in start order
@@ -235,8 +235,8 @@ func (a *App) Stop(ctx context.Context) error {
 // Engine returns the running engine, to spawn entities and send commands
 // through. It returns nil until Start has succeeded, and nil for good after
 // a failed Start. After Stop it returns the stopped engine, which refuses
-// work with ego.ErrEngineNotStarted.
-func (a *App) Engine() *ego.Engine {
+// work with engine.ErrEngineNotStarted.
+func (a *App) Engine() *engine.Engine {
 	return a.published.Load()
 }
 
@@ -247,7 +247,7 @@ func (a *App) Engine() *ego.Engine {
 // refuses work with runtimeport.ErrEngineNotStarted. It is the same engine
 // Engine returns.
 func (a *App) Runtime() runtimeport.Runtime {
-	// A nil *ego.Engine stored in the interface would not compare equal to
+	// A nil *engine.Engine stored in the interface would not compare equal to
 	// nil; return an untyped nil instead (ego-runtime-001 §D6).
 	if engine := a.published.Load(); engine != nil {
 		return engine
@@ -293,12 +293,12 @@ func (a *App) probeStores(ctx context.Context) error {
 // after a failed start.
 func (a *App) startActorSystem(ctx context.Context) error {
 	stream := a.hooks.newEventStream()
-	egoOpts := append(a.opts.egoOptions(a.spec), ego.WithEventStream(stream))
-	config := ego.NewConfig(a.spec.EventsStore, egoOpts...)
+	egoOpts := append(a.opts.egoOptions(a.spec), engine.WithEventStream(stream))
+	config := engine.NewConfig(a.spec.EventsStore, egoOpts...)
 
 	actorOpts := config.GoaktOptions()
 	if a.opts.cluster != nil {
-		actorOpts = append(actorOpts, actor.WithCluster(a.opts.cluster.WithKinds(ego.ClusterKinds()...)))
+		actorOpts = append(actorOpts, actor.WithCluster(a.opts.cluster.WithKinds(engine.ClusterKinds()...)))
 	}
 	actorOpts = append(actorOpts, a.opts.actorOptions...)
 
@@ -337,18 +337,18 @@ func (a *App) stopActorSystem(ctx context.Context) error {
 	return err
 }
 
-// startEngine is step 3: it plugs an ego.Engine into the running actor
+// startEngine is step 3: it plugs an engine.Engine into the running actor
 // system and starts it. Should it fail after the engine started, it stops
 // the engine itself.
 func (a *App) startEngine(ctx context.Context) error {
-	engine, err := ego.NewEngine(a.sys, a.config)
+	eng, err := engine.NewEngine(a.sys, a.config)
 	if err != nil {
 		return fmt.Errorf("compose/goakt: create engine: %w", err)
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		return fmt.Errorf("compose/goakt: start engine: %w", err)
 	}
-	a.engine = engine
+	a.engine = eng
 
 	if err := a.afterStep(StepStartEngine); err != nil {
 		cleanupCtx, cancel := a.cleanupContext(ctx)

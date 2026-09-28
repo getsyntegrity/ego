@@ -210,7 +210,9 @@ func matchingPrefix(sp string, prefixes []string) (string, bool) {
 }
 
 // isRootPackageGoFile reports whether sp is a .go file directly inside the
-// module root directory (not a subdirectory).
+// module root directory (not a subdirectory). The module root holds no Go
+// files (archcheck's root-no-go-files guard), so such a file is a stray that
+// forces the full suite.
 func isRootPackageGoFile(sp string) bool {
 	return path.Dir(sp) == "." && strings.HasSuffix(sp, ".go")
 }

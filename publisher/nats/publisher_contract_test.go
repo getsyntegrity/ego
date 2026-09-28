@@ -50,8 +50,8 @@ var (
 // publishers are built without a broker connection: Publish rejects the call
 // before touching the client. Together with test/compat's
 // TestEgoSentinelIsThePublishingSentinel, which checks that
-// ego.ErrPublisherNotStarted is this same error value, it proves the
-// historical check that the error also matches ego.ErrPublisherNotStarted
+// engine.ErrPublisherNotStarted is this same error value, it proves the
+// historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).
 func TestPublishBeforeStartMatchesPublishingSentinel(t *testing.T) {
 	ctx := context.Background()

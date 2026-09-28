@@ -35,9 +35,9 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/compose"
 	egoakt "github.com/getsyntegrity/ego/v4/compose/goakt"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/testkit"
@@ -161,16 +161,16 @@ func (x *AccountBehavior) ID() string {
 }
 
 // InitialState returns the initial state
-func (x *AccountBehavior) InitialState() ego.State {
-	return ego.State(new(samplepb.Account))
+func (x *AccountBehavior) InitialState() engine.State {
+	return engine.State(new(samplepb.Account))
 }
 
 // HandleCommand handles every command that is sent to the persistent behavior
-func (x *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, _ ego.State) (events []ego.Event, err error) {
+func (x *AccountBehavior) HandleCommand(_ context.Context, command engine.Command, _ engine.State) (events []engine.Event, err error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
 		// TODO in production grid app validate the command using the prior state
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCreated{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetAccountBalance(),
@@ -179,7 +179,7 @@ func (x *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 
 	case *samplepb.CreditAccount:
 		// TODO in production grid app validate the command using the prior state
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCredited{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetBalance(),
@@ -192,7 +192,7 @@ func (x *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 }
 
 // HandleEvent handles every event emitted
-func (x *AccountBehavior) HandleEvent(_ context.Context, event ego.Event, priorState ego.State) (state ego.State, err error) {
+func (x *AccountBehavior) HandleEvent(_ context.Context, event engine.Event, priorState engine.State) (state engine.State, err error) {
 	switch evt := event.(type) {
 	case *samplepb.AccountCreated:
 		return &samplepb.Account{

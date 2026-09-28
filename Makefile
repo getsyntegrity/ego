@@ -99,8 +99,8 @@ docker-mock: docker-image
 	$(DOCKER_RUN) sh -c '\
 		mockery --dir persistence  --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/persistence  --case snake && \
 		mockery --dir offsetstore  --name OffsetStore     --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/offsetstore  --case snake && \
-		mockery --dir .            --name EventPublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
-		mockery --dir .            --name StatePublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
+		mockery --dir engine       --name EventPublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
+		mockery --dir engine       --name StatePublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
 		mockery --dir encryption   --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/encryption   --case snake && \
 		mockery --dir eventadapter --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/eventadapter --case snake && \
 		mockery --dir tenancy      --name TenantResolver  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/tenancy      --case snake'

@@ -35,7 +35,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 	"github.com/getsyntegrity/ego/v4/testkit"
@@ -55,7 +55,7 @@ func main() {
 	// Durable-state-only deployments pass a nil events store to NewConfig;
 	// the EventsStore extension is still registered by GoaktOptions because
 	// eGo's actor types depend on it being present.
-	cfg := ego.NewConfig(nil, ego.WithStateStore(durableStore), ego.WithLogger(logger))
+	cfg := engine.NewConfig(nil, engine.WithStateStore(durableStore), engine.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
 	if err != nil {
 		logger.Error("failed to build actor system", "error", err)
@@ -65,7 +65,7 @@ func main() {
 		logger.Error("failed to start actor system", "error", err)
 		os.Exit(1)
 	}
-	engine, err := ego.NewEngine(sys, cfg)
+	engine, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		logger.Error("failed to create ego engine", "error", err)
 		os.Exit(1)
@@ -140,13 +140,13 @@ func (x *AccountBehavior) ID() string {
 
 // InitialState returns the initial state
 // nolint
-func (x *AccountBehavior) InitialState() ego.State {
-	return ego.State(new(samplepb.Account))
+func (x *AccountBehavior) InitialState() engine.State {
+	return engine.State(new(samplepb.Account))
 }
 
 // HandleCommand handles every command that is sent to the persistent behavior
 // nolint
-func (x *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, priorVersion uint64, priorState ego.State) (event ego.State, newVersion uint64, err error) {
+func (x *AccountBehavior) HandleCommand(_ context.Context, command engine.Command, priorVersion uint64, priorState engine.State) (event engine.State, newVersion uint64, err error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
 		// TODO in production grid app validate the command using the prior state

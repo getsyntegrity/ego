@@ -33,7 +33,7 @@ import (
 
 // TestRuntime_NilBeforeStart pins design ego-runtime-001 §D6: before Start
 // the accessor returns an untyped nil, so a consumer's `rt == nil` check
-// holds. Returning the atomic pointer directly would wrap a nil *ego.Engine
+// holds. Returning the atomic pointer directly would wrap a nil *engine.Engine
 // in a non-nil interface and fail this test.
 func TestRuntime_NilBeforeStart(t *testing.T) {
 	app := mustNew(t, newFixture(t, "runtime-nil-before-start").spec)

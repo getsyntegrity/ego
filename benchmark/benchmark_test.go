@@ -37,8 +37,8 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	"github.com/getsyntegrity/ego/v4/testkit"
@@ -71,12 +71,12 @@ func (s *slowEventsStore) WriteEvents(ctx context.Context, scope persistence.Sco
 // Behavior
 // ---------------------------------------------------------------------------
 
-// accountBehavior implements ego.EventSourcedBehavior for benchmarks.
+// accountBehavior implements engine.EventSourcedBehavior for benchmarks.
 type accountBehavior struct {
 	id string
 }
 
-var _ ego.EventSourcedBehavior = (*accountBehavior)(nil)
+var _ engine.EventSourcedBehavior = (*accountBehavior)(nil)
 
 func newAccountBehavior(id string) *accountBehavior {
 	return &accountBehavior{id: id}
@@ -84,14 +84,14 @@ func newAccountBehavior(id string) *accountBehavior {
 
 func (a *accountBehavior) ID() string { return a.id }
 
-func (a *accountBehavior) InitialState() ego.State {
+func (a *accountBehavior) InitialState() engine.State {
 	return new(samplepb.Account)
 }
 
-func (a *accountBehavior) HandleCommand(_ context.Context, command ego.Command, _ ego.State) ([]ego.Event, error) {
+func (a *accountBehavior) HandleCommand(_ context.Context, command engine.Command, _ engine.State) ([]engine.Event, error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCreated{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetAccountBalance(),
@@ -99,7 +99,7 @@ func (a *accountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 		}, nil
 	case *samplepb.CreditAccount:
 		if cmd.GetAccountId() == a.id {
-			return []ego.Event{
+			return []engine.Event{
 				&samplepb.AccountCredited{
 					AccountId:      cmd.GetAccountId(),
 					AccountBalance: cmd.GetBalance(),
@@ -112,7 +112,7 @@ func (a *accountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 	}
 }
 
-func (a *accountBehavior) HandleEvent(_ context.Context, event ego.Event, priorState ego.State) (ego.State, error) {
+func (a *accountBehavior) HandleEvent(_ context.Context, event engine.Event, priorState engine.State) (engine.State, error) {
 	switch evt := event.(type) {
 	case *samplepb.AccountCreated:
 		return &samplepb.Account{
@@ -155,15 +155,15 @@ func (a *accountBehavior) UnmarshalBinary(data []byte) error {
 // benchEnv holds the shared infrastructure for a benchmark run.
 type benchEnv struct {
 	ctx    context.Context
-	engine *ego.Engine
+	engine *engine.Engine
 }
 
-// setupEngine creates an ego Engine backed by the given event store.
+// setupEngine creates an engine.Engine backed by the given event store.
 func setupEngine(b *testing.B, store persistence.EventsStore) *benchEnv {
 	b.Helper()
 	ctx := context.Background()
 
-	cfg := ego.NewConfig(store, ego.WithLogger(ego.DiscardLogger))
+	cfg := engine.NewConfig(store, engine.WithLogger(engine.DiscardLogger))
 	sys, err := goakt.NewActorSystem("BenchEngine", cfg.GoaktOptions()...)
 	if err != nil {
 		b.Fatalf("build actor system: %v", err)
@@ -173,22 +173,22 @@ func setupEngine(b *testing.B, store persistence.EventsStore) *benchEnv {
 		b.Fatalf("start actor system: %v", err)
 	}
 
-	engine, err := ego.NewEngine(sys, cfg)
+	eng, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		b.Fatalf("create engine: %v", err)
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		b.Fatalf("start engine: %v", err)
 	}
 
 	time.Sleep(time.Second)
 
 	b.Cleanup(func() {
-		_ = engine.Stop(ctx)
+		_ = eng.Stop(ctx)
 		_ = sys.Stop(ctx)
 	})
 
-	return &benchEnv{ctx: ctx, engine: engine}
+	return &benchEnv{ctx: ctx, engine: eng}
 }
 
 // connectStore creates and connects an in-memory event store.
@@ -233,8 +233,8 @@ func (e *benchEnv) spawnBatchEntity(b *testing.B, threshold int, flushWindow tim
 	behavior := newAccountBehavior(entityID)
 
 	if err := e.engine.Entity(e.ctx, behavior,
-		ego.WithBatchThreshold(threshold),
-		ego.WithBatchFlushWindow(flushWindow),
+		engine.WithBatchThreshold(threshold),
+		engine.WithBatchFlushWindow(flushWindow),
 	); err != nil {
 		b.Fatalf("create batch entity: %v", err)
 	}
@@ -870,7 +870,7 @@ type durableAccountBehavior struct {
 	id string
 }
 
-var _ ego.DurableStateBehavior = (*durableAccountBehavior)(nil)
+var _ engine.DurableStateBehavior = (*durableAccountBehavior)(nil)
 
 func newDurableAccountBehavior(id string) *durableAccountBehavior {
 	return &durableAccountBehavior{id: id}
@@ -878,11 +878,11 @@ func newDurableAccountBehavior(id string) *durableAccountBehavior {
 
 func (a *durableAccountBehavior) ID() string { return a.id }
 
-func (a *durableAccountBehavior) InitialState() ego.State {
+func (a *durableAccountBehavior) InitialState() engine.State {
 	return new(samplepb.Account)
 }
 
-func (a *durableAccountBehavior) HandleCommand(_ context.Context, command ego.Command, priorVersion uint64, priorState ego.State) (ego.State, uint64, error) {
+func (a *durableAccountBehavior) HandleCommand(_ context.Context, command engine.Command, priorVersion uint64, priorState engine.State) (engine.State, uint64, error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
 		return &samplepb.Account{
@@ -928,17 +928,17 @@ func (a *durableAccountBehavior) UnmarshalBinary(data []byte) error {
 // durableBenchEnv holds the shared infrastructure for a durable state benchmark.
 type durableBenchEnv struct {
 	ctx    context.Context
-	engine *ego.Engine
+	engine *engine.Engine
 }
 
-// setupDurableEngine creates an ego Engine with a durable state store.
+// setupDurableEngine creates an engine.Engine with a durable state store.
 func setupDurableEngine(b *testing.B, store persistence.StateStore) *durableBenchEnv {
 	b.Helper()
 	ctx := context.Background()
 
-	cfg := ego.NewConfig(nil,
-		ego.WithStateStore(store),
-		ego.WithLogger(ego.DiscardLogger),
+	cfg := engine.NewConfig(nil,
+		engine.WithStateStore(store),
+		engine.WithLogger(engine.DiscardLogger),
 	)
 
 	sys, err := goakt.NewActorSystem("BenchDurableEngine", cfg.GoaktOptions()...)
@@ -950,22 +950,22 @@ func setupDurableEngine(b *testing.B, store persistence.StateStore) *durableBenc
 		b.Fatalf("start actor system: %v", err)
 	}
 
-	engine, err := ego.NewEngine(sys, cfg)
+	eng, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		b.Fatalf("create engine: %v", err)
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		b.Fatalf("start engine: %v", err)
 	}
 
 	time.Sleep(time.Second)
 
 	b.Cleanup(func() {
-		_ = engine.Stop(ctx)
+		_ = eng.Stop(ctx)
 		_ = sys.Stop(ctx)
 	})
 
-	return &durableBenchEnv{ctx: ctx, engine: engine}
+	return &durableBenchEnv{ctx: ctx, engine: eng}
 }
 
 // connectDurableStore creates and connects an in-memory durable state store.

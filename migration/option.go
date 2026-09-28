@@ -49,7 +49,7 @@ func WithPageSize(size uint64) Option {
 // WithLogger sets the kit-logger Logger used during migration, the same
 // logging seam the engine uses. When the option is not used, or when the
 // given logger is nil or a typed-nil pointer, the migrator logs through
-// kit-logger's process-wide logger — the same default ego.DefaultLogger()
+// kit-logger's process-wide logger — the same default engine.DefaultLogger()
 // returns.
 // WithScope sets the persistence.Scope the Migrator lists, replays, and
 // writes snapshots in. The default is persistence.Unscoped(), the scope every

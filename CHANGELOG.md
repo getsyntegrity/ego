@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### 💥 Breaking Changes
+
+- **BREAKING: the root package `ego` moved to `github.com/getsyntegrity/ego/v4/engine` (package `engine`); the module root no longer contains any Go files (#124, #159).** The module path, the `go get github.com/getsyntegrity/ego/v4` command and every other package path (`persistence`, `projection`, `testkit`, `compose/goakt`, `port/...`) are unchanged. Only code that imported the root package has to change: replace the import path and rename the qualifier. No symbol was renamed, added or removed, so `ego.NewEngine` is `engine.NewEngine` and `ego.EventSourcedBehavior` is `engine.EventSourcedBehavior`.
+
+  | Before | After |
+  |---|---|
+  | `import "github.com/getsyntegrity/ego/v4"` | `import "github.com/getsyntegrity/ego/v4/engine"` |
+  | `import ego "github.com/getsyntegrity/ego/v4"` | `import "github.com/getsyntegrity/ego/v4/engine"` |
+  | `ego.NewConfig`, `ego.NewEngine`, `ego.With…` | `engine.NewConfig`, `engine.NewEngine`, `engine.With…` |
+  | `ego.Engine`, `ego.Config`, `ego.State`, `ego.Command`, `ego.Event` | `engine.Engine`, `engine.Config`, `engine.State`, `engine.Command`, `engine.Event` |
+  | `ego.EventSourcedBehavior`, `ego.DurableStateBehavior` | `engine.EventSourcedBehavior`, `engine.DurableStateBehavior` |
+  | `ego.EventPublisher`, `ego.StatePublisher`, `ego.ErrPublisherNotStarted` | `engine.EventPublisher`, `engine.StatePublisher`, `engine.ErrPublisherNotStarted` |
+  | `ego.DefaultLogger`, `ego.DiscardLogger`, `ego.ResolveLogger` | `engine.DefaultLogger`, `engine.DiscardLogger`, `engine.ResolveLogger` |
+
+  A local variable named `engine` (common in application code: `engine, err := ego.NewEngine(...)`) now shadows the package name after its declaration; rename the variable (for example to `eng`) or import the package under an alias.
+
+  **Why now, and why in the v4 line.** The root directory was one package with 28 production and 54 white-box test files, which cannot be split without exporting internals; moving it whole to a subdirectory is the smallest change that empties the root and unblocks the package split tracked in #159. Strict SemVer would ship this as `/v5`. This release targets `v4.1.0` instead, by explicit maintainer decision, because `v4.0.0` (2026-09-28) has no known consumers: GitHub code search finds no importer outside this repository. If you do import `github.com/getsyntegrity/ego/v4` directly, pin `v4.0.0` until you have applied the table above. A Go shim left at the root was rejected because it would defeat the goal of an empty root.
+
+  `archcheck` enforces the result with a new `root-no-go-files` check, and its runtime-neutral rules (`application-no-runtime`, `composition-no-runtime`, `external-adapter-no-runtime`) now forbid importing the `engine` package. The architecture tests that used to run from the module root now locate it by walking up to `go.mod`.
+
 ### 🐛 Bug Fixes
 
 - **`release-publishers.yml` defaults `bump` to `minor`, so the first publisher release is `v0.1.0` (#134).** An untagged, suffix-less publisher starts from `v0.0.0`, so the previous `patch` default planned `publisher/<name>/v0.0.1` for all four publishers instead of the intended `v0.1.0`. `TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher` (`internal/cmd/releaseplan`) reads the workflow's default and runs the publishers-only plan against this repository with only `v4.0.0` tagged, and requires `v0.1.0` for every publisher. A later fix release passes `bump: patch` explicitly.

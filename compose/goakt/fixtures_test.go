@@ -71,7 +71,7 @@ func (a *account) HandleEvent(_ context.Context, evt behaviorport.Event, _ behav
 }
 
 // wallet is a durable-state behavior. It also has MarshalBinary and
-// UnmarshalBinary, so it satisfies the deprecated ego.DurableStateBehavior
+// UnmarshalBinary, so it satisfies the deprecated engine.DurableStateBehavior
 // and can be spawned through both entry points.
 type wallet struct{ id string }
 

@@ -70,7 +70,7 @@ var allowedFirstParty = []string{
 // TestProductionClosureExcludesRootAndGoAkt is #147's closure criterion
 // (ego-runtime-001 §D8): the consumer's production build reaches only
 // port/runtime, port/behavior and contracts — every first-party package in
-// it must be on allowedFirstParty — and never the root package ego or any
+// it must be on allowedFirstParty — and never the engine package or any
 // GoAkt package. Only the production build is checked; the end-to-end test
 // that needs GoAkt lives in compose/goakt.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
@@ -86,8 +86,8 @@ func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 		switch {
 		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
 			t.Errorf("runtimeconsumer's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == modulePrefix:
-			t.Errorf("runtimeconsumer's production closure must not reach the root package ego; got %q", dep)
+		case dep == modulePrefix+"/engine":
+			t.Errorf("runtimeconsumer's production closure must not reach the engine package; got %q", dep)
 		case dep == modulePrefix+"/internal/runtimeconsumer":
 			// the package itself
 		case strings.HasPrefix(dep, modulePrefix+"/") && !slices.Contains(allowedFirstParty, dep):

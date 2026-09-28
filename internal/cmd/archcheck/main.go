@@ -78,6 +78,11 @@ func runCheck(repoRoot string, baseline []rules.BaselineEntry, stdout io.Writer)
 		return fmt.Errorf("reading root module path: %w", err)
 	}
 
+	rootFiles, err := reportRootGoFiles(repoRoot, stdout)
+	if err != nil {
+		return fmt.Errorf("checking root Go files: %w", err)
+	}
+
 	rootPkgs, err := loadRootModule(repoRoot)
 	if err != nil {
 		return fmt.Errorf("loading root module: %w", err)
@@ -108,6 +113,9 @@ func runCheck(repoRoot string, baseline []rules.BaselineEntry, stdout io.Writer)
 	fmt.Fprintf(stdout, "archcheck: %d modules checked, %d packages checked, %d edges checked, %d baselined, %d violation(s), %d stale entries\n",
 		result.ModulesChecked, result.PackagesChecked, result.EdgesChecked, baselined, len(result.Violations), len(result.Stale))
 
+	if rootFiles > 0 {
+		return fmt.Errorf("%d root Go file(s), %d violation(s), %d stale baseline entries", rootFiles, len(result.Violations), len(result.Stale))
+	}
 	if len(result.Violations) > 0 || len(result.Stale) > 0 {
 		return fmt.Errorf("%d violation(s), %d stale baseline entries", len(result.Violations), len(result.Stale))
 	}

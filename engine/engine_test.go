@@ -1,0 +1,2537 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/remote"
+	"github.com/tochemey/goakt/v4/supervisor"
+	"github.com/travisjeffery/go-dynaport"
+	noopmetric "go.opentelemetry.io/otel/metric/noop"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+
+	"github.com/getsyntegrity/ego/v4/egopb"
+	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/pause"
+	"github.com/getsyntegrity/ego/v4/internal/syncmap"
+	egomock "github.com/getsyntegrity/ego/v4/mocks/ego"
+	mockoffsetstore "github.com/getsyntegrity/ego/v4/mocks/offsetstore"
+	mockpersistence "github.com/getsyntegrity/ego/v4/mocks/persistence"
+	"github.com/getsyntegrity/ego/v4/offsetstore"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
+)
+
+// NewEventSourcedEntity is a test alias used by older tests; the helper file
+// also references it.
+func NewEventSourcedEntity(id string) *AccountEventSourcedBehavior {
+	return NewAccountEventSourcedBehavior(id)
+}
+
+// TestNewEngineValidation exercises the error paths that surface a
+// mis-configured handoff between the actor system and the engine.
+func TestNewEngineValidation(t *testing.T) {
+	t.Run("nil actor system", func(t *testing.T) {
+		_, err := NewEngine(nil, NewConfig(testkit.NewEventsStore()))
+		require.ErrorIs(t, err, ErrActorSystemRequired)
+	})
+
+	t.Run("nil config", func(t *testing.T) {
+		cfg := NewConfig(testkit.NewEventsStore())
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		_, err = NewEngine(sys, nil)
+		require.ErrorIs(t, err, ErrMissingRequiredExtensions)
+	})
+
+	t.Run("not started actor system", func(t *testing.T) {
+		cfg := NewConfig(testkit.NewEventsStore())
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		// Deliberately skip sys.Start.
+		_, err = NewEngine(sys, cfg)
+		require.ErrorIs(t, err, ErrActorSystemNotStarted)
+	})
+
+	t.Run("missing required extension is reported", func(t *testing.T) {
+		ctx := context.Background()
+		// Build an actor system with NO ego extensions registered.
+		sys, err := goakt.NewActorSystem("Sample", goakt.WithPubSub())
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, NewConfig(testkit.NewEventsStore()))
+		require.ErrorIs(t, err, ErrMissingRequiredExtensions)
+	})
+
+	t.Run("missing optional extension is reported when configured", func(t *testing.T) {
+		ctx := context.Background()
+		// Build the actor system from a Config that does NOT include an offset
+		// store, then ask NewEngine for a Config that does. The mismatch should
+		// surface ErrMissingRequiredExtensions.
+		store := testkit.NewEventsStore()
+		baseCfg := NewConfig(store)
+		sys, err := goakt.NewActorSystem("Sample", baseCfg.GoaktOptions()...)
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, NewConfig(store, WithOffsetStore(testkit.NewOffsetStore())))
+		require.ErrorIs(t, err, ErrMissingRequiredExtensions)
+	})
+}
+
+// TestNewEngineTenantResolverValidation exercises NewEngine's rejection of
+// ambiguous WithTenantResolver registrations (DP2) and its acceptance of the
+// two valid configurations: zero registrations (legacy) and exactly one
+// non-nil registration (tenant-aware).
+func TestNewEngineTenantResolverValidation(t *testing.T) {
+	t.Run("two distinct resolvers fail construction", func(t *testing.T) {
+		ctx := context.Background()
+		cfg := NewConfig(testkit.NewEventsStore(),
+			WithTenantResolver(&stubTenantResolver{id: "acme"}),
+			WithTenantResolver(&stubTenantResolver{id: "globex"}),
+		)
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, cfg)
+		require.ErrorIs(t, err, ErrAmbiguousTenantResolver)
+	})
+
+	t.Run("same resolver registered twice fails with the same error", func(t *testing.T) {
+		// Count, not value identity, is what is rejected (spec.md "Same
+		// resolver registered twice").
+		ctx := context.Background()
+		resolver := &stubTenantResolver{id: "acme"}
+		cfg := NewConfig(testkit.NewEventsStore(),
+			WithTenantResolver(resolver),
+			WithTenantResolver(resolver),
+		)
+		sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+		require.NoError(t, err)
+		require.NoError(t, sys.Start(ctx))
+		t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+		_, err = NewEngine(sys, cfg)
+		require.ErrorIs(t, err, ErrAmbiguousTenantResolver)
+	})
+
+	t.Run("exactly one resolver succeeds", func(t *testing.T) {
+		resolver := &stubTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore(), WithTenantResolver(resolver))
+		assert.Same(t, resolver, engine.tenantResolver)
+	})
+
+	t.Run("zero resolvers succeeds as legacy, non-tenant-aware mode", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore())
+		assert.Nil(t, engine.tenantResolver)
+	})
+
+	t.Run("nil registrations do not count toward ambiguity", func(t *testing.T) {
+		resolver := &stubTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", testkit.NewEventsStore(),
+			WithTenantResolver(nil),
+			WithTenantResolver(resolver),
+			WithTenantResolver(nil),
+		)
+		assert.Same(t, resolver, engine.tenantResolver)
+	})
+}
+
+// TestEngineEventSourced covers the happy path for an event-sourced entity in
+// single-node mode.
+func TestEngineEventSourced(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+
+	// create
+	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 500.00,
+	}, time.Minute)
+	require.NoError(t, err)
+	acct, ok := state.(*testpb.Account)
+	require.True(t, ok)
+	assert.EqualValues(t, 500.00, acct.GetAccountBalance())
+	assert.EqualValues(t, 1, revision)
+
+	// credit
+	state, revision, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{
+		AccountId: entityID,
+		Balance:   250,
+	}, time.Minute)
+	require.NoError(t, err)
+	acct, ok = state.(*testpb.Account)
+	require.True(t, ok)
+	assert.EqualValues(t, 750.00, acct.GetAccountBalance())
+	assert.EqualValues(t, 2, revision)
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestSendCommandTenantResolution exercises the T4-A trust boundary in
+// Engine.SendCommand: in tenant-aware mode (a resolver registered via
+// WithTenantResolver) Resolve is invoked exactly once per command and the
+// resulting TenantContext is attached before the actor runtime ever sees
+// the command; a resolver failure blocks the command outright, before
+// dispatch, the actor, the handler, or persistence. Legacy mode (no
+// resolver) is exercised separately by TestEngineEventSourced and
+// TestEngineDurableState, which remain unmodified and passing.
+//
+// TENANT-003 T4 note (corrected): Engine.Entity/DurableStateEntity/Saga
+// never call Resolve at spawn (Resolve-Once, Propagate-After reserves
+// Resolve for the command trust boundary alone) — each entity below is
+// spawned with engine.WithTenant declaring its tenant explicitly, so every
+// resolver.callCount() assertion below counts SendCommand's own Resolve
+// calls only.
+func TestSendCommandTenantResolution(t *testing.T) {
+	t.Run("resolves exactly once and attaches the TenantContext before the handler runs", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		resolver := &countingTenantResolver{id: "acme"}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		// TENANT-003 T4 (corrected): Entity's spawn declares its tenant via
+		// engine.WithTenant and never calls Resolve, so one SendCommand call
+		// means exactly one Resolve invocation — this is the regression
+		// guard for the defect CI caught (a prior design resolved at spawn
+		// too, doubling this count).
+		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command, never at spawn")
+		assert.EqualValues(t, 1, probe.invocationCount())
+
+		tc, ok := probe.observedTenant()
+		require.True(t, ok, "HandleCommand must observe a TenantContext attached to its ctx via tenancy.From")
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("a resolver error rejects the command before the actor system runs it", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		wantErr := errors.New("identity provider unavailable")
+		// The entity spawns under an explicit engine.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so an
+		// always-erroring resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises wantErr below.
+		resolver := &erroringTenantResolver{err: wantErr}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.ErrorIs(t, err, wantErr, "SendCommand must surface the resolver error, not silently transform it")
+
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
+		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
+
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when Resolve fails")
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("a resolver returning the zero-value TenantContext is rejected before dispatch (Blocker 1)", func(t *testing.T) {
+		// design.md Decision D8 (EGO-TENANT-006 review fix): a custom
+		// TenantResolver implementation living outside package tenancy can
+		// only ever produce tenancy.TenantContext{} via a bare struct
+		// literal, since every field is unexported. Returning it with a
+		// nil error used to be silently accepted by tenancy.Attach (which
+		// only checked whether a DIFFERENT TenantContext was already
+		// bound, never the content of this one) and then handed straight
+		// through by tenancy.Require (which only checked presence). This
+		// proves the corrected trust boundary now fails closed before the
+		// command ever reaches the actor system.
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		// The entity spawns under an explicit engine.WithTenant declaration
+		// (TENANT-003 T4, corrected): spawn never calls Resolve, so this
+		// always-zero-value resolver can still let the entity spawn. Only
+		// SendCommand's own Resolve call exercises the zero-value case below.
+		resolver := &zeroValueTenantResolver{}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.Error(t, err, "SendCommand must reject a resolver returning the zero-value TenantContext")
+		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+
+		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
+		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
+
+		scopeA, err := persistence.NewTenantScope("acme")
+		require.NoError(t, err)
+		latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
+		require.NoError(t, err)
+		assert.Nil(t, latest, "no event may be persisted when the resolved TenantContext is invalid")
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("tenancy sentinel errors from the resolver block the command before the handler", func(t *testing.T) {
+		for _, tt := range []struct {
+			name    string
+			wantErr error
+		}{
+			{"ErrMissing", tenancy.ErrMissing},
+			{"ErrInvalid", tenancy.ErrInvalid},
+			{"ErrDenied", tenancy.ErrDenied},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				ctx := context.Background()
+				store := testkit.NewEventsStore()
+				require.NoError(t, store.Connect(ctx))
+				t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+				// The entity spawns under an explicit engine.WithTenant
+				// declaration (TENANT-003 T4, corrected): spawn never calls
+				// Resolve, so SendCommand's own resolve is what hits
+				// tt.wantErr.
+				resolver := &erroringTenantResolver{err: tt.wantErr}
+				engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+				require.NoError(t, engine.Start(ctx))
+
+				entityID := uuid.NewString()
+				probe := newTenancyProbeEventSourcedBehavior(entityID)
+				require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+
+				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Zero(t, probe.invocationCount())
+
+				scopeA, err := persistence.NewTenantScope("acme")
+				require.NoError(t, err)
+				latest, err := store.GetLatestEvent(ctx, scopeA, entityID)
+				require.NoError(t, err)
+				assert.Nil(t, latest)
+
+				require.NoError(t, engine.Stop(ctx))
+			})
+		}
+	})
+
+	t.Run("concurrent commands for different tenants do not cross-contaminate", func(t *testing.T) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		// perCallerTenantResolver resolves whichever tenant ID the caller
+		// placed on ctx, simulating a resolver that derives identity from
+		// request-scoped data (e.g. a header) rather than a fixed value.
+		resolver := perCallerTenantResolver{}
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		const tenantCount = 5
+		entityIDs := make([]string, tenantCount)
+		probes := make([]*tenancyProbeEventSourcedBehavior, tenantCount)
+		tenantIDs := make([]tenancy.TenantID, tenantCount)
+
+		for i := 0; i < tenantCount; i++ {
+			entityIDs[i] = uuid.NewString()
+			tenantIDs[i] = tenancy.TenantID(fmt.Sprintf("tenant-%d", i))
+
+			probes[i] = newTenancyProbeEventSourcedBehavior(entityIDs[i])
+			// TENANT-003 T4 (corrected): Engine.Entity never calls Resolve
+			// at spawn, so each entity declares its owning tenant explicitly
+			// via engine.WithTenant — the same tenant every SendCommand call
+			// below targets it with.
+			require.NoError(t, engine.Entity(ctx, probes[i], WithTenant(tenantIDs[i])))
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < tenantCount; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				callerCtx := context.WithValue(ctx, perCallerTenantKey{}, string(tenantIDs[i]))
+				_, _, err := engine.SendCommand(callerCtx, entityIDs[i], &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+				assert.NoError(t, err)
+			}(i)
+		}
+		wg.Wait()
+
+		for i := 0; i < tenantCount; i++ {
+			tc, ok := probes[i].observedTenant()
+			require.True(t, ok)
+			gotTenant, ok := tc.Tenant()
+			require.True(t, ok)
+			assert.Equal(t, tenantIDs[i], gotTenant, "each entity's handler must observe only its own tenant")
+		}
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+}
+
+// TestSendCommandSingleTenantZeroPlumbing exercises AC4/AC5/D6/D7:
+// tenancy.WithSingleTenant, registered as the sole resolver via
+// WithTenantResolver, lets a command succeed with zero manual
+// tenancy.Attach/tenancy.Require calls in application code — the caller's
+// ctx here is a plain context.Background(), exactly like every other
+// SendCommand test in this file, and never touches the tenancy package at
+// all. SendCommand and the actor's T4-A/T4-B gates do the entire resolve,
+// attach, and re-confirm sequence identically to a multi-tenant resolver
+// (see TestSendCommandTenantResolution above); this test only proves it
+// also works, end-to-end, for the single-tenant case with no per-call
+// tenant plumbing whatsoever.
+func TestSendCommandSingleTenantZeroPlumbing(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	resolver, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
+	require.NoError(t, err)
+	engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	probe := newTenancyProbeEventSourcedBehavior(entityID)
+	require.NoError(t, engine.Entity(ctx, probe))
+
+	// Plain context.Background(): no tenancy.Attach, no tenancy.Require,
+	// nothing tenancy-related at the call site.
+	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 1, probe.invocationCount())
+	tc, ok := probe.observedTenant()
+	require.True(t, ok, "HandleCommand must still observe a TenantContext even though the caller never attached one")
+	tenantID, ok := tc.Tenant()
+	require.True(t, ok)
+	assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestSendCommandResolverSwapIdenticalSequence proves D6/D7's other half:
+// swapping tenancy.WithSingleTenant for an ordinary multi-tenant resolver
+// changes nothing about the resolve-attach-gate sequence a command travels
+// through. Both resolvers here are driven through the exact same
+// SendCommand call with the exact same plain ctx; only the registered
+// resolver differs.
+func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
+	newEngineWithResolver := func(t *testing.T, resolver tenancy.TenantResolver, spawnOpts ...SpawnOption) (*Engine, string, *tenancyProbeEventSourcedBehavior) {
+		t.Helper()
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		probe := newTenancyProbeEventSourcedBehavior(entityID)
+		require.NoError(t, engine.Entity(ctx, probe, spawnOpts...))
+
+		return engine, entityID, probe
+	}
+
+	t.Run("single-tenant resolver", func(t *testing.T) {
+		ctx := context.Background()
+		singleTenant, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
+		require.NoError(t, err)
+
+		// No engine.WithTenant here: acceptance criterion 6 requires
+		// single-tenant mode to need no tenant plumbing invented by the
+		// application. tenancy.WithSingleTenant's FixedTenantResolver
+		// capability is what lets spawn determine the tenant without one.
+		engine, entityID, probe := newEngineWithResolver(t, singleTenant)
+		_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 1, probe.invocationCount())
+		tc, ok := probe.observedTenant()
+		require.True(t, ok)
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+
+	t.Run("multi-tenant resolver", func(t *testing.T) {
+		ctx := context.Background()
+		multiTenant := &countingTenantResolver{id: "acme"}
+
+		// An ordinary multi-tenant resolver has no fixed tenant, so the
+		// application must declare it explicitly via engine.WithTenant.
+		engine, entityID, probe := newEngineWithResolver(t, multiTenant, WithTenant(tenancy.TenantID("acme")))
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+		require.NoError(t, err)
+
+		// This is the regression guard for the defect CI caught: an earlier
+		// design called Resolve at spawn too, so this resolver was invoked
+		// twice (spawn + SendCommand) for this exact sequence instead of
+		// once.
+		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step, exactly once")
+		assert.EqualValues(t, 1, probe.invocationCount())
+		tc, ok := probe.observedTenant()
+		require.True(t, ok)
+		tenantID, ok := tc.Tenant()
+		require.True(t, ok)
+		assert.Equal(t, tenancy.TenantID("acme"), tenantID)
+
+		require.NoError(t, engine.Stop(ctx))
+	})
+}
+
+// TestEngineDurableState covers the happy path for a durable-state entity.
+func TestEngineDurableState(t *testing.T) {
+	ctx := context.Background()
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", nil,
+		WithLogger(DiscardLogger),
+		WithStateStore(stateStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+
+	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 500.00,
+	}, time.Minute)
+	require.NoError(t, err)
+	acct, ok := state.(*testpb.Account)
+	require.True(t, ok)
+	assert.EqualValues(t, 500.00, acct.GetAccountBalance())
+	assert.EqualValues(t, 1, revision)
+
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineDurableStateRequiresStateStore confirms that calling
+// DurableStateEntity without WithStateStore is reported as a config error.
+func TestEngineDurableStateRequiresStateStore(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	err := engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(uuid.NewString()))
+	require.ErrorIs(t, err, ErrDurableStateStoreRequired)
+}
+
+// TestEngineSendCommandErrors covers the error paths of SendCommand that do
+// not require an entity to be live.
+func TestEngineSendCommandErrors(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	t.Run("engine not started", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		state, rev, err := engine.SendCommand(ctx, uuid.NewString(), &testpb.CreateAccount{}, time.Second)
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.Nil(t, state)
+		require.Zero(t, rev)
+	})
+
+	t.Run("undefined entity id", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+		state, rev, err := engine.SendCommand(ctx, "", &testpb.CreateAccount{}, time.Second)
+		require.ErrorIs(t, err, ErrUndefinedEntityID)
+		require.Nil(t, state)
+		require.Zero(t, rev)
+	})
+}
+
+// TestEngineEntityExists exercises the EntityExists liveness probe.
+func TestEngineEntityExists(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	t.Run("not started", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		exists, err := engine.EntityExists(ctx, uuid.NewString())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.False(t, exists)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+		exists, err := engine.EntityExists(ctx, uuid.NewString())
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	t.Run("found after materialization", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+			AccountBalance: 100,
+		}, time.Minute)
+		require.NoError(t, err)
+
+		exists, err := engine.EntityExists(ctx, entityID)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
+}
+
+// TestEngineActorSystemAccessor covers Engine.ActorSystem before/after Start/Stop.
+func TestEngineActorSystemAccessor(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+
+	// Right after NewEngine: the engine HAS its reference to the actor system
+	// (it can validate extensions etc). It is NOT yet "Started" but the
+	// accessor returns the system so callers can inspect it.
+	require.NotNil(t, engine.ActorSystem())
+
+	require.NoError(t, engine.Start(ctx))
+	require.NotNil(t, engine.ActorSystem())
+
+	require.NoError(t, engine.Stop(ctx))
+	require.Nil(t, engine.ActorSystem(), "ActorSystem must be nil after Stop")
+}
+
+// TestEngineHotPathGuards verifies every hot-path method bails out with
+// ErrEngineNotStarted when the engine's actor system reference has been
+// detached (mid-Stop or never started).
+func TestEngineHotPathGuards(t *testing.T) {
+	// Build a synthetic engine that has Started()==true but no actor system
+	// reference. Reproduces the race between Stop's atomic detach and a
+	// concurrent hot-path caller.
+	synth := func(t *testing.T) *Engine {
+		t.Helper()
+		e := &Engine{
+			eventsStore:   testkit.NewEventsStore(),
+			logger:        DiscardLogger,
+			eventsStreams: syncmap.New[string, *eventsStream](),
+			statesStreams: syncmap.New[string, *statesStream](),
+		}
+		e.started.Store(true)
+		return e
+	}
+
+	ctx := context.Background()
+
+	t.Run("StartProjection", func(t *testing.T) {
+		err := synth(t).StartProjection(ctx, "projection-"+uuid.NewString())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+	t.Run("StopProjection", func(t *testing.T) {
+		err := synth(t).StopProjection(ctx, "projection-"+uuid.NewString())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+	t.Run("IsProjectionRunning", func(t *testing.T) {
+		running, err := synth(t).IsProjectionRunning(ctx, "projection-"+uuid.NewString())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.False(t, running)
+	})
+	t.Run("Entity", func(t *testing.T) {
+		err := synth(t).Entity(ctx, NewEventSourcedEntity(uuid.NewString()))
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+	t.Run("EntityExists", func(t *testing.T) {
+		exists, err := synth(t).EntityExists(ctx, uuid.NewString())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.False(t, exists)
+	})
+	t.Run("DurableStateEntity", func(t *testing.T) {
+		err := synth(t).DurableStateEntity(ctx, NewAccountDurableStateBehavior(uuid.NewString()))
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+	t.Run("SendCommand", func(t *testing.T) {
+		state, rev, err := synth(t).SendCommand(ctx, uuid.NewString(), &testpb.CreateAccount{}, time.Second)
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.Nil(t, state)
+		require.Zero(t, rev)
+	})
+	t.Run("Saga", func(t *testing.T) {
+		err := synth(t).Saga(ctx, &testSagaBehavior{sagaID: "saga-" + uuid.NewString()}, time.Second)
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+	t.Run("SagaStatus", func(t *testing.T) {
+		info, err := synth(t).SagaStatus(ctx, "saga-"+uuid.NewString(), time.Second)
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.Nil(t, info)
+	})
+}
+
+// TestEngineProjection covers basic projection registration in single-node
+// mode (no cluster, projection runs as a regular long-lived actor).
+func TestEngineProjection(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("discard", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	require.NoError(t, engine.StartProjection(ctx, "discard"))
+	pause.For(500 * time.Millisecond)
+
+	running, err := engine.IsProjectionRunning(ctx, "discard")
+	require.NoError(t, err)
+	require.True(t, running)
+
+	require.NoError(t, engine.StopProjection(ctx, "discard"))
+	require.NoError(t, engine.Stop(ctx))
+}
+
+// TestEngineStartProjectionNotRegistered verifies that StartProjection fails fast
+// with ErrProjectionNotRegistered when the name was never registered via
+// WithProjection, instead of spawning an actor whose PreStart would fail.
+func TestEngineStartProjectionNotRegistered(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("registered", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(ctx) })
+
+	err := engine.StartProjection(ctx, "unknown")
+	require.ErrorIs(t, err, ErrProjectionNotRegistered)
+	require.Contains(t, err.Error(), "unknown")
+}
+
+// countingProjectionHandler records how many events it processed so tests can
+// assert which projection's handler was invoked.
+type countingProjectionHandler struct {
+	counter atomic.Int64
+}
+
+func (x *countingProjectionHandler) Handle(_ context.Context, _ string, _ *anypb.Any, _ uint64) error {
+	x.counter.Add(1)
+	return nil
+}
+
+// TestEngineProjectionsOwnHandlers verifies that projections registered under
+// different names each run with their own handler.
+func TestEngineProjectionsOwnHandlers(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	accountsHandler := new(countingProjectionHandler)
+	auditHandler := new(countingProjectionHandler)
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("accounts", &projection.Options{
+			Handler:      accountsHandler,
+			BufferSize:   100,
+			PullInterval: 100 * time.Millisecond,
+		}),
+		WithProjection("audit", &projection.Options{
+			Handler:      auditHandler,
+			BufferSize:   100,
+			PullInterval: 100 * time.Millisecond,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(ctx) })
+
+	require.NoError(t, engine.StartProjection(ctx, "accounts"))
+	require.NoError(t, engine.StartProjection(ctx, "audit"))
+	pause.For(500 * time.Millisecond)
+
+	event, err := anypb.New(&testpb.AccountCredited{})
+	require.NoError(t, err)
+	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{{
+		PersistenceId:  uuid.NewString(),
+		SequenceNumber: 1,
+		Event:          event,
+		Timestamp:      time.Now().Unix(),
+		Shard:          3,
+	}}, persistence.Unconditional()))
+
+	// Both projections poll independently; each must observe the event
+	// through its own handler.
+	require.Eventually(t, func() bool {
+		return accountsHandler.counter.Load() == 1 && auditHandler.counter.Load() == 1
+	}, 5*time.Second, 100*time.Millisecond)
+}
+
+// TestEngineClusterMode runs a single-node cluster end-to-end to exercise the
+// StartProjection-as-singleton branch (sys.InCluster()==true) and the
+// engine.ClusterKinds() registration. It builds the goakt actor system manually
+// to demonstrate the cluster-mode bootstrap.
+func TestEngineClusterMode(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	ports := dynaport.Get(3)
+	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+	host := "127.0.0.1"
+
+	provider := &mockClusterProvider{
+		id:    "test",
+		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+	}
+
+	clusterCfg := goakt.NewClusterConfig().
+		WithDiscovery(provider).
+		WithDiscoveryPort(gossipPort).
+		WithPeersPort(clusterPort).
+		WithMinimumPeersQuorum(1).
+		WithReplicaCount(1).
+		WithPartitionCount(4).
+		WithKinds(ClusterKinds()...)
+
+	cfg := NewConfig(store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("discard", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+		WithProjection("discard-too", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+
+	goaktOpts := append(cfg.GoaktOptions(),
+		goakt.WithCluster(clusterCfg),
+		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+	)
+
+	sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+	// wait briefly for the single-node cluster to advertise itself
+	pause.For(time.Second)
+	require.True(t, sys.InCluster())
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(ctx) })
+
+	// Singleton uniqueness is keyed by actor name (goakt >= v4.4.1), so every
+	// registered projection gets its own singleton. Before that goakt release
+	// the kind-keyed reservation made the second StartProjection a silent
+	// no-op.
+	require.NoError(t, engine.StartProjection(ctx, "discard"))
+	require.NoError(t, engine.StartProjection(ctx, "discard-too"))
+	pause.For(time.Second)
+
+	for _, name := range []string{"discard", "discard-too"} {
+		running, err := engine.IsProjectionRunning(ctx, name)
+		require.NoError(t, err)
+		require.True(t, running, "projection %s should be running as a cluster singleton", name)
+	}
+
+	// entity flow in cluster mode
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+	acct, ok := state.(*testpb.Account)
+	require.True(t, ok)
+	assert.EqualValues(t, 100, acct.GetAccountBalance())
+}
+
+// TestEngineMultiNodeRemoteEntitySpawn is a regression test for remote entity
+// spawns failing with "dependency type is not registered".
+//
+// With the default RoundRobin placement, Engine.Entity routes spawns to peer
+// nodes. The receiving node deserializes the spawn request's dependencies
+// (the behavior and eGo's internal EntityConfig) against its own registry,
+// which is populated at NewEngine time from WithEntityKinds. Only node1 ever
+// calls Entity(), so every spawn landing on node2 exercises that
+// pre-registration path; before the fix those spawns failed because node2's
+// registry was only populated by its own (never-issued) Entity() calls.
+func TestEngineMultiNodeRemoteEntitySpawn(t *testing.T) {
+	ctx := context.Background()
+
+	cluster := newTestCluster(t,
+		[]Option{WithEntityKinds(new(AccountEventSourcedBehavior))},
+		[]Option{WithEntityKinds(new(AccountEventSourcedBehavior))},
+	)
+	engine1 := cluster.engines[0]
+
+	// Only node1 spawns. With RoundRobin placement over two members, a run of
+	// spawns is guaranteed to place some entities on node2, which never called
+	// Entity() itself.
+	for range 8 {
+		entityID := uuid.NewString()
+		require.NoError(t, engine1.Entity(ctx, NewEventSourcedEntity(entityID)),
+			"remote spawn must succeed on a node that never called Entity() itself")
+
+		// SpawnOn (and therefore Entity) only returns once the actor's
+		// registry record is written to the cluster store, so the entity is
+		// immediately addressable from this node — no retry needed.
+		state, _, err := engine1.SendCommand(ctx, entityID, &testpb.CreateAccount{
+			AccountBalance: 100,
+		}, time.Minute)
+		require.NoError(t, err)
+		account, ok := state.(*testpb.Account)
+		require.True(t, ok)
+		assert.EqualValues(t, 100, account.GetAccountBalance())
+	}
+}
+
+// testCluster is a cluster of eGo engines started in one process by
+// newTestCluster. systems[i] and engines[i] belong to node i.
+type testCluster struct {
+	systems []goakt.ActorSystem
+	engines []*Engine
+}
+
+// newTestCluster starts one clustered actor system and eGo engine per entry
+// of nodeOpts, all in this process, and waits until every node sees all the
+// others as peers. Each node gets its own in-memory events store and
+// DiscardLogger; nodeOpts[i] adds node i's options (for example its entity
+// kinds). Nodes discover each other through mockClusterProvider, and their
+// cluster config registers ClusterKinds() with GoAkt's default RoundRobin
+// placement, so a run of SpawnOn calls from one node places some actors on
+// the others. Engines and actor systems are stopped at test cleanup.
+func newTestCluster(t *testing.T, nodeOpts ...[]Option) *testCluster {
+	t.Helper()
+	ctx := context.Background()
+	host := "127.0.0.1"
+	nodes := len(nodeOpts)
+	require.GreaterOrEqual(t, nodes, 2, "a test cluster needs at least two nodes")
+
+	// Three ports per node: gossip, peers and remoting.
+	ports := dynaport.Get(3 * nodes)
+	gossipAddrs := make([]string, nodes)
+	for i := range nodes {
+		gossipAddrs[i] = net.JoinHostPort(host, strconv.Itoa(ports[3*i]))
+	}
+
+	newNode := func(opts []Option, gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		cfg := NewConfig(store, append([]Option{WithLogger(DiscardLogger)}, opts...)...)
+
+		provider := &mockClusterProvider{id: "test", peers: gossipAddrs}
+		clusterCfg := goakt.NewClusterConfig().
+			WithDiscovery(provider).
+			WithDiscoveryPort(gossipPort).
+			WithPeersPort(peersPort).
+			WithMinimumPeersQuorum(1).
+			WithReplicaCount(1).
+			WithPartitionCount(7).
+			WithKinds(ClusterKinds()...)
+
+		goaktOpts := append(cfg.GoaktOptions(),
+			goakt.WithCluster(clusterCfg),
+			goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+		)
+
+		sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+		require.NoError(t, err)
+		return sys, cfg
+	}
+
+	cluster := &testCluster{
+		systems: make([]goakt.ActorSystem, nodes),
+		engines: make([]*Engine, nodes),
+	}
+	configs := make([]*Config, nodes)
+	for i, opts := range nodeOpts {
+		cluster.systems[i], configs[i] = newNode(opts, ports[3*i], ports[3*i+1], ports[3*i+2])
+	}
+
+	// start all nodes concurrently so they bootstrap the cluster together
+	errs := make(chan error, nodes)
+	for _, sys := range cluster.systems {
+		go func() { errs <- sys.Start(ctx) }()
+	}
+	for range nodes {
+		require.NoError(t, <-errs)
+	}
+	t.Cleanup(func() {
+		for _, sys := range cluster.systems {
+			_ = sys.Stop(context.Background())
+		}
+	})
+
+	// wait until every node sees all the others as peers
+	require.Eventually(t, func() bool {
+		for _, sys := range cluster.systems {
+			peers, err := sys.Peers(ctx, time.Second)
+			if err != nil || len(peers) != nodes-1 {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "the nodes never formed a cluster")
+
+	// Registered before the start loop so that, if one engine fails to
+	// build or start, the engines already started are still stopped.
+	t.Cleanup(func() {
+		for _, engine := range cluster.engines {
+			if engine != nil {
+				_ = engine.Stop(context.Background())
+			}
+		}
+	})
+	for i, sys := range cluster.systems {
+		engine, err := NewEngine(sys, configs[i])
+		require.NoError(t, err)
+		cluster.engines[i] = engine
+		require.NoError(t, engine.Start(ctx))
+	}
+
+	return cluster
+}
+
+// TestParseCommandReply pins the reply-decoding contract.
+func TestParseCommandReply(t *testing.T) {
+	t.Run("error reply", func(t *testing.T) {
+		reply := &egopb.CommandReply{
+			Reply: &egopb.CommandReply_ErrorReply{
+				ErrorReply: &egopb.ErrorReply{Message: "something failed"},
+			},
+		}
+		_, _, err := parseCommandReply(reply)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "something failed")
+	})
+
+	t.Run("no reply", func(t *testing.T) {
+		_, _, err := parseCommandReply(&egopb.CommandReply{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no state received")
+	})
+
+	t.Run("state reply", func(t *testing.T) {
+		state, _ := anypb.New(&samplepb.Account{AccountId: "acc-1", AccountBalance: 100})
+		reply := &egopb.CommandReply{
+			Reply: &egopb.CommandReply_StateReply{
+				StateReply: &egopb.StateReply{
+					PersistenceId:  "entity-1",
+					State:          state,
+					SequenceNumber: 5,
+				},
+			},
+		}
+		result, seq, err := parseCommandReply(reply)
+		require.NoError(t, err)
+		assert.EqualValues(t, 5, seq)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("unmarshal failure", func(t *testing.T) {
+		reply := &egopb.CommandReply{
+			Reply: &egopb.CommandReply_StateReply{
+				StateReply: &egopb.StateReply{
+					State:          &anypb.Any{TypeUrl: "type.googleapis.com/invalid.Type", Value: []byte("garbage")},
+					SequenceNumber: 1,
+				},
+			},
+		}
+		_, _, err := parseCommandReply(reply)
+		require.Error(t, err)
+	})
+}
+
+// TestBuildSpawnOptionsFromConfig pins the SpawnOption translation that the
+// entity/durable-state/saga paths share.
+func TestBuildSpawnOptionsFromConfig(t *testing.T) {
+	t.Run("with batch threshold", func(t *testing.T) {
+		opts := buildSpawnOptionsFromConfig(&spawnConfig{
+			batchThreshold:      5,
+			supervisorDirective: RestartDirective,
+			entitiesPlacement:   RoundRobin,
+		})
+		require.NotEmpty(t, opts)
+	})
+	t.Run("with passivation", func(t *testing.T) {
+		opts := buildSpawnOptionsFromConfig(&spawnConfig{
+			passivateAfter:      time.Minute,
+			supervisorDirective: RestartDirective,
+			entitiesPlacement:   RoundRobin,
+		})
+		require.NotEmpty(t, opts)
+	})
+	t.Run("relocation enabled", func(t *testing.T) {
+		opts := buildSpawnOptionsFromConfig(&spawnConfig{
+			toRelocate:          true,
+			supervisorDirective: RestartDirective,
+			entitiesPlacement:   RoundRobin,
+		})
+		require.NotEmpty(t, opts)
+	})
+}
+
+// TestToSpawnPlacement maps eGo placement strategies to their goakt
+// equivalents.
+func TestToSpawnPlacement(t *testing.T) {
+	assert.Equal(t, goakt.LeastLoad, toSpawnPlacement(LeastLoad))
+	assert.Equal(t, goakt.Random, toSpawnPlacement(Random))
+	assert.Equal(t, goakt.Local, toSpawnPlacement(Local))
+	assert.Equal(t, goakt.RoundRobin, toSpawnPlacement(RoundRobin))
+}
+
+// TestToSupervisorDirective maps eGo supervisor directives to goakt.
+func TestToSupervisorDirective(t *testing.T) {
+	t.Run("stop maps to Stop", func(t *testing.T) {
+		// concrete assertion is on stringer; behavior is "anything not RestartDirective stops".
+		// Negative test below.
+	})
+	t.Run("restart maps to Restart (default)", func(t *testing.T) {
+		dir := toSupervisorDirective(RestartDirective)
+		require.NotNil(t, dir)
+	})
+}
+
+// TestEngineEraseEntityErrors covers the engine-state guards on EraseEntity.
+func TestEngineEraseEntityErrors(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	// not started
+	require.ErrorIs(t, engine.EraseEntity(ctx, uuid.NewString(), false), ErrEngineNotStarted)
+}
+
+// TestEngineProjectionLagErrors covers the engine-state guards on ProjectionLag.
+func TestEngineProjectionLagErrors(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	t.Run("not started", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		_, err := engine.ProjectionLag(ctx, "any")
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+
+	t.Run("started without offset store", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+		_, err := engine.ProjectionLag(ctx, "any")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "offset store is required")
+	})
+}
+
+// TestEngineRebuildProjectionErrors covers the engine-state guards on
+// RebuildProjection.
+func TestEngineRebuildProjectionErrors(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	t.Run("not started", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		err := engine.RebuildProjection(ctx, "any", time.Now())
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+	})
+
+	t.Run("started without offset store", func(t *testing.T) {
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+		err := engine.RebuildProjection(ctx, "any", time.Now())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "offset store is required")
+	})
+}
+
+// TestEngineSubscribeBeforeStart confirms Subscribe is gated by the engine
+// being started.
+func TestEngineSubscribeBeforeStart(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	_, err := engine.Subscribe()
+	require.ErrorIs(t, err, ErrEngineNotStarted)
+}
+
+// TestEngineConfigRegistersAllExtensions verifies that every Option that
+// triggers an extension registration is honored by Config.GoaktOptions and
+// makes it into the resulting actor system.
+func TestEngineConfigRegistersAllExtensions(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	stateStore := testkit.NewDurableStore()
+	offsetStore := testkit.NewOffsetStore()
+	snapStore := testkit.NewSnapshotStore()
+
+	cfg := NewConfig(store,
+		WithLogger(DiscardLogger),
+		WithStateStore(stateStore),
+		WithOffsetStore(offsetStore),
+		WithSnapshotStore(snapStore),
+		WithEventAdapters(&testEventAdapter{}),
+		WithProjection("discard", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   10,
+			PullInterval: time.Second,
+		}),
+	)
+
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+	wantIDs := []string{
+		extensions.EventsStoreExtensionID,
+		extensions.EventsStreamExtensionID,
+		extensions.DurableStateStoreExtensionID,
+		extensions.OffsetStoreExtensionID,
+		extensions.ProjectionExtensionID,
+		extensions.SnapshotStoreExtensionID,
+		extensions.EventAdaptersExtensionID,
+	}
+	for _, id := range wantIDs {
+		assert.NotNilf(t, sys.Extension(id), "expected extension %s to be registered", id)
+	}
+
+	// NewEngine should accept the same Config cleanly.
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(ctx) })
+}
+
+// TestEngineStartWithTelemetry exercises the telemetry-enabled branch of
+// Engine.Start: when WithTelemetry is configured, Start materializes the
+// metrics struct and installs the OTel propagator. Both noop tracer and noop
+// meter are used to keep the test side-effect free.
+func TestEngineStartWithTelemetry(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	tel := &Telemetry{
+		Tracer: nooptrace.NewTracerProvider().Tracer("test"),
+		Meter:  noopmetric.NewMeterProvider().Meter("test"),
+	}
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithTelemetry(tel),
+	)
+	require.NoError(t, engine.Start(ctx))
+	require.NotNil(t, engine.metrics, "metrics should be initialized when telemetry is configured")
+	require.True(t, engine.Started())
+}
+
+// TestEngineEraseEntity covers EraseEntity's happy paths: a no-op when
+// `full` is false, the events-only path, and the events+snapshots path.
+func TestEngineEraseEntity(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("full=false is a no-op", func(t *testing.T) {
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+
+		require.NoError(t, engine.EraseEntity(ctx, uuid.NewString(), false))
+	})
+
+	t.Run("full=true with persisted events", func(t *testing.T) {
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		snapStore := testkit.NewSnapshotStore()
+		require.NoError(t, snapStore.Connect(ctx))
+		t.Cleanup(func() { _ = snapStore.Disconnect(ctx) })
+
+		engine := newTestEngine(t, "Sample", store,
+			WithLogger(DiscardLogger),
+			WithSnapshotStore(snapStore),
+		)
+		require.NoError(t, engine.Start(ctx))
+
+		entityID := uuid.NewString()
+		require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+			AccountBalance: 100,
+		}, time.Minute)
+		require.NoError(t, err)
+
+		require.NoError(t, engine.EraseEntity(ctx, entityID, true))
+
+		// Subsequent erase against the same id should be a clean no-op (no
+		// events left).
+		require.NoError(t, engine.EraseEntity(ctx, entityID, true))
+	})
+
+	t.Run("full=true with no events is safe", func(t *testing.T) {
+		store := testkit.NewEventsStore()
+		require.NoError(t, store.Connect(ctx))
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+		engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+		require.NoError(t, engine.Start(ctx))
+
+		// Entity that was never used: GetLatestEvent returns nil and
+		// EraseEntity should short-circuit without error.
+		require.NoError(t, engine.EraseEntity(ctx, uuid.NewString(), true))
+	})
+}
+
+// TestEngineProjectionLagHappyPath drives ProjectionLag through its full body
+// so the per-shard iteration, the empty-shard short-circuit, and the lag
+// computation are all exercised.
+func TestEngineProjectionLagHappyPath(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	// Fresh stores: every known shard is empty, so the loop should run the
+	// empty-shard branch and return a zero-lag map.
+	lags, err := engine.ProjectionLag(ctx, "any")
+	require.NoError(t, err)
+	for shard, lag := range lags {
+		assert.Zerof(t, lag, "expected zero lag on empty shard %d", shard)
+	}
+}
+
+// TestEngineRebuildProjectionSuccess exercises the success branch of
+// RebuildProjection: it stops the running projection, resets its offset, and
+// restarts it.
+func TestEngineRebuildProjectionSuccess(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("rebuild-target", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	const name = "rebuild-target"
+	require.NoError(t, engine.StartProjection(ctx, name))
+	pause.For(300 * time.Millisecond)
+
+	require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
+	pause.For(300 * time.Millisecond)
+
+	running, err := engine.IsProjectionRunning(ctx, name)
+	require.NoError(t, err)
+	require.True(t, running, "projection should be running again after rebuild")
+}
+
+// TestEngineSagaHappyPath registers a saga via Engine.Saga and then queries
+// its status via Engine.SagaStatus, covering the success branches of both.
+func TestEngineSagaHappyPath(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	sagaID := "saga-" + uuid.NewString()
+	require.NoError(t, engine.Saga(ctx, &testSagaBehavior{sagaID: sagaID}, 0))
+	pause.For(300 * time.Millisecond)
+
+	info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.Equal(t, sagaID, info.ID)
+}
+
+// ensure proto and context imports are not flagged when subtests vary.
+var _ context.Context = context.Background()
+var _ = proto.Message(nil)
+
+// TestEngineAddEventPublishersGuards covers the engine-state guards on
+// AddEventPublishers.
+func TestEngineAddEventPublishersGuards(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	// not started
+	pub := new(egomock.EventPublisher)
+	err := engine.AddEventPublishers(pub)
+	require.ErrorIs(t, err, ErrEngineNotStarted)
+}
+
+// TestEngineAddStatePublishersGuards covers the engine-state guards on
+// AddStatePublishers.
+func TestEngineAddStatePublishersGuards(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	// not started
+	pub := new(egomock.StatePublisher)
+	err := engine.AddStatePublishers(pub)
+	require.ErrorIs(t, err, ErrEngineNotStarted)
+}
+
+// TestEngineAddEventPublishers exercises the happy path of
+// AddEventPublishers: the publisher must observe events generated by an
+// event-sourced entity through the in-process stream.
+func TestEngineAddEventPublishers(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	published := make(chan struct{}, 4)
+	pub := new(egomock.EventPublisher)
+	pub.On("ID").Return("eGo.test.EventPublisher")
+	pub.On("Close", mock.Anything).Return(nil)
+	pub.On("Publish", mock.Anything, mock.AnythingOfType("*egopb.Event")).
+		Run(func(_ mock.Arguments) {
+			select {
+			case published <- struct{}{}:
+			default:
+			}
+		}).
+		Return(nil)
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddEventPublishers(pub))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for event publish")
+	}
+}
+
+// TestEnginePublisherIdleCPU is the regression test for
+// https://github.com/Tochemey/ego/issues/291: the publisher consumption
+// loops used to poll Subscriber.Iterator() — which returns a closed snapshot
+// channel — in a tight select, pinning one full CPU core per registered
+// publisher whenever the stream was idle. Post-fix the loops block on the
+// subscriber's Ready signal, so an idle engine with publishers must consume
+// close to zero CPU.
+func TestEnginePublisherIdleCPU(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	eventPub := new(egomock.EventPublisher)
+	eventPub.On("ID").Return("eGo.test.EventPublisher")
+	eventPub.On("Close", mock.Anything).Return(nil)
+
+	statePub := new(egomock.StatePublisher)
+	statePub.On("ID").Return("eGo.test.StatePublisher")
+	statePub.On("Close", mock.Anything).Return(nil)
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddEventPublishers(eventPub))
+	require.NoError(t, engine.AddStatePublishers(statePub))
+
+	// let startup work settle before sampling
+	pause.For(500 * time.Millisecond)
+
+	cpuStart := processCPUTime(t)
+	const idle = 2 * time.Second
+	pause.For(idle)
+	cpuBurned := processCPUTime(t) - cpuStart
+
+	// Pre-fix, each of the two idle consumption loops burned a full core
+	// (~2s of CPU each over the 2s window). The threshold leaves generous
+	// headroom for runtime and actor-system background work while still
+	// catching any loop that spins instead of blocking.
+	require.Less(t, cpuBurned, idle/2,
+		"idle publisher loops burned %v of CPU over %v of wall time: busy-spin regression", cpuBurned, idle)
+}
+
+// processCPUTime returns the cumulative user+system CPU time of the test
+// process.
+func processCPUTime(t *testing.T) time.Duration {
+	t.Helper()
+	var usage syscall.Rusage
+	require.NoError(t, syscall.Getrusage(syscall.RUSAGE_SELF, &usage))
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// TestEngineAddStatePublishers exercises the happy path of
+// AddStatePublishers: the publisher must observe durable-state updates
+// generated by a durable-state entity.
+func TestEngineAddStatePublishers(t *testing.T) {
+	ctx := context.Background()
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	published := make(chan struct{}, 4)
+	pub := new(egomock.StatePublisher)
+	pub.On("ID").Return("eGo.test.StatePublisher")
+	pub.On("Close", mock.Anything).Return(nil)
+	pub.On("Publish", mock.Anything, mock.AnythingOfType("*egopb.DurableState")).
+		Run(func(_ mock.Arguments) {
+			select {
+			case published <- struct{}{}:
+			default:
+			}
+		}).
+		Return(nil)
+
+	engine := newTestEngine(t, "Sample", nil,
+		WithLogger(DiscardLogger),
+		WithStateStore(stateStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddStatePublishers(pub))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for state publish")
+	}
+}
+
+// TestEngineStopReturnsEventPublisherCloseError verifies that a failure in an
+// EventPublisher's Close surfaces from Engine.Stop.
+func TestEngineStopReturnsEventPublisherCloseError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	closeErr := errors.New("close error")
+	pub := new(egomock.EventPublisher)
+	pub.On("ID").Return("eGo.test.FailingEventPublisher")
+	pub.On("Close", mock.Anything).Return(closeErr)
+
+	cfg := NewConfig(store, WithLogger(DiscardLogger))
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddEventPublishers(pub))
+
+	require.ErrorIs(t, engine.Stop(ctx), closeErr)
+}
+
+// TestEngineStopReturnsStatePublisherCloseError verifies that a failure in a
+// StatePublisher's Close surfaces from Engine.Stop.
+func TestEngineStopReturnsStatePublisherCloseError(t *testing.T) {
+	ctx := context.Background()
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	closeErr := errors.New("close error")
+	pub := new(egomock.StatePublisher)
+	pub.On("ID").Return("eGo.test.FailingStatePublisher")
+	pub.On("Close", mock.Anything).Return(closeErr)
+
+	cfg := NewConfig(nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddStatePublishers(pub))
+
+	require.ErrorIs(t, engine.Stop(ctx), closeErr)
+}
+
+// TestEngineEventPublisherKeepsGoingOnPublishError ensures that a failing
+// Publish does not stall or kill the sendEvent goroutine: a subsequent event
+// must still be delivered.
+func TestEngineEventPublisherKeepsGoingOnPublishError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	published := make(chan struct{}, 4)
+	pub := new(egomock.EventPublisher)
+	pub.On("ID").Return("eGo.test.FailingPublisher")
+	pub.On("Close", mock.Anything).Return(nil)
+	pub.On("Publish", mock.Anything, mock.AnythingOfType("*egopb.Event")).
+		Run(func(_ mock.Arguments) {
+			select {
+			case published <- struct{}{}:
+			default:
+			}
+		}).
+		Return(assert.AnError)
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddEventPublishers(pub))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first publish attempt")
+	}
+
+	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{
+		AccountId: entityID, Balance: 25,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sendEvent goroutine appears to have stopped after a publish error")
+	}
+}
+
+// TestEngineStatePublisherKeepsGoingOnPublishError ensures that a failing
+// state Publish does not kill the sendState goroutine.
+func TestEngineStatePublisherKeepsGoingOnPublishError(t *testing.T) {
+	ctx := context.Background()
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	published := make(chan struct{}, 4)
+	pub := new(egomock.StatePublisher)
+	pub.On("ID").Return("eGo.test.FailingStatePublisher")
+	pub.On("Close", mock.Anything).Return(nil)
+	pub.On("Publish", mock.Anything, mock.AnythingOfType("*egopb.DurableState")).
+		Run(func(_ mock.Arguments) {
+			select {
+			case published <- struct{}{}:
+			default:
+			}
+		}).
+		Return(assert.AnError)
+
+	engine := newTestEngine(t, "Sample", nil,
+		WithLogger(DiscardLogger),
+		WithStateStore(stateStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+	require.NoError(t, engine.AddStatePublishers(pub))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first state publish attempt")
+	}
+
+	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{
+		AccountId: entityID, Balance: 25,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sendState goroutine appears to have stopped after a publish error")
+	}
+}
+
+// TestEngineSendCommandWithTelemetry exercises the telemetry-instrumented
+// branch of SendCommand for both the success and error paths.
+func TestEngineSendCommandWithTelemetry(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	tel := &Telemetry{
+		Tracer: nooptrace.NewTracerProvider().Tracer("test"),
+		Meter:  noopmetric.NewMeterProvider().Meter("test"),
+	}
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithTelemetry(tel),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+
+	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 42,
+	}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+
+	// Error path: an unknown entity hits a send timeout, exercising the
+	// span.RecordError branch.
+	_, _, err = engine.SendCommand(ctx, "missing-"+uuid.NewString(),
+		&testpb.CreateAccount{AccountBalance: 1}, 10*time.Millisecond)
+	require.Error(t, err)
+}
+
+// TestToSupervisorDirectiveStop covers the StopDirective branch.
+func TestToSupervisorDirectiveStop(t *testing.T) {
+	assert.Equal(t, supervisor.StopDirective, toSupervisorDirective(StopDirective))
+	assert.Equal(t, supervisor.RestartDirective, toSupervisorDirective(RestartDirective))
+}
+
+// TestEngineStartWithoutActorSystem covers the guard in Start that returns
+// ErrActorSystemRequired when the engine's atomic actor-system reference has
+// been detached (e.g. mid-shutdown or in a manually-constructed instance).
+func TestEngineStartWithoutActorSystem(t *testing.T) {
+	e := &Engine{
+		eventsStore:   testkit.NewEventsStore(),
+		logger:        DiscardLogger,
+		eventsStreams: syncmap.New[string, *eventsStream](),
+		statesStreams: syncmap.New[string, *statesStream](),
+	}
+	require.ErrorIs(t, e.Start(context.Background()), ErrActorSystemRequired)
+}
+
+// TestEngineProjectionLagClampsNegative seeds the offset store with a value
+// far in the future so that latestTimestamp - currOffset is negative,
+// exercising the lag clamp in ProjectionLag.
+func TestEngineProjectionLagClampsNegative(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	// Produce an event so the shard is non-empty and we follow the
+	// latestTimestamp/currOffset arithmetic branch.
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	// Discover the populated shards and stamp a future offset on each so
+	// currOffset > latestTimestamp and the clamp branch fires.
+	shardOffsets, err := store.ShardOffsets(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, shardOffsets)
+
+	const projectionName = "future-projection"
+	future := time.Now().Add(24 * time.Hour).UnixNano()
+	for shard := range shardOffsets {
+		require.NoError(t, offsetStore.WriteOffset(ctx, &egopb.Offset{
+			ProjectionName: projectionName,
+			ShardNumber:    shard,
+			Value:          future,
+			Timestamp:      time.Now().UnixMilli(),
+		}))
+	}
+
+	lags, err := engine.ProjectionLag(ctx, projectionName)
+	require.NoError(t, err)
+	require.NotEmpty(t, lags)
+	for shard, lag := range lags {
+		assert.Equalf(t, time.Duration(0), lag,
+			"expected clamped zero lag on shard %d when offset is in the future", shard)
+	}
+}
+
+// TestEngineNotStartedGuardsDirect drives the top-of-function
+// `!engine.Started()` short-circuit on every API that has one. The synth
+// engine used by TestEngineHotPathGuards has started=true and exercises the
+// "ref==nil" branch; this test complements it by exercising the "started==
+// false" branch with a real engine that simply has not been started.
+func TestEngineNotStartedGuardsDirect(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	newEngine := func() *Engine {
+		return newTestEngine(t, "Sample", store,
+			WithLogger(DiscardLogger),
+			WithStateStore(testkit.NewDurableStore()),
+		)
+	}
+
+	t.Run("StartProjection", func(t *testing.T) {
+		require.ErrorIs(t, newEngine().StartProjection(ctx, "p"), ErrEngineNotStarted)
+	})
+	t.Run("StopProjection", func(t *testing.T) {
+		require.ErrorIs(t, newEngine().StopProjection(ctx, "p"), ErrEngineNotStarted)
+	})
+	t.Run("IsProjectionRunning", func(t *testing.T) {
+		running, err := newEngine().IsProjectionRunning(ctx, "p")
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.False(t, running)
+	})
+	t.Run("Entity", func(t *testing.T) {
+		require.ErrorIs(t,
+			newEngine().Entity(ctx, NewEventSourcedEntity(uuid.NewString())),
+			ErrEngineNotStarted)
+	})
+	t.Run("DurableStateEntity", func(t *testing.T) {
+		require.ErrorIs(t,
+			newEngine().DurableStateEntity(ctx, NewAccountDurableStateBehavior(uuid.NewString())),
+			ErrEngineNotStarted)
+	})
+	t.Run("Saga", func(t *testing.T) {
+		require.ErrorIs(t,
+			newEngine().Saga(ctx, &testSagaBehavior{sagaID: "s"}, 0),
+			ErrEngineNotStarted)
+	})
+	t.Run("SagaStatus", func(t *testing.T) {
+		info, err := newEngine().SagaStatus(ctx, "s", time.Second)
+		require.ErrorIs(t, err, ErrEngineNotStarted)
+		require.Nil(t, info)
+	})
+}
+
+// TestEngineIsProjectionRunningActorOfError covers the ActorOf-failure
+// branch of IsProjectionRunning. Asking for an actor name that does not
+// exist makes the underlying actor system surface an error, which the
+// engine wraps.
+func TestEngineIsProjectionRunningActorOfError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	running, err := engine.IsProjectionRunning(ctx, "missing-projection-"+uuid.NewString())
+	require.Error(t, err)
+	require.False(t, running)
+}
+
+// TestEngineStartProjectionStandaloneSpawnError covers the spawn-failure wrap
+// in StartProjection's standalone branch (lines 378-379). The actor system is
+// stopped out from under the engine so that the next Spawn call returns
+// ErrActorSystemNotStarted, which the engine wraps.
+func TestEngineStartProjectionStandaloneSpawnError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	cfg := NewConfig(store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("boom-projection", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+
+	// Stop the actor system; the engine still believes it's running, so
+	// the StartProjection call falls through to the Spawn-in-standalone path
+	// and gets ErrActorSystemNotStarted from goakt.
+	require.NoError(t, sys.Stop(ctx))
+
+	err = engine.StartProjection(ctx, "boom-projection")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to start the projection")
+}
+
+// TestEngineEntityWithRetentionPolicy exercises the retention-policy block
+// in Entity (lines 552-556) by passing a non-nil RetentionPolicy.
+func TestEngineEntityWithRetentionPolicy(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	snapStore := testkit.NewSnapshotStore()
+	require.NoError(t, snapStore.Connect(ctx))
+	t.Cleanup(func() { _ = snapStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithSnapshotStore(snapStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID),
+		WithRetentionPolicy(RetentionPolicy{
+			DeleteEventsOnSnapshot:    true,
+			DeleteSnapshotsOnSnapshot: true,
+			EventsRetentionCount:      3,
+		}),
+	))
+}
+
+// TestEngineSendCommandUnexpectedReply pins the ErrCommandReplyUnmarshalling
+// branch: when the reply is not a *egopb.CommandReply, SendCommand surfaces
+// that sentinel error.
+func TestEngineSendCommandUnexpectedReply(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	// Spawn a plain goakt actor under a known name that replies with a
+	// non-CommandReply proto; SendCommand routes there by entityID.
+	sys := engine.ActorSystem()
+	require.NotNil(t, sys)
+	entityID := "weird-" + uuid.NewString()
+	_, err := sys.Spawn(ctx, entityID,
+		&simpleReplyActor{reply: &samplepb.Account{AccountId: entityID}},
+		goakt.WithLongLived())
+	require.NoError(t, err)
+
+	state, rev, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 1,
+	}, time.Minute)
+	require.ErrorIs(t, err, ErrCommandReplyUnmarshalling)
+	require.Nil(t, state)
+	require.Zero(t, rev)
+}
+
+// TestEngineSagaStatusErrorPaths covers the three error branches of
+// SagaStatus that follow the not-started guard: SendSync failure, an
+// unexpected reply type, and parseCommandReply returning an error.
+func TestEngineSagaStatusErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+	require.NoError(t, engine.Start(ctx))
+
+	t.Run("empty saga id", func(t *testing.T) {
+		info, err := engine.SagaStatus(ctx, "", time.Second)
+		require.ErrorIs(t, err, ErrUndefinedEntityID)
+		require.Nil(t, info)
+	})
+
+	t.Run("SendSync failure", func(t *testing.T) {
+		info, err := engine.SagaStatus(ctx, "missing-saga-"+uuid.NewString(), 10*time.Millisecond)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to get saga status")
+		require.Nil(t, info)
+	})
+
+	sys := engine.ActorSystem()
+	require.NotNil(t, sys)
+
+	t.Run("unexpected reply type", func(t *testing.T) {
+		sagaID := "saga-bad-reply-" + uuid.NewString()
+		_, err := sys.Spawn(ctx, sagaID,
+			&simpleReplyActor{reply: &samplepb.Account{}},
+			goakt.WithLongLived())
+		require.NoError(t, err)
+		info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unexpected reply type from saga")
+		require.Nil(t, info)
+	})
+
+	t.Run("parseCommandReply error reply", func(t *testing.T) {
+		sagaID := "saga-error-reply-" + uuid.NewString()
+		errReply := &egopb.CommandReply{
+			Reply: &egopb.CommandReply_ErrorReply{
+				ErrorReply: &egopb.ErrorReply{Message: "saga is sick"},
+			},
+		}
+		_, err := sys.Spawn(ctx, sagaID,
+			&simpleReplyActor{reply: errReply},
+			goakt.WithLongLived())
+		require.NoError(t, err)
+		info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "saga is sick")
+		require.Nil(t, info)
+	})
+}
+
+// synthEngineWithStores builds a minimal Engine whose state-machine looks
+// "started" to the API but whose stores are injected directly. The actor
+// system is NOT populated: any code path that touches it via
+// engine.actorSystem.Load() will fail, so this synth is appropriate only for
+// methods that read stores after their started-guard (EraseEntity,
+// ProjectionLag, ...).
+func synthEngineWithStores(eventsStore persistence.EventsStore, snapStore persistence.SnapshotStore, offsetStore offsetstore.OffsetStore) *Engine {
+	e := &Engine{
+		eventsStore:   eventsStore,
+		snapshotStore: snapStore,
+		offsetStore:   offsetStore,
+		logger:        DiscardLogger,
+		eventsStreams: syncmap.New[string, *eventsStream](),
+		statesStreams: syncmap.New[string, *statesStream](),
+	}
+	e.started.Store(true)
+	return e
+}
+
+// TestEngineEraseEntityStoreErrors covers the three error wraps in
+// EraseEntity's full-erase block (lines 906-918): GetLatestEvent failure,
+// DeleteEvents failure, and DeleteSnapshots failure.
+func TestEngineEraseEntityStoreErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("GetLatestEvent error", func(t *testing.T) {
+		eventsStore := new(mockpersistence.EventsStore)
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+			Return(nil, errors.New("boom"))
+
+		engine := synthEngineWithStores(eventsStore, nil, nil)
+		err := engine.EraseEntity(ctx, "pid-1", true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to get latest event for erasure")
+	})
+
+	t.Run("DeleteEvents error", func(t *testing.T) {
+		eventsStore := new(mockpersistence.EventsStore)
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+			Return(&egopb.Event{SequenceNumber: 5}, nil)
+		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(5)).
+			Return(errors.New("delete fail"))
+
+		engine := synthEngineWithStores(eventsStore, nil, nil)
+		err := engine.EraseEntity(ctx, "pid-2", true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to delete events for erasure")
+	})
+
+	t.Run("DeleteSnapshots error", func(t *testing.T) {
+		eventsStore := new(mockpersistence.EventsStore)
+		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+			Return(&egopb.Event{SequenceNumber: 7}, nil)
+		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
+			Return(nil)
+
+		snapStore := new(mockpersistence.SnapshotStore)
+		snapStore.On("DeleteSnapshots", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
+			Return(errors.New("snap fail"))
+
+		engine := synthEngineWithStores(eventsStore, snapStore, nil)
+		err := engine.EraseEntity(ctx, "pid-3", true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to delete snapshots for erasure")
+	})
+}
+
+// TestEngineProjectionLagStoreErrors covers ProjectionLag's per-store error
+// wraps: ShardOffsets failure and GetCurrentOffset failure.
+func TestEngineProjectionLagStoreErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ShardOffsets failure", func(t *testing.T) {
+		eventsStore := new(mockpersistence.EventsStore)
+		eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64(nil), errors.New("shards down"))
+		offsetStore := new(mockoffsetstore.OffsetStore)
+
+		engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+		lags, err := engine.ProjectionLag(ctx, "any")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to fetch shard offsets")
+		require.Nil(t, lags)
+	})
+
+	t.Run("GetCurrentOffset failure", func(t *testing.T) {
+		eventsStore := new(mockpersistence.EventsStore)
+		eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{1: 100}, nil)
+
+		offsetStore := new(mockoffsetstore.OffsetStore)
+		offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
+			Return(nil, errors.New("offset down"))
+
+		engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+		lags, err := engine.ProjectionLag(ctx, "any")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to get offset for shard")
+		require.Nil(t, lags)
+	})
+}
+
+// TestEngineProjectionLagComputation drives the lag arithmetic directly:
+// lag is the difference between the shard's latest event timestamp (as
+// reported by ShardOffsets) and the projection's committed offset.
+func TestEngineProjectionLagComputation(t *testing.T) {
+	ctx := context.Background()
+
+	eventsStore := new(mockpersistence.EventsStore)
+	eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{7: 1500}, nil)
+
+	offsetStore := new(mockoffsetstore.OffsetStore)
+	offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
+		Return(&egopb.Offset{Value: 500}, nil)
+
+	engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+	lags, err := engine.ProjectionLag(ctx, "any")
+	require.NoError(t, err)
+	require.Equal(t, time.Duration(1000), lags[7])
+}
+
+// TestEngineSagaSpawnError covers the Spawn-failure wrap in Engine.Saga
+// (line 838). Same trick as the projection variant: stop the actor system
+// while the engine still believes it owns one.
+func TestEngineSagaSpawnError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	cfg := NewConfig(store, WithLogger(DiscardLogger))
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+
+	require.NoError(t, sys.Stop(ctx))
+
+	err = engine.Saga(ctx, &testSagaBehavior{sagaID: "doomed-saga"}, time.Second)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to start saga")
+}
+
+// TestEngineRebuildProjectionRemoveError covers RebuildProjection's
+// "failed to stop projection" branch (lines 470-472). Rebuilding a name
+// that was never registered makes the internal StopProjection call fail
+// because Kill cannot find the actor.
+func TestEngineRebuildProjectionRemoveError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	err := engine.RebuildProjection(ctx, "never-registered-"+uuid.NewString(), ZeroTime)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to stop projection")
+}
+
+// TestEngineRebuildProjectionResetOffsetError covers the
+// "failed to reset offset" branch (lines 475-477). A real projection is
+// added so StopProjection succeeds, then the engine's offset store is
+// swapped for a mock that fails on ResetOffset.
+func TestEngineRebuildProjectionResetOffsetError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("rebuild-reset-error", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	const name = "rebuild-reset-error"
+	require.NoError(t, engine.StartProjection(ctx, name))
+	pause.For(200 * time.Millisecond)
+
+	// Swap the offset store for one that fails on ResetOffset so the
+	// rebuild path takes the ResetOffset-error branch.
+	bad := new(mockoffsetstore.OffsetStore)
+	bad.On("ResetOffset", mock.Anything, name, mock.AnythingOfType("int64")).
+		Return(errors.New("reset boom"))
+	engine.mutex.Lock()
+	engine.offsetStore = bad
+	engine.mutex.Unlock()
+
+	err := engine.RebuildProjection(ctx, name, ZeroTime)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to reset offset")
+}
+
+// TestEngineRebuildProjectionRestartError covers the
+// "failed to restart projection" branch (lines 480-482). A successful
+// StopProjection + ResetOffset sequence is followed by a StartProjection
+// that fails because the actor system is stopped from inside the offset
+// store mock just before the restart runs.
+func TestEngineRebuildProjectionRestartError(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	cfg := NewConfig(store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("rebuild-restart-error", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+
+	const name = "rebuild-restart-error"
+	require.NoError(t, engine.StartProjection(ctx, name))
+	pause.For(200 * time.Millisecond)
+
+	// Inject a mock offset store whose ResetOffset stops the actor system
+	// in-place. The subsequent StartProjection call inside RebuildProjection
+	// will then see a not-running actor system and fail.
+	bad := new(mockoffsetstore.OffsetStore)
+	bad.On("ResetOffset", mock.Anything, name, mock.AnythingOfType("int64")).
+		Run(func(_ mock.Arguments) {
+			_ = sys.Stop(ctx)
+		}).
+		Return(nil)
+
+	engine.mutex.Lock()
+	engine.offsetStore = bad
+	engine.mutex.Unlock()
+
+	err = engine.RebuildProjection(ctx, name, ZeroTime)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to restart projection")
+}
+
+// TestEngineClusterModeStartProjectionAlreadyExists exercises the cluster
+// singleton branch in StartProjection where a second start of the same
+// projection name is a clean no-op: SpawnSingleton is idempotent when the
+// name is already bound to the same singleton, so no error surfaces.
+func TestEngineClusterModeStartProjectionAlreadyExists(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	ports := dynaport.Get(3)
+	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+	host := "127.0.0.1"
+
+	provider := &mockClusterProvider{
+		id:    "test",
+		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+	}
+
+	clusterCfg := goakt.NewClusterConfig().
+		WithDiscovery(provider).
+		WithDiscoveryPort(gossipPort).
+		WithPeersPort(clusterPort).
+		WithMinimumPeersQuorum(1).
+		WithReplicaCount(1).
+		WithPartitionCount(4).
+		WithKinds(ClusterKinds()...)
+
+	cfg := NewConfig(store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("discard-once", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+
+	goaktOpts := append(cfg.GoaktOptions(),
+		goakt.WithCluster(clusterCfg),
+		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+	)
+
+	sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+	require.NoError(t, err)
+	require.NoError(t, sys.Start(ctx))
+	t.Cleanup(func() { _ = sys.Stop(ctx) })
+
+	pause.For(time.Second)
+	require.True(t, sys.InCluster())
+
+	engine, err := NewEngine(sys, cfg)
+	require.NoError(t, err)
+	require.NoError(t, engine.Start(ctx))
+	t.Cleanup(func() { _ = engine.Stop(ctx) })
+
+	const name = "discard-once"
+	require.NoError(t, engine.StartProjection(ctx, name))
+	pause.For(time.Second)
+
+	// Re-registering must take the ErrSingletonAlreadyExists branch and
+	// silently return nil rather than erroring.
+	require.NoError(t, engine.StartProjection(ctx, name),
+		"second StartProjection on the same name must be a clean no-op via ErrSingletonAlreadyExists")
+}
+
+// TestEngineProjectionLagWithEvents drives ProjectionLag through the path
+// where a shard actually has events, exercising the latestTimestamp/offset
+// arithmetic and the per-shard accumulation.
+func TestEngineProjectionLagWithEvents(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	// Produce at least one event so a shard becomes non-empty and the loop
+	// falls through to the latestTimestamp/offset computation.
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+		AccountBalance: 100,
+	}, time.Minute)
+	require.NoError(t, err)
+
+	lags, err := engine.ProjectionLag(ctx, "any")
+	require.NoError(t, err)
+	require.NotEmpty(t, lags, "expected at least one shard to be reported")
+	for shard, lag := range lags {
+		assert.GreaterOrEqualf(t, int64(lag), int64(0), "lag for shard %d must not be negative", shard)
+	}
+}

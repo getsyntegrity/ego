@@ -33,8 +33,8 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4"
 	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/engine"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/port/adapter"
 	"github.com/getsyntegrity/ego/v4/port/publishing"
@@ -85,7 +85,7 @@ func newFixture(t *testing.T, name string) *fixture {
 
 func mustNew(t *testing.T, spec compose.Spec, opts ...Option) *App {
 	t.Helper()
-	app, err := New(spec, append([]Option{WithLogger(ego.DiscardLogger)}, opts...)...)
+	app, err := New(spec, append([]Option{WithLogger(engine.DiscardLogger)}, opts...)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown(t *testing.T) {
 
 // TestEngine_UndeclaredFamilyReturnsTypedError: the Spec declares event
 // sourcing only, so a durable-state spawn through either entry point
-// returns ego.ErrEntityFamilyNotDeclared (design §D3).
+// returns engine.ErrEntityFamilyNotDeclared (design §D3).
 func TestEngine_UndeclaredFamilyReturnsTypedError(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, "undeclared-family")
@@ -535,11 +535,11 @@ func TestEngine_UndeclaredFamilyReturnsTypedError(t *testing.T) {
 	if err := app.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := app.Engine().SpawnDurableState(ctx, &wallet{id: "w-new"}); !errors.Is(err, ego.ErrEntityFamilyNotDeclared) {
+	if err := app.Engine().SpawnDurableState(ctx, &wallet{id: "w-new"}); !errors.Is(err, engine.ErrEntityFamilyNotDeclared) {
 		t.Fatalf("SpawnDurableState = %v, want ErrEntityFamilyNotDeclared", err)
 	}
 	//nolint:staticcheck // the deprecated entry point must enforce the same guard
-	if err := app.Engine().DurableStateEntity(ctx, &wallet{id: "w-old"}); !errors.Is(err, ego.ErrEntityFamilyNotDeclared) {
+	if err := app.Engine().DurableStateEntity(ctx, &wallet{id: "w-old"}); !errors.Is(err, engine.ErrEntityFamilyNotDeclared) {
 		t.Fatalf("DurableStateEntity = %v, want ErrEntityFamilyNotDeclared", err)
 	}
 	if err := app.Engine().SpawnEventSourced(ctx, &account{id: "acc-declared"}); err != nil {

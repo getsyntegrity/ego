@@ -180,11 +180,11 @@ func TestLoadRootModule_LoadErrorFailsClosed(t *testing.T) {
 }
 
 // writeRunFixture builds a tiny repository fixture under t.TempDir(): a
-// root module with its root package, one contract package (tenancy), one
+// root module with its engine package, one contract package (tenancy), one
 // application package (migration) that imports it and the composition
 // package (compose), plus a nested adapter module
-// (publisher/kafka) that either stays clean or imports the root module
-// path directly — the one edge external-adapter-no-runtime forbids — so a
+// (publisher/kafka) that either stays clean or imports the engine
+// package directly — the one edge external-adapter-no-runtime forbids — so a
 // single builder produces both a clean graph and a violating one for
 // runCheck's end-to-end tests.
 func writeRunFixture(t *testing.T, withViolation bool) (dir, modulePath string) {
@@ -192,7 +192,7 @@ func writeRunFixture(t *testing.T, withViolation bool) (dir, modulePath string) 
 	dir = t.TempDir()
 	modulePath = "github.com/example/archcheckfixture"
 	writeFile(t, filepath.Join(dir, "go.mod"), "module "+modulePath+"\n\ngo 1.21\n")
-	writeFile(t, filepath.Join(dir, "root.go"), "package archcheckfixture\n\n// Runtime stands in for the root package ego.\ntype Runtime struct{}\n")
+	writeFile(t, filepath.Join(dir, "engine", "engine.go"), "package engine\n\n// Runtime stands in for the engine package.\ntype Runtime struct{}\n")
 	writeFile(t, filepath.Join(dir, "tenancy", "tenancy.go"), "package tenancy\n\n// Marker is a contract type.\ntype Marker struct{}\n")
 	writeFile(t, filepath.Join(dir, "compose", "compose.go"),
 		"package compose\n\nimport \""+modulePath+"/tenancy\"\n\n// Spec stands in for compose.Spec.\ntype Spec struct{ Resolver tenancy.Marker }\n")
@@ -202,7 +202,7 @@ func writeRunFixture(t *testing.T, withViolation bool) (dir, modulePath string) 
 
 	kafka := "package kafka\n\nimport \"fmt\"\n\nvar _ = fmt.Sprintf\n"
 	if withViolation {
-		kafka = "package kafka\n\nimport \"" + modulePath + "\"\n"
+		kafka = "package kafka\n\nimport \"" + modulePath + "/engine\"\n"
 	}
 	writeFile(t, filepath.Join(dir, "publisher", "kafka", "kafka.go"), kafka)
 	return dir, modulePath
@@ -251,7 +251,7 @@ func TestRunCheck_StaleBaselineEntryFails(t *testing.T) {
 	baseline := []rules.BaselineEntry{
 		{
 			Importer:         modulePath + "/publisher/kafka",
-			Import:           modulePath,
+			Import:           modulePath + "/engine",
 			Rule:             "external-adapter-no-runtime",
 			Owner:            "@fixture",
 			Justification:    "test fixture: entry that matches nothing real",
@@ -269,14 +269,14 @@ func TestRunCheck_StaleBaselineEntryFails(t *testing.T) {
 }
 
 // TestRunCheck_CompositionNoRuntimeViolationFails: compose importing the
-// root package (ego's stand-in) fails the check under
+// engine package (its stand-in) fails the check under
 // composition-no-runtime (ego-arch-003 design §D8).
 func TestRunCheck_CompositionNoRuntimeViolationFails(t *testing.T) {
 	requireGo(t)
 
 	dir, modulePath := writeRunFixture(t, false)
 	writeFile(t, filepath.Join(dir, "compose", "compose.go"),
-		"package compose\n\nimport \""+modulePath+"\"\n\n// Spec leaks the runtime.\ntype Spec struct{ R archcheckfixture.Runtime }\n")
+		"package compose\n\nimport \""+modulePath+"/engine\"\n\n// Spec leaks the runtime.\ntype Spec struct{ R engine.Runtime }\n")
 	var stdout strings.Builder
 	err := runCheck(dir, nil, &stdout)
 	if err == nil {

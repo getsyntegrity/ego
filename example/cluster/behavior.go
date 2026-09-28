@@ -28,7 +28,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/engine"
 	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
 )
@@ -36,16 +36,16 @@ import (
 // AccountBehavior implements behaviorport.EventSourced (port/behavior) for a
 // bank account. It handles CreateAccount, CreditAccount, and DebitAccount
 // commands. This example runs in cluster mode, so it also implements
-// MarshalBinary/UnmarshalBinary (ego.BehaviorKind) so GoAkt can place and
+// MarshalBinary/UnmarshalBinary (engine.BehaviorKind) so GoAkt can place and
 // relocate it across nodes; main.go registers it with
-// ego.WithBehaviorKinds so every node can decode a spawn a peer places on it.
+// engine.WithBehaviorKinds so every node can decode a spawn a peer places on it.
 type AccountBehavior struct {
 	id string
 }
 
 var (
 	_ behaviorport.EventSourced = (*AccountBehavior)(nil)
-	_ ego.BehaviorKind          = (*AccountBehavior)(nil)
+	_ engine.BehaviorKind       = (*AccountBehavior)(nil)
 )
 
 func NewAccountBehavior(id string) *AccountBehavior {
@@ -56,14 +56,14 @@ func (a *AccountBehavior) ID() string {
 	return a.id
 }
 
-func (a *AccountBehavior) InitialState() ego.State {
+func (a *AccountBehavior) InitialState() engine.State {
 	return new(samplepb.Account)
 }
 
-func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, priorState ego.State) ([]ego.Event, error) {
+func (a *AccountBehavior) HandleCommand(_ context.Context, command engine.Command, priorState engine.State) ([]engine.Event, error) {
 	switch cmd := command.(type) {
 	case *samplepb.CreateAccount:
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCreated{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetAccountBalance(),
@@ -71,7 +71,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 		}, nil
 
 	case *samplepb.CreditAccount:
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountCredited{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetBalance(),
@@ -84,7 +84,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 			return nil, fmt.Errorf("insufficient funds: have %.2f, need %.2f",
 				account.GetAccountBalance(), cmd.GetBalance())
 		}
-		return []ego.Event{
+		return []engine.Event{
 			&samplepb.AccountDebited{
 				AccountId:      cmd.GetAccountId(),
 				AccountBalance: cmd.GetBalance(),
@@ -96,7 +96,7 @@ func (a *AccountBehavior) HandleCommand(_ context.Context, command ego.Command, 
 	}
 }
 
-func (a *AccountBehavior) HandleEvent(_ context.Context, event ego.Event, priorState ego.State) (ego.State, error) {
+func (a *AccountBehavior) HandleEvent(_ context.Context, event engine.Event, priorState engine.State) (engine.State, error) {
 	switch evt := event.(type) {
 	case *samplepb.AccountCreated:
 		return &samplepb.Account{
