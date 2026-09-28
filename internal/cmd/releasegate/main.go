@@ -190,11 +190,23 @@ func waitForGate(ctx context.Context, client *Client, cfg config, clk clock, slp
 		}
 
 		now := clk.Now()
-		if cfg.timeout <= 0 || !now.Before(deadline) {
+		remaining := deadline.Sub(now)
+		if cfg.timeout <= 0 || remaining <= 0 {
 			return errors.New(timeoutMessage(cfg.sha, cfg.timeout, lastErr, lastReason))
 		}
-		fmt.Fprintf(stdout, "release gate: polling again in %s\n", cfg.interval)
-		slp.Sleep(cfg.interval)
+
+		// Clamp the sleep to whatever time is actually left before the
+		// deadline (PR #171 review, R3/minor): -interval is an operator
+		// setting, and nothing stops it from being configured larger than
+		// -timeout. Sleeping the full interval in that case would sleep
+		// past the deadline before this loop ever gets to check it again,
+		// silently turning a small -timeout into a much longer real wait.
+		sleepFor := cfg.interval
+		if sleepFor > remaining {
+			sleepFor = remaining
+		}
+		fmt.Fprintf(stdout, "release gate: polling again in %s\n", sleepFor)
+		slp.Sleep(sleepFor)
 	}
 }
 

@@ -300,3 +300,28 @@ func TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError(t *testing.T) {
 		t.Fatalf("error = %v, want it to name the last fetch error (503)", err)
 	}
 }
+
+// TestRun_SleepClampedToRemainingBeforeDeadline covers R3 (minor): a poll
+// interval larger than the remaining time budget must not overshoot the
+// deadline. -interval is 10m but -timeout is only 1m, so the single sleep
+// this loop performs must be clamped down to the 1m actually left, not
+// the full 10m interval.
+func TestRun_SleepClampedToRemainingBeforeDeadline(t *testing.T) {
+	srv := alwaysReturn(t, inProgressRunBody())
+	defer srv.Close()
+
+	args := []string{"-repo", "getsyntegrity/ego", "-sha", sha, "-on-main", "true", "-timeout", "1m", "-interval", "10m"}
+	var stdout, stderr bytes.Buffer
+	clk := &fakeClock{now: time.Now()}
+	slp := &fakeSleeper{clock: clk}
+	err := run(args, &stdout, &stderr, fakeGetenv(map[string]string{"GITHUB_TOKEN": "tok"}), clk, slp, srv.URL)
+	if err == nil {
+		t.Fatal("run: want a timeout error, got nil")
+	}
+	if len(slp.calls) != 1 {
+		t.Fatalf("Sleep was called %d times, want exactly 1", len(slp.calls))
+	}
+	if slp.calls[0] != time.Minute {
+		t.Fatalf("Sleep duration = %s, want exactly the 1m remaining before the deadline (the 10m -interval must be clamped down to it)", slp.calls[0])
+	}
+}

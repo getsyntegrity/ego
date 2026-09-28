@@ -1288,11 +1288,16 @@ landed on `main`, so its `build.yml` run (triggered by that same push to
 yet, when `release.yml`'s tag-triggered run starts. The `gate` job polls
 every 30 seconds (`-interval`) for up to 20 minutes (`-timeout`) before
 giving up, via `internal/cmd/releasegate/main.go`'s bounded wait loop
-(`waitForGate`). Once the timeout expires, the gate fails with a clear
-message naming the SHA and the last known state — a fetch error, a
-decision reason (still pending, or no run found at all), or both when the
-loop saw one of each before giving up — it never hangs the workflow
-indefinitely, and it never
+(`waitForGate`). Each sleep between polls is clamped to whatever time is
+actually left before the deadline (PR #171 review, R3/minor): `-interval`
+is an operator-set flag, and nothing stops it from being configured
+larger than `-timeout`; without the clamp, that single sleep would run
+past the deadline before the loop ever got to check it again, silently
+turning a short `-timeout` into a much longer real wait. Once the timeout
+expires, the gate fails with a clear message naming the SHA and the last
+known state — a fetch error, a decision reason (still pending, or no run
+found at all), or both when the loop saw one of each before giving up —
+it never hangs the workflow indefinitely, and it never
 silently treats "still waiting" as success. The off-main case is checked
 once, up front, without ever calling GitHub's API: main reachability
 cannot change while the job runs, so polling for it would only waste time

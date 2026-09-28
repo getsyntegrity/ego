@@ -234,11 +234,14 @@ rather than growing the original 5-task plan past its cap.
   1-call/0-sleep count both still hold). `go vet` clean, `staticcheck` 0
   findings, `gofmt -l` clean. Updated docs/ci.md's bounded-wait section
   and added a new "transient GitHub API error" paragraph.
-- [ ] **R3 (minor) — clamp sleep to the deadline.** Each poll's sleep is
-  now clamped to whatever time remains before the deadline, so a large
-  `-interval` can never sleep past it. Test: `-timeout 1m -interval 10m`
-  against an always-pending fixture sleeps exactly once, for exactly the
-  1m remaining, not 10m.
+- [x] **R3 (minor) — clamp sleep to the deadline.** Each poll's sleep is
+  now clamped to whatever time remains before the deadline (`sleepFor :=
+  min(cfg.interval, remaining)`), so a large `-interval` can never sleep
+  past it. RED observed: `TestRun_SleepClampedToRemainingBeforeDeadline`
+  failed — Sleep was called with the full unclamped 10m interval instead
+  of the 1m actually remaining. GREEN: same test passes; full suite
+  33/33 PASS. `go vet` clean, `staticcheck` 0 findings, `gofmt -l` clean.
+  Updated docs/ci.md's bounded-wait paragraph.
 
 ### Verification (review fixes)
 
