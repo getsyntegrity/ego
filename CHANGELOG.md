@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   Update every import from `github.com/pablogore/ego/v4/...` to `github.com/getsyntegrity/ego/v4/...` (root packages, e.g. `egopb`, `test/data/testpb`, and root-level `example/*` other than `example/cluster`) or to `github.com/getsyntegrity/ego/publisher/<name>` (a publisher import). No root tag was ever cut under the old path: a consumer currently pinned to a pre-release pseudo-version of the old `github.com/pablogore/ego/v4` root path keeps building unchanged (pseudo-versions carry no module-path check beyond `go.sum`), but must rewrite its imports before it can upgrade past that pin, since no newer version will ever exist under the old path. A new `scripts/ci/verify-consumer.sh` check (`docs/ci.md`, "Verify clean consumer") now proves, on every full-suite CI run, that a consumer resolving these paths the way `go get` really would — with no local `replace` — succeeds; the public-proxy path is checked by `scripts/ci/verify-published.sh`, from the release flow, once the root tag is published.
 
-- **Versioning: v4.0.0 is the first release under `github.com/getsyntegrity/ego/v4` (#134), not a continuation of upstream's v4.4.x/v4.5.x line.** Numbering restarts under the new module identity established by the path move above. Continuing upstream `tochemey/ego`'s own v4.4.x/v4.5.x numbers would be SemVer-dishonest, because this release carries breaking changes against upstream's `[v4.4.3]` (the module-path move itself, `migration.New`'s new signature, and the removed logger seam below) — and bumping to v5 to signal that is not an option, since the module path must stay `/v4` (ADR `ego-arch-006`, decision D1). Upstream has also already published its own, different `v4.5.0`, so `v4.4.3`/`v4.5.0` are not free for this fork to reuse for different content. The `[v4.4.3]` entry and everything below it in this file is upstream `tochemey/ego` history, kept for reference, not this fork's own past releases. Each publisher (`publisher/kafka`, `nats`, `pulsar`, `websocket`) starts its own independent line the same way, at `publisher/<name>/v0.1.0`.
+- **Versioning: v4.0.0 is the first release under `github.com/getsyntegrity/ego/v4` (#134), not a continuation of upstream's v4.4.x/v4.5.x line.** Numbering restarts under the new module identity established by the path move above. Continuing upstream `tochemey/ego`'s own v4.4.x/v4.5.x numbers would be SemVer-dishonest, because this release carries breaking changes against upstream's `v4.4.3` (the module-path move itself, `migration.New`'s new signature, and the removed logger seam below) — and bumping to v5 to signal that is not an option, since the module path must stay `/v4` (ADR `ego-arch-006`, decision D1). Version numbers are not chosen around upstream's tags: the module path is what distinguishes these artifacts, and Go, the module proxy and the checksum database key every version by module path, so upstream's own releases (including its `v4.0.0` and `publisher/<name>/v0.1.0`) are different modules from these and do not conflict with them. Upstream's history is kept at the end of this file, under "Upstream history: tochemey/ego", for reference; none of it is a release of `github.com/getsyntegrity/ego`. Each publisher (`publisher/kafka`, `nats`, `pulsar`, `websocket`) starts its own independent line the same way, at `publisher/<name>/v0.1.0`.
 
 - **`migration.New` now returns `(*Migrator, error)`, and the `Migrator` walks one explicit scope.** Once store calls carry a `persistence.Scope`, the legacy `Migrator` listed, replayed, and wrote snapshots only under `persistence.Unscoped()` while its documentation claimed it walked every tenant, so after tenant adoption it reported success without migrating anything in a tenant scope. The new `migration.WithScope(scope)` selects the scope used for listing, replay, and the snapshot write alike; the default stays `persistence.Unscoped()`, so a caller that passes no scope keeps today's behavior. `New` rejects an invalid (zero-value) scope with `persistence.ErrInvalidScope`, so every `Migrator` it returns is ready to run. It does not sweep all tenants automatically — the SPI has no way to enumerate scopes — so run one `Migrator` per tenant scope. Update callers from `m := migration.New(...)` to `m, err := migration.New(...)` and handle the error.
 
@@ -259,7 +259,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Codecov removed.** The Codecov upload, `codecov.yml`, and the README badge are gone — the maintainers do not use it, and it was inherited from the upstream project this repo was forked from (`tochemey/ego`). Both workflows now publish the native coverage total (`go tool cover -func`) to the job summary instead.
 - **The last archcheck baseline entry is gone: `migration` no longer imports package `ego`** ([#147](https://github.com/getsyntegrity/ego/issues/147), slice S4-1 of the ego-arch-001 ADR). `migration`'s only production use of package `ego` was `ego.ResolveLogger`, resolving the kit-logger logger it falls back to when none is configured (via `ego.DefaultLogger()`) whenever a caller's logger is nil or a typed-nil pointer. That logic — `DefaultLogger`, the typed-nil detection and `ResolveLogger` — now lives in a new runtime-free internal package, `internal/logging`, which imports only `kit-logger` and the standard library `reflect` package. `ego.DefaultLogger` and `ego.ResolveLogger` keep their exact signature, behavior and identity (a test comparing `ego.DefaultLogger()` with `assert.Same` still sees the same `kitlog.L()` instance) and delegate to `internal/logging`; `migration` now imports `internal/logging` directly instead of package `ego`. No public API changed. `go list -deps github.com/pablogore/ego/v4/migration` no longer contains the root package or `github.com/tochemey/goakt/v4`. The `migration -> ego` baseline entry (`internal/cmd/archcheck/baseline.go`, rule `application-no-runtime`) is removed; `repoBaseline` is now empty, and archcheck reports `0 baselined, 0 violation(s), 0 stale entries`. See `openspec/changes/ego-arch-001/design.md` §2–§4.
 
-## [v4.4.3] - 2026-08-15
+---
+
+# Upstream history: tochemey/ego
+
+Everything below this line is the changelog of the upstream project [tochemey/ego](https://github.com/Tochemey/ego), published under upstream's own module path `github.com/tochemey/ego/v4` (publishers under upstream's `publisher/<name>` tags), up to the upstream `v4.4.3` release this repository forked from. None of these versions is a release of `github.com/getsyntegrity/ego`; they are kept for reference only, and each heading names upstream explicitly so it cannot be confused with a release of this module.
+
+## [tochemey/ego v4.4.3] - 2026-08-15
 
 ### 💥 Breaking Changes
 
@@ -320,14 +326,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   Clusters roll node by node. The default `auto` protocol pin negotiates the multiplexed wire with upgraded peers and falls back to the legacy wire for peers still on v4.4.x, so no flag day is required. Deployments with heavy inter-node command traffic can shard it across connections with `remote.WithOrdinaryLanes(n)` — safe at any count, because eGo's ordering guarantee is per entity and Go-Akt pins each receiver to a lane by a stable hash of its address. See [Remoting](./readme.md#remoting).
 
-## [v4.4.2] - 2026-07-24
+## [tochemey/ego v4.4.2] - 2026-07-24
 
 ### 🐛 Bug Fixes
 
 - **Projections no longer freeze silently on store errors** ([#318](https://github.com/Tochemey/ego/issues/318)). A failed events/offsets store round trip used to stop the processing loop permanently while the projection actor stayed alive and healthy-looking, leaving the read model dead until a node restart. The runner now retries the pull pass in place with exponential backoff (1s doubling to a 30s cap, reset on the first clean pass) and resumes from committed offsets once the store recovers — in both standalone and cluster mode, with no actor restart involved.
 - **Unprocessable events now stop the projection visibly.** An event that cannot be processed — a handler error under the `Fail`/`RetryAndFail` recovery policies, a failed decryption, or a failed event adaptation — stops the runner and escalates to the projection actor, which fails through supervision with a stop directive instead of dying silently behind a healthy-looking actor. The failure is observable via `Engine.IsProjectionRunning`. The projection supervisor now also applies to cluster singletons via Go-Akt's `WithSingletonSupervisor`.
 
-## [v4.4.0] - 2026-07-17
+## [tochemey/ego v4.4.0] - 2026-07-17
 
 This release makes projections first-class named components: each projection is registered under its own name with its **own handler** and runtime options, aligning eGo with how Akka/Pekko Projections and Axon event processors bind one handler per projection. It removes two footguns of the previous engine-wide design — a single handler silently shared by every projection, and a second `WithProjection` call silently overwriting the first — and renames the projection lifecycle methods to match what they actually do.
 
@@ -385,7 +391,7 @@ This release makes projections first-class named components: each projection is 
 3. **Split multiplexing handlers (optional but recommended)** — a handler that branched on event type to serve several logical read models can now be split into one focused handler per named projection.
 4. **Cluster deployments** — make sure every node's `Config` registers the same set of projections, just as every node already lists the same `WithEntityKinds`.
 
-## [v4.3.0] - 2026-07-16
+## [tochemey/ego v4.3.0] - 2026-07-16
 
 ### 💥 Breaking Changes
 
@@ -441,7 +447,7 @@ This release makes projections first-class named components: each projection is 
 
   Single-node deployments are unaffected and may omit the option: the lazy registration done by `Entity`, `DurableStateEntity`, and `Saga` remains as a local-node fallback.
 
-## [v4.2.1] - 2026-06-20
+## [tochemey/ego v4.2.1] - 2026-06-20
 
 ### 🐛 Bug Fixes
 
@@ -451,7 +457,7 @@ This release makes projections first-class named components: each projection is 
 
 - **Logger adapter refactor** (`8f0a73d`, `491c480`). The goakt logger adapter avoids `fmt.Sprint` reflection on the common single-string-message path, delegates the `*Context` variants to their non-context counterparts instead of duplicating their bodies, and replaces ad-hoc level strings with named constants. Dead code and redundant tests were removed alongside.
 
-## [v4.2.0] - 2026-05-17
+## [tochemey/ego v4.2.0] - 2026-05-17
 
 ### 💥 Breaking Changes
 
@@ -529,7 +535,7 @@ Upgrading from `v4.1.x` to this release requires reshaping the engine bootstrap:
 
 - **`example/cluster/Makefile`** — the load-distribution probe now hits `/accounts/{id}` instead of `/healthz`. Kind's NGINX Ingress Controller exposes its own `/healthz` on the data port (80) and answers it before the request reaches the app, so the previous probe never received the app's `X-Served-By` header and the assertion was a no-op.
 
-## [v4.1.2] - 2026-04-26
+## [tochemey/ego v4.1.2] - 2026-04-26
 
 ### 🚀 New Features
 
@@ -541,7 +547,7 @@ Upgrading from `v4.1.x` to this release requires reshaping the engine bootstrap:
 - **`RWMutex` for Remaining Snapshot Reads** — The engine mutex has been promoted from `sync.Mutex` to `sync.RWMutex`. The remaining field-snapshot reads (`offsetStore`, `eventStream`, `stateStore`, `eventsStore`, `snapshotStore`) acquire it via `RLock`, allowing concurrent readers. Writers (`AddEventPublishers`, `AddStatePublishers`) keep the exclusive `Lock`.
 - **Test Coverage** — Added `TestActorSystem` covering the unstarted, started, stopped, and concurrent-reader cases (the latter exercised under `-race`), and `TestActorSystemRefGuard` exercising the defensive `ErrEngineNotStarted` branch on every hot read path.
 
-## [v4.1.1] - 2026-04-18
+## [tochemey/ego v4.1.1] - 2026-04-18
 
 ### 🚀 New Features
 
@@ -555,7 +561,7 @@ Upgrading from `v4.1.x` to this release requires reshaping the engine bootstrap:
 
 - Added `SECURITY.md` describing the project's security analysis and disclosure process.
 
-## [v4.1.0] - 2026-04-02
+## [tochemey/ego v4.1.0] - 2026-04-02
 
 ### 🚀 New Features
 
@@ -595,7 +601,7 @@ Upgrading from `v4.1.x` to this release requires reshaping the engine bootstrap:
 - `golangci-lint` → v2.11.4
 - `codecov/codecov-action` → v6
 
-## [v4.0.0] - 2026-03-21
+## [tochemey/ego v4.0.0] - 2026-03-21
 
 ### 🚀 New Features
 
