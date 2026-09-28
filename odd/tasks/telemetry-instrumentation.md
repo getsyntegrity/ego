@@ -66,7 +66,7 @@ tags; merge.
   Route: inline (one package, already mapped).
 - [x] T3 Rewire `engine` call sites; reduce `engine/telemetry.go` to the public type.
   Route: inline (mechanical, mapped call sites).
-- [ ] T4 Gates: contract diff main vs branch, full tests, race on touched packages,
+- [x] T4 Gates: contract diff main vs branch, full tests, race on touched packages,
   archcheck, lint, apidiff, external consumer; open PR.
 
 ## Verification evidence
