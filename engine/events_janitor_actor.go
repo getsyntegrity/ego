@@ -27,6 +27,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 	"github.com/getsyntegrity/ego/v4/persistence"
 )
 
@@ -73,7 +74,7 @@ func newEventsJanitorActor() *eventsJanitorActor {
 // extension ID is (see optionalExtension in extension_lookup.go and
 // issue #99).
 func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
-	a.logger = kitLoggerFrom(ctx.Logger())
+	a.logger = goaktlog.Backend(ctx.Logger())
 
 	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
