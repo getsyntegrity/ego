@@ -828,7 +828,7 @@ func (s *SagaActor) compensate(ctx context.Context, logger kitlog.Logger, actorS
 	s.status = SagaCompleted
 }
 
-// replyWithState replies with the saga's current state.
+// replyWithState replies with the saga's current state and lifecycle status.
 func (s *SagaActor) replyWithState(ctx *goakt.ReceiveContext) {
 	state, _ := anypb.New(s.currentState)
 	reply := &egopb.CommandReply{
@@ -837,10 +837,43 @@ func (s *SagaActor) replyWithState(ctx *goakt.ReceiveContext) {
 				PersistenceId:  s.sagaID,
 				State:          state,
 				SequenceNumber: s.eventsCounter,
+				SagaStatus:     sagaStatusToProto(s.status),
 			},
 		},
 	}
 	ctx.Response(reply)
+}
+
+// sagaStatusToProto maps a SagaStatus onto the wire enum the saga actor
+// reports in its StateReply (#153).
+func sagaStatusToProto(status SagaStatus) egopb.SagaLifecycleStatus {
+	switch status {
+	case SagaCompleted:
+		return egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPLETED
+	case SagaCompensating:
+		return egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPENSATING
+	case SagaFailed:
+		return egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_FAILED
+	default:
+		return egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_RUNNING
+	}
+}
+
+// sagaStatusFromProto maps the wire enum of a saga's StateReply back onto a
+// SagaStatus (#153). SAGA_LIFECYCLE_STATUS_NONE, which a saga actor built
+// before the field existed leaves in its reply, and any value this build does
+// not know read as SagaRunning: the status every such reply reported before.
+func sagaStatusFromProto(status egopb.SagaLifecycleStatus) SagaStatus {
+	switch status {
+	case egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPLETED:
+		return SagaCompleted
+	case egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPENSATING:
+		return SagaCompensating
+	case egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_FAILED:
+		return SagaFailed
+	default:
+		return SagaRunning
+	}
 }
 
 // getStateAndReply returns the saga's current state without processing any

@@ -56,6 +56,29 @@ message StateReply {
   uint64 sequence_number = 3;
   // Specifies the timestamp
   int64 timestamp = 4;
+  // Specifies the saga lifecycle status. Only a saga actor sets it, in its
+  // reply to GetStateCommand; every other reply leaves it at
+  // SAGA_LIFECYCLE_STATUS_NONE.
+  SagaLifecycleStatus saga_status = 5;
+}
+
+// SagaLifecycleStatus is the lifecycle status a saga actor reports in its
+// StateReply. It mirrors ego.SagaStatus; SAGA_LIFECYCLE_STATUS_NONE means the
+// replier did not report one (a non-saga reply, or a saga node built before
+// this field existed) and is read as running. A reader maps any value it does
+// not know to SagaRunning, so a value added later must be safe to read as
+// running on older nodes.
+enum SagaLifecycleStatus {
+  // No lifecycle status was reported.
+  SAGA_LIFECYCLE_STATUS_NONE = 0;
+  // The saga is actively processing.
+  SAGA_LIFECYCLE_STATUS_RUNNING = 1;
+  // The saga finished successfully, or its compensation succeeded.
+  SAGA_LIFECYCLE_STATUS_COMPLETED = 2;
+  // The saga is rolling back.
+  SAGA_LIFECYCLE_STATUS_COMPENSATING = 3;
+  // The saga failed and its compensation also failed.
+  SAGA_LIFECYCLE_STATUS_FAILED = 4;
 }
 
 // ErrorReply is used when a command processing has
