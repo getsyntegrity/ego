@@ -35,14 +35,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/command"
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/runner"
-	"github.com/pablogore/ego/v4/persistence"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/runner"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 // statesTopic is the single in-process pub/sub topic eGo's durable-state

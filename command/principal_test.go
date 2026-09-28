@@ -27,7 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pablogore/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/command"
 )
 
 func TestNewPrincipal(t *testing.T) {

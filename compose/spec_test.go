@@ -31,14 +31,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/offsetstore"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/port/adapter"
-	"github.com/pablogore/ego/v4/port/publishing"
-	"github.com/pablogore/ego/v4/projection"
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/offsetstore"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 // The fakes below embed the contract interface they stand in for, so they

@@ -26,12 +26,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pablogore/ego/v4"
-	"github.com/pablogore/ego/v4/port/publishing"
-	"github.com/pablogore/ego/v4/publisher/kafka"
-	"github.com/pablogore/ego/v4/publisher/nats"
-	"github.com/pablogore/ego/v4/publisher/pulsar"
-	"github.com/pablogore/ego/v4/publisher/websocket"
+	"github.com/getsyntegrity/ego/publisher/kafka"
+	"github.com/getsyntegrity/ego/publisher/nats"
+	"github.com/getsyntegrity/ego/publisher/pulsar"
+	"github.com/getsyntegrity/ego/publisher/websocket"
+	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
 )
 
 // The publishers still satisfy the compatibility aliases in package ego (ADR

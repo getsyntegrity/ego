@@ -38,7 +38,7 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
 ## Tasks
 
 - [x] T1 RED — add `scripts/ci/verify-consumer.sh` and observe it fail on the unmigrated tree (reproduces #134). Route: delegated writer (T1–T3 together; 2+ non-trivial files).
-- [ ] T2 GREEN — mechanical rename per the table, `buf` regeneration of the two `.pb.go`, badges, `golangci-lint fmt`; `verify-consumer.sh` passes; build/vet/test/lint/archcheck in every module.
+- [x] T2 GREEN — mechanical rename per the table, `buf` regeneration of the two `.pb.go`, badges, `golangci-lint fmt`; `verify-consumer.sh` passes; build/vet/test/lint/archcheck in every module.
 - [ ] T3 CHANGELOG entry, `docs/ci.md`, and CI wiring: a consumer job in `pull_request.yml` (when the plan is `full`) and `build.yml` (always), included in `CI Gate`.
 - [ ] T4 Push the branch, open the PR, update #134 (acceptance criteria: `go list -m` alone does not count; the public-proxy check is pending until the root tag). Route: inline (`gh`).
 
@@ -72,8 +72,95 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
   Exit code 1, as expected: the publisher's `go get` fails to resolve
   `v4/publisher/kafka/v0.1.0` because the tag prefix does not match a real
   directory (reproduces #134).
-- Commit: `test(ci): add a clean-consumer resolution check for published module paths (#134)` — SHA `<filled after commit>`.
+- Commit: `test(ci): add a clean-consumer resolution check for published module paths (#134)` — SHA `b9765c1`.
+
+### T2 (GREEN) — done
+
+- Renamed `github.com/pablogore/ego` → `github.com/getsyntegrity/ego` in 226
+  tracked files (`rg -l --hidden` outside `openspec/**`, `odd/**`,
+  `CHANGELOG.md`, `docs/ci/baseline-159-a1.md`, piped to `sd`); `kit-logger`
+  untouched (different path, regex required a trailing `/ego` word
+  boundary). Then dropped `/v4` for nested modules only (`publisher/*`,
+  `benchmark`, `example/cluster`, `test/compat`) with the Rust-regex `sd`
+  pattern from D1. Fixed the four `readme.md` shields.io badges that used
+  the bare `pablogore/ego` form (no `github.com/` prefix).
+- Regenerated `egopb/ego.pb.go` and `test/data/testpb/test.pb.go` with
+  `buf generate` (buf v1.73.0, protoc-gen-go v1.36.12); confirmed
+  byte-identical to a fresh `buf generate` output both right after
+  copying and again at the end of T2, after every other edit.
+  `example/examplepb/sample.pb.go` (tochemey's own `go_package`) is
+  unchanged, as expected.
+- `golangci-lint fmt --config .golangci.yml ./...` made zero additional
+  changes: the renamed import blocks were already gofmt/goimports-clean
+  (the existing local-import group stayed separate from third-party
+  imports; `sd`'s rename never merged or reordered a group).
+- **Judgement call — `internal/cmd/archcheck` needed a real code fix, not
+  just a text rename.** `ExternalAdapterLayer` (`internal/cmd/archcheck/rules/layers.go`)
+  matched a publisher package by `rootModulePath + "/publisher"`
+  (`github.com/getsyntegrity/ego/v4/publisher`). Since D1 drops `/v4` for
+  nested modules, no publisher package import path starts with that
+  prefix any more, so both adapter rules
+  (`external-adapter-no-runtime`, `external-adapter-no-composition`)
+  matched zero packages and archcheck refused to run at all
+  ("rule(s) matched zero packages in the graph"). Added
+  `repoPathFromModule` (strips a trailing Go major-version path element,
+  `/vN`, N≥2) and made `ExternalAdapterLayer` match against the
+  repository path instead of the root module path. Updated the rule
+  engine's own unit fixtures (`evaluate_test.go`, a new `repoRoot`
+  const; `adapter_composition_test.go`) to the same `repoRoot`-prefixed
+  publisher paths, since they had encoded the old (pre-D1) assumption.
+  This is squarely in the feature's stated scope
+  ("`internal/cmd/{archcheck,ciselect}` literals") — it just turned out
+  to be a logic fix, not a literal. `internal/cmd/ciselect` needed no
+  equivalent fix: it only ever matches root-module packages.
+- `go mod tidy` was needed (go.sum unaffected in every case, confirmed by
+  `git diff --stat`) in `publisher/nats`, `publisher/websocket`,
+  `benchmark`, `example/cluster` and `test/compat`: renaming
+  `pablogore` → `getsyntegrity` in place shifted a `require`/`replace`
+  block out of the alphabetical order `go mod tidy` enforces (`kafka` and
+  `pulsar` happened to stay in order). `test/compat`'s reordering also
+  covers its `replace` block, since dropping `/v4` from the four
+  publisher paths moved them ahead of the root's own `v4`-suffixed path
+  too.
+- Verification, `PATH=/home/pablog/sdk/go1.26.6/bin:/home/pablog/go/bin:...
+  GOROOT= GOWORK=off`, all commands reported per instructions:
+  - root: `GOFLAGS=-mod=mod go build ./...` → clean. `go vet ./...` →
+    clean. `go run ./internal/cmd/archcheck` →
+    `8 modules checked, 55 packages checked, 213 edges checked, 0
+    baselined, 0 violation(s), 0 stale entries`.
+    `go test -count=1 ./...` → all 33 root packages `ok` (or
+    `[no test files]`), exit 0 (re-run after the archcheck fix and every
+    nested `go mod tidy`, to cover the final tree).
+  - `golangci-lint run --modules-download-mode=mod --timeout 10m --config
+    .golangci.yml` (root's own `.golangci.yml` sets
+    `modules-download-mode: vendor`, which needs `go mod vendor` first —
+    the environment note says to use `GOFLAGS=-mod=mod` locally instead,
+    so the flag override avoids ever creating `vendor/`) → **14
+    pre-existing `revive: var-declaration` findings in `command/errors.go`
+    and `tenancy/errors.go`**, confirmed unrelated to this change: `git
+    diff 50c4a4f -- command/errors.go tenancy/errors.go` is empty (neither
+    file was touched by the rename), and running the identical lint
+    command against a `git archive 50c4a4f` checkout reproduces the exact
+    same 14 findings. This is pre-existing lint debt on `main`, not
+    something D1 introduced; **flagging for your decision** — fix it here
+    (out of the stated mechanical scope) or leave it for a separate,
+    unrelated cleanup. Not fixed in this PR.
+  - Each nested module (`publisher/{kafka,nats,pulsar,websocket}`,
+    `benchmark`, `example/cluster`, `test/compat`), via
+    `GO_TEST_RACE=0 scripts/ci/verify-module.sh <dir>` (download, `go mod
+    tidy -diff`, build, vet, `golangci-lint run` against the root
+    `.golangci.yml`, `govulncheck` gated by
+    `scripts/ci/govulncheck-allow.json`, `go test -count=1`): all seven
+    →  **0 lint issues, 0 blocked govulncheck findings** (pulsar has 3
+    pre-existing, already-excepted findings, owner `@pablogore`, review
+    2026-12-28 — untouched by this change), tests `ok`.
+  - `rg --hidden 'pablogore/ego' -g '!openspec/**' -g '!odd/**' -g
+    '!docs/ci/baseline-159-a1.md' -g '!CHANGELOG.md'` → no matches.
+  - `verify-consumer.sh` on the migrated tree: pending the T2 commit (it
+    verifies committed `HEAD`); GREEN evidence recorded once committed,
+    below.
+- Commit: `refactor!: migrate module paths to github.com/getsyntegrity/ego (#134)` — SHA `<filled after commit>`.
 
 ## Next step
 
-T2 (GREEN): the mechanical module-path rename.
+T2's `verify-consumer.sh` GREEN evidence, then T3 (CHANGELOG, docs/ci.md, CI wiring).

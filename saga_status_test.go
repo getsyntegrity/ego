@@ -32,10 +32,10 @@ import (
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/pablogore/ego/v4/egopb"
-	samplepb "github.com/pablogore/ego/v4/example/examplepb"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // TestEngineSagaStatusReportsLifecycleStatus covers #153: Engine.SagaStatus

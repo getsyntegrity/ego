@@ -33,13 +33,13 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/pablogore/ego/v4"
-	"github.com/pablogore/ego/v4/compose"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/port/adapter"
-	"github.com/pablogore/ego/v4/port/publishing"
-	"github.com/pablogore/ego/v4/projection"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/projection"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
 )
 
 const projectionName = "balances"

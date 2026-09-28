@@ -66,7 +66,7 @@ func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 		switch {
 		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
 			t.Errorf("migration's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == "github.com/pablogore/ego/v4":
+		case dep == "github.com/getsyntegrity/ego/v4":
 			t.Errorf("migration's production closure must not reach the root package ego; got %q", dep)
 		}
 	}

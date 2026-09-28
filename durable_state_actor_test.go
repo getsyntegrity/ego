@@ -39,14 +39,14 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	mocks "github.com/pablogore/ego/v4/mocks/persistence"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	mocks "github.com/getsyntegrity/ego/v4/mocks/persistence"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 func TestDurableStateActorPreStartExtensions(t *testing.T) {

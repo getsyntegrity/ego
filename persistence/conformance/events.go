@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/persistence"
 )
 
 // RunEventsStoreConformance runs the full cross-tenant isolation matrix

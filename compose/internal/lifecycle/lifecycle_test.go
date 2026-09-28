@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pablogore/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/compose"
 )
 
 // recorder is an ordered fake: every step it builds appends "start X" or

@@ -22,7 +22,7 @@
 
 package ego
 
-import "github.com/pablogore/ego/v4/port/publishing"
+import "github.com/getsyntegrity/ego/v4/port/publishing"
 
 // The publisher contracts live in package port/publishing, which does not
 // depend on the GoAkt runtime. These aliases keep the historical import path

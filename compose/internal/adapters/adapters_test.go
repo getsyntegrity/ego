@@ -29,8 +29,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pablogore/ego/v4/compose/internal/adapters"
-	"github.com/pablogore/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/compose/internal/adapters"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
 )
 
 // recorder collects the calls made on the fakes, in order.

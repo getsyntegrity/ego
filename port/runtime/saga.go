@@ -23,7 +23,7 @@
 package runtime
 
 import (
-	"github.com/pablogore/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/port/behavior"
 )
 
 // SagaStatus represents the current status of a saga.

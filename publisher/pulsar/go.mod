@@ -1,10 +1,10 @@
-module github.com/pablogore/ego/v4/publisher/pulsar
+module github.com/getsyntegrity/ego/publisher/pulsar
 
 go 1.26.2
 
 require (
 	github.com/apache/pulsar-client-go v0.21.0
-	github.com/pablogore/ego/v4 v4.4.3
+	github.com/getsyntegrity/ego/v4 v4.4.3
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
@@ -109,4 +109,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/pablogore/ego/v4 => ../../
+replace github.com/getsyntegrity/ego/v4 => ../../

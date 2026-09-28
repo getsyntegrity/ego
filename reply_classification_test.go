@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pablogore/ego/v4/command"
-	"github.com/pablogore/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/persistence"
 )
 
 func TestClassifierRegistrySentinelsDoNotPrefixEachOther(t *testing.T) {

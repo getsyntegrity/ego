@@ -23,7 +23,7 @@
 package ego
 
 import (
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
 )
 
 // SupervisorDirective defines the action a supervisor takes when an entity

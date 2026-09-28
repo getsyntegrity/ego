@@ -38,7 +38,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pablogore/ego/v4/internal/cmd/archcheck/rules"
+	"github.com/getsyntegrity/ego/v4/internal/cmd/archcheck/rules"
 )
 
 // skipDirNames are directory names the loaders never descend into, at any

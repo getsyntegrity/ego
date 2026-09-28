@@ -67,13 +67,13 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/pablogore/ego/v4"
-	"github.com/pablogore/ego/v4/compose"
-	"github.com/pablogore/ego/v4/compose/internal/adapters"
-	"github.com/pablogore/ego/v4/compose/internal/lifecycle"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/port/adapter"
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/v4/compose/internal/adapters"
+	"github.com/getsyntegrity/ego/v4/compose/internal/lifecycle"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
+	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
 )
 
 // The names of App.Start's five steps (design §D6). A failed Start returns

@@ -30,9 +30,9 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/port/adapter"
-	"github.com/pablogore/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
 )
 
 type EventsPublisher struct {

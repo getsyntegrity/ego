@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	rootModule  = "github.com/pablogore/ego/v4"
+	rootModule  = "github.com/getsyntegrity/ego/v4"
 	adapterPath = rootModule + "/port/adapter"
 )
 

@@ -27,8 +27,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pablogore/ego/v4/compose"
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/v4/compose"
+	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
 )
 
 // TestRuntime_NilBeforeStart pins design ego-runtime-001 §D6: before Start

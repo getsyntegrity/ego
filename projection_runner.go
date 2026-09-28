@@ -40,14 +40,14 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/internal/ticker"
-	"github.com/pablogore/ego/v4/offsetstore"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/ticker"
+	"github.com/getsyntegrity/ego/v4/offsetstore"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/projection"
 )
 
 // numWorkers is the fixed size of the persistent shard-processing goroutine pool.

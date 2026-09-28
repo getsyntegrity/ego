@@ -26,8 +26,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

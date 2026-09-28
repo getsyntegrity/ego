@@ -39,17 +39,17 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/pause"
-	mocksoffsetstore "github.com/pablogore/ego/v4/mocks/offsetstore"
-	mockseventstore "github.com/pablogore/ego/v4/mocks/persistence"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/projection"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/pause"
+	mocksoffsetstore "github.com/getsyntegrity/ego/v4/mocks/offsetstore"
+	mockseventstore "github.com/getsyntegrity/ego/v4/mocks/persistence"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/projection"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 func TestProjection(t *testing.T) {

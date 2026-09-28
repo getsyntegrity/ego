@@ -39,11 +39,11 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/pablogore/ego/v4/command"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // domainOnlyEventSourced implements behaviorport.EventSourcedEnvelope and

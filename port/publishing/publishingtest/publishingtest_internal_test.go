@@ -33,8 +33,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
 )
 
 // fakeEvents is a correct in-memory events publisher; each field breaks

@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pablogore/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
 )
 
 // ErrUnreachable is the only error that makes a check skip. A Target

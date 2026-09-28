@@ -53,10 +53,10 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 
-	"github.com/pablogore/ego/v4"
-	samplepb "github.com/pablogore/ego/v4/example/examplepb"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4"
+	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/projection"
 )
 
 const projectionName = "account-balances"

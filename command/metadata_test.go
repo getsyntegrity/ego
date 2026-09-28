@@ -29,8 +29,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pablogore/ego/v4/command"
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 func mustOperationID(t *testing.T, s string) command.OperationID {

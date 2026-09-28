@@ -25,7 +25,7 @@ package persistence
 import (
 	"context"
 
-	"github.com/pablogore/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/egopb"
 )
 
 // EventsStore defines the API to write to the events store

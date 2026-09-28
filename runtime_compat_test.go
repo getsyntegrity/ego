@@ -30,8 +30,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
-	"github.com/pablogore/ego/v4/tenancy"
+	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 // TestRuntimeSentinelsAreTheSameValues checks, for each of the ten sentinels

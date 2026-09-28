@@ -27,7 +27,13 @@ import (
 	"testing"
 )
 
-const root = "github.com/pablogore/ego/v4"
+const root = "github.com/getsyntegrity/ego/v4"
+
+// repoRoot is root with its "/v4" major-version suffix removed: the path a
+// nested publisher module keeps as its own module path since D1 (#134).
+// Root-module package fixtures use root; publisher/* package and module-path
+// fixtures use repoRoot, matching the real repository layout.
+const repoRoot = "github.com/getsyntegrity/ego"
 
 // rulesFor returns the subset of DefaultRules(root) named by ids, in that
 // order. Evaluate now rejects a ruleset where any rule's Layer matched zero
@@ -57,7 +63,7 @@ func rulesFor(t *testing.T, ids ...string) []Rule {
 func repoModules() []Module {
 	return []Module{
 		{Path: root},
-		{Path: root + "/publisher/kafka", Requires: []string{root}},
+		{Path: repoRoot + "/publisher/kafka", Requires: []string{root}},
 		{Path: root + "/benchmark", Requires: []string{root}},
 		{Path: root + "/example/cluster", Requires: []string{root}},
 	}
@@ -151,7 +157,7 @@ func allowedGraph() Graph {
 			Imports:    []string{root + "/compose/goakt"},
 		},
 		{
-			ImportPath: root + "/publisher/kafka",
+			ImportPath: repoRoot + "/publisher/kafka",
 			Kind:       NestedModule,
 			Imports:    []string{root + "/egopb", "github.com/segmentio/kafka-go"},
 		},
@@ -327,7 +333,7 @@ func TestEvaluate_EmptyBaselineOnCleanGraphReportsZero(t *testing.T) {
 
 func TestValidateBaseline_DuplicateEntryRejected(t *testing.T) {
 	entry := BaselineEntry{
-		Importer:         root + "/publisher/kafka",
+		Importer:         repoRoot + "/publisher/kafka",
 		Import:           root,
 		Rule:             "external-adapter-no-runtime",
 		Owner:            "@pablogore",
@@ -350,7 +356,7 @@ func TestValidateBaseline_DuplicateEntryDifferentRuleIsNotADuplicate(t *testing.
 	// not a duplicate (a real import could plausibly break two rules at
 	// once, e.g. a nested module's root-package import).
 	a := BaselineEntry{
-		Importer:         root + "/publisher/kafka",
+		Importer:         repoRoot + "/publisher/kafka",
 		Import:           root,
 		Rule:             "external-adapter-no-runtime",
 		Owner:            "@pablogore",
@@ -408,7 +414,7 @@ func TestEvaluate_ContractAllowlistDoesNotNeedPortPackages(t *testing.T) {
 		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
-		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/egopb"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/egopb"}},
 	}}
 	result, err := Evaluate(withRepoModules(graph), DefaultRules(root), nil)
 	if err != nil {
@@ -436,11 +442,11 @@ func TestEvaluate_SummaryCountsAreExactAndDeduped(t *testing.T) {
 		{ImportPath: root + "/tenancy", Kind: RootModule, Imports: []string{"context"}},
 		{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/tenancy"}},
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: []string{"context"}},
-		{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{root, root + "/egopb"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{root, root + "/egopb"}},
 	}}
 	baseline := []BaselineEntry{
 		{
-			Importer:         root + "/publisher/kafka",
+			Importer:         repoRoot + "/publisher/kafka",
 			Import:           root,
 			Rule:             "external-adapter-no-runtime",
 			Owner:            "@pablogore",
@@ -515,7 +521,7 @@ func TestEvaluate_ViolationReasonNamesForbiddenPrefix(t *testing.T) {
 			name:   "external-adapter-no-runtime goakt import",
 			ruleID: "external-adapter-no-runtime",
 			graph: Graph{Packages: []Package{
-				{ImportPath: root + "/publisher/kafka", Kind: NestedModule, Imports: []string{"github.com/tochemey/goakt/v4"}},
+				{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{"github.com/tochemey/goakt/v4"}},
 			}},
 			wantImport: "github.com/tochemey/goakt/v4",
 			wantSubstr: "goakt",
@@ -584,7 +590,7 @@ func TestEvaluate_StdlibIsAlwaysAllowed(t *testing.T) {
 			Imports:    []string{"errors", "reflect", "net/http"},
 		},
 		{
-			ImportPath: root + "/publisher/kafka",
+			ImportPath: repoRoot + "/publisher/kafka",
 			Kind:       NestedModule,
 			Imports:    []string{"fmt", "net/http"},
 		},
@@ -731,7 +737,7 @@ func TestApplicationNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
 func TestExternalAdapterNoRuntime_ForbidsRootAndGoAktOnly(t *testing.T) {
 	graph := Graph{Packages: []Package{
 		{
-			ImportPath: root + "/publisher/kafka",
+			ImportPath: repoRoot + "/publisher/kafka",
 			Kind:       NestedModule,
 			Imports:    []string{root, "github.com/tochemey/goakt/v4/actor", root + "/egopb"},
 		},

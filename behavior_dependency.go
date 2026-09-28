@@ -29,7 +29,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 
-	"github.com/pablogore/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
 )
 
 // spawnDependency returns the GoAkt spawn dependency that carries behavior b
