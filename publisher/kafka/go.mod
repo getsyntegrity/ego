@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/IBM/sarama v1.60.2
-	github.com/getsyntegrity/ego/v4 v4.4.3
+	github.com/getsyntegrity/ego/v4 v4.0.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
