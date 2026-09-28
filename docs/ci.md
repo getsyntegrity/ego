@@ -241,7 +241,12 @@ The matrix is kept for parallelism.
 
 The selector widens, never narrows, when it cannot decide safely: an empty
 change list, an unrecognized path, a package graph or `go.mod` load error,
-or a failing `-base` all end in `full`. In `pull_request.yml`, a `ciselect`
+or a failing `-base` all end in `full`. An empty list and an unrecognized
+path are also **global**: every module is selected — the root and every
+nested module, including one that does not require the root — because the
+selector cannot tell which module such a path affects and must not rely on
+the requirement graph to reach them all. (A changed `go.mod`/`go.sum` is
+never "unrecognized": the module-boundary rules own it.) In `pull_request.yml`, a `ciselect`
 process error is caught by the workflow and re-run as `ciselect -all
 -reason "selector failed; full-suite fallback"`. If `git diff` itself fails
 the `plan` job fails and `CI Gate` fails with it, which is safe but red.
@@ -290,7 +295,8 @@ on `main` and an `affected` run on a PR.
 
 ### Modes and fail-safe rules
 
-- **`full`**: `-all` was passed, a full-fallback or unknown path changed,
+- **`full`**: `-all` was passed, a full-fallback or unknown path changed
+  (an unknown path selects every module, see "Fallbacks and the gate"),
   no changed files were detected at all, or the computed affected set
   happens to equal every included package.
 - **`affected`**: a proper, non-empty, non-total subset of the included

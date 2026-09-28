@@ -87,6 +87,24 @@ func globalReason(opts Options, changed []string) string {
 	return ""
 }
 
+// unrecognizedPathReason returns a global reason for the first changed path
+// the classifier cannot place (ClassUnknown), or "" when every path is
+// recognized. A go.mod or go.sum is skipped: a module boundary change (a
+// go.mod added or deleted) is owned by the boundary rules below, which a
+// deleted module's path would otherwise pre-empt as "unrecognized".
+func unrecognizedPathReason(g Graph, changed []string, satelliteDirs []string) string {
+	dirIndex := buildDirIndex(g)
+	for _, c := range changed {
+		if base := path.Base(normalizeChangedPath(c)); base == "go.mod" || base == "go.sum" {
+			continue
+		}
+		if cf := classify(c, satelliteDirs, dirIndex); cf.Class == ClassUnknown {
+			return fmt.Sprintf("global: %s", cf.Reason)
+		}
+	}
+	return ""
+}
+
 // moduleGraph indexes Options.Modules.
 type moduleGraph struct {
 	byDir      map[string]ModuleInfo
@@ -187,8 +205,15 @@ func selectWithModules(g Graph, changed []string, opts Options) Result {
 	mg := newModuleGraph(opts.Modules)
 	in := rootInputs{satelliteDirs: append(append([]string{}, opts.SatelliteDirs...), mg.nestedDirs()...)}
 
-	// 1. Global check.
-	if reason := globalReason(opts, changed); reason != "" {
+	// 1. Global check. An unrecognized path is global too: the selector
+	// cannot tell which module it affects, so it must not rely on the
+	// requirement graph to reach every module (a nested module that does
+	// not require the root would otherwise be left out).
+	reason := globalReason(opts, changed)
+	if reason == "" {
+		reason = unrecognizedPathReason(g, changed, in.satelliteDirs)
+	}
+	if reason != "" {
 		in.forceFull = []string{reason}
 		res := selectRoot(g, changed, opts, in)
 		res.Global = true

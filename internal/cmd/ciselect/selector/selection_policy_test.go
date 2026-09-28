@@ -163,21 +163,26 @@ func TestSelectionPolicy_AllVerifiesRootAndEveryNestedModule(t *testing.T) {
 // When the diff cannot be interpreted safely the selector must widen, never
 // narrow: an empty list and an unrecognized path both run everything.
 func TestSelectionPolicy_UndeterminedChangeFallsBackToFull(t *testing.T) {
-	// An unrecognized path forces the root lane to full; nested modules
-	// follow only through the requirement graph (kafka requires the root,
-	// nats does not). An empty list is global.
+	// Both are global: every module is selected, including nested modules
+	// that do not require the root (nats), because the selector cannot
+	// tell which module an unrecognized path affects. Mixing an
+	// unrecognized path with a narrow change must not narrow it back.
+	all := []string{".", "publisher/kafka", "publisher/nats"}
 	for name, tc := range map[string]struct {
-		changed  []string
-		wantDirs []string
+		changed []string
 	}{
-		"empty list":       {nil, []string{".", "publisher/kafka", "publisher/nats"}},
-		"unrecognized dir": {[]string{"mystery/thing.txt"}, []string{".", "publisher/kafka"}},
+		"empty list":                   {nil},
+		"unrecognized dir":             {[]string{"mystery/thing.txt"}},
+		"unrecognized dir plus a leaf": {[]string{"mystery/thing.txt", "publisher/kafka/kafka.go"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := fixtureGraph()
 			res := Select(g, tc.changed, moduleFixtureOpts())
 			assertFull(t, g, res)
-			assertSameSet(t, planDirs(res), tc.wantDirs)
+			if !res.Global {
+				t.Fatalf("Global = false, want true (reasons=%v)", res.Reasons)
+			}
+			assertSameSet(t, planDirs(res), all)
 		})
 	}
 }
