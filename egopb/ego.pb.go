@@ -25,7 +25,9 @@ const (
 // SagaLifecycleStatus is the lifecycle status a saga actor reports in its
 // StateReply. It mirrors ego.SagaStatus; SAGA_LIFECYCLE_STATUS_NONE means the
 // replier did not report one (a non-saga reply, or a saga node built before
-// this field existed) and is read as running.
+// this field existed) and is read as running. A reader maps any value it does
+// not know to SagaRunning, so a value added later must be safe to read as
+// running on older nodes.
 type SagaLifecycleStatus int32
 
 const (
