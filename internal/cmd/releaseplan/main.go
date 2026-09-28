@@ -58,8 +58,34 @@ func run(args []string, stdout, stderr io.Writer) error {
 	tagsFlag := fs.String("tags", "", "path to a file of existing tags, one per line; may be empty (required)")
 	bumpFlag := fs.String("bump", "patch", "version bump to apply: patch, minor or major")
 	outDirFlag := fs.String("out-dir", "", "directory to write plan.json and summary.md into (required)")
+
+	// Publisher-tag-release continuation flags (issue #159 F4, task T3):
+	// none of these change default behavior when unset, and each reuses
+	// -repo-root/-release/-tags/-bump/-out-dir above wherever those already
+	// mean the right thing, rather than inventing parallel flags.
+	continuationCheckSHAFlag := fs.String("continuation-check-sha", "", "continuation mode: validate that this is exactly 40 lowercase hex characters, then exit (no other flags required)")
+	continuationCheckVersionFlag := fs.String("continuation-check-version", "", "continuation mode: validate that this matches vX.Y.Z (semver, leading \"v\", no pre-release/build suffix), then exit (no other flags required)")
+	continuationCheckRequiredVersionFlag := fs.String("continuation-check-required-version", "", "continuation mode: for every directory in -release except the root ('.'), confirm its go.mod \"require\" line for the root module is exactly this version; reuses -repo-root and -release")
+	continuationPlanPublishersFlag := fs.Bool("continuation-plan-publishers", false, "continuation mode: compute next tags only for the directories in -release, which must exclude the root ('.') — it is tagged separately before this runs; reuses -repo-root, -release, -tags, -bump and -out-dir, writing plan.json/summary.md exactly like the default full release plan")
+	continuationCheckTagConflictsFlag := fs.String("continuation-check-tag-conflicts", "", "continuation mode: path to a combined local+origin tag list (e.g. output of \"git tag -l\" plus \"git ls-remote --tags origin\"); fails, naming every conflict, if any tag -continuation-plan-publishers computed already exists there. Requires -continuation-plan-publishers")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *continuationCheckSHAFlag != "" || *continuationCheckVersionFlag != "" || *continuationCheckRequiredVersionFlag != "" ||
+		*continuationPlanPublishersFlag || *continuationCheckTagConflictsFlag != "" {
+		return runContinuation(continuationParams{
+			repoRoot:          *repoRootFlag,
+			release:           *releaseFlag,
+			tags:              *tagsFlag,
+			bump:              *bumpFlag,
+			outDir:            *outDirFlag,
+			checkSHA:          *continuationCheckSHAFlag,
+			checkVersion:      *continuationCheckVersionFlag,
+			checkRequiredVer:  *continuationCheckRequiredVersionFlag,
+			planPublishers:    *continuationPlanPublishersFlag,
+			checkTagConflicts: *continuationCheckTagConflictsFlag,
+		}, stdout, stderr)
 	}
 
 	if *releaseFlag == "" {
