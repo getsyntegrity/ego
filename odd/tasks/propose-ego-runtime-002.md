@@ -13,7 +13,7 @@ in-memory runtime (RUNTIME-005) and `compose/inmem` (IMPL-6), but no design exis
 
 Documentation only: `openspec/changes/ego-runtime-002/` with `proposal.md`, `design.md` (the GoAkt
 behavior to match, decisions D1–D10, open questions Q1–Q7 with recommendations, compatibility,
-risks, chain and file ownership) and six chained specs of at most five tasks each. No production
+risks, chain and file ownership) and eight chained specs (0–7) of at most five tasks each. No production
 code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 ## Constraints
@@ -29,6 +29,7 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 - [x] **T2** Map the GoAkt runtime's observable behavior with `file:line` on `57c4b11` (design §2).
 - [x] **T3** Write proposal, design and the specs.
 - [x] **T4** Open the pull request against `main` with the open questions and the spec chain (#165, head `3785827`).
+- [x] **T6** Apply re-review N1–N9 and the four structural items the maintainer approved on 2026-09-27: spec 0 characterization, Q8 wording, Q9 internal clock, and `EraseEntity` as its own spec 7.
 - [x] **T5** Apply the independent review's factual corrections (review of #165) and record the maintainer decisions of 2026-09-27 (passivation implemented, saga delivery order not in the contract, `EraseEntity` crypto-shredding per #166).
 
 ## Review round 1 (2026-09-27)
@@ -49,6 +50,17 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
   - `EraseEntity` follows #166, which blocks spec 2.
 - **Chain:** now six specs (5, 5, 5, 3, 5, 5 tasks).
 
+## Review round 2 (2026-09-27, head `4bccf2e`)
+
+- **N1:** new spec 0 characterizes GoAkt before spec 1: liveness after failures, a command queued behind a failed write, panics under each directive, passivation activity, and the ignored options. Every promise of a later correction is removed.
+- **N2/N3 (Q8):** saga delivery order is unspecified on every runtime and promised nowhere. There is no reversed-order hook, and only the comparison fixtures must be order-independent.
+- **N4/N7 (Q9):** no public clock. The manual clock is internal to `internal/inmemruntime/clock.go` (ordered by deadline, then registration) and moves to spec 1; spec 5 no longer depends on spec 4.
+- **N8:** `EraseEntity` is spec 7, blocked only by #166. Until then it returns `ErrUnsupported`, which is stated as not meeting the contract.
+- **N5:** the passivation activity rule and the write-and-publish on passivation are recorded, with the goakt citations.
+- **N6:** saga options are measured in spec 0.
+- **N9:** the nits are fixed.
+- **Chain:** 0 (4 tasks), 1 (5), 2 (5), 3 (5), 4 (3), 5 (5), 6 (4), 7 (3).
+
 ## Findings worth keeping
 
 - `eventstream` delivers each message to each subscriber in its own goroutine
@@ -62,4 +74,4 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 ## Next step
 
-Maintainer answers to the remaining open questions (Q1, Q3–Q6, placement and relocation in Q2, no-event text in Q7); then spec 1.
+Maintainer answers to the remaining open questions (Q1, Q3–Q6, placement and relocation in Q2, no-event text in Q7); then spec 0.
