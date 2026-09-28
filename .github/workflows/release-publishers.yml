@@ -24,7 +24,10 @@ on:
         description: "Version bump to apply to each publisher tag"
         required: false
         type: choice
-        default: patch
+        # minor, not patch: an untagged suffix-less publisher starts from
+        # v0.0.0, so the first release must be v0.1.0 (#134), never v0.0.1.
+        # Pinned by TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher.
+        default: minor
         options:
           - patch
           - minor

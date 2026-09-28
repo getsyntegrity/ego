@@ -1343,7 +1343,10 @@ always selects the full suite anyway.
   dispatches `.github/workflows/release-publishers.yml`
   (`workflow_dispatch`) with four inputs: `sha` (the merge commit on
   `main`), `ego_version` (the root tag the publishers must require, e.g.
-  `v4.5.0`), `bump` (`patch`/`minor`/`major`, default `patch`), and
+  `v4.0.0`), `bump` (`patch`/`minor`/`major`, default `minor`: an
+  untagged publisher starts from `v0.0.0`, so the first release is
+  `v0.1.0`, never `v0.0.1`; pass `patch` explicitly for a later fix
+  release), and
   `dry_run` (boolean, default `true`). The workflow validates every
   precondition before doing anything: `sha` and `ego_version` are
   well-formed, `sha` is genuinely reachable from `origin/main`,
