@@ -69,8 +69,13 @@ that owns it. There is also no guide for writing a new adapter.
 - **The engine scenario test is a new root test file** (`engine_fixed_tenant_resolver_test.go`),
   because the only allowed `engine.go` edit is the call site and no existing root test implemented
   `FixedTenantResolver` with `(zero, false)`.
-- **Not changed, recorded:** `compose/errors.go`'s `ValidationError.Rule` comment still lists V1–V7;
-  it is outside this spec's file list.
+- **Review fixes (PR #164, APPROVE with nits):** `compose/errors.go` and `example/eventssourced/main.go`
+  now name V8 (`4225f72`, authorized by the coordinator); the scan catches embedded
+  (`interface{ adapter.Pinger }`) and aliased (`type P = adapter.Pinger`) forms, RED first on the
+  negative control (`d0bedc9`); `spec.go` comments on store `CapStart` and the tenant checker
+  (`2bfe502`); `docs/ci.md` wording (`adb6300`). The tenant checker keeps its
+  port-interface assertion: building it over the typed `s.TenantResolver` would split the one
+  capability table between a package variable and call sites.
 
 ## Evidence
 
