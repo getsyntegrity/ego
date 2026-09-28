@@ -17,6 +17,7 @@ jobs:
   # limitation this gate does not fix.
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: "soon"
     permissions:
       contents: read
       actions: read
