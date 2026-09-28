@@ -1,0 +1,402 @@
+# Feature: releaseplan, a pure release planner with a dry run on main (#159 A2 / F4, PR-A)
+
+Branch: `feat/159-f4a-releaseplan` · Base: `origin/main` `48dc0a4` · Issue: #159 (A2, F4) · Related: #39, #38, #134
+
+## Problem
+
+The release pipeline that design ego-arch-006 calls F4 does not exist, and S2 is gated on it (design §3, D8 option C). Today `.github/workflows/release.yml` decides the release by hand:
+
+- it hard-codes the root module path (`release.yml:90`, `:146`; `scripts/ci/verify-published.sh:35`);
+- it has no notion of release order between modules;
+- its `major` branch (`release.yml:126-130`) would compute a `publisher/<name>/v2.0.0` tag, which Go rejects for a module path without a `/v2` suffix.
+
+## What changes
+
+A new command, `internal/cmd/releaseplan`, reads every `go.mod` in the repository and computes, without side effects:
+
+1. **Order.** The release order of the released modules, topologically sorted by their in-repository `require` edges (D3: a module is released after everything it requires). A cycle is an error that names the modules involved.
+2. **Paths.** Each module's path, read from its `go.mod`, never hard-coded. So the planner keeps working unchanged when D1 migrates the paths.
+3. **Tags.** The next tag of each released module under the approved D2 (a) scheme: the root is tagged `vX.Y.Z` and must match its `/vN` suffix; a nested module is tagged `<dir>/vX.Y.Z` and, without a `/vN` suffix, may only carry v0 or v1. A bump that would produce v2+ on a suffix-less path, or a major that does not match the root's suffix, is refused.
+
+`build.yml` runs it as a dry run on every `main` push and writes the plan to the job summary. It publishes nothing and creates no tag.
+
+"Pure" means the output depends only on the `go.mod` files and the explicit inputs (existing tags, requested bump). It does not call git, the network or the GitHub API. `go mod edit -json` is used to read each `go.mod`, as `internal/cmd/ciselect` does (`main.go:379-391`); it only parses the file.
+
+## Scope and constraints
+
+- **In scope:** `internal/cmd/releaseplan/**` with tests, a dry-run step in `.github/workflows/build.yml`, `docs/ci.md`, this document.
+- **Out of scope, PR-B:**
+  - checking that `build.yml` passed on the commit before any tag is created — a workflow step, not the planner, because doing it inside the same build's dry run would be circular;
+  - changes to `release.yml` and `scripts/ci/verify-published.sh`.
+- **Not touched:** module paths (D1 is not confirmed), production code, contracts, `pull_request.yml`. This PR does not unblock S2 on its own: S2 still needs the D1 confirmation and the rest of F4.
+- **Which modules are released** is an explicit, reviewable input, not inferred. Today `release.yml` releases the root and `publisher/*`. `benchmark`, `example/cluster` and `test/compat` are never released (D5). A released module that requires an unreleased in-repository module is an error.
+- **TDD:** strict (user global configuration); runner `go test`. Never `-race`, never the workbench.
+- **RDD:** off (global).
+- **Route:** delegated direct (one writer; 2+ non-trivial files).
+- **Delivery:** one work-unit commit per task on this branch; push and PR after verification.
+
+## Tasks
+
+- [x] T1 Module discovery and the release graph: read each `go.mod`, keep in-repository requires, topological order, cycle detection, released-requires-unreleased check (tests first).
+- [x] T2 Tag scheme: parse existing tags per module prefix, next version for `patch|minor|major`, D2 (a) naming, refusal of v2+ without `/vN` and of a root major that does not match its suffix (tests first).
+- [x] T3 CLI: flags for repository root, released-module list, existing tags file and bump; JSON plan plus a markdown summary; non-zero exit on any refusal. Tests on a synthetic repository in `testdata`, plus a run against this repository.
+- [x] T4 Dry run in `build.yml` (no publish, no tags) and `docs/ci.md`.
+
+## Checks
+
+- `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1 ./internal/cmd/releaseplan/...` (no `-race`)
+- `go vet` and staticcheck on the new package
+- actionlint on `build.yml`
+- `go run ./internal/cmd/releaseplan ...` on this repository: order puts the root before the publishers; no refusal for a `patch` bump
+- `rg 'pablogore/ego' internal/cmd/releaseplan -g '!*_test.go' -g '!**/testdata/**'` shows only the package's own import paths, never a hard-coded module path used as data
+
+## Progress and evidence
+
+- Created before the first source write.
+
+### T1 — module discovery and the release graph (`fa064c7`)
+
+- Files: `internal/cmd/releaseplan/discover.go`, `order.go`, `release_set.go`,
+  their `_test.go` files, and `testdata/{linear-chain,diamond,cycle,
+  released-requires-unreleased,missing-listed-dir,tagscheme}`.
+- Discovery mirrors `internal/cmd/ciselect/main.go:379-397`'s `readGoMod`
+  (`go mod edit -json`, no network/build); an in-repository require is any
+  `Require.Path` that equals another discovered module's path — the design
+  note "replace directives only to resolve local dirs" turned out
+  unnecessary here: every `go.mod` in this repository already declares the
+  canonical path in `require` (the `replace` only swaps the resolved
+  version for the working tree, `publisher/kafka/go.mod` etc.), so edge
+  detection never needs to consult `replace` at all. Recorded as a
+  judgement call: simpler and stays exactly "what the module declares it
+  needs," independent of a local dev override.
+- Cycle detection (`detectCycle`) runs over every discovered module, not
+  only the released set, per the feature scope ("a cycle among discovered
+  modules is an error naming the cycle").
+- `releasedSet` is the released-requires-unreleased and missing-listed-dir
+  check; `releaseOrder` is Kahn's algorithm restricted to the released
+  subgraph, lexicographic tie-break on directory.
+- TDD: implementation files were moved aside, tests written, RED confirmed
+  (`undefined: discoverGraph` etc.), restored, GREEN confirmed (9/9 tests).
+- Verification: `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+  ./internal/cmd/releaseplan/...` → PASS (9 tests). `go vet
+  ./internal/cmd/releaseplan/...` → clean.
+
+### T2 — tag scheme (`2039d0b`)
+
+- Files: `internal/cmd/releaseplan/tags.go`, `tags_test.go` (reuses the
+  `testdata/tagscheme` fixture from T1: root `example.com/repo/v4`,
+  nested `pub` at `example.com/repo/v4/pub` with no suffix).
+- **Judgement call — the no-tag baseline (corrected by the coordinator
+  after T4).** With no existing tag, `noTagBaseline` starts a module with
+  a `/vN` suffix at `vN.0.0` (the only major D2 (a) allows for it) and a
+  suffix-less module at `0.0.0`, which is what `release.yml:117-121` does
+  today for a publisher without a tag (`CURRENT="0.0.0"`). So a first
+  patch is `v0.0.1` and a first major is `v1.0.0`, both legal without a
+  suffix; v2+ is still refused, from a v1 tag. The writer's first version
+  started suffix-less modules at `1.0.0` so an untagged `-bump major`
+  would be refused at once. Rejected: `v1.0.0` is legal for a suffix-less
+  path, and starting at v1 would make every first publisher release
+  declare a stable API, diverging from `release.yml` without a decision.
+  RED: `pub next = 1.0.1, want 0.0.1` and an untagged pub major refused as
+  v2; GREEN after the change. No override flag: seeding `-tags` with a
+  starting tag is already a trivial override.
+- `nextTag(dir, modPath, tags, bumpKind)` returns the current tag (empty
+  if none) and the next version, or an error naming the module directory,
+  its path and the refused version.
+- TDD: `tags_test.go` written first against not-yet-existing `nextTag`/
+  `parseSemver`; RED confirmed (`undefined: nextTag`, `undefined:
+  parseSemver`); `tags.go` added; GREEN confirmed (15/15 tests total).
+- Verification: `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+  ./internal/cmd/releaseplan/...` → PASS (15 tests). `go vet
+  ./internal/cmd/releaseplan/...` → clean.
+
+### T3 — CLI, plan.json/summary.md, release-modules.txt (`f184638`)
+
+- Files: `internal/cmd/releaseplan/main.go`, `plan.go`,
+  `main_test.go`, `plan_test.go`, `scripts/ci/release-modules.txt`.
+- `scripts/ci/release-modules.txt` was read off `.github/workflows/
+  release.yml` (not modified): the root (its tag triggers the workflow;
+  release.yml never creates it) and every `publisher/*` directory with a
+  `go.mod`, discovered there by `for d in publisher/*/; do if [ -f
+  "$d/go.mod" ]; ...` — today `kafka`, `nats`, `pulsar`, `websocket`.
+  `benchmark`, `example/cluster`, `test/compat` are excluded (D5).
+- `buildPlan` order: `detectCycle` (whole graph) → `releasedSet`
+  (validates the list, D5) → `releaseOrder` → `nextTag` per module, in
+  order, stopping at the first refusal — so a failure is always
+  unambiguous about which module to fix first.
+- TDD: `plan_test.go`/`main_test.go` written first against not-yet-
+  existing `buildPlan`/`run`; RED confirmed (`undefined: buildPlan`,
+  `undefined: run`); `plan.go`/`main.go` added; GREEN after fixing one
+  test assertion that itself mismatched `json.MarshalIndent`'s spacing
+  (`"requires":[]` vs the actual `"requires": []`) — not an
+  implementation bug. `gofmt -w` also aligned a struct field in
+  `discover.go` (whitespace only, included in this commit).
+- Verification:
+  - `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+    ./internal/cmd/releaseplan/...` → PASS (28 tests, including
+    `TestRun_RealRepository` against this actual repository).
+  - `go vet ./internal/cmd/releaseplan/...` → clean.
+  - `GOROOT= go run honnef.co/go/tools/cmd/staticcheck@latest
+    ./internal/cmd/releaseplan/...` → clean (no findings).
+  - `rg -n 'pablogore/ego' internal/cmd/releaseplan -g '!*_test.go' -g
+    '!**/testdata/**'` → no matches (exit 1): no hard-coded module path
+    used as data outside tests/fixtures.
+  - Real run, `-bump patch -tags /dev/null -release scripts/ci/
+    release-modules.txt`: exit 0, order `.` (→ `v4.0.1`),
+    `publisher/kafka` (→ `publisher/kafka/v0.0.1` after the baseline
+    correction; `v1.0.1` before it), `publisher/nats`,
+    `publisher/pulsar`, `publisher/websocket` (root first, then every
+    publisher, each `Requires: [github.com/pablogore/ego/v4]`).
+  - Real run, `-bump major`, same inputs: exit 1,
+    `releaseplan: module . (github.com/pablogore/ego/v4): refusing tag
+    v5.0.0: major v5 does not match the /v4 suffix of module path
+    github.com/pablogore/ego/v4` (root fails first, so `buildPlan`
+    stops there per its documented fail-fast order). Isolating a
+    publisher's own refusal (temporary debug test, removed after
+    capturing the message, tree confirmed clean by `git status`) gives:
+    `module publisher/kafka (github.com/pablogore/ego/v4/publisher/kafka):
+    refusing tag publisher/kafka/v2.0.0: major v2 requires a /v2 suffix
+    in module path github.com/pablogore/ego/v4/publisher/kafka (Go
+    modules require v2+ to be suffixed)`.
+
+### T4 — dry run in `build.yml` and `docs/ci.md` (`c7128ec`)
+
+- Files: `.github/workflows/build.yml` (new `release-plan` job, `ci-gate`
+  now `needs: [plan, modules, release-plan]`), `docs/ci.md` (new "Release
+  plan dry run (releaseplan)" section, plus short cross-references from
+  "`build.yml`" and "Version policy").
+- `release-plan` has no `needs:` on `plan`/`modules` (runs in parallel,
+  never holds back the test/build gate), checks out with `fetch-depth: 0`
+  and `fetch-tags: true`, writes `git tag -l` to a temp file, runs
+  `releaseplan -bump patch`, appends `summary.md` to
+  `$GITHUB_STEP_SUMMARY`, and uploads `plan.json` as the `release-plan`
+  artifact. Job-scoped `permissions: contents: read` (no broader token
+  than checkout needs).
+- **Judgement call — fail `ci-gate` on a broken plan.** Recommended and
+  implemented: yes. A dry run nobody has to look at protects nobody;
+  making `release-plan` required means a newly nested module missing from
+  `scripts/ci/release-modules.txt`, a cycle, or a tag-scheme violation is
+  visible on `main` immediately, the same way `plan`/`modules` failures
+  already are. Rejected alternative: leave it informational only
+  (`if: always()`, never gating) — rejected because that is exactly the
+  failure mode `docs/ci.md` already calls out for `modules` before
+  `ci-gate` existed (a job whose result nobody is required to look at).
+- `internal/cmd/releaseplan` was **not** added to `ciselect`'s
+  full-fallback lists (`internal/cmd/ciselect/`, `internal/cmd/
+  vulngate/`, …): it is a root package, so `ciselect`'s own root-module
+  selection already tests it on any change under
+  `internal/cmd/releaseplan/`; no concrete false negative was found that
+  would justify forcing full mode for it specifically (unlike `ciselect`/
+  `vulngate`, `releaseplan` does not itself decide *what* CI runs, only
+  what a release would look like, so a stale selection plan is not a risk
+  here the way it would be for those two).
+- Verification:
+  - `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/
+    build.yml'))"` → `YAML OK`.
+  - `GOROOT= go run github.com/rhysd/actionlint/cmd/actionlint@latest
+    .github/workflows/build.yml` → 0 findings.
+  - `bash -n` on the `release-plan` step's run body and the updated
+    `ci-gate` run body → both OK.
+  - `rg -n '\$\{\{' .github/workflows/build.yml` → every match is inside
+    `outputs:`, `with:` or `env:`; none inside a `run:` shell body.
+  - Simulated the `release-plan` job's exact commands locally
+    (`git tag -l` → 0 tags → `releaseplan -bump patch`) → exit 0, same
+    summary as T3's real run (root then the four publishers).
+  - `git diff --stat origin/main...HEAD` (`origin/main` = `48dc0a4`, this
+    branch's base): only `internal/cmd/releaseplan/**`,
+    `.github/workflows/build.yml`, `docs/ci.md`,
+    `scripts/ci/release-modules.txt` and this feature document changed —
+    `release.yml`, `scripts/ci/verify-published.sh` and every `go.mod`
+    outside `testdata/` are untouched.
+
+## Overall verification (all four tasks, final pass)
+
+- `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+  ./internal/cmd/releaseplan/... ./internal/cmd/ciselect/...` → PASS (28
+  releaseplan tests + ciselect's own suite, all green).
+- `go vet ./internal/cmd/releaseplan/...` → clean.
+- `GOROOT= go run honnef.co/go/tools/cmd/staticcheck@latest
+  ./internal/cmd/releaseplan/...` → clean.
+- `actionlint .github/workflows/build.yml` → 0 findings; YAML parses;
+  `bash -n` on the two changed run bodies → OK; no `${{ }}` inside any
+  `run:` body.
+- Real run on this repository, `-bump patch -tags /dev/null -release
+  scripts/ci/release-modules.txt`: exit 0, root (`v4.0.1`) ordered before
+  all four publishers (each `publisher/<name>/v0.0.1` after the baseline
+  correction, `Requires: [github.com/pablogore/ego/v4]`). `-bump major`,
+  same inputs: exit 1, root refused (v4 path suffix vs. requested v5). An
+  untagged publisher's first major is `v1.0.0` (legal); v2+ from a v1 tag
+  is refused (`TestNextTag_ExistingMajorRefusal`).
+- `rg -n 'pablogore/ego' internal/cmd/releaseplan -g '!*_test.go' -g
+  '!**/testdata/**'` → no matches: no hard-coded module path used as data
+  outside tests/fixtures (the package's own `import` lines are excluded
+  by `-g '!*_test.go'`'s sibling non-test files, none of which import
+  anything under `github.com/pablogore/ego`).
+- `git diff --stat origin/main...HEAD` → `release.yml`,
+  `scripts/ci/verify-published.sh` and every real `go.mod` untouched;
+  only `internal/cmd/releaseplan/**`, `scripts/ci/release-modules.txt`,
+  `.github/workflows/build.yml`, `docs/ci.md` and this document changed.
+- Commits: T1 `fa064c7`, T2 `2039d0b`, T3 `f184638`, T4 `c7128ec`, all on
+  `feat/159-f4a-releaseplan`. Not pushed; no PR opened (per scope — push
+  and PR are the user's decision after this report).
+
+## Review fixes (PR #169)
+
+The maintainer accepted 5 of 6 independent-review findings on PR #169 and
+asked for them fixed on this branch. Applied in the worktree
+`.claude/worktrees/159-impact-ci`, one work-unit commit per finding, all
+under `internal/cmd/releaseplan/**` (no other path touched — `docs/ci.md`
+needed no change, see below).
+
+### R1 — `writeOutputs` all-or-nothing (`836601d`)
+
+- Finding (MINOR): `writeOutputs` (`main.go:168-176` at PR #169 head
+  `743692a`) iterated a `map[string]string`, so `plan.json` and
+  `summary.md` were written in random order, and an I/O failure partway
+  through could leave one file without the other.
+- Fix: each output is now written to a temp file in `-out-dir` first
+  (`writeTempFile`, a package-level `var` seam so a test can inject a
+  failure on a specific call), then both temps are renamed into place
+  only once both writes succeed — `plan.json` first, a fixed order, not a
+  map's random one. Any write or rename failure removes every temp file
+  and any already-renamed final file, so a caller never observes one
+  output without the other.
+- TDD: `TestWriteOutputs_SecondWriteFailure_LeavesNoPartialOutput` written
+  first against the not-yet-existing `writeTempFile` seam; RED confirmed
+  (`undefined: writeTempFile`, build failure). Implemented `writeTempFile`
+  and the temp-then-rename `writeOutputs`; GREEN. Added a second test,
+  `TestWriteOutputs_RenameFailure_UndoesTheFirstFile` (summary.md
+  pre-seeded as a directory so its rename fails after plan.json's already
+  succeeded), covering the other half of the contract — GREEN on first
+  run, no separate RED needed since it exercises the same new code path
+  the first test already forced into existence.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R2 — 3+-node cycle and a cycle confined to unreleased modules (`a1723cd`)
+
+- Finding (MINOR): cycle coverage was thin — only a 2-node cycle
+  (`testdata/cycle`, `moda <-> modb`), and no test that a cycle among
+  modules nobody released still gets refused.
+- Added `testdata/cycle-3node` (`. -> moda -> modb -> .`, a 3-node cycle)
+  and `TestDetectCycle_ThreeNodeCycle` in `order_test.go`; added
+  `testdata/unreleased-cycle` (`modx <-> mody` cycle, only `.` released)
+  and `TestBuildPlan_CycleConfinedToUnreleasedModules` in `plan_test.go`,
+  exercised end-to-end through `buildPlan`.
+- Honest result: both passed immediately, no RED. `detectCycle` already
+  traverses the whole discovered graph regardless of cycle length (T1's
+  own note: "Cycle detection runs over every discovered module, not only
+  the released set"), and `buildPlan` already calls `detectCycle` before
+  `releasedSet`, so a cycle confined to unreleased modules was already
+  refused. These are regression tests for behavior the implementation
+  already had, not a bugfix — recorded here rather than claiming a RED
+  that never happened.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R3 — tag prefix collision tests (`7f2cd6e`)
+
+- Finding (MINOR): no test that `tagPrefix`'s dir-based prefix can't
+  accidentally match a different module's tag (`publisher/kafka` vs.
+  `publisher/kafka-x`, the root's `v` vs. a nested module's tag, and the
+  reverse).
+- Added three pure unit tests on `latestTag` in `tags_test.go` (no
+  fixture needed — `latestTag`/`tagPrefix` take a `dir` and a `[]string`
+  of tags directly):
+  `TestLatestTag_IgnoresSiblingDirWithSharedPrefix` (`publisher/kafka`
+  vs. a `publisher/kafka-x/v9.9.9` tag), `TestLatestTag_
+  RootIgnoresNestedModuleTag` (root `v` prefix vs. a
+  `publisher/kafka/v1.0.0` tag), `TestLatestTag_NestedModuleIgnoresRootTag`
+  (`publisher/kafka` vs. the root's own `v4.9.9`).
+- Honest result: all three passed immediately, no RED.
+  `latestTag`'s `strings.CutPrefix(t, prefix)` already requires an exact
+  prefix match — `"publisher/kafka-x/..."` does not have
+  `"publisher/kafka/v"` as a prefix (the next character after
+  `"publisher/kafka"` is `-`, not `/`), and `"publisher/kafka/v1.0.0"`
+  does not start with `"v"`. Regression tests for existing correct
+  behavior, not a bugfix.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R4 — comment on `TestRun_RealRepository`'s hard-coded count (`84db6a0`)
+
+- Finding (NIT): `main_test.go`'s `TestRun_RealRepository` hard-codes
+  `len(doc.Modules) != 5` with no note that this is deliberate.
+- Comment-only: added a comment above the assertion explaining it must
+  fail loudly the moment `scripts/ci/release-modules.txt` changes, rather
+  than silently track whatever count the file holds that day. No RED
+  needed (comment-only change, per the accepted finding).
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS
+  (unchanged); `go vet` → clean; `gofmt -l` → clean.
+
+### R5 — `skipDirs` matches ciselect's list plus `.claude` (`c59020b`)
+
+- Finding (NIT): `discover.go:40-48`'s `skipDirs` claimed to mirror
+  `internal/cmd/ciselect/main.go:56-64`'s `skipDirs` but differed:
+  releaseplan had `.claude` (ciselect doesn't), ciselect has `.atl`
+  (releaseplan didn't).
+- Fix: `skipDirs` now holds the union — ciselect's list plus `.claude`,
+  where this repository's local git worktrees live
+  (`.claude/worktrees/<name>`) — and the comment above it says so
+  instead of the inaccurate "mirroring ciselect's skipDirs". `ciselect`
+  itself was not touched (out of scope; the union goes the other
+  direction, into releaseplan only).
+- TDD: `TestDiscoverGraph_SkipsWorktreeAndAtlDirs` in `discover_test.go`
+  written first against `testdata/skip-worktree-dirs` (a `go.mod` under
+  both `.atl/child/` and `.claude/child/`, neither of which must be
+  discovered); RED confirmed (`dirs = [. .atl/child], want [.]` — `.atl`
+  was not yet in `skipDirs`, so its `go.mod` was discovered as a real
+  module). Added `.atl` to `skipDirs`; GREEN.
+- The fixture files under `testdata/skip-worktree-dirs/.atl/` and
+  `.claude/` are `git add -f`'d past this repository's own top-level
+  `.gitignore` entries for `.atl/` and `.claude/` (lines 24 and 17):
+  those entries exist to keep real worktree/tooling state out of the
+  repository, not to block a test fixture that exists specifically to
+  prove those directory names are skipped.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### Finding 6 — NOT fixed (deliberate)
+
+- Finding (NIT): `parseSemver` (`tags.go`) accepts a component with
+  leading zeros (e.g. `01`) via `strconv.Atoi`, which silently drops the
+  leading zero rather than rejecting the tag as malformed.
+- Decision: leave as is. Rejecting a leading-zero tag would make
+  `parseSemver` silently *ignore* that tag (treat it as if it did not
+  match the module's prefix at all, via `latestTag`'s `ok` check), which
+  could make `nextTag` compute its next version from an older tag than
+  the true latest — a worse failure than accepting the odd tag and
+  parsing it as the (admittedly non-canonical) integer it represents. No
+  tag in this repository's own history has a leading zero, and D2 (a)
+  does not define behavior for one; the maintainer accepted leaving this
+  unfixed rather than trading a cosmetic wart for a "latest version"
+  correctness risk.
+
+### Overall verification (review fixes)
+
+- `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+  ./internal/cmd/releaseplan/... ./internal/cmd/ciselect/...` → PASS (34
+  releaseplan `--- PASS` lines including subtests + ciselect's own suite,
+  all green).
+- `go vet ./internal/cmd/releaseplan/...` → clean.
+- `GOROOT= go run honnef.co/go/tools/cmd/staticcheck@latest
+  ./internal/cmd/releaseplan/...` → clean.
+- `gofmt -l internal/cmd/releaseplan` → clean (no output).
+- Real run, `-bump patch -tags /dev/null -release
+  scripts/ci/release-modules.txt`: same table as T3/T4's — root
+  (`v4.0.1`) then the four publishers (each `.../v0.0.1`,
+  `Requires: [github.com/pablogore/ego/v4]`) — confirming R1's rewrite of
+  `writeOutputs` and R5's `skipDirs` change left observable behavior on
+  this repository unchanged.
+- `git status -s` → clean after every commit; no stray build artifacts
+  (`go build` was never run in this worktree — only `go test`/`go run`).
+- `git diff --stat 743692a..HEAD` → only files under
+  `internal/cmd/releaseplan/**` changed (`discover.go`, `main.go`, five
+  `_test.go` files, and new `testdata/` fixtures); `docs/ci.md` needed no
+  edit — it documents `plan.json`/`summary.md` as outputs and describes
+  no write order or skip-list detail that R1 or R5 would have
+  contradicted.
+- Commits: R1 `836601d`, R2 `a1723cd`, R3 `7f2cd6e`, R4 `84db6a0`, R5
+  `c59020b`, all on `feat/159-f4a-releaseplan` in the
+  `.claude/worktrees/159-impact-ci` worktree. Not pushed; no PR update
+  made (per instructions — the coordinator handles push/branch update).

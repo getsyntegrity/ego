@@ -1,0 +1,4 @@
+# released: root and modx, but not modx's own in-repository dependency
+# mody — this must be refused.
+.
+modx
