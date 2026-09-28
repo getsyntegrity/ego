@@ -174,11 +174,11 @@ history of this file.
 | W2a-3 | #147 S4-3 interfaces | feat/147-s4-3-runtime-interfaces @c84e894 | #160 @15555da | merged by maintainer (squash 33ac9fe) | engine_runtime.go assertion + test double; carries S4-2 doc nits |
 | W2a-4 | #147 S4-4 composition + consumer | feat/147-s4-4-app-runtime @2ebf01b | #161 | merged (squash dba275b); #147 closed; main full lane run 36359538783 green on every job | |
 | B-154 | #154 relocation default | docs/154-relocation-default @d94d9e3 | #162 | merged (squash beed644); #154 closed |
-| B-153 | #153 SagaStatus | fix/153-saga-status | — | in progress | engine.go limited to SagaStatus; saga_actor.go; additive proto field only |
+| B-153 | #153 SagaStatus | fix/153-saga-status @392154d | #163 | merged (squash bcfb64c); #153 closed | additive proto field StateReply.saga_status; SagaCompensating not observable, status not persisted (documented; #18) |
 | W2b | #106 adapter SPI | docs/propose-ego-arch-004 @0673636 | #149 @c42c11b | merged | A: chained specs (1: SPI-1+2, 2: SPI-3+4, 3: SPI-5); B: O1–O6 approved, O7 deferred; merge authorized after review + CI on final head |
 | W2b-1 | #106 spec 1 adapter-spi-boundary | feat/106-spec1-spi-boundary @e5806db | #157 @ff3eced | merged | port/adapter + external-adapter-no-composition |
 | W2b-2 | #106 spec 2 adapter-conformance | feat/106-spec2-conformance @2c9aba1 | #158 | merged (squash 8eb01d1); merge needs maintainer authorization; carry-over: document "nil or typed-nil is undeclared" in the accessor contract |
-| W2b-3 | #106 spec 3 adapter-composition | feat/106-spec3-composition | — | in progress | engine.go limited to the fixed-tenant call site; carry-overs: single-assertion-site scan, §D6 wording, §D2 nil sentence, docs/ci.md PT-1 line |
+| W2b-3 | #106 spec 3 adapter-composition | feat/106-spec3-composition @6e0c343 | #164 | approved at 7620e93; fixes + merge of main under re-review; CI running | point 4 kept as a comment (maintainer agreed); follow-up candidate: move the assertion-site scan into archcheck so it runs on every PR (needs approval) |
 | W1d | #102 ADR | docs/propose-ego-arch-006 @c6c9463 | #132 | merged (47b2b34) | human said: wait for CI; §5.2 amendment done; D1 migration plan gated on confirmation |
 | W3-S0 | #102 S0 selector | ci/102-s0-module-aware-selector @90ccf25 | #133 | merged (33fa052) | implementing R1/R2 (+ -base via merge-base); then CI + review before merge |
 | W3-S1 | #102 S1 test/compat | ci/102-s1-test-compat @e6a669e | #142 | merged (658bbae) | approved with nits, CI 8/8; maintainer chose option (c): no reflect/unsafe, per-publisher pre-Start check + identity check in test/compat, ADR note, nits; then review + CI |
