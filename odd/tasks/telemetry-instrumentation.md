@@ -62,7 +62,7 @@ tags; merge.
   attributes, parentage, error status), instrument catalog, measurement attribute keys,
   creation counts, propagator, and the no-telemetry case; green on `origin/main`.
   Route: inline.
-- [ ] T2 `internal/instrumentation` with its own tests (RED first) and a neutrality guard.
+- [x] T2 `internal/instrumentation` with its own tests (RED first) and a neutrality guard.
   Route: inline (one package, already mapped).
 - [ ] T3 Rewire `engine` call sites; reduce `engine/telemetry.go` to the public type.
   Route: inline (mechanical, mapped call sites).
