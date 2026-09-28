@@ -90,8 +90,10 @@ jobs:
       - name: Compute the govulncheck report path
         id: govulncheck-report
         shell: bash
+        env:
+          MODULE: ${{ matrix.module }}
         run: |
-          safe="$(printf '%s' "${{ matrix.module }}" | tr '/' '-')"
+          safe="$(printf '%s' "$MODULE" | tr '/' '-')"
           echo "name=govulncheck-${safe}" >> "$GITHUB_OUTPUT"
           echo "path=${RUNNER_TEMP}/govulncheck-${safe}.json" >> "$GITHUB_OUTPUT"
       - name: Download the selection plan
@@ -156,11 +158,12 @@ jobs:
         shell: bash
         env:
           GOFLAGS: -mod=vendor
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
         run: |
           {
             echo "### Coverage"
             echo
-            echo "Selection mode: \`full\`"
+            echo "Selection mode: \`$PLAN_MODE\`"
             echo
             echo '```'
             go tool cover -func=coverage.out | tail -1
@@ -176,6 +179,7 @@ jobs:
         shell: bash
         env:
           GOFLAGS: -mod=vendor
+          GOVULNCHECK_REPORT: ${{ steps.govulncheck-report.outputs.path }}
         # -format json always exits 0 even when it finds vulnerabilities, so
         # the scan's own exit code is checked here (this step fails
         # immediately if it is non-zero) and internal/cmd/vulngate then
@@ -183,23 +187,26 @@ jobs:
         # scripts/ci/govulncheck-allow.json (docs/ci.md, "The govulncheck
         # exception gate (vulngate)").
         run: |
-          govulncheck -format json ./... > "${{ steps.govulncheck-report.outputs.path }}"
+          govulncheck -format json ./... > "$GOVULNCHECK_REPORT"
           go run ./internal/cmd/vulngate \
             -module . \
-            -report "${{ steps.govulncheck-report.outputs.path }}" \
+            -report "$GOVULNCHECK_REPORT" \
             -allow scripts/ci/govulncheck-allow.json
       - name: Verify module
         if: matrix.module != '.'
         shell: bash
         env:
+          MODULE: ${{ matrix.module }}
           GO_TEST_RACE: "1"
           GOVULNCHECK_REPORT: ${{ steps.govulncheck-report.outputs.path }}
-        run: scripts/ci/verify-module.sh "${{ matrix.module }}"
+        run: scripts/ci/verify-module.sh "$MODULE"
       # if: always() so a module whose govulncheck step (or the exception
       # gate) failed still keeps its report as evidence for the reviewer
-      # deciding whether a new allow-list entry is warranted.
+      # deciding whether a new allow-list entry is warranted. Guarded on the
+      # report path output so this step is a no-op (not a failure) when
+      # "Compute the govulncheck report path" itself never ran.
       - name: Upload the govulncheck report
-        if: always()
+        if: always() && steps.govulncheck-report.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.govulncheck-report.outputs.name }}

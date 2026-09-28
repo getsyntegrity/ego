@@ -228,9 +228,12 @@ cat /tmp/ci/modules.json    # the matrix: selected module dirs, "." (root) first
 cat /tmp/ci/plan.json       # machine-readable: every module, selected or not, with its reason chain
 ```
 
-`-all -reason "<why>"` produces the full plan used by `main`, release and
-manual runs. A non-zero exit is a planning failure: callers must fall back
-to `-all` (as the `plan` job does) or fail; they must never run less.
+`-all -reason "<why>"` produces the full plan used by `main` (push) and
+manual `workflow_dispatch` runs in `build.yml`. `release.yml` performs no
+verification of its own — it relies on `main` having already passed — so it
+never runs `ciselect`, build, vet or tests. A non-zero exit is a planning
+failure: callers must fall back to `-all` (as the `plan` job does) or fail;
+they must never run less.
 
 The measurements that motivated this split (module graph, `go list -deps`
 closures, per-job timings with run IDs, and the selector's output for a
