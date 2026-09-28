@@ -9,8 +9,76 @@ permissions:
   contents: write
 
 jobs:
+  # gate is release.yml's pre-publish backstop (#159, F4 PR-B): it refuses
+  # to let anything below it run unless the EXACT tagged commit both is on
+  # main and has a build.yml run that completed with conclusion "success".
+  # See docs/ci.md, "Release gate", for the full rationale, how to test
+  # this job without publishing anything, and a documented pre-existing
+  # limitation this gate does not fix.
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+
+      - name: Resolve the tagged commit and its main membership
+        id: resolve
+        shell: bash
+        run: |
+          # GITHUB_REF is one of the automatic environment variables every
+          # Actions run gets (docs.github.com/en/actions/reference/variables-reference);
+          # it is a plain shell env var, not a GitHub Actions expression, so
+          # it needs no env: passthrough.
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # A lightweight tag already points straight at a commit; an
+          # annotated tag points at a tag object that itself points at a
+          # commit (possibly through a chain of further tag objects).
+          # "^{commit}" dereferences either case down to the commit, so this
+          # one line handles both — see docs/ci.md, "Release gate", for why
+          # this matters (a bare `git rev-parse "$TAG"` would return an
+          # annotated tag's own object SHA, not the commit SHA build.yml
+          # ran against).
+          SHA=$(git rev-parse "${TAG}^{commit}")
+          echo "Tag ${TAG} dereferences to commit ${SHA}"
+
+          git fetch origin main --quiet
+          if git merge-base --is-ancestor "${SHA}" origin/main; then
+            ON_MAIN=true
+          else
+            ON_MAIN=false
+          fi
+          echo "commit ${SHA} on main: ${ON_MAIN}"
+
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "on-main=${ON_MAIN}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for a green build.yml run on the exact tagged commit
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GATE_REPO: ${{ github.repository }}
+          GATE_SHA: ${{ steps.resolve.outputs.sha }}
+          GATE_ON_MAIN: ${{ steps.resolve.outputs.on-main }}
+        run: |
+          go run ./internal/cmd/releasegate \
+            -repo "$GATE_REPO" \
+            -sha "$GATE_SHA" \
+            -on-main "$GATE_ON_MAIN" \
+            -timeout 20m \
+            -interval 30s
+
   release-ego:
     runs-on: ubuntu-latest
+    needs: gate
     steps:
       - uses: actions/checkout@v7
         with:

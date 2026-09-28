@@ -1,0 +1,257 @@
+# Release gate for `v*` tags (#159, F4 PR-B)
+
+## Problem
+
+`release.yml` fires on every push of a `v*` tag and immediately creates a
+GitHub Release, then bumps and tags the four `publisher/*` modules against
+it. Nothing checks that the tagged commit ever had a green `build.yml` run.
+A human can tag a broken or unreviewed commit and the whole publish chain
+runs anyway.
+
+## What changes
+
+A new job `gate` runs first in `release.yml`, before `release-ego` (which
+creates the GitHub Release) and before `release-publishers` (which bumps
+and tags the publisher modules, `needs: release-ego` already). `gate`:
+
+1. Dereferences the pushed tag to its commit (`git rev-parse "$TAG^{commit}"`
+   — handles a lightweight tag pointing at an annotated tag object).
+2. Confirms that commit is reachable from `origin/main` (`git merge-base
+   --is-ancestor`); rejects the tag otherwise.
+3. Runs a new Go CLI, `internal/cmd/releasegate`, which polls the GitHub
+   REST API for `build.yml` runs on that exact commit SHA and fails unless
+   the most recent completed run's conclusion is `success`. The wait is
+   bounded (default 20 minutes) so an in-flight `build.yml` run gets a
+   chance to finish, but the job does not hang forever.
+
+`release-ego` becomes `needs: gate`; `release-publishers`'s existing
+`needs: release-ego` is untouched, so the full chain is
+`gate → release-ego → release-publishers`. No publisher step's logic or
+order changes.
+
+## Why
+
+The maintainer wants a hard backstop: nothing publishes off a commit that
+never had, or no longer has, a green `build.yml` run for that exact SHA.
+"Green on a nearby commit" or "green a while ago on a different SHA" must
+not count.
+
+## Scope
+
+- New package `internal/cmd/releasegate` (root module, standard library
+  only): a pure decision function (`Decide`) plus a thin GitHub REST client
+  and a bounded-wait CLI.
+- `.github/workflows/release.yml`: new `gate` job; `release-ego` gains
+  `needs: gate`.
+- `docs/ci.md`: new "Release gate" section.
+- This file and its Engram mirror (`odd/release-gate-159/tasks`).
+
+**Out of scope / explicitly not touched:** `internal/cmd/releaseplan/**`,
+`scripts/ci/release-modules.txt` (branch `feat/159-f4a-releaseplan`, PR
+#169), the publisher steps' own logic, and the pre-existing
+`git push origin HEAD:main` conflict with branch-protection documented
+below.
+
+## Constraints
+
+- Standard library only in `internal/cmd/releasegate` (no new module
+  dependency for one CLI).
+- Every `${{ }}` expression in a `release.yml` `run:` body goes through
+  `env:`, per this repo's existing convention (see `build.yml`,
+  `pull_request.yml`).
+- Strict TDD: RED (failing test) observed before GREEN for every non-trivial
+  unit.
+- `go test` runs without `-race`; no workbench.
+
+## Known limitation to document, not fix
+
+`release.yml:169-170` (existing `release-publishers` job) commits publisher
+`go.mod`/`go.sum` bumps and runs `git push origin HEAD:main`. `main` is
+protected with a required, strict "CI Gate" check and
+`enforce_admins: true`, so this direct push of a commit that never ran
+"CI Gate" is rejected by GitHub (`GH006: Protected branch update failed`).
+This is pre-existing and out of scope for this change; documented in
+`docs/ci.md` and flagged in the final report for a maintainer decision.
+
+## TDD
+
+Mode: **strict** (user's global `CLAUDE.md`: "Strict TDD Mode: enabled").
+Runner: `GOROOT= GOWORK=off GOFLAGS=-mod=mod /home/pablog/sdk/go1.26.6/bin/go test -count=1 ./internal/cmd/releasegate/...`.
+Route: delegated direct is available per the mandatory triggers, but this
+session is already the dedicated worker for the whole task (see harness
+note), so tasks run inline in this same session; each task is still one
+bounded, independently-verified unit.
+
+## Tasks
+
+- [x] **T1 — Pure decision function.** `internal/cmd/releasegate/decision.go`:
+  `Decide(sha string, onMain bool, runs []Run) Result` (Pass/Wait/Fail +
+  reason). Tests: success (latest completed run for SHA is `success`),
+  different SHA (no match for target SHA among other SHAs' runs), failure,
+  cancellation, pending (latest run for SHA is `in_progress`/`queued` →
+  `Wait`), no run for SHA (`Wait`), off-main (`Fail` regardless of runs),
+  plus the "most recent completed run governs" rule (3 sub-cases). RED
+  observed: compile failure, `Run`/`Decide`/`Fail`/`Wait`/`Pass` undefined.
+  GREEN: `go test -count=1 -v ./internal/cmd/releasegate/...` — 12/12 PASS.
+  `gofmt -l` clean. `go vet`/`go build` on the package itself only succeed
+  once T3 adds `func main`; expected, standard `package main` multi-file
+  layout (matches `internal/cmd/archcheck`'s loader.go/baseline.go split).
+  Commit: (recorded after commit below).
+- [x] **T2 — GitHub REST client.** `internal/cmd/releasegate/client.go`:
+  `Client.ListBuildRuns(ctx, repo, sha)` against
+  `/repos/{owner}/{repo}/actions/workflows/build.yml/runs?head_sha=...`,
+  paginated, `httptest.Server`-testable via `Client.BaseURL`. Filters by
+  `head_sha` only (not `branch`/`event`) — see client.go's doc comment and
+  docs/ci.md for why. RED observed: compile failure, `Client`/`NewClient`/
+  `DefaultBaseURL` undefined. GREEN: `go test -count=1 -v
+  ./internal/cmd/releasegate/...` — 18/18 PASS (6 new client tests: single
+  page, pagination across 2 pages/101 runs, 401 non-OK status, malformed
+  JSON, no-token omits Authorization header, NewClient defaults). `gofmt
+  -l` clean.
+- [x] **T3 — CLI with bounded wait.** `internal/cmd/releasegate/main.go`:
+  flags `-repo -sha -on-main -timeout -interval`, `GITHUB_TOKEN` env,
+  injectable clock/sleeper (`fakeClock`/`fakeSleeper` advance a virtual
+  clock instead of really sleeping). RED observed: compile failure, `run`
+  undefined. GREEN: `go test -count=1 -v ./internal/cmd/releasegate/...`
+  — 25/25 PASS across all three files (pass, fail, off-main fails fast with
+  0 GitHub calls, wait-then-timeout at exactly 3 polls/2 sleeps for a
+  2m/1m timeout/interval, `-timeout 0` is exactly 1 check/0 sleeps, missing
+  `GITHUB_TOKEN`, 4 invalid-flag cases). `go build`/`go vet
+  ./internal/cmd/releasegate/...` clean. `gofmt -l` clean (one
+  pre-existing misalignment in main_test.go fixed by `gofmt -w`).
+  `staticcheck ./internal/cmd/releasegate/...`: found S1016 in
+  `client.go`'s `toRun` (hand-written struct literal instead of a type
+  conversion — apiRun and Run share identical fields/order/types); fixed
+  to `return Run(a)`; re-run: 0 findings.
+- [x] **T4 — `release.yml` gate job.** Added `gate` (permissions
+  `contents: read`, `actions: read`; checkout `fetch-depth: 0`; dereference
+  the tag with `git rev-parse "$TAG^{commit}"`; `git merge-base
+  --is-ancestor` against `origin/main`; run `go run
+  ./internal/cmd/releasegate -repo -sha -on-main -timeout 20m -interval
+  30s`); `release-ego` gained `needs: gate` (chain is now
+  `gate → release-ego → release-publishers`). No publisher step's logic,
+  order, or content touched. Every `${{ }}` used goes through `env:` in
+  the second step (`GITHUB_TOKEN`, `GATE_REPO`, `GATE_SHA`,
+  `GATE_ON_MAIN`); the first step uses only the automatic `$GITHUB_REF`
+  env var, no `${{ }}` at all. One actionlint finding hit and fixed along
+  the way: a code comment that literally contained `${{ }}` (empty) was
+  itself parsed as a GitHub Actions expression and failed to parse;
+  reworded the comment to avoid the literal brace sequence.
+  Check: `actionlint .github/workflows/release.yml` → 0 findings (after
+  the fix above). YAML parses (`python3 -c "import yaml; yaml.safe_load(...)"`
+  → OK). `bash -n` on both new `run:` bodies → both exit 0. Grepping for
+  `${{` over both extracted run bodies → no matches (confirmed nothing
+  leaked outside `env:`). `git diff -- .github/workflows/release.yml`
+  reviewed line by line: only the new `gate` job and the `needs: gate`
+  line; every publisher step byte-for-byte unchanged.
+- [x] **T5 — Docs + real dry-run.** Added `docs/ci.md` "Release gate (#159,
+  F4 PR-B)" section, appended at the true end of the file (after
+  "Toolchain requirements," the last existing section), with a note that a
+  rebase will be needed if PR #169 merges first. Covers: what it checks
+  and why the exact SHA; the lightweight-vs-annotated tag dereference; why
+  main membership is computed with `git merge-base` rather than the
+  compare API; the "most recent completed run governs" rule and both
+  rejected alternatives; the `workflow_dispatch`-counts-too judgement
+  call; the bounded wait and its off-main fast path; how to test without
+  publishing; and the GH006 branch-protection limitation. Real read-only
+  dry runs against `getsyntegrity/ego` (`GITHUB_TOKEN=$(gh auth token) go
+  run ./internal/cmd/releasegate ... -timeout 0`, all `exit status 1` or
+  `0`, nothing written):
+  - `8b3962acc109ac06da3a4ada4c3186be7d46cfa5` (`-on-main=true`): **PASS**,
+    run 36420765355, conclusion `success`.
+  - `743692a7804005408355e5066d165debc885f9f4` (PR #169's branch,
+    `-on-main=false`): **FAIL** "not reachable from origin/main," 0 GitHub
+    calls (verified this is the CLI's off-main fast path, matching
+    `TestRun_OffMainFailsFastWithoutCallingGitHub`).
+  - Same SHA, `-on-main=true` forced only to illustrate the no-run path:
+    **FAIL** "no build.yml run found yet" (`build.yml` never runs on a PR
+    branch).
+  - `ddf9337092a5b4e43a6d90897914f34ed52f453f` (a real main commit with a
+    genuinely failed `build.yml` run, found via `gh api
+    ".../runs?branch=main"`, confirmed it is the only run for that SHA):
+    **FAIL**, run 35120281495, conclusion `failure`.
+  - No real `cancelled` main run existed to test the same way (`gh api
+    ".../runs?branch=main&status=cancelled"` → empty); documented as
+    relying on the `TestDecide_CancelledConclusionFails` fixture instead.
+  `gofmt -l internal/cmd/releasegate/` clean.
+
+## Delivery
+
+One work-unit commit per task on this branch (`ci/159-release-gate`),
+Conventional Commits, no Co-Authored-By/AI-attribution trailers. Push, PR,
+and merge are the coordinator's/user's decision, not this session's.
+
+## Verification (recorded per task as evidence accumulates)
+
+- `go test -count=1 ./internal/cmd/releasegate/...`
+- `go vet ./internal/cmd/releasegate/...`
+- `staticcheck ./internal/cmd/releasegate/...`
+- `actionlint .github/workflows/release.yml`
+- real read-only dry runs against `getsyntegrity/ego`
+- `git diff --stat origin/main...HEAD`
+
+## Review fixes (PR #171, independent review, 2026-09-28)
+
+PR #171 (this branch, head `0792efd`, pushed to origin) got an independent
+review: two majors, one minor. Fixed in this worktree, not pushed (the
+coordinator pushes). Three small, bounded fixes — kept as their own round
+rather than growing the original 5-task plan past its cap.
+
+- [x] **R1 (MAJOR) — re-run recency.** `decision.go` sorted "most recent"
+  by `CreatedAt` then `ID`, but re-running a workflow run keeps the same
+  `id` and the same `created_at`; only `run_started_at`/`updated_at`/
+  `run_attempt` change (verified on real run 35120281495, `run_attempt`
+  2 — confirmed live via `gh api repos/getsyntegrity/ego/actions/runs/35120281495`:
+  `created_at` 2026-09-16T16:11:21Z, `run_started_at`
+  2026-09-16T16:22:19Z). Added `RunStartedAt`/`RunAttempt` to `Run`
+  (decision.go) and `apiRun` (client.go, same field order for the
+  `Run(a)` conversion); added `effectiveStart()`; sort by effective start
+  time (`RunStartedAt`, falling back to `CreatedAt`), then `RunAttempt`,
+  then `ID`, all descending. RED observed: compile failure,
+  `RunStartedAt`/`RunAttempt` undefined on `Run`. GREEN:
+  `TestDecide_RerunRecency` (3 subtests: older-created-then-failing-re-run
+  → Fail, symmetric now-succeeding → Pass, in-progress re-run → Wait),
+  `TestDecide_MissingRunStartedAtFallsBackToCreatedAt`, plus
+  `TestClient_ListBuildRuns_SinglePage` extended to assert
+  `run_started_at`/`run_attempt` decode correctly. Full suite: 30/30
+  PASS. `go vet` clean, `staticcheck` 0 findings, `gofmt -l` clean.
+  Updated docs/ci.md's "most recent completed run governs" section with
+  the corrected tie-break and the real run-35120281495 evidence. Commit:
+  (recorded below).
+- [x] **R2 (MAJOR) — transient API errors.** `waitForGate` returned
+  immediately on any `ListBuildRuns` error. Now treated as retryable
+  inside the bounded wait: log it, sleep, retry until the deadline; at
+  the deadline, fail naming the last fetch error and/or the last verdict
+  reason via the new `timeoutMessage()` helper (both when both exist —
+  neither alone tells the full story). Still fail-closed: `Pass` is only
+  ever returned immediately after a fetch that both succeeded and whose
+  `Decide` result was itself `Pass`. RED observed:
+  `TestRun_TransientFetchErrorsThenPass` failed with the raw fetch error
+  instead of retrying; `TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError`
+  failed the same way instead of timing out. GREEN: both new tests pass,
+  full suite 32/32 PASS, no regressions (`TestRun_WaitThenTimeout`'s exact
+  3-call/2-sleep count and `TestRun_TimeoutZeroIsSingleCheckNoSleep`'s
+  1-call/0-sleep count both still hold). `go vet` clean, `staticcheck` 0
+  findings, `gofmt -l` clean. Updated docs/ci.md's bounded-wait section
+  and added a new "transient GitHub API error" paragraph.
+- [x] **R3 (minor) — clamp sleep to the deadline.** Each poll's sleep is
+  now clamped to whatever time remains before the deadline (`sleepFor :=
+  min(cfg.interval, remaining)`), so a large `-interval` can never sleep
+  past it. RED observed: `TestRun_SleepClampedToRemainingBeforeDeadline`
+  failed — Sleep was called with the full unclamped 10m interval instead
+  of the 1m actually remaining. GREEN: same test passes; full suite
+  33/33 PASS. `go vet` clean, `staticcheck` 0 findings, `gofmt -l` clean.
+  Updated docs/ci.md's bounded-wait paragraph.
+
+### Verification (review fixes)
+
+- `go test -count=1 ./internal/cmd/releasegate/...`
+- `go vet ./internal/cmd/releasegate/...`
+- `staticcheck ./internal/cmd/releasegate/...`
+- `gofmt -l internal/cmd/releasegate/`
+- `actionlint .github/workflows/release.yml` (only if release.yml
+  changed — it should not for these fixes)
+- real read-only dry run: `-sha 8b3962acc109ac06da3a4ada4c3186be7d46cfa5
+  -on-main=true -timeout 0` → PASS; `-sha
+  ddf9337092a5b4e43a6d90897914f34ed52f453f -on-main=true -timeout 0` →
+  FAIL
