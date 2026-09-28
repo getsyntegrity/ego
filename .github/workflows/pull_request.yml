@@ -14,11 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # plan is deliberately cheap: it only computes the diff, runs ciselect and
+  # publishes the decision. It never installs dependencies, lints or tests,
+  # so a PR that only touches a nested module (or nothing testable at all)
+  # never pays for the root module's vendoring, archcheck or lint either.
+  plan:
     runs-on: ubuntu-latest
     env:
       FORCE_COLOR: 1
     outputs:
+      mode: ${{ steps.select.outputs.mode }}
       modules: ${{ steps.select.outputs.modules }}
     steps:
       - uses: actions/checkout@v7
@@ -31,22 +36,6 @@ jobs:
           check-latest: false
           cache-dependency-path: "**/*.sum"
       - run: go version
-      - name: Vendoring and Tidy
-        run: go mod tidy && go mod vendor
-      - name: Install dependencies
-        run: |
-          go mod download
-      - name: Check architecture boundaries
-        shell: bash
-        env:
-          GOFLAGS: -mod=vendor
-        run: |
-          go run ./internal/cmd/archcheck
-      - name: Run Linter
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.1
-          args: --timeout 10m --config .golangci.yml
       - name: Determine changed files
         shell: bash
         env:
@@ -55,11 +44,9 @@ jobs:
         run: |
           git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
           git merge-base "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/base.txt"
-      - name: Select packages
+      - name: Select packages and modules
         id: select
         shell: bash
-        env:
-          GOFLAGS: -mod=vendor
         run: |
           if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")" -out-dir "$RUNNER_TEMP/ci"; then
             :
@@ -70,46 +57,35 @@ jobs:
           cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
           echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
           echo "modules=$(cat "$RUNNER_TEMP/ci/modules.json")" >> "$GITHUB_OUTPUT"
-      - name: Run tests
-        shell: bash
-        env:
-          GOFLAGS: -mod=vendor
-          GO_TEST_RACE: "1"
-        run: |
-          scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
-      - name: Coverage summary
-        if: always() && hashFiles('coverage.out') != ''
-        shell: bash
-        env:
-          GOFLAGS: -mod=vendor
-        run: |
-          {
-            echo "### Coverage"
-            echo
-            echo "Selection mode: \`${{ steps.select.outputs.mode }}\`"
-            echo
-            if [ "${{ steps.select.outputs.mode }}" = "affected" ]; then
-              echo "In \`affected\` mode the total only reflects the packages that ran; the denominator is still every included package."
-              echo
-            fi
-            echo '```'
-            go tool cover -func=coverage.out | tail -1
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Coverage summary (no coverage)
-        if: always() && hashFiles('coverage.out') == ''
-        shell: bash
-        run: |
-          echo "Coverage: no coverage.out was produced (selection mode: \`${{ steps.select.outputs.mode }}\`)." >> "$GITHUB_STEP_SUMMARY"
+      # The whole out-dir (mode, packages.txt, coverpkg, modules.json,
+      # plan.json, summary.md) is uploaded so the root entry of the modules
+      # matrix ("Run tests (root)") can reuse this exact decision instead of
+      # re-running ciselect a second time, which could in principle disagree
+      # with plan's own run. Only plan.json and summary.md are meant to be
+      # read by a human or another pipeline (docs/ci.md); the rest are
+      # ciselect's own working files for scripts/ci/go-test.sh.
+      - name: Upload the selection plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
+          retention-days: 7
 
+  # modules fans out one job per selected module directory, root (".")
+  # included when the root lane is not "none" (ego-arch-006 spec 1, C2): the
+  # root module runs in the same per-module job shape as every nested one,
+  # from its own directory with GOWORK=off, and its root-only steps
+  # (download the plan, vendor, archcheck, lint, package-level tests,
+  # coverage) are conditional on `matrix.module == '.'`. A PR confined to a
+  # nested module never runs any of the root-only steps.
   modules:
-    needs: build
-    if: needs.build.outputs.modules != '[]'
+    needs: plan
+    if: needs.plan.outputs.modules != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJSON(needs.build.outputs.modules) }}
+        module: ${{ fromJSON(needs.plan.outputs.modules) }}
     env:
       FORCE_COLOR: 1
     steps:
@@ -121,15 +97,184 @@ jobs:
         with:
           go-version: "1.27.0"
           check-latest: false
-          cache-dependency-path: "${{ matrix.module }}/go.sum"
+          cache-dependency-path: ${{ matrix.module == '.' && '**/*.sum' || format('{0}/go.sum', matrix.module) }}
       - run: go version
       - name: Install golangci-lint
+        if: matrix.module != '.'
         shell: bash
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.13.1/install.sh \
             | sh -s -- -b "$(go env GOPATH)/bin" v2.13.1
-      - name: Verify module
+      - name: Install govulncheck
+        shell: bash
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      # A stable report path per matrix entry, computed once so the root and
+      # nested-module steps below and the "Upload govulncheck report" step
+      # all agree on where the JSON report lives; artifact names cannot
+      # contain "/", so matrix.module ("." or "publisher/pulsar") is
+      # sanitized here rather than in a workflow expression (GitHub Actions
+      # expressions have no string-replace function).
+      - name: Compute the govulncheck report path
+        id: govulncheck-report
         shell: bash
         env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          safe="$(printf '%s' "$MODULE" | tr '/' '-')"
+          echo "name=govulncheck-${safe}" >> "$GITHUB_OUTPUT"
+          echo "path=${RUNNER_TEMP}/govulncheck-${safe}.json" >> "$GITHUB_OUTPUT"
+      - name: Download the selection plan
+        if: matrix.module == '.'
+        uses: actions/download-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
+      - name: Vendoring and Tidy
+        if: matrix.module == '.'
+        run: go mod tidy && go mod vendor
+      - name: Install dependencies
+        if: matrix.module == '.'
+        run: go mod download
+      # Nested modules already get an explicit build+vet from
+      # scripts/ci/verify-module.sh; the root module previously had no
+      # equivalent explicit step of its own. archcheck (go list ./...) and
+      # the lint step below already cover the whole root module
+      # unconditionally, same as these two new steps — only
+      # scripts/ci/go-test.sh's test step is scoped to whatever ciselect
+      # selected for this PR (or every included package in full mode). These
+      # two steps close the build/vet gap: `./...` from the repository root
+      # only ever lists root-module packages (every nested module has its
+      # own go.mod, so the go tool excludes it, and vendor/ is never listed
+      # either — verified with `GOROOT= GOWORK=off GOFLAGS=-mod=vendor go
+      # list ./...`, 0 matches for `publisher/` or `/vendor/`).
+      - name: Build (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: go build ./...
+      - name: Vet (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: go vet ./...
+      - name: Check architecture boundaries
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: |
+          go run ./internal/cmd/archcheck
+      - name: Run Linter (root)
+        if: matrix.module == '.'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+          args: --timeout 10m --config .golangci.yml
+      - name: Run tests (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
           GO_TEST_RACE: "1"
-        run: scripts/ci/verify-module.sh "${{ matrix.module }}"
+        run: |
+          scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out
+      - name: Coverage summary (root)
+        if: matrix.module == '.' && always() && hashFiles('coverage.out') != ''
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          {
+            echo "### Coverage"
+            echo
+            echo "Selection mode: \`$PLAN_MODE\`"
+            echo
+            if [ "$PLAN_MODE" = "affected" ]; then
+              echo "In \`affected\` mode the total only reflects the packages that ran; the denominator is still every included package."
+              echo
+            fi
+            echo '```'
+            go tool cover -func=coverage.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage summary (root, no coverage)
+        if: matrix.module == '.' && always() && hashFiles('coverage.out') == ''
+        shell: bash
+        env:
+          PLAN_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          echo "Coverage: no coverage.out was produced (selection mode: \`$PLAN_MODE\`)." >> "$GITHUB_STEP_SUMMARY"
+      - name: govulncheck (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+          GOVULNCHECK_REPORT: ${{ steps.govulncheck-report.outputs.path }}
+        # -format json always exits 0 even when it finds vulnerabilities, so
+        # the scan's own exit code is checked here (this step fails
+        # immediately if it is non-zero) and internal/cmd/vulngate then
+        # decides whether the report's findings are covered by
+        # scripts/ci/govulncheck-allow.json (docs/ci.md, "The govulncheck
+        # exception gate (vulngate)").
+        run: |
+          govulncheck -format json ./... > "$GOVULNCHECK_REPORT"
+          go run ./internal/cmd/vulngate \
+            -module . \
+            -report "$GOVULNCHECK_REPORT" \
+            -allow scripts/ci/govulncheck-allow.json
+      - name: Verify module
+        if: matrix.module != '.'
+        shell: bash
+        env:
+          MODULE: ${{ matrix.module }}
+          GO_TEST_RACE: "1"
+          GOVULNCHECK_REPORT: ${{ steps.govulncheck-report.outputs.path }}
+        run: scripts/ci/verify-module.sh "$MODULE"
+      # if: always() so a module whose govulncheck step (or the exception
+      # gate) failed still keeps its report as evidence for the reviewer
+      # deciding whether a new allow-list entry is warranted. Guarded on the
+      # report path output so this step is a no-op (not a failure) when
+      # "Compute the govulncheck report path" itself never ran.
+      - name: Upload the govulncheck report
+        if: always() && steps.govulncheck-report.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.govulncheck-report.outputs.name }}
+          path: ${{ steps.govulncheck-report.outputs.path }}
+          retention-days: 7
+          if-no-files-found: ignore
+
+  ci-gate:
+    name: CI Gate
+    needs: [plan, modules]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded, or been legitimately skipped
+        shell: bash
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          MODULES_RESULT: ${{ needs.modules.result }}
+        run: |
+          echo "plan:    $PLAN_RESULT"
+          echo "modules: $MODULES_RESULT"
+          status=0
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::plan job did not succeed ($PLAN_RESULT)"
+            status=1
+          fi
+          # modules only ever skips because plan's own outputs.modules was
+          # "[]" (see modules' if:); when plan succeeded, that is the only
+          # way modules can be "skipped", so it is not a failure here. Any
+          # other outcome (failure, cancelled) fails the gate.
+          case "$MODULES_RESULT" in
+            success | skipped) ;;
+            *)
+              echo "::error::modules job did not succeed ($MODULES_RESULT)"
+              status=1
+              ;;
+          esac
+          exit "$status"

@@ -200,6 +200,7 @@ func TestModuleGraph_GlobalChange(t *testing.T) {
 		".github/workflows/x.yml",
 		"scripts/ci/go-test.sh",
 		"internal/cmd/ciselect/main.go",
+		"internal/cmd/vulngate/main.go",
 		"protos/ego/v4/ego.proto",
 	} {
 		t.Run(path, func(t *testing.T) {

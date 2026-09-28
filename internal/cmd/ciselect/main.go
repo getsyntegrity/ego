@@ -673,7 +673,7 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
-	modulesJSON, err := modulesJSON(result.Modules)
+	modulesJSON, err := modulesJSON(selectedModuleDirs(result.Plan))
 	if err != nil {
 		return fmt.Errorf("encoding modules.json: %w", err)
 	}
@@ -697,15 +697,27 @@ func writeOutputs(outDir string, result selector.Result, summary string) error {
 	return nil
 }
 
-// modulesJSON renders the selected nested module directories as a JSON
-// array of strings, always valid JSON: "[]" when none were selected, never
-// "null". This is what pull_request.yml and build.yml feed into a matrix
-// job's fromJSON().
-func modulesJSON(modules []selector.ModuleSelection) (string, error) {
-	dirs := make([]string, 0, len(modules))
-	for _, m := range modules {
-		dirs = append(dirs, m.Dir)
+// selectedModuleDirs returns the directory of every selected entry of plan,
+// in plan order (root first, then nested sorted by directory). The root
+// directory "." is included exactly like any nested module's: the matrix
+// job shape is the same for both (ego-arch-006 spec 1, C2), so ciselect
+// makes no distinction here between "the root module is affected" and "a
+// nested module is affected" — both simply mean "add this directory to the
+// matrix".
+func selectedModuleDirs(plan []selector.ModulePlan) []string {
+	dirs := make([]string, 0, len(plan))
+	for _, p := range plan {
+		if p.Selected {
+			dirs = append(dirs, p.Dir)
+		}
 	}
+	return dirs
+}
+
+// modulesJSON renders dirs as a JSON array of strings, always valid JSON:
+// "[]" when none were selected, never "null". This is what
+// pull_request.yml and build.yml feed into a matrix job's fromJSON().
+func modulesJSON(dirs []string) (string, error) {
 	b, err := json.Marshal(dirs)
 	if err != nil {
 		return "", err
