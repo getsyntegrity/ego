@@ -89,14 +89,31 @@ jobs:
         with:
           generate_release_notes: true
 
-  release-publishers:
+  # prepare-publisher-bump replaces the old release-publishers job (#159,
+  # F4 PR-C): main is branch-protected now (required "CI Gate" check,
+  # strict, enforce_admins), so nothing may push straight to main or open a
+  # PR on its own. This job stops one step earlier than before: it bumps
+  # each publisher's go.mod/go.sum to the just-released ego version, pushes
+  # that bump on its own branch (release/publishers-<tag>), and prints the
+  # exact `gh pr create` command for a human to run. It creates no
+  # publisher tags and no publisher GitHub releases — that now happens in
+  # the separate, explicitly-dispatched release-publishers.yml workflow
+  # once a human has merged the bump PR. See docs/ci.md.
+  prepare-publisher-bump:
     runs-on: ubuntu-latest
     needs: release-ego
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
+          # A plain GITHUB_TOKEN is enough here: this job only pushes a new,
+          # unprotected release/publishers-<tag> branch (never main), and
+          # the job-level `contents: write` permission above already grants
+          # that. The old RELEASE_PAT was needed to push straight to main;
+          # that push no longer happens.
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-go@v7
         with:
@@ -121,40 +138,10 @@ jobs:
         id: ego-version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Determine semver bump type
-        id: bump-type
-        run: |
-          NEW_TAG="${GITHUB_REF#refs/tags/}"
-          # Find the previous ego tag
-          PREV_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -v "^${NEW_TAG}$" | head -1)
-
-          if [ -z "$PREV_TAG" ]; then
-            echo "type=patch" >> "$GITHUB_OUTPUT"
-            echo "No previous tag found, defaulting to patch bump."
-            exit 0
-          fi
-
-          echo "Previous ego tag: ${PREV_TAG}"
-          echo "New ego tag: ${NEW_TAG}"
-
-          # Strip leading 'v'
-          OLD="${PREV_TAG#v}"
-          NEW="${NEW_TAG#v}"
-
-          IFS='.' read -r OLD_MAJOR OLD_MINOR OLD_PATCH <<< "$OLD"
-          IFS='.' read -r NEW_MAJOR NEW_MINOR NEW_PATCH <<< "$NEW"
-
-          if [ "$NEW_MAJOR" -gt "$OLD_MAJOR" ]; then
-            echo "type=major" >> "$GITHUB_OUTPUT"
-          elif [ "$NEW_MINOR" -gt "$OLD_MINOR" ]; then
-            echo "type=minor" >> "$GITHUB_OUTPUT"
-          else
-            echo "type=patch" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Wait for ego module to be available on proxy
+        env:
+          EGO_VERSION: ${{ steps.ego-version.outputs.version }}
         run: |
-          EGO_VERSION="${{ steps.ego-version.outputs.version }}"
           MODULE="github.com/pablogore/ego/v4@${EGO_VERSION}"
           echo "Waiting for ${MODULE} on Go proxy..."
           for i in $(seq 1 30); do
@@ -168,46 +155,36 @@ jobs:
           echo "::error::Timed out waiting for module on Go proxy"
           exit 1
 
-      - name: Update publishers and create tags
+      - name: Create publisher bump branch from origin/main
+        id: create-branch
+        env:
+          EGO_VERSION: ${{ steps.ego-version.outputs.version }}
         run: |
-          EGO_VERSION="${{ steps.ego-version.outputs.version }}"
-          BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
-          PUBLISHERS="${{ steps.discover-publishers.outputs.publishers }}"
+          BRANCH="release/publishers-${EGO_VERSION}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          git fetch origin main --quiet
+
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            echo "::error::Branch ${BRANCH} already exists on origin. Refusing to overwrite it; delete or merge the existing branch first."
+            exit 1
+          fi
+
+          # Branch from origin/main, not from whatever ref this job happened
+          # to check out (the pushed tag), so the bump commit sits cleanly
+          # on top of real main history.
+          git checkout -B "${BRANCH}" origin/main
+
+      - name: Update publishers
+        env:
+          EGO_VERSION: ${{ steps.ego-version.outputs.version }}
+          PUBLISHERS: ${{ steps.discover-publishers.outputs.publishers }}
+        run: |
           for PUB in $PUBLISHERS; do
             echo "::group::Processing publisher: ${PUB}"
-
-            # Determine latest publisher tag and compute next version
-            PREFIX="publisher/${PUB}/v"
-            LATEST=$(git tag -l "${PREFIX}*" --sort=-version:refname | head -1)
-            if [ -z "$LATEST" ]; then
-              CURRENT="0.0.0"
-            else
-              CURRENT="${LATEST#${PREFIX}}"
-            fi
-
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
-            case "$BUMP_TYPE" in
-              major)
-                MAJOR=$((MAJOR + 1))
-                MINOR=0
-                PATCH=0
-                ;;
-              minor)
-                MINOR=$((MINOR + 1))
-                PATCH=0
-                ;;
-              patch)
-                PATCH=$((PATCH + 1))
-                ;;
-            esac
-
-            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-            echo "Publisher ${PUB}: ${CURRENT} -> ${NEXT_VERSION} (${BUMP_TYPE} bump)"
 
             # Update go.mod
             cd "publisher/${PUB}"
@@ -232,68 +209,55 @@ jobs:
             echo "::endgroup::"
           done
 
-          # Single commit for all publisher updates
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(publishers): update ego dependency to ${EGO_VERSION}"
-            git push origin HEAD:main
-            echo "Pushed dependency updates to main."
-          else
-            echo "No dependency changes to commit."
+      - name: Commit and push publisher bump branch
+        id: push-branch
+        env:
+          EGO_VERSION: ${{ steps.ego-version.outputs.version }}
+          BRANCH: ${{ steps.create-branch.outputs.branch }}
+        run: |
+          if git diff --cached --quiet; then
+            echo "No dependency changes to commit; not pushing ${BRANCH}."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # Create and push all publisher tags from the current HEAD
-          for PUB in $PUBLISHERS; do
-            PREFIX="publisher/${PUB}/v"
-            LATEST=$(git tag -l "${PREFIX}*" --sort=-version:refname | head -1)
-            if [ -z "$LATEST" ]; then
-              CURRENT="0.0.0"
-            else
-              CURRENT="${LATEST#${PREFIX}}"
-            fi
+          git commit -m "chore(publishers): update ego dependency to ${EGO_VERSION}"
+          git push origin "${BRANCH}"
+          echo "Pushed ${BRANCH} to origin."
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
 
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
-            case "$BUMP_TYPE" in
-              major)
-                MAJOR=$((MAJOR + 1))
-                MINOR=0
-                PATCH=0
-                ;;
-              minor)
-                MINOR=$((MINOR + 1))
-                PATCH=0
-                ;;
-              patch)
-                PATCH=$((PATCH + 1))
-                ;;
-            esac
-
-            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-            TAG="publisher/${PUB}/v${NEXT_VERSION}"
-            git tag "${TAG}"
-            echo "Created tag: ${TAG}"
-          done
-
-          git push origin --tags
-          echo "Pushed all publisher tags."
-
-      - name: Create publisher GitHub releases
+      - name: Write step summary
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          EGO_VERSION: ${{ steps.ego-version.outputs.version }}
+          BRANCH: ${{ steps.create-branch.outputs.branch }}
+          PUSHED: ${{ steps.push-branch.outputs.pushed }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          EGO_VERSION="${{ steps.ego-version.outputs.version }}"
-          BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
-          PUBLISHERS="${{ steps.discover-publishers.outputs.publishers }}"
+          if [ "${PUSHED}" != "true" ]; then
+            {
+              echo "## Publisher bump: nothing to do"
+              echo
+              echo "No publisher go.mod/go.sum changes were produced for ego ${EGO_VERSION}; branch ${BRANCH} was not pushed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
-          for PUB in $PUBLISHERS; do
-            PREFIX="publisher/${PUB}/v"
-            LATEST=$(git tag -l "${PREFIX}*" --sort=-version:refname | head -1)
-            VERSION="${LATEST#${PREFIX}}"
+          COMPARE_URL="https://github.com/${REPO}/compare/main...${BRANCH}?expand=1"
+          PR_BODY="Bumps the publisher submodules' go.mod/go.sum to ego ${EGO_VERSION}. Generated by ${RUN_URL}."
 
-            gh release create "${LATEST}" \
-              --title "${PUB} publisher v${VERSION}" \
-              --notes "Release of \`${PUB}\` publisher v${VERSION}, updated to ego ${EGO_VERSION}." \
-              --latest=false
-
-            echo "Created release for ${PUB} publisher v${VERSION}"
-          done
+          {
+            echo "## Publisher bump ready for review"
+            echo
+            echo "Branch \`${BRANCH}\` was pushed with the publisher dependency bump to ego ${EGO_VERSION}."
+            echo
+            echo "Compare: ${COMPARE_URL}"
+            echo
+            echo "Open the PR by hand:"
+            echo
+            echo '```bash'
+            echo "gh pr create --base main --head ${BRANCH} --title \"chore(publishers): update ego dependency to ${EGO_VERSION}\" --body \"${PR_BODY}\""
+            echo '```'
+            echo
+            echo "After this PR is merged to main, dispatch \`.github/workflows/release-publishers.yml\` (workflow_dispatch) with the merge commit SHA and ego version \`${EGO_VERSION}\` to tag and release the publishers."
+          } >> "$GITHUB_STEP_SUMMARY"
