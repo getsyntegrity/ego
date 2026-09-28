@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -108,20 +109,104 @@ func TestClient_ListBuildRuns_Pagination(t *testing.T) {
 	}
 }
 
-func TestClient_ListBuildRuns_NonOKStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"message":"Bad credentials"}`)
-	}))
-	defer srv.Close()
-
-	c := &Client{BaseURL: srv.URL, Token: "bad-token", HTTPClient: srv.Client()}
-	_, err := c.ListBuildRuns(context.Background(), "getsyntegrity/ego", sha)
-	if err == nil {
-		t.Fatal("ListBuildRuns: want error on 401, got nil")
+// TestClient_ListBuildRuns_ErrorClassification replaces the old
+// TestClient_ListBuildRuns_NonOKStatus (which only checked a 401 produced
+// *an* error): it now proves ListBuildRuns classifies every non-2xx
+// response as either permanent (fail fast: retrying can never succeed —
+// 401 unauthorized, 404 not found, or a 403 that is NOT a rate limit) or
+// retryable (5xx, 429, or a 403 that IS a rate limit, detected via the
+// `X-RateLimit-Remaining: 0` / `Retry-After` headers or a secondary-rate-
+// limit message in the response body). main.go's waitForGate uses
+// errors.Is(err, ErrPermanentGitHubError) to tell the two apart.
+func TestClient_ListBuildRuns_ErrorClassification(t *testing.T) {
+	cases := []struct {
+		name          string
+		status        int
+		headers       map[string]string
+		body          string
+		wantPermanent bool
+	}{
+		{
+			name:          "401 unauthorized is permanent",
+			status:        http.StatusUnauthorized,
+			body:          `{"message":"Bad credentials"}`,
+			wantPermanent: true,
+		},
+		{
+			name:          "404 not found is permanent",
+			status:        http.StatusNotFound,
+			body:          `{"message":"Not Found"}`,
+			wantPermanent: true,
+		},
+		{
+			name:          "403 with no rate-limit signal is permanent",
+			status:        http.StatusForbidden,
+			body:          `{"message":"Forbidden"}`,
+			wantPermanent: true,
+		},
+		{
+			name:          "403 with X-RateLimit-Remaining: 0 is retryable",
+			status:        http.StatusForbidden,
+			headers:       map[string]string{"X-RateLimit-Remaining": "0"},
+			body:          `{"message":"API rate limit exceeded for user"}`,
+			wantPermanent: false,
+		},
+		{
+			name:          "403 with Retry-After is retryable",
+			status:        http.StatusForbidden,
+			headers:       map[string]string{"Retry-After": "60"},
+			body:          `{"message":"Forbidden"}`,
+			wantPermanent: false,
+		},
+		{
+			name:          "403 secondary rate limit message body is retryable",
+			status:        http.StatusForbidden,
+			body:          `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes."}`,
+			wantPermanent: false,
+		},
+		{
+			name:          "429 too many requests is retryable",
+			status:        http.StatusTooManyRequests,
+			body:          `{"message":"rate limited"}`,
+			wantPermanent: false,
+		},
+		{
+			name:          "500 internal server error is retryable",
+			status:        http.StatusInternalServerError,
+			body:          `{"message":"boom"}`,
+			wantPermanent: false,
+		},
+		{
+			name:          "503 service unavailable is retryable",
+			status:        http.StatusServiceUnavailable,
+			body:          `{"message":"temporarily unavailable"}`,
+			wantPermanent: false,
+		},
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Fatalf("error = %v, want it to mention the 401 status", err)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+
+			c := &Client{BaseURL: srv.URL, Token: "bad-token", HTTPClient: srv.Client()}
+			_, err := c.ListBuildRuns(context.Background(), "getsyntegrity/ego", sha)
+			if err == nil {
+				t.Fatalf("ListBuildRuns: want error on %d, got nil", tc.status)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("%d", tc.status)) {
+				t.Fatalf("error = %v, want it to mention the %d status", err, tc.status)
+			}
+			if got := errors.Is(err, ErrPermanentGitHubError); got != tc.wantPermanent {
+				t.Fatalf("errors.Is(err, ErrPermanentGitHubError) = %v, want %v (err=%v)", got, tc.wantPermanent, err)
+			}
+		})
 	}
 }
 

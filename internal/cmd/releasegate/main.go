@@ -172,6 +172,17 @@ func waitForGate(ctx context.Context, client *Client, cfg config, clk clock, slp
 	for attempt := 1; ; attempt++ {
 		runs, err := client.ListBuildRuns(ctx, cfg.repo, cfg.sha)
 		if err != nil {
+			// A permanent error (401, 404, or a non-rate-limited 403 — see
+			// client.go's isPermanentStatus) can never turn into success no
+			// matter how long this loop keeps polling: the token is
+			// invalid, or the repo/workflow/SHA cannot be found, and
+			// neither of those changes on its own between now and the
+			// deadline. Failing immediately, instead of retrying every
+			// -interval until -timeout is exhausted, saves the rest of the
+			// wait budget for the transient errors it actually exists for.
+			if errors.Is(err, ErrPermanentGitHubError) {
+				return fmt.Errorf("release gate: permanent error, will not retry: %v", err)
+			}
 			lastErr = err
 			fmt.Fprintf(stdout, "release gate: fetch error (attempt %d) — %v\n", attempt, err)
 		} else {

@@ -23,8 +23,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -161,7 +163,7 @@ func (c *Client) ListBuildRuns(ctx context.Context, repo, sha string) ([]Run, er
 		body, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("GitHub API returned %d listing %s runs for %s: %s", resp.StatusCode, buildWorkflowFile, sha, truncate(body, 500))
+			return nil, classifyStatusError(resp.StatusCode, resp.Header, body, sha)
 		}
 		if readErr != nil {
 			return nil, fmt.Errorf("reading response body: %w", readErr)
@@ -179,6 +181,79 @@ func (c *Client) ListBuildRuns(ctx context.Context, repo, sha string) ([]Run, er
 			return all, nil
 		}
 	}
+}
+
+// ErrPermanentGitHubError is wrapped into the error ListBuildRuns returns
+// when a non-2xx GitHub API response is classified as permanent: no amount
+// of retrying before the deadline can turn it into success, so main.go's
+// waitForGate checks errors.Is(err, ErrPermanentGitHubError) to fail fast
+// instead of spending the whole wait budget on a status that will never
+// change. See classifyStatusError for exactly which codes this covers.
+var ErrPermanentGitHubError = errors.New("permanent GitHub API error, retrying will not help")
+
+// classifyStatusError builds ListBuildRuns's non-2xx error, wrapping
+// ErrPermanentGitHubError when the status is classified as permanent (see
+// isPermanentStatus) so callers can tell it apart from a retryable error
+// with errors.Is, without string-matching the message.
+func classifyStatusError(statusCode int, header http.Header, body []byte, sha string) error {
+	msg := fmt.Sprintf("GitHub API returned %d listing %s runs for %s: %s", statusCode, buildWorkflowFile, sha, truncate(body, 500))
+	if isPermanentStatus(statusCode, header, body) {
+		return fmt.Errorf("%s: %w", msg, ErrPermanentGitHubError)
+	}
+	return errors.New(msg)
+}
+
+// isPermanentStatus reports whether statusCode is one retrying can never
+// turn into success:
+//
+//   - 401 Unauthorized: the token is invalid or missing scope. It will not
+//     become valid by waiting.
+//   - 404 Not Found: the repo, workflow file, or SHA does not exist as far
+//     as this token can see. Waiting does not make it appear.
+//   - 403 Forbidden that is NOT a rate limit: GitHub also returns 403 for
+//     an actual rate limit (secondary or primary), which IS transient and
+//     must stay retryable — isRateLimited tells the two 403 cases apart.
+//
+// Every other status (5xx, 429, and any other 4xx not listed above) is
+// treated as retryable, matching this client's existing conservative
+// default of retrying anything not explicitly known to be permanent.
+func isPermanentStatus(statusCode int, header http.Header, body []byte) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusNotFound:
+		return true
+	case http.StatusForbidden:
+		return !isRateLimited(header, body)
+	default:
+		return false
+	}
+}
+
+// isRateLimited detects a 403 that is actually a rate limit (primary or
+// secondary), which GitHub's own docs (docs.github.com/en/rest/using-the-
+// rest-api/rate-limits-for-the-rest-api) say to detect via any of:
+//
+//   - the X-RateLimit-Remaining response header is "0" (primary rate
+//     limit exhausted);
+//   - a Retry-After response header is present (GitHub sets this on both
+//     primary and secondary rate-limit responses to say how long to
+//     wait);
+//   - the response body's message mentions a rate limit (GitHub's
+//     secondary rate limit has no dedicated header, only this prose
+//     message — e.g. "You have exceeded a secondary rate limit").
+//
+// Matching is deliberately loose (a case-insensitive substring check on
+// the body) rather than parsing the JSON message field: GitHub does not
+// document a stable machine-readable field for this case, and a false
+// positive here only means "retry a 403 instead of failing fast", which
+// is the safe direction to be wrong in.
+func isRateLimited(header http.Header, body []byte) bool {
+	if header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+	if header.Get("Retry-After") != "" {
+		return true
+	}
+	return bytes.Contains(bytes.ToLower(body), []byte("rate limit"))
 }
 
 func truncate(b []byte, n int) string {

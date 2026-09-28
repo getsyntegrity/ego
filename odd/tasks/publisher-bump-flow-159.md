@@ -113,7 +113,7 @@ but pushing/PR is out of scope for this session regardless).
   `push origin HEAD:main` and no publisher `git tag`/`gh release create` left
   in this file.
 
-- [ ] **T2 — releasegate error classification (PR #171 follow-up).**
+- [x] **T2 — releasegate error classification (PR #171 follow-up).**
   `internal/cmd/releasegate/client.go`: classify `ListBuildRuns`'s non-200
   response into permanent (401, 404, 403-not-rate-limited) vs retryable
   (5xx, 429, network errors, 403 with `X-RateLimit-Remaining: 0` or a
@@ -125,6 +125,25 @@ but pushing/PR is out of scope for this session regardless).
   Check: strict TDD RED→GREEN evidence for the new/changed tests; `go test
   -count=1 ./internal/cmd/releasegate/...` green; `go vet`, `staticcheck`,
   `gofmt -l` clean on changed files.
+  **Done.** Added `ErrPermanentGitHubError` (sentinel, wrapped with `%w`)
+  and `classifyStatusError`/`isPermanentStatus`/`isRateLimited` in
+  `client.go`; `waitForGate` in `main.go` now checks
+  `errors.Is(err, ErrPermanentGitHubError)` and returns immediately (no
+  retry) on a permanent error. Replaced `TestClient_ListBuildRuns_NonOKStatus`
+  with a 9-case table-driven `TestClient_ListBuildRuns_ErrorClassification`;
+  added `TestRun_PermanentFetchErrorFailsFastWithoutRetrying` (RED: current
+  code retried a 401 41 times instead of failing after 1; GREEN after the
+  `waitForGate` fix) and `TestRun_TimeoutZeroWithFetchErrorFails` (already
+  GREEN before any production change — `-timeout 0` + a fetch error already
+  correctly failed, so this test only locks that behavior in, per the
+  task's "report honestly if already passing" instruction).
+  Verification (all observed, literal output in the T2 delegate's report):
+  `go test -count=1 ./internal/cmd/releasegate/...` → `ok`; `go vet` → clean;
+  `staticcheck` → no findings; `gofmt -l` → nothing printed (clean).
+  Commit: see repo `git log -1` on this branch (single Conventional Commit,
+  `fix(releasegate): fail fast on permanent GitHub API errors (#159)`, no
+  AI-attribution trailer, only files under `internal/cmd/releasegate/`,
+  `docs/ci.md`, and this task file staged).
 
 - [ ] **T3 — `releaseplan` continuation decision logic.** Add flags/functions
   for: (a) SHA (40 lowercase hex) and `ego_version` (`v\d+\.\d+\.\d+`) format
@@ -218,4 +237,10 @@ but pushing/PR is out of scope for this session regardless).
   Commit: see repo `git log -1` on this branch (single Conventional Commit,
   no AI-attribution trailer, only `.github/workflows/release.yml` and this
   file staged).
-- Next: T2.
+- **T2 done.** See T2's task entry above for the full evidence. Files
+  touched: `internal/cmd/releasegate/client.go`, `client_test.go`,
+  `main.go`, `main_test.go`, `docs/ci.md` (retry paragraph only, per this
+  task's own scope). Commit: see repo `git log` on this branch (single
+  Conventional Commit, no AI-attribution trailer; only files under
+  `internal/cmd/releasegate/`, `docs/ci.md`, and this task file staged).
+- Next: T3.

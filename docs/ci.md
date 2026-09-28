@@ -1380,6 +1380,35 @@ by default. The deadline message names the last fetch error, the last
 decision reason `Decide` produced, or both, so an operator can tell "GitHub
 was unreachable" apart from "still genuinely waiting on a pending run".
 
+**Not every API error is worth retrying (#159 T2, PR #171 follow-up).**
+`ListBuildRuns` (`internal/cmd/releasegate/client.go`) classifies each
+non-2xx response so `waitForGate` knows whether waiting could possibly
+help:
+
+- **Retried until the deadline:** any `5xx` server error, `429 Too Many
+  Requests`, a network/transport error (the connection failed before a
+  response even came back), and a `403 Forbidden` that GitHub is actually
+  using as a rate-limit response. A `403` is recognized as a rate limit,
+  not a permission error, when the response carries an
+  `X-RateLimit-Remaining: 0` header, carries a `Retry-After` header, or
+  its body's message mentions a rate limit (GitHub's secondary rate limit
+  has no dedicated header — only that prose message, e.g. "You have
+  exceeded a secondary rate limit").
+- **Failed immediately, no retry:** `401 Unauthorized` (the token is
+  invalid or missing the `actions:read` scope — that does not fix itself
+  while this process sits and waits), `404 Not Found` (the repo, workflow
+  file, or SHA is not visible to this token — waiting does not make it
+  appear), and a `403 Forbidden` that is *not* a rate limit by the test
+  above (a genuine permission problem, not a throttle).
+
+`waitForGate` tells the two apart with `errors.Is(err,
+ErrPermanentGitHubError)`, a sentinel `ListBuildRuns` wraps into the error
+it returns for the fail-fast cases. Before this change, a `401` or `404`
+would burn the entire `-timeout` budget retrying every `-interval`, even
+though the very first response already proved retrying was pointless;
+now it fails on the first attempt, with a message that says the error is
+permanent and why.
+
 **How to test the gate without publishing anything.** Every call the gate
 makes is a read-only GitHub API request; it creates nothing, tags
 nothing, and pushes nothing. Run it directly, from a checkout with a full

@@ -301,6 +301,81 @@ func TestRun_PersistentFetchErrorsFailAtDeadlineNamingTheError(t *testing.T) {
 	}
 }
 
+// --- releasegate error classification (#159 T2, PR #171 follow-up) ---------
+
+// TestRun_PermanentFetchErrorFailsFastWithoutRetrying proves that a
+// permanent ListBuildRuns error (classified via errors.Is(err,
+// ErrPermanentGitHubError) — see client.go's isPermanentStatus) makes
+// waitForGate return immediately instead of retrying until the deadline.
+// The server always answers 401, the configured timeout is a full 20
+// minutes, and yet run() must fail after exactly one fetch, without ever
+// calling Sleep — proving the whole wait budget was not wasted retrying an
+// error that could never succeed.
+func TestRun_PermanentFetchErrorFailsFastWithoutRetrying(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"message":"Bad credentials"}`)
+	}))
+	defer srv.Close()
+
+	args := []string{"-repo", "getsyntegrity/ego", "-sha", sha, "-on-main", "true", "-timeout", "20m", "-interval", "30s"}
+	var stdout, stderr bytes.Buffer
+	clk := &fakeClock{now: time.Now()}
+	slp := &fakeSleeper{clock: clk}
+	err := run(args, &stdout, &stderr, fakeGetenv(map[string]string{"GITHUB_TOKEN": "tok"}), clk, slp, srv.URL)
+	if err == nil {
+		t.Fatal("run: want an error on a permanent (401) fetch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "permanent") {
+		t.Fatalf("error = %v, want it to say the error is permanent", err)
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Fatalf("error = %v, want it to name the 401 status", err)
+	}
+	if calls != 1 {
+		t.Fatalf("GitHub API was called %d times, want exactly 1 (a permanent error must fail fast, not retry)", calls)
+	}
+	if len(slp.calls) != 0 {
+		t.Fatalf("Sleep was called %d times, want 0 (a permanent error must not wait for the next poll)", len(slp.calls))
+	}
+}
+
+// TestRun_TimeoutZeroWithFetchErrorFails is the T2-required test: -timeout
+// 0 (single check, no waiting) combined with a ListBuildRuns fetch error
+// must still make the gate Fail, not silently succeed or hang. This uses a
+// retryable error (503) specifically so the assertion is about the
+// -timeout<=0 "no wait budget left" path in waitForGate, not about
+// permanent-error fail-fast (covered separately above).
+func TestRun_TimeoutZeroWithFetchErrorFails(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"message":"temporarily unavailable"}`)
+	}))
+	defer srv.Close()
+
+	args := []string{"-repo", "getsyntegrity/ego", "-sha", sha, "-on-main", "true", "-timeout", "0", "-interval", "30s"}
+	var stdout, stderr bytes.Buffer
+	clk := &fakeClock{now: time.Now()}
+	slp := &fakeSleeper{clock: clk}
+	err := run(args, &stdout, &stderr, fakeGetenv(map[string]string{"GITHUB_TOKEN": "tok"}), clk, slp, srv.URL)
+	if err == nil {
+		t.Fatal("run: want an error when -timeout 0 and the fetch fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("error = %v, want it to name the fetch error (503)", err)
+	}
+	if calls != 1 {
+		t.Fatalf("GitHub API was called %d times, want exactly 1 (-timeout 0 checks once, does not retry)", calls)
+	}
+	if len(slp.calls) != 0 {
+		t.Fatalf("Sleep was called %d times, want 0 (-timeout 0 never waits)", len(slp.calls))
+	}
+}
+
 // TestRun_SleepClampedToRemainingBeforeDeadline covers R3 (minor): a poll
 // interval larger than the remaining time budget must not overshoot the
 // deadline. -interval is 10m but -timeout is only 1m, so the single sleep
