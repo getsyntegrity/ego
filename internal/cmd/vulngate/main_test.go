@@ -198,6 +198,47 @@ func TestLoadAllowList_BadDateFails(t *testing.T) {
 	}
 }
 
+// TestLoadAllowList_DuplicateTripleFails covers two entries that share the
+// same (module, id, vulnerable_module) triple. evaluate keys its scoped
+// exceptions map by exactly that triple, so a second entry for the same key
+// would silently overwrite the first one in the map with no diagnostic at
+// all; loadAllowList must reject the file outright instead, mirroring
+// internal/cmd/archcheck/rules/baseline.go's duplicate rejection for its own
+// (Importer, Import, Rule) triple.
+func TestLoadAllowList_DuplicateTripleFails(t *testing.T) {
+	path := writeTempFile(t, "allow.json", allowFileJSON(
+		entryJSON("publisher/pulsar", "GO-2026-5046", "github.com/hamba/avro/v2", "2026-12-28"),
+		entryJSON("publisher/pulsar", "GO-2026-5046", "github.com/hamba/avro/v2", "2026-06-01"),
+	))
+	_, err := loadAllowList(path)
+	if err == nil {
+		t.Fatal("loadAllowList: want error for a duplicate (module, id, vulnerable_module) triple, got nil")
+	}
+	for _, want := range []string{"publisher/pulsar", "GO-2026-5046", "github.com/hamba/avro/v2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("loadAllowList error %q does not name the duplicate %q", err, want)
+		}
+	}
+}
+
+// TestLoadAllowList_SameIDDifferentVulnerableModuleIsNotADuplicate covers
+// the triple's third component: two entries sharing (module, id) but naming
+// different vulnerable_module values are two distinct, legitimate
+// exceptions, not a duplicate.
+func TestLoadAllowList_SameIDDifferentVulnerableModuleIsNotADuplicate(t *testing.T) {
+	path := writeTempFile(t, "allow.json", allowFileJSON(
+		entryJSON("publisher/pulsar", "GO-2026-5046", "github.com/hamba/avro/v2", "2026-12-28"),
+		entryJSON("publisher/pulsar", "GO-2026-5046", "github.com/other/module", "2026-12-28"),
+	))
+	entries, err := loadAllowList(path)
+	if err != nil {
+		t.Fatalf("loadAllowList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+}
+
 // --- evaluate ------------------------------------------------------------
 
 func TestEvaluate_ExceptedFinding(t *testing.T) {

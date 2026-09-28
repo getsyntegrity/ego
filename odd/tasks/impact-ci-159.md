@@ -35,7 +35,9 @@ matrix is empty, the `modules` job is *skipped*, not green.
 - Touches `.github/workflows/{pull_request,build}.yml`, `scripts/ci/*`, `internal/cmd/ciselect/**`,
   `docs/ci.md`, `CHANGELOG.md`, this document. Not touched: `release.yml`, production Go code, module
   layout.
-- `main`, release and `workflow_dispatch` keep the full gate (`ciselect -all`).
+- `main` (push) and manual `workflow_dispatch` runs keep the full gate (`ciselect -all`);
+  `release.yml` performs no verification of its own (it relies on `main` having already passed) and
+  never runs `ciselect`, build, vet or tests.
 - TDD: strict (user global configuration); runner `go test`. Workflow YAML has no unit runner: its
   check is `actionlint` when available plus a YAML parse check. Never `-race` locally, never the
   workbench.
@@ -418,3 +420,88 @@ matrix is empty, the `modules` job is *skipped*, not green.
     build/vet steps) parses with `bash -n`; `GOROOT= GOWORK=off go test
     -count=1 ./internal/cmd/ciselect/... ./internal/cmd/vulngate/...` still
     green.
+
+- **Independent review of draft PR #167 at head `e0e5004`, fixes applied
+  (T1/T3 evidence, no new task — the spec's task count stays at 5):**
+  1. **Fixed (Major, security — template injection).** Every `${{ … }}` used
+     inside a `run:` body in `pull_request.yml` and `build.yml` (matrix.module
+     in "Compute the govulncheck report path" and "Verify module";
+     `needs.plan.outputs.mode` in the two root coverage-summary steps; the
+     govulncheck report path in "govulncheck (root)") now flows through that
+     step's own `env:` (`MODULE`, `PLAN_MODE`, `GOVULNCHECK_REPORT`) and is
+     referenced quoted (`"$MODULE"`, `"$PLAN_MODE"`). Proof: a Python/PyYAML
+     scan of both workflows' `run` step bodies for `${{` (not a raw-text
+     `rg`, since a naive text grep also matches `with:`/`env:` values that
+     are not run-body interpolation) found **zero** remaining after the fix,
+     down from 8 occurrences across 5 steps before it — so nothing was kept.
+  2. **Fixed (Minor).** `loadAllowList` (`internal/cmd/vulngate/main.go`) now
+     rejects a second allow-list entry sharing the same (`module`, `id`,
+     `vulnerable_module`) triple with an error naming the module, ID and
+     vulnerable module, mirroring
+     `internal/cmd/archcheck/rules/baseline.go`'s `ValidateBaseline` duplicate
+     rejection for its own (Importer, Import, Rule) triple. Without this, two
+     entries sharing a triple would silently collapse in `evaluate`'s
+     `scoped` map (last one wins) with no diagnostic. **TDD (RED → GREEN)**:
+     added `TestLoadAllowList_DuplicateTripleFails` (RED: failed with
+     "want error ... got nil" against the pre-fix code) and
+     `TestLoadAllowList_SameIDDifferentVulnerableModuleIsNotADuplicate` (a
+     same-ID-different-module pair is not a duplicate; passed unmodified,
+     confirming it wasn't a vacuous pairing). Implemented via a new
+     `allowKey{Module, ID, VulnerableModule}` type and a `seen` map in
+     `loadAllowList`, checked after each entry's own `validate()`. GREEN:
+     all 28 vulngate tests pass. The real
+     `scripts/ci/govulncheck-allow.json` (3 entries) was also loaded through
+     `loadAllowList` directly in a throwaway test and confirmed to have no
+     duplicates (not touched by this fix, per scope).
+  3. **Fixed (Minor).** "Upload the govulncheck report" (both workflows) now
+     runs `if: always() && steps.govulncheck-report.outputs.path != ''`
+     instead of a bare `if: always()`, so it no-ops instead of erroring on
+     empty name/path when "Compute the govulncheck report path" itself was
+     skipped (e.g. "Install govulncheck" failed first); a failed scan or
+     failed gate still uploads its report, since only "Compute the
+     govulncheck report path" being skipped short-circuits the step.
+  4. **Fixed (Minor, docs).** `docs/ci.md` ("Running the plan outside GitHub
+     Actions") and this document's own "Scope and constraints" section both
+     said `-all` "produces the full plan used by `main`, release and manual
+     runs". Corrected to: `main` (push) and manual `workflow_dispatch` runs
+     (in `build.yml`) use `-all`; `release.yml` performs no verification of
+     its own (it relies on `main` having already passed) and never runs
+     `ciselect`, build, vet or tests. `docs/ci.md`'s "What each workflow
+     runs" section already said this correctly ("main and workflow_dispatch
+     never..." with no mention of release), so only the one drifted sentence
+     in each document needed the correction.
+  5. **Fixed (Nit).** `build.yml`'s "Coverage summary (root)" step hardcoded
+     `` Selection mode: `full` `` instead of reading `plan.outputs.mode`.
+     Now reads it via `env: PLAN_MODE: ${{ needs.plan.outputs.mode }}` and
+     `"$PLAN_MODE"` in the run body, same as item 1's fix for the equivalent
+     step in `pull_request.yml`.
+  - **Follow-ups from the same review, deliberately NOT done in #167** (each
+    is a separate, larger change than a fix-up and stays out of this spec's
+    5-task cap):
+    - #5: two hand-maintained global-path lists
+      (`internal/cmd/ciselect/selector/classify.go:112-119` and
+      `internal/cmd/ciselect/selector/modulegraph.go:57-63`) should become one
+      shared core list.
+    - #7: the govulncheck report artifact name collision risk from
+      `tr '/' '-'` sanitizing `matrix.module` (e.g. two different module
+      paths could theoretically collide on the same sanitized name).
+    - #8: `vulngate`'s exception-matching logic duplicates
+      `internal/cmd/archcheck`'s baseline/exception logic in spirit; a shared
+      helper could reduce that duplication.
+    - #9: `govulncheck`/`vulngate` are compiled fresh per matrix job instead
+      of once and reused.
+    - #10: `pull_request.yml` and `build.yml` duplicate the whole
+      `modules`/`ci-gate` job bodies; a reusable workflow or a
+      `scripts/ci/verify-root.sh` script could remove the duplication.
+  - Verification (this review's fixes): `GOROOT= GOWORK=off go test -count=1
+    ./internal/cmd/vulngate/... ./internal/cmd/ciselect/...` — all green (28
+    vulngate + full ciselect suite); `GOROOT= GOWORK=off go run
+    honnef.co/go/tools/cmd/staticcheck@latest ./internal/cmd/vulngate/...` —
+    0 findings; `GOROOT= go run
+    github.com/rhysd/actionlint/cmd/actionlint@latest
+    .github/workflows/pull_request.yml .github/workflows/build.yml` — 0
+    findings; both workflows parse as YAML and every `run:` block passes
+    `bash -n`; the injection proof above (0 remaining `${{` in any `run:`
+    body). Local golangci-lint remains broken in this worktree (built with
+    go1.26.6, per the T1/T3 environment notes); staticcheck was run instead
+    for the new/changed vulngate code, per this task's instructions.

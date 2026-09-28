@@ -205,12 +205,32 @@ func loadAllowList(path string) ([]allowEntry, error) {
 	if dec.More() {
 		return nil, fmt.Errorf("%s has trailing content after its JSON array", path)
 	}
+	seen := make(map[allowKey]bool, len(entries))
 	for i, e := range entries {
 		if err := e.validate(); err != nil {
 			return nil, fmt.Errorf("%s entry %d (%s): %w", path, i, e.ID, err)
 		}
+		key := allowKey{Module: e.Module, ID: e.ID, VulnerableModule: e.VulnerableModule}
+		if seen[key] {
+			return nil, fmt.Errorf("%s entry %d: duplicate exception for module %s, id %s, vulnerable_module %s", path, i, e.Module, e.ID, e.VulnerableModule)
+		}
+		seen[key] = true
 	}
 	return entries, nil
+}
+
+// allowKey identifies an allow-list entry by the same (module, id,
+// vulnerable_module) triple evaluate scopes and keys its exceptions by
+// (main.go's evaluate, scoped map): loadAllowList rejects a second entry for
+// the same triple outright, mirroring
+// internal/cmd/archcheck/rules/baseline.go's ValidateBaseline, which rejects
+// a duplicate (Importer, Import, Rule) the same way. Without this check, two
+// entries sharing a triple would silently collapse into whichever one
+// evaluate's map assignment saw last, with no diagnostic at all.
+type allowKey struct {
+	Module           string
+	ID               string
+	VulnerableModule string
 }
 
 // traceFrame mirrors one frame of a govulncheck JSON finding's trace, as
