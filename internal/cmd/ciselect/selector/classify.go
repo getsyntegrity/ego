@@ -118,6 +118,43 @@ var fullFallbackPrefixDirs = []string{
 	"egopb",
 }
 
+// noVerificationImpactExactFiles are the only .github/ files whose change
+// cannot alter how any module builds, lints or tests, decided from what
+// reads them:
+//   - release.yml runs only on a "v*" tag push and release-publishers.yml
+//     only on workflow_dispatch; neither is triggered by a pull request or
+//     by a push to a branch, so neither runs in build.yml/pull_request.yml.
+//   - stale.yml runs only on a schedule or workflow_dispatch and only
+//     manages issues and pull requests.
+//   - CODEOWNERS only routes review requests.
+//
+// This is an allow-list on purpose: an unknown or new .github/ file (a
+// composite action, a reusable workflow, a new trigger workflow) is not
+// listed, so it keeps forcing the full suite.
+var noVerificationImpactExactFiles = map[string]bool{
+	".github/workflows/release.yml":            true,
+	".github/workflows/release-publishers.yml": true,
+	".github/workflows/stale.yml":              true,
+	".github/CODEOWNERS":                       true,
+}
+
+// noVerificationImpactPrefixDirs are .github/ directories with the same
+// property: GitHub renders issue templates in its UI and nothing in CI reads
+// them.
+var noVerificationImpactPrefixDirs = []string{
+	".github/ISSUE_TEMPLATE",
+}
+
+// isNoVerificationImpactPath reports whether sp is an allow-listed .github/
+// file that cannot change module verification.
+func isNoVerificationImpactPath(sp string) bool {
+	if noVerificationImpactExactFiles[sp] {
+		return true
+	}
+	_, ok := matchingPrefix(sp, noVerificationImpactPrefixDirs)
+	return ok
+}
+
 // noTestPrefixDirs are module-relative directory prefixes that hold
 // documentation or governance content with no associated behavior to
 // test.
@@ -146,6 +183,11 @@ func classify(p string, satelliteDirs []string, dirIndex map[string]string) Chan
 	cf := ChangedFile{Path: p}
 	sp := normalizeChangedPath(p)
 
+	if isNoVerificationImpactPath(sp) {
+		cf.Class = ClassNoTest
+		cf.Reason = fmt.Sprintf("%s cannot change module verification (release-only or repository-metadata file)", sp)
+		return cf
+	}
 	if fullFallbackExactFiles[sp] {
 		cf.Class = ClassFullFallback
 		cf.Reason = fmt.Sprintf("%s changed (full-fallback path)", sp)

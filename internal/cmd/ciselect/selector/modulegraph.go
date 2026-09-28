@@ -74,6 +74,9 @@ func globalReason(opts Options, changed []string) string {
 	}
 	for _, c := range changed {
 		sp := normalizeChangedPath(c)
+		if isNoVerificationImpactPath(sp) {
+			continue
+		}
 		if globalExactFiles[sp] {
 			return fmt.Sprintf("global: %s changed", sp)
 		}
