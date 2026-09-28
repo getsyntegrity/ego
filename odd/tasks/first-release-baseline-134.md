@@ -154,11 +154,30 @@ patch`, `git tag -l`) therefore advertises v4.0.1 to anyone reading the job summ
   `publisher/<name>/v0.1.0`" expectation for `bump=minor`.
 - Commit: `fix(releaseplan): plan vN.0.0 as the first release of an untagged /vN module (#134)`.
 
-### T2 — pending
+### T2 — done
 
-Not started yet.
+- `CHANGELOG.md`: added one new bullet under `[Unreleased]` → `💥 Breaking
+  Changes`, directly after the existing #134 module-path-move bullet, recording
+  that the first release will be v4.0.0, why (breaking changes already listed
+  above it, D1 forbidding a `/v5` path, upstream's own `[v4.4.3]`/`v4.5.0` being
+  taken), that `[v4.4.3]` and everything below it is upstream `tochemey/ego`
+  history, and that each publisher starts its own line at
+  `publisher/<name>/v0.1.0`. `git diff CHANGELOG.md` is a pure two-line addition
+  (`1 file changed, 2 insertions(+)`) — no existing entry touched.
+- Release docs: `rg -n 'v4\.0\.1|noTagBaseline|first release|releaseplan' docs
+  openspec/changes/ego-arch-006 readme.md contributing.md` found no file
+  asserting the old, now-wrong "untagged + major always refuses" rule or the
+  v4.0.1 baseline. `docs/ci.md`'s "Release plan dry run (releaseplan)" section
+  describes the job mechanically (what it runs, what it uploads) without
+  naming a specific computed version, so it was not wrong and was left as is.
+  The `ego-arch-006` design/proposal mentions of "the first release" are D1
+  decision history (migrate the module path before the first release) and were
+  left untouched, per scope. No file needed a correction beyond the CHANGELOG
+  entry.
+- Commit: `docs(release): record v4.0.0 as the first root release (#134)`.
 
 ## Next step
 
-Do T2: `CHANGELOG.md` entry and release-doc corrections, then update this
-document with the actual evidence and commit SHA.
+None outstanding: the numbering decision, the releaseplan fix, and the docs
+recording it are all in place and verified. The actual root tag is still not
+created (explicitly out of scope here).
