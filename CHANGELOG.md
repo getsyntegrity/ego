@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- **`release-publishers.yml` defaults `bump` to `minor`, so the first publisher release is `v0.1.0` (#134).** An untagged, suffix-less publisher starts from `v0.0.0`, so the previous `patch` default planned `publisher/<name>/v0.0.1` for all four publishers instead of the intended `v0.1.0`. `TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher` (`internal/cmd/releaseplan`) reads the workflow's default and runs the publishers-only plan against this repository with only `v4.0.0` tagged, and requires `v0.1.0` for every publisher. A later fix release passes `bump: patch` explicitly.
+
 ### 🧹 Improvements
 
 - **CI: release-only `.github` files no longer force the full suite on a pull request.** `internal/cmd/ciselect` now keeps an explicit allow-list of `.github` files that cannot change how any module builds or tests (`workflows/release.yml`, `workflows/release-publishers.yml`, `workflows/stale.yml`, `CODEOWNERS`, `ISSUE_TEMPLATE/**`); a PR touching only those selects no modules. Every other `.github` path, including files that do not exist yet, still forces the full suite. A changed path the selector cannot classify at all is now global too: it selects every module, including a nested module that does not require the root (before, it forced only the root lane to `full` and reached nested modules through the requirement graph, so `publisher/nats` was left out). `develop` is added to the `build.yml` push and `pull_request.yml` pull-request branches, inactive until that branch exists. `docs/ci.md` documents the selection policy per event, the `.github` classification, the fallbacks and `CI Gate`.
