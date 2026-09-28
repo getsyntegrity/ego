@@ -86,7 +86,11 @@ func TestRun_RefusalIsNonZero(t *testing.T) {
 	releaseFile := filepath.Join(dir, "release.txt")
 	writeLines(t, releaseFile, []string{".", "pub"})
 	tagsFile := filepath.Join(dir, "tags.txt")
-	writeLines(t, tagsFile, []string{})
+	// An untagged root would now legally reach v4.0.0 on a major bump (the
+	// fix this test predates), so the refusal here comes from an existing
+	// tag already at the /v4 boundary: v4.0.0 -bump major asks for v5.0.0,
+	// which the root's path suffix does not allow.
+	writeLines(t, tagsFile, []string{"v4.0.0"})
 	outDir := filepath.Join(dir, "out")
 
 	var stdout, stderr bytes.Buffer
@@ -113,8 +117,11 @@ func TestRun_MissingRequiredFlags(t *testing.T) {
 // repository (internal/cmd/releaseplan/../../.. is the repo root),
 // mirroring the feature document's "Real run on this repository" check:
 // a patch bump succeeds and orders the root before every publisher; a
-// major bump is refused because the root's path ends in /v4 (an untagged
-// publisher's first major, v1.0.0, would be legal on its own).
+// major bump is refused once the root already carries a v4.x tag,
+// because its path ends in /v4 (an untagged publisher's first major,
+// v1.0.0, would be legal on its own). With no tag at all, a major bump
+// no longer refuses: it lands on v4.0.0, the root's first legal release
+// (#134) — covered separately below.
 func TestRun_RealRepository(t *testing.T) {
 	repoRoot := filepath.Join("..", "..", "..")
 	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
@@ -172,10 +179,12 @@ func TestRun_RealRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("major bump refuses root and every publisher", func(t *testing.T) {
+	t.Run("major bump refuses an already-tagged root", func(t *testing.T) {
 		dir := t.TempDir()
 		tagsFile := filepath.Join(dir, "tags.txt")
-		writeLines(t, tagsFile, []string{})
+		// v4.0.0 -bump major asks for v5.0.0, which the real root module's
+		// /v4 path suffix does not allow.
+		writeLines(t, tagsFile, []string{"v4.0.0"})
 		outDir := filepath.Join(dir, "out")
 
 		var stdout, stderr bytes.Buffer
@@ -187,7 +196,48 @@ func TestRun_RealRepository(t *testing.T) {
 			"-out-dir", outDir,
 		}, &stdout, &stderr)
 		if err == nil {
-			t.Fatal("expected a major bump to be refused for the root or a publisher")
+			t.Fatal("expected a major bump to be refused for the already-tagged root")
+		}
+	})
+
+	t.Run("major bump from no tags gives the root its first release, v4.0.0", func(t *testing.T) {
+		// The fix for #134: with no tag at all, the root's /v4 path suffix
+		// means there is no earlier v4 release to bump from, so every
+		// valid bump kind — including major — lands on v4.0.0 itself,
+		// never a refusal and never v5.0.0.
+		dir := t.TempDir()
+		tagsFile := filepath.Join(dir, "tags.txt")
+		writeLines(t, tagsFile, []string{})
+		outDir := filepath.Join(dir, "out")
+
+		var stdout, stderr bytes.Buffer
+		if err := run([]string{
+			"-repo-root", repoRoot,
+			"-release", releaseFile,
+			"-tags", tagsFile,
+			"-bump", "major",
+			"-out-dir", outDir,
+		}, &stdout, &stderr); err != nil {
+			t.Fatalf("run: %v (stderr: %s)", err, stderr.String())
+		}
+
+		planBytes, err := os.ReadFile(filepath.Join(outDir, "plan.json"))
+		if err != nil {
+			t.Fatalf("reading plan.json: %v", err)
+		}
+		var doc struct {
+			Modules []struct {
+				Dir     string `json:"dir"`
+				NextTag string `json:"nextTag"`
+			} `json:"modules"`
+		}
+		if err := json.Unmarshal(planBytes, &doc); err != nil {
+			t.Fatalf("decoding plan.json: %v", err)
+		}
+		for _, m := range doc.Modules {
+			if m.Dir == "." && m.NextTag != "v4.0.0" {
+				t.Fatalf("root nextTag = %q, want v4.0.0", m.NextTag)
+			}
 		}
 	})
 }

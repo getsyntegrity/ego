@@ -122,10 +122,12 @@ func latestTag(dir string, tags []string) (v semver, tag string, found bool) {
 
 // noTagBaseline is the synthetic "current version" nextTag bumps from
 // when no existing tag matches a module's prefix. A path with a "/vN"
-// suffix starts at vN.0.0, the only major D2 (a) allows for it. A path
-// without a suffix starts at 0.0.0, which is what release.yml does today
-// for a publisher with no tag (CURRENT="0.0.0"), so a first patch is
-// v0.0.1 and a first major is v1.0.0, both legal without a suffix.
+// suffix starts at vN.0.0, the only major D2 (a) allows for it — and,
+// per nextTag, that baseline IS the first release itself for such a
+// module, never something bumped further. A path without a suffix starts
+// at 0.0.0, which is what release.yml does today for a publisher with no
+// tag (CURRENT="0.0.0"), so a first patch is v0.0.1 and a first major is
+// v1.0.0, both legal without a suffix.
 //
 // Rejected: starting a suffix-less module at 1.0.0, so that an untagged
 // "-bump major" is refused at once. It would make every first release a
@@ -175,6 +177,19 @@ func validateMajor(modPath string, major int) error {
 // ("patch", "minor" or "major"). It returns the current tag (empty when
 // none exists) and the next version, or a refusal naming dir, modPath and
 // the requested version when the computed major violates D2 (a).
+//
+// A module with no tag at all and a "/vN" path suffix has no earlier vN
+// release to bump from, so its next tag is exactly vN.0.0 for every valid
+// bump kind — never vN.0.1, vN.1.0 or v(N+1).0.0. An invalid bump kind is
+// still an error (bumpVersion below validates it before this case is
+// applied). A module without a suffix, or one that already has a
+// matching tag, is unaffected and keeps bumping normally.
+//
+// Rejected: keeping "always bump the synthetic baseline" and special-
+// casing only "-bump major" (the one case that currently errors). That
+// would leave the patch and minor cases silently advertising vN.0.1 /
+// vN.1.0 — a version nobody chose — on every dry run of an untagged
+// module, which is the actual defect this function fixes.
 func nextTag(dir, modPath string, tags []string, bumpKind string) (currentTag string, next semver, err error) {
 	base, curTag, found := latestTag(dir, tags)
 	if !found {
@@ -185,6 +200,13 @@ func nextTag(dir, modPath string, tags []string, bumpKind string) (currentTag st
 	if err != nil {
 		return "", semver{}, fmt.Errorf("module %s (%s): %w", dir, modPath, err)
 	}
+
+	if !found {
+		if _, ok := moduleSuffixMajor(modPath); ok {
+			next = base
+		}
+	}
+
 	if err := validateMajor(modPath, next.major); err != nil {
 		return "", semver{}, fmt.Errorf("module %s (%s): refusing tag %s%s: %w", dir, modPath, tagPrefix(dir), next.String(), err)
 	}
