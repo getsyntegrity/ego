@@ -50,7 +50,7 @@ Where #166's final text differs from this summary, #166 wins, and this spec is r
 ## Dependencies
 
 - Spec 2 merged (tenancy).
-- **[#166](https://github.com/getsyntegrity/ego/issues/166) settled**: the extension and the key granularity (blocking). This spec does not decide the key granularity; it depends on #166 for it.
+- **[#166](https://github.com/getsyntegrity/ego/issues/166)'s GoAkt implementation merged**: the extension and the key granularity (blocking), since task 3 runs the erasure scenario on both roots. This spec does not decide the key granularity; it depends on #166 for it.
 
 ## Next in the chain
 
