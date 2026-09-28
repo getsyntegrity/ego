@@ -618,7 +618,7 @@ that does not depend on GitHub Actions, so a later portable pipeline
 {
   "global": false,
   "reasons": ["affected by 1 changed package(s)"],
-  "root": {"mode": "affected", "selected": ["github.com/getsyntegrity/ego/v4", "…"]},
+  "root": {"mode": "affected", "selected": ["github.com/getsyntegrity/ego/v4/engine", "…"]},
   "modules": [
     {"dir": ".", "path": "github.com/getsyntegrity/ego/v4", "selected": true,
      "reason": "affected by 1 changed package(s)", "chain": ["."]},
