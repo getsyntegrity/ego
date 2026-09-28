@@ -267,20 +267,51 @@ but pushing/PR is out of scope for this session regardless).
   Commit, no AI-attribution trailer; only
   `.github/workflows/release-publishers.yml` and this task file staged).
 
-- [ ] **T5 — Docs.** `docs/ci.md`: rewrite the "Version policy" description
-  of the flow (two-stage: prepare-branch job stops before tagging,
-  `release-publishers.yml` tags) and replace the closing "known,
-  pre-existing limitation" paragraph (the `GH006` direct-push conflict) with
-  a description of the resolved flow — human opens the PR, no
-  approval-free CI because a human opened it, how to dry-run the
-  continuation without publishing, the continuation's inputs. Leave T2's
-  retry-classification paragraph as T2 already wrote it.
-  `docs/main-branch-policy.md`: replace the "Known conflict with
-  release.yml" paragraph with the resolved flow (no more direct push;
-  bump branch + human PR + explicit dispatched continuation).
-  Check: docs read cleanly (plain prose, real paths/commands per the user's
-  document-readability rules); no leftover reference to `git push origin
-  HEAD:main` as current behavior.
+- [x] **T5 — Docs.** `docs/ci.md`: rewrote the "Version policy" section's
+  flow description into three named stages (Stage 1: `release.yml`'s
+  `prepare-publisher-bump` job bumps and pushes only
+  `release/publishers-<tag>`, never `main`, never a tag; Stage 2: a human
+  runs the printed `gh pr create` command, so the PR goes through ordinary
+  `CI Gate` review — no approval-bypass machinery needed because a human
+  opened it; Stage 3: a human dispatches `release-publishers.yml`
+  `workflow_dispatch` with `sha`/`ego_version`/`bump`/`dry_run`, where
+  `dry_run: true` (default) safely previews every precondition check and
+  `dry_run: false` does the real tag/push/release). Replaced the closing
+  "known, pre-existing limitation" paragraph with "How the
+  publisher-bump-vs-branch-protection conflict was resolved" — kept as
+  history (what `release-publishers` used to do, the `GH006` failure mode
+  it would have hit) followed by the resolution, pointing back to
+  "Version policy" instead of duplicating it. Also fixed one more stale
+  claim found while verifying: the "Release gate" section's job-chain
+  sentence still said `gate → release-ego → release-publishers` "does the
+  publisher bumps and tags" — updated to name `prepare-publisher-bump` and
+  say it only pushes a branch (in scope per this task's own verification
+  instruction: "no leftover claim that publishers are pushed/tagged
+  directly by release.yml anymore").
+  `docs/main-branch-policy.md`: replaced the "Known conflict with
+  release.yml" paragraph (4 sentences, same concreteness as the rest of
+  the document — names `prepare-publisher-bump`, `release/publishers-<tag>`,
+  `release-publishers.yml`) with "Resolved: the publisher bump no longer
+  touches `main` directly", pointing to `docs/ci.md`'s "Version policy"
+  for the full three-stage flow.
+  Verification (observed): re-read both files after editing — no leftover
+  claim that publishers are pushed/tagged directly by `release.yml`; no
+  leftover "open maintainer decision" framing (`rg -n "open maintainer
+  decision" docs/ci.md docs/main-branch-policy.md` → no matches); every
+  command/job/file name checked against the actual `release.yml` and
+  `release-publishers.yml` content read fresh in this task (not
+  paraphrased from T1/T4's notes). `rg -n 'push origin HEAD:main'
+  docs/ci.md docs/main-branch-policy.md` → 2 matches, both inside
+  sentences describing the old job in the past tense ("used to... push",
+  "ran... pushed the result straight to `main` with `git push origin
+  HEAD:main`"), never as current behavior.
+  Commit: see repo `git log -1` on this branch (single Conventional
+  Commit, `docs(ci): document the publisher bump-branch and dispatched
+  tag flow (#159)`, no AI-attribution trailer; only `docs/ci.md`,
+  `docs/main-branch-policy.md` and this task file staged) — not hardcoded
+  here because amending this same commit to add this note would change
+  its own hash on every edit; the exact SHA is reported in the session's
+  final report to the user instead.
 
 ## Progress
 
@@ -407,4 +438,43 @@ but pushing/PR is out of scope for this session regardless).
   T4's own task entry above. Commit: see repo `git log -1` on this branch
   (single Conventional Commit, no AI-attribution trailer; only
   `.github/workflows/release-publishers.yml` and this task file staged).
-- Next: T5.
+- **T5 done.** See T5's task entry above for the full detail. Files
+  touched: `docs/ci.md`, `docs/main-branch-policy.md`, this task file.
+  Commit: see repo `git log -1` on this branch (same self-reference note
+  as T5's own entry above).
+
+## All tasks complete
+
+T1-T5 are all done on branch `ci/159-publisher-bump-flow`, one
+Conventional Commit each, no AI-attribution trailer, nothing pushed, no
+PR opened, no tags created — delivery remains the coordinator's decision
+per the Delivery section above. Commits in order:
+
+1. `4cb7cf0` — T1: split `release.yml`'s publisher job into
+   `prepare-publisher-bump`, which now stops after pushing a
+   `release/publishers-<tag>` branch (no push to `main`, no publisher
+   tags/releases).
+2. `6fbc2d3` — T2: `internal/cmd/releasegate` fails fast on permanent
+   GitHub API errors (401/404/non-rate-limited 403) instead of retrying
+   until the timeout (PR #171 follow-up).
+3. `c32fb7e` — T3: `internal/cmd/releaseplan` gains the continuation
+   decision logic (SHA/version validation, required-root-version check,
+   publishers-only tag computation, tag-conflict check) the dispatched
+   continuation workflow needs.
+4. `8235017` — T4: new `.github/workflows/release-publishers.yml`
+   (`workflow_dispatch`-only), the explicit, human-triggered continuation
+   that validates every precondition and, unless `dry_run`, creates and
+   pushes the publisher tags and their GitHub releases.
+5. (see `git log -1` on this branch) — T5: `docs/ci.md` and
+   `docs/main-branch-policy.md` now describe the resolved three-stage flow
+   (bump branch → human-merged PR → dispatched tagging continuation)
+   instead of the old single-job direct-push design and its `GH006`
+   conflict. (Not hardcoded: this commit's own hash changes on every
+   amend needed to add this note, so it is reported as the session's
+   final commit SHA in the report to the user instead of embedded here.)
+
+End state: `release.yml` never pushes to `main` and never opens a PR;
+publishers are tagged only from a commit that already passed `build.yml`
+on `main`, through an explicit, auditable, human-dispatched step. The
+binding maintainer decisions from the Problem/Why sections above are all
+satisfied.

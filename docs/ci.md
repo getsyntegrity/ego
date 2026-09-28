@@ -1205,12 +1205,63 @@ checks both, separately:
 - The root module is released first, as a semantic-version tag `v4.x.y`.
 - Each publisher module is released only against a root version that
   already exists on the module proxy — never against an unpublished
-  version, and never verified only through the local `replace`.
-  `release.yml` discovers which directories under `publisher/` to release
-  from `publisher/*/go.mod` (never a hand-written list), updates each
-  one's `github.com/pablogore/ego/v4` requirement to the just-published
-  root tag, runs `verify-published.sh` against it, and only then tags
-  `publisher/<name>/vX.Y.Z`.
+  version, and never verified only through the local `replace`. Getting a
+  publisher from "root just tagged" to "publisher tagged and released" is
+  a three-stage flow, not one job, because `main`'s branch protection
+  (`docs/main-branch-policy.md`) does not let any workflow push a commit
+  to `main` or open a pull request on its own.
+
+  **Stage 1 — `release.yml`'s `prepare-publisher-bump` job.** Still
+  triggered by pushing a root `v*` tag, and still running after `gate`
+  and `release-ego` (see "Release gate" below). It discovers which
+  directories under `publisher/` to release from `publisher/*/go.mod`
+  (never a hand-written list), then for each one runs
+  `go get github.com/pablogore/ego/v4@<tag>`, `go mod tidy` and
+  `scripts/ci/verify-published.sh`, exactly as before this change. What
+  changed is what happens to the result: instead of committing and
+  pushing straight to `main`, the job creates a branch
+  `release/publishers-<tag>` from `origin/main`, commits the bumped
+  `go.mod`/`go.sum` on it, and pushes only that branch — never `main`,
+  and no publisher tag or GitHub release is created in this job. Its step
+  summary prints the compare link and the exact command to open the PR by
+  hand, for example:
+
+  ```bash
+  gh pr create --base main --head release/publishers-v4.5.0 \
+    --title "chore(publishers): update ego dependency to v4.5.0" \
+    --body "..."
+  ```
+
+  **Stage 2 — a human opens and merges the bump PR.** Because a person,
+  not a bot, runs that `gh pr create` command, the pull request is
+  ordinary: it goes through the same required `CI Gate` check and the
+  same review conventions as any other PR into `main`
+  (`docs/main-branch-policy.md`). This is also why no CI approval-bypass
+  machinery is needed anywhere in this flow — nothing here ever tries to
+  push to or merge into `main` on its own.
+
+  **Stage 3 — the dispatched `release-publishers.yml` continuation.**
+  Once the bump PR is merged, someone with repository access manually
+  dispatches `.github/workflows/release-publishers.yml`
+  (`workflow_dispatch`) with four inputs: `sha` (the merge commit on
+  `main`), `ego_version` (the root tag the publishers must require, e.g.
+  `v4.5.0`), `bump` (`patch`/`minor`/`major`, default `patch`), and
+  `dry_run` (boolean, default `true`). The workflow validates every
+  precondition before doing anything: `sha` and `ego_version` are
+  well-formed, `sha` is genuinely reachable from `origin/main`,
+  `build.yml` completed successfully for that exact `sha` (reusing the
+  same `internal/cmd/releasegate` check "Release gate" below describes),
+  every released publisher's `go.mod` actually requires the root at
+  `ego_version`, and none of the tags it is about to create already
+  exist locally or on `origin`. `dry_run: true` (the default) is safe to
+  run at any time — it runs every one of those checks and prints the
+  resulting plan (exactly which publisher tags would be created) without
+  creating anything. Setting `dry_run: false` performs the real work: it
+  re-checks ancestry and tag conflicts once more immediately before
+  tagging (origin state can move between planning and tagging), then
+  creates the publisher tags at `sha`, pushes them atomically, and
+  creates their GitHub releases — the same `gh release create` step the
+  old single-stage job used to run, preserved verbatim.
 - `benchmark`, `example/cluster` and `test/compat` are never released.
   They exist only as integrated-verification consumers (`verify-module.sh`
   covers them in the PR and `main` lanes) and keep their `replace`
@@ -1219,14 +1270,17 @@ checks both, separately:
   and while it is listed here; `release.yml` only releases
   `publisher/*`.
 
-This section describes what `release.yml` does today, unchanged by this
-PR (#159, F4 PR-A): it hard-codes the root module path and has no
+This section describes what `release.yml` and `release-publishers.yml` do
+today. `release.yml` still hard-codes the root module path and has no
 explicit notion of release order or of a tag's major version matching its
 module path's `/vN` suffix. `internal/cmd/releaseplan` (see "Release plan
 dry run (releaseplan)" above) computes the same root-first order and the
-D2 (a) tag scheme from `scripts/ci/release-modules.txt` and each
-module's own `go.mod`, but only as a dry run on `main` — it does not yet
-drive a real release; that remains a later PR.
+D2 (a) tag scheme from `scripts/ci/release-modules.txt` and each module's
+own `go.mod` for the `build.yml` dry run; `release-publishers.yml` reuses
+that same package's decision logic — extended with the continuation
+checks named above (SHA/version format, required-version, publishers-only
+tag computation, tag-conflict detection) — for the real tag computation
+in stage 3, instead of duplicating that logic in shell.
 
 ### Toolchain requirements
 
@@ -1255,11 +1309,13 @@ whole publish chain would run anyway.
 
 `.github/workflows/release.yml` now runs a `gate` job first, before
 `release-ego` (which creates the GitHub Release) and before
-`release-publishers` (which needs `release-ego` and does the publisher
-bumps and tags): `gate → release-ego → release-publishers`. `gate` fails
-the whole workflow — nothing downstream ever starts — unless the exact
-tagged commit both is on `main` and has a `build.yml` run that completed
-with conclusion `success`.
+`prepare-publisher-bump` (which needs `release-ego` and, as of #159 F4
+PR-C, only bumps each publisher's `go.mod`/`go.sum` and pushes a
+`release/publishers-<tag>` branch — it creates no publisher tags itself;
+see "Version policy" above): `gate → release-ego →
+prepare-publisher-bump`. `gate` fails the whole workflow — nothing
+downstream ever starts — unless the exact tagged commit both is on `main`
+and has a `build.yml` run that completed with conclusion `success`.
 
 **Why the exact SHA, not "a recent green build."** A green `build.yml` run
 on a *different* commit — an earlier commit on the same branch, or a
@@ -1446,19 +1502,23 @@ instead (`TestDecide_CancelledConclusionFails`,
 `decision_test.go`), which do not depend on any particular commit's real
 CI history continuing to exist.
 
-**A known, pre-existing limitation this gate does not fix.** After
-`release-ego`, the `release-publishers` job (`release.yml:169-170` before
-this change, an existing step this change does not touch) commits each
-publisher's bumped `go.mod`/`go.sum` and runs `git push origin HEAD:main`
-directly. `main` is a protected branch with a required, strict status
-check ("CI Gate," see "The `ci-gate` job" above) and
-`enforce_admins: true`. A direct push of a brand-new commit that has never
-run through "CI Gate" is rejected by GitHub with `GH006: Protected branch
-update failed`. This gate does not change that step's logic or order —
-the maintainer asked for it to stay untouched — so this conflict remains
-open and needs a maintainer decision (for example: route that commit
-through a short-lived branch and a fast-forward-only merge, or grant the
-release workflow's token a documented, audited bypass of the required
-check for that one push). Filed here rather than silently worked around,
-since silently bypassing branch protection was explicitly out of scope
-for this change.
+**How the publisher-bump-vs-branch-protection conflict was resolved.**
+Until #159's F4 PR-C, the `release-publishers` job (`release.yml:169-170`
+at the time) ran right after `release-ego`, committed each publisher's
+bumped `go.mod`/`go.sum`, and pushed the result straight to `main` with
+`git push origin HEAD:main`. `main` is a protected branch with a
+required, strict status check ("CI Gate," see "The `ci-gate` job" above)
+and `enforce_admins: true`, so a direct push of a brand-new commit that
+had never run through "CI Gate" would have been rejected by GitHub with
+`GH006: Protected branch update failed`. The gate work described in this
+section deliberately left that step untouched at the time — the conflict
+was filed here as open, rather than silently worked around.
+
+It is resolved now. `release.yml`'s publisher job (renamed
+`prepare-publisher-bump`) no longer pushes to `main` at all, and no
+workflow opens a pull request on its own. See "Version policy" above for
+the resulting three-stage flow: `release.yml` pushes a bump branch, a
+human opens and merges the ordinary, normally-reviewed pull request it
+prints the command for, and an explicitly dispatched
+`release-publishers.yml` run does the actual publisher tagging once that
+PR has landed on `main`.
