@@ -49,12 +49,18 @@ matrix is empty, the `modules` job is *skipped*, not green.
 - [x] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
 - [x] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
 - [x] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
-- [ ] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6).
+- [x] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6). Evidence:
+  `docs/ci/baseline-159-a1.md` (measured by a delegated read-only agent at `57c4b11`, local paths and
+  machine notes removed) and the "Running the plan outside GitHub Actions" section of `docs/ci.md`.
+  Check: structural readback (docs only).
 
 ## Follow-up chain (not in this spec)
 
 - **Spec 2 (#159 C5):** re-measure with the A1 scenarios on real PR runs after spec 1 merges; retire
   the old flow only with no false negatives and a measured gain.
+- **Finding from A1 for spec 2:** 4 of 5 sampled PRs ran in full mode because any root-dir `.go` file is
+  a full-fallback path in `selector/classify.go`. Refining that rule is possible only while the root
+  package exists; #124 removes the cause.
 - **Blocked on human decisions or other work:** A2 (D1 module path and F4 release — a decision), A3
   (#102 S2/S3), A4 (#147/#148; #148 implementation is not yet authorized), A5 (`testkit`, after A3),
   A6 (#124, needs a major version).

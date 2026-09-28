@@ -198,6 +198,38 @@ on `main` and an `affected` run on a PR.
   `summary.md`. `none` is reserved for changes that are provably
   documentation/governance or satellite-only.
 
+### Running the plan outside GitHub Actions (#159, C6)
+
+The impact plan does not depend on GitHub Actions. `ciselect` reads a plain
+newline-separated list of changed paths and writes its whole decision to a
+directory, so any CI engine (including a future Shipwright pipeline, #38)
+or a developer can compute the same plan the `plan` job computes:
+
+```sh
+git diff --name-only --no-renames "$(git merge-base origin/main HEAD)...HEAD" > /tmp/changed.txt
+GOWORK=off go run ./internal/cmd/ciselect \
+  -changed /tmp/changed.txt \
+  -base "$(git merge-base origin/main HEAD)" \
+  -out-dir /tmp/ci
+cat /tmp/ci/summary.md      # human-readable: each module, why it was selected, what runs
+cat /tmp/ci/modules.json    # the matrix: selected module dirs, "." (root) first when selected
+cat /tmp/ci/plan.json       # machine-readable: every module, selected or not, with its reason chain
+```
+
+`-all -reason "<why>"` produces the full plan used by `main`, release and
+manual runs. A non-zero exit is a planning failure: callers must fall back
+to `-all` (as the `plan` job does) or fail; they must never run less.
+
+The measurements that motivated this split (module graph, `go list -deps`
+closures, per-job timings with run IDs, and the selector's output for a
+publisher leaf, a shared contract, `testkit` and a runtime package) are
+recorded in [`docs/ci/baseline-159-a1.md`](ci/baseline-159-a1.md). The
+headline: in full mode about 92% of the root job is the test step, and
+most pull requests reach full mode because any `.go` file directly in the
+repository root is a full-fallback path. Emptying the root (#124) is what
+unlocks most of the saving; this spec only removes the unconditional
+prerequisite work.
+
 ## Architecture boundary check
 
 Both workflows run `go run ./internal/cmd/archcheck` right after dependencies are installed and before the linter, so a broken layer boundary fails the run in seconds instead of after the test suite. It enforces the dependency rules of the ego-arch-001 ADR (`openspec/changes/ego-arch-001/design.md` §3), tracked by [#107](https://github.com/getsyntegrity/ego/issues/107).
