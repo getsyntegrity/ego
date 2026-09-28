@@ -189,3 +189,59 @@ and merge are the coordinator's/user's decision, not this session's.
 - `actionlint .github/workflows/release.yml`
 - real read-only dry runs against `getsyntegrity/ego`
 - `git diff --stat origin/main...HEAD`
+
+## Review fixes (PR #171, independent review, 2026-09-28)
+
+PR #171 (this branch, head `0792efd`, pushed to origin) got an independent
+review: two majors, one minor. Fixed in this worktree, not pushed (the
+coordinator pushes). Three small, bounded fixes — kept as their own round
+rather than growing the original 5-task plan past its cap.
+
+- [x] **R1 (MAJOR) — re-run recency.** `decision.go` sorted "most recent"
+  by `CreatedAt` then `ID`, but re-running a workflow run keeps the same
+  `id` and the same `created_at`; only `run_started_at`/`updated_at`/
+  `run_attempt` change (verified on real run 35120281495, `run_attempt`
+  2 — confirmed live via `gh api repos/getsyntegrity/ego/actions/runs/35120281495`:
+  `created_at` 2026-09-16T16:11:21Z, `run_started_at`
+  2026-09-16T16:22:19Z). Added `RunStartedAt`/`RunAttempt` to `Run`
+  (decision.go) and `apiRun` (client.go, same field order for the
+  `Run(a)` conversion); added `effectiveStart()`; sort by effective start
+  time (`RunStartedAt`, falling back to `CreatedAt`), then `RunAttempt`,
+  then `ID`, all descending. RED observed: compile failure,
+  `RunStartedAt`/`RunAttempt` undefined on `Run`. GREEN:
+  `TestDecide_RerunRecency` (3 subtests: older-created-then-failing-re-run
+  → Fail, symmetric now-succeeding → Pass, in-progress re-run → Wait),
+  `TestDecide_MissingRunStartedAtFallsBackToCreatedAt`, plus
+  `TestClient_ListBuildRuns_SinglePage` extended to assert
+  `run_started_at`/`run_attempt` decode correctly. Full suite: 30/30
+  PASS. `go vet` clean, `staticcheck` 0 findings, `gofmt -l` clean.
+  Updated docs/ci.md's "most recent completed run governs" section with
+  the corrected tie-break and the real run-35120281495 evidence. Commit:
+  (recorded below).
+- [ ] **R2 (MAJOR) — transient API errors.** `waitForGate` returned
+  immediately on any `ListBuildRuns` error. Now treated as retryable
+  inside the bounded wait: log it, sleep (clamped, see R3), retry until
+  the deadline; at the deadline, fail naming the last fetch error and/or
+  the last verdict reason, whichever is available. Still fail-closed:
+  `Pass` is only ever returned right after a successful fetch whose
+  `Decide` result is `Pass`. Tests: N transient errors then a successful
+  `Pass` fetch → `Pass`; errors persisting past the deadline → `Fail`
+  naming the error.
+- [ ] **R3 (minor) — clamp sleep to the deadline.** Each poll's sleep is
+  now clamped to whatever time remains before the deadline, so a large
+  `-interval` can never sleep past it. Test: `-timeout 1m -interval 10m`
+  against an always-pending fixture sleeps exactly once, for exactly the
+  1m remaining, not 10m.
+
+### Verification (review fixes)
+
+- `go test -count=1 ./internal/cmd/releasegate/...`
+- `go vet ./internal/cmd/releasegate/...`
+- `staticcheck ./internal/cmd/releasegate/...`
+- `gofmt -l internal/cmd/releasegate/`
+- `actionlint .github/workflows/release.yml` (only if release.yml
+  changed — it should not for these fixes)
+- real read-only dry run: `-sha 8b3962acc109ac06da3a4ada4c3186be7d46cfa5
+  -on-main=true -timeout 0` → PASS; `-sha
+  ddf9337092a5b4e43a6d90897914f34ed52f453f -on-main=true -timeout 0` →
+  FAIL

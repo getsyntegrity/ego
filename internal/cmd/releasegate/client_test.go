@@ -41,7 +41,7 @@ func TestClient_ListBuildRuns_SinglePage(t *testing.T) {
 			t.Errorf("head_sha query param = %q, want %q", r.URL.Query().Get("head_sha"), sha)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"total_count":1,"workflow_runs":[{"id":36420765355,"head_sha":"`+sha+`","event":"push","status":"completed","conclusion":"success","created_at":"2026-09-28T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/36420765355"}]}`)
+		fmt.Fprint(w, `{"total_count":1,"workflow_runs":[{"id":36420765355,"head_sha":"`+sha+`","event":"push","status":"completed","conclusion":"success","created_at":"2026-09-28T10:00:00Z","run_started_at":"2026-09-28T10:05:00Z","run_attempt":2,"html_url":"https://github.com/o/r/actions/runs/36420765355"}]}`)
 	}))
 	defer srv.Close()
 
@@ -55,6 +55,13 @@ func TestClient_ListBuildRuns_SinglePage(t *testing.T) {
 	}
 	if runs[0].ID != 36420765355 || runs[0].HeadSHA != sha || runs[0].Conclusion != "success" {
 		t.Fatalf("runs[0] = %+v, unexpected", runs[0])
+	}
+	if runs[0].RunAttempt != 2 {
+		t.Fatalf("runs[0].RunAttempt = %d, want 2", runs[0].RunAttempt)
+	}
+	wantRunStartedAt := mustTime(t, "2026-09-28T10:05:00Z")
+	if !runs[0].RunStartedAt.Equal(wantRunStartedAt) {
+		t.Fatalf("runs[0].RunStartedAt = %v, want %v", runs[0].RunStartedAt, wantRunStartedAt)
 	}
 	if !strings.HasPrefix(gotPath, "/repos/getsyntegrity/ego/actions/workflows/build.yml/runs?") {
 		t.Fatalf("request path = %q, want the build.yml runs endpoint", gotPath)

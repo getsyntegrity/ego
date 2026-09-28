@@ -87,6 +87,22 @@ type Run struct {
 	Status     string // "queued", "in_progress", "completed", ...
 	Conclusion string // meaningful only when Status == "completed": "success", "failure", "cancelled", "skipped", "timed_out", ...
 	CreatedAt  time.Time
+	// RunStartedAt is when this run's CURRENT attempt actually started
+	// executing — GitHub's own "run_started_at" field. Re-running a
+	// workflow run (from the Actions UI, the API, or `gh run rerun`) keeps
+	// the same run ID and the same CreatedAt (when the run object was
+	// first recorded), but advances RunStartedAt and RunAttempt to the new
+	// attempt. Decide sorts by RunStartedAt (falling back to CreatedAt
+	// when RunStartedAt is zero), not CreatedAt, exactly so a re-run's
+	// fresher evidence outranks an older, never-rerun run that merely has
+	// a later CreatedAt. See decision.go's Decide doc comment and
+	// docs/ci.md, "Release gate," for the real run this was verified
+	// against (run 35120281495, run_attempt 2).
+	RunStartedAt time.Time
+	// RunAttempt is GitHub's 1-based attempt counter for this run; it only
+	// ever increases when the same run is re-run. Used as Decide's
+	// tiebreaker when two runs report the identical effective start time.
+	RunAttempt int
 	HTMLURL    string
 }
 
@@ -96,6 +112,18 @@ type Run struct {
 type Result struct {
 	Verdict Verdict
 	Reason  string
+}
+
+// effectiveStart is the timestamp Decide's ordering treats as "when this
+// run's most current evidence became available": RunStartedAt when GitHub
+// reported one, or CreatedAt otherwise (a real API response always
+// includes run_started_at, but a hand-built fixture or an unusually old
+// run might not).
+func effectiveStart(r Run) time.Time {
+	if !r.RunStartedAt.IsZero() {
+		return r.RunStartedAt
+	}
+	return r.CreatedAt
 }
 
 // Decide is the release gate's pure decision function. It has no I/O and no
@@ -115,13 +143,19 @@ type Result struct {
 //
 // Rule (see docs/ci.md, "Release gate", for the two rejected alternatives
 // and why): among the runs matching sha, the MOST RECENT one governs,
-// ordered by CreatedAt (ties broken by the higher, and therefore later,
-// run ID — GitHub Actions run IDs are assigned monotonically instance-wide,
-// so this is a safe, simpler tiebreaker than parsing sub-second timestamp
-// precision). If that latest run has not completed, the outcome is Wait
-// regardless of what any older run for the same SHA concluded — a newer
-// run in flight might still turn out to be a duplicate re-run that
-// resolves either way, and true certainty means the newest evidence.
+// ordered by effective start time — RunStartedAt, falling back to
+// CreatedAt when RunStartedAt is zero (see Run's doc comment) — descending;
+// ties broken by the higher RunAttempt, then by the higher (and therefore
+// later) run ID. RunStartedAt, not CreatedAt, is what "most recent" means
+// here: re-running a workflow run keeps its original CreatedAt but
+// advances RunStartedAt and RunAttempt, so a run that was re-run after
+// another run's CreatedAt is nonetheless the fresher evidence, and
+// CreatedAt alone would rank the two backwards (verified against real run
+// 35120281495, run_attempt 2 — see docs/ci.md). If that latest run has not
+// completed, the outcome is Wait regardless of what any older run for the
+// same SHA concluded — a newer run in flight might still turn out to be a
+// duplicate re-run that resolves either way, and true certainty means the
+// newest evidence.
 func Decide(sha string, onMain bool, runs []Run) Result {
 	if !onMain {
 		return Result{
@@ -144,8 +178,12 @@ func Decide(sha string, onMain bool, runs []Run) Result {
 	}
 
 	sort.SliceStable(matching, func(i, j int) bool {
-		if !matching[i].CreatedAt.Equal(matching[j].CreatedAt) {
-			return matching[i].CreatedAt.After(matching[j].CreatedAt)
+		si, sj := effectiveStart(matching[i]), effectiveStart(matching[j])
+		if !si.Equal(sj) {
+			return si.After(sj)
+		}
+		if matching[i].RunAttempt != matching[j].RunAttempt {
+			return matching[i].RunAttempt > matching[j].RunAttempt
 		}
 		return matching[i].ID > matching[j].ID
 	})

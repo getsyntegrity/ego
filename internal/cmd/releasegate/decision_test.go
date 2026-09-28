@@ -167,3 +167,81 @@ func TestDecide_MostRecentCompletedRunGoverns(t *testing.T) {
 		}
 	})
 }
+
+// TestDecide_RerunRecency covers GitHub's real re-run behavior (verified
+// against real run 35120281495, run_attempt 2): re-running a workflow run
+// keeps its original id AND its original created_at (the time the run
+// object was first recorded); only run_started_at, updated_at, and
+// run_attempt change to reflect the later re-run. Sorting by CreatedAt
+// alone (the pre-fix rule) can therefore rank a run that was never
+// re-run, but happens to have a later created_at, ABOVE a run that WAS
+// re-run afterward and so carries the actually most recent evidence. The
+// fix sorts by an effective start time (RunStartedAt, falling back to
+// CreatedAt when RunStartedAt is zero — see
+// TestDecide_MissingRunStartedAtFallsBackToCreatedAt), then RunAttempt,
+// then ID.
+func TestDecide_RerunRecency(t *testing.T) {
+	// runA was created first (T09:00) but was manually re-run at T11:00
+	// (its run_started_at), after runB (created at T10:00, never re-run)
+	// already completed. runA's later re-run is the true latest evidence
+	// for this SHA, even though runA's own CreatedAt is older than runB's.
+	runA := func(status, conclusion string) Run {
+		return Run{
+			ID:           1,
+			HeadSHA:      sha,
+			Status:       status,
+			Conclusion:   conclusion,
+			CreatedAt:    mustTime(t, "2026-09-28T09:00:00Z"),
+			RunStartedAt: mustTime(t, "2026-09-28T11:00:00Z"),
+			RunAttempt:   2,
+			HTMLURL:      "https://github.com/o/r/actions/runs/1",
+		}
+	}
+	runB := Run{
+		ID:           2,
+		HeadSHA:      sha,
+		Status:       "completed",
+		Conclusion:   "success",
+		CreatedAt:    mustTime(t, "2026-09-28T10:00:00Z"),
+		RunStartedAt: mustTime(t, "2026-09-28T10:00:00Z"),
+		RunAttempt:   1,
+	}
+
+	t.Run("older-created run re-run later and now failing governs (Fail)", func(t *testing.T) {
+		res := Decide(sha, true, []Run{runA("completed", "failure"), runB})
+		if res.Verdict != Fail {
+			t.Fatalf("Verdict = %v, want Fail (the later re-run must govern despite its older created_at); reason=%q", res.Verdict, res.Reason)
+		}
+	})
+
+	t.Run("symmetric: older-created run re-run later and now succeeding governs (Pass)", func(t *testing.T) {
+		runBFailed := runB
+		runBFailed.Conclusion = "failure"
+		res := Decide(sha, true, []Run{runA("completed", "success"), runBFailed})
+		if res.Verdict != Pass {
+			t.Fatalf("Verdict = %v, want Pass (the later re-run must govern despite its older created_at); reason=%q", res.Verdict, res.Reason)
+		}
+	})
+
+	t.Run("a re-run in progress (newest run_started_at) waits", func(t *testing.T) {
+		res := Decide(sha, true, []Run{runA("in_progress", ""), runB})
+		if res.Verdict != Wait {
+			t.Fatalf("Verdict = %v, want Wait; reason=%q", res.Verdict, res.Reason)
+		}
+	})
+}
+
+// TestDecide_MissingRunStartedAtFallsBackToCreatedAt documents that a run
+// with a zero-value RunStartedAt (never observed from the real API, but
+// possible from an older or truncated fixture) is ordered by CreatedAt
+// instead, preserving this package's pre-fix behavior for such runs.
+func TestDecide_MissingRunStartedAtFallsBackToCreatedAt(t *testing.T) {
+	runs := []Run{
+		{ID: 1, HeadSHA: sha, Status: "completed", Conclusion: "failure", CreatedAt: mustTime(t, "2026-09-28T09:00:00Z")},
+		{ID: 2, HeadSHA: sha, Status: "completed", Conclusion: "success", CreatedAt: mustTime(t, "2026-09-28T10:00:00Z")},
+	}
+	res := Decide(sha, true, runs)
+	if res.Verdict != Pass {
+		t.Fatalf("Verdict = %v, want Pass (run 2's later CreatedAt governs since neither run has RunStartedAt); reason=%q", res.Verdict, res.Reason)
+	}
+}

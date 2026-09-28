@@ -1235,8 +1235,22 @@ benefit over a `git` command the job already has the history for.
 **The most recent completed run governs.** Among the runs matching the
 exact SHA, `internal/cmd/releasegate`'s pure decision function,
 `Decide` (`internal/cmd/releasegate/decision.go`), looks only at the most
-recent one (by `created_at`, ties broken by the higher run ID, since
-GitHub Actions run IDs are assigned monotonically instance-wide):
+recent one — ordered by GitHub's `run_started_at` (when this run's current
+attempt actually started), not `created_at` (when the run object was
+first recorded), falling back to `created_at` only when `run_started_at`
+is absent; ties broken by the higher `run_attempt`, then by the higher
+run ID (GitHub Actions run IDs are assigned monotonically instance-wide).
+`created_at` alone is not enough: **re-running** a workflow run (from the
+Actions UI, the API, or `gh run rerun`) keeps the same run ID and the same
+`created_at`, but advances `run_started_at` and `run_attempt` — verified
+against real run
+[35120281495](https://github.com/getsyntegrity/ego/actions/runs/35120281495)
+(`run_attempt: 2`, `created_at` 2026-09-16T16:11:21Z, `run_started_at`
+2026-09-16T16:22:19Z, eleven minutes later). A run that was re-run *after*
+another run's `created_at` is the fresher evidence even though its own
+`created_at` is older; sorting by `created_at` alone would rank the two
+backwards and let a stale re-run's original, superseded result outvote
+the real most recent one.
 
 - If that latest run has not completed yet (`status` is `queued`,
   `in_progress`, `waiting`, `pending`, or `requested`), the gate **waits**

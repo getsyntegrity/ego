@@ -91,15 +91,21 @@ type runsResponse struct {
 	WorkflowRuns []apiRun `json:"workflow_runs"`
 }
 
-// apiRun mirrors one workflow run object's fields Decide needs.
+// apiRun mirrors one workflow run object's fields Decide needs. Its field
+// order and types must stay identical to Run's (only the json tags
+// differ): toRun below converts between them with a plain struct
+// conversion, which Go only allows when the two types have the same
+// underlying structure.
 type apiRun struct {
-	ID         int64     `json:"id"`
-	HeadSHA    string    `json:"head_sha"`
-	Event      string    `json:"event"`
-	Status     string    `json:"status"`
-	Conclusion string    `json:"conclusion"`
-	CreatedAt  time.Time `json:"created_at"`
-	HTMLURL    string    `json:"html_url"`
+	ID           int64     `json:"id"`
+	HeadSHA      string    `json:"head_sha"`
+	Event        string    `json:"event"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	CreatedAt    time.Time `json:"created_at"`
+	RunStartedAt time.Time `json:"run_started_at"`
+	RunAttempt   int       `json:"run_attempt"`
+	HTMLURL      string    `json:"html_url"`
 }
 
 // toRun converts apiRun to Run via a plain struct conversion: both types
