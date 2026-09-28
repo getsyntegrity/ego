@@ -106,6 +106,30 @@ jobs:
       - name: Install dependencies
         if: matrix.module == '.'
         run: go mod download
+      # Nested modules already get an explicit build+vet from
+      # scripts/ci/verify-module.sh; the root module previously had no
+      # equivalent explicit step of its own. archcheck (go list ./...) and
+      # the lint step below already cover the whole root module
+      # unconditionally, same as these two new steps — only
+      # scripts/ci/go-test.sh's test step is scoped to whatever ciselect
+      # selected (always every included package here, via -all). These two
+      # steps close the build/vet gap: `./...` from the repository root only
+      # ever lists root-module packages (every nested module has its own
+      # go.mod, so the go tool excludes it, and vendor/ is never listed
+      # either — verified with `GOROOT= GOWORK=off GOFLAGS=-mod=vendor go
+      # list ./...`, 0 matches for `publisher/` or `/vendor/`).
+      - name: Build (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: go build ./...
+      - name: Vet (root)
+        if: matrix.module == '.'
+        shell: bash
+        env:
+          GOFLAGS: -mod=vendor
+        run: go vet ./...
       - name: Check architecture boundaries
         if: matrix.module == '.'
         shell: bash

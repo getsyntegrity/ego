@@ -36,7 +36,8 @@ request that never needs the root module's own checks never pays for them:
   whenever the root lane is not `none`, exactly like any nested module (see
   "The `modules` matrix job" below). The root entry of the matrix downloads
   the `ciselect-plan` artifact (`actions/download-artifact`) and runs the
-  root module's own steps — vendoring and tidy, `archcheck`, lint,
+  root module's own steps — vendoring and tidy, an explicit `go build ./...`
+  and `go vet ./...` over the **whole** root module, `archcheck`, lint,
   `scripts/ci/go-test.sh` and the coverage summary — against the exact
   decision `plan` already made, instead of recomputing it: a second,
   independent `ciselect` run could in principle disagree with `plan`'s (a
@@ -73,13 +74,18 @@ request that never needs the root module's own checks never pays for them:
    output directory is uploaded as the `ciselect-plan` artifact for the
    root entry of `modules` to reuse.
 4. **`modules`, root entry** (`matrix.module == '.'`, present only when
-   `plan`'s `mode` is not `none`): vendoring and tidy, `archcheck`, lint,
-   then downloads `ciselect-plan` and **runs tests**:
+   `plan`'s `mode` is not `none`): vendoring and tidy, then an explicit
+   `go build ./...` and `go vet ./...` over the **whole** root module —
+   independent of whatever `ciselect` selected for this PR — then
+   `archcheck`, lint, then downloads `ciselect-plan` and **runs tests**:
    `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`, with
    `GO_TEST_RACE=1` (the race detector stays on for pull requests), plus
    `govulncheck -format json ./...` gated by `internal/cmd/vulngate` (see
    "Root module in the matrix" and "The govulncheck exception gate
-   (vulngate)" below).
+   (vulngate)" below). Build and vet always cover every root-module
+   package; only the test step is scoped to `ciselect`'s selection — in
+   `affected` mode that means the packages `ciselect` selected, in `full`
+   mode every included package (see "Modes and fail-safe rules" below).
 5. **Coverage summary**: when `coverage.out` was produced, the root entry
    runs `go tool cover -func=coverage.out`, takes its final `total:` line,
    and appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
@@ -98,12 +104,15 @@ runs `go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` —
 always the full suite, no change detection — appends the summary to the
 job summary the same way, and uploads it as `ciselect-plan`. `-all` always
 selects the root module (mode `full`, never `none`), so the root entry of
-`modules` always runs here too: it downloads `ciselect-plan`, then runs
-`scripts/ci/go-test.sh` with the race detector on,
-`govulncheck -format json ./...` gated by `internal/cmd/vulngate`, and
-appends the same coverage summary to the job summary. This is the
-mandatory gate and always runs the complete suite, root and every nested
-module.
+`modules` always runs here too: it downloads `ciselect-plan`, runs an
+explicit `go build ./...` and `go vet ./...` over the whole root module
+(the same unconditional steps `pull_request.yml`'s root entry runs), then
+`scripts/ci/go-test.sh` with the race detector on and every included
+package selected (`-all`'s `full` mode), `govulncheck -format json ./...`
+gated by `internal/cmd/vulngate`, and appends the same coverage summary to
+the job summary. This is the mandatory gate and always runs the complete
+suite, root and every nested module — `main` and `workflow_dispatch` never
+run in `affected` mode.
 
 ### `scripts/ci/go-test.sh`
 
@@ -720,11 +729,29 @@ the workflow:
 
 **Root-only steps.** Inside the `modules` job, every step that only makes
 sense for the root module (downloading the `ciselect-plan` artifact,
-`go mod tidy && go mod vendor`, `archcheck`, the root's own
+`go mod tidy && go mod vendor`, an explicit `go build ./...` and
+`go vet ./...` over the whole root module, `archcheck`, the root's own
 `golangci-lint-action` lint step, `scripts/ci/go-test.sh` and its coverage
 summary) is `if: matrix.module == '.'`; the `Verify module`
 (`scripts/ci/verify-module.sh`) step, and installing `golangci-lint`
-manually for it, are `if: matrix.module != '.'`. `govulncheck` is
+manually for it, are `if: matrix.module != '.'`. The explicit `Build
+(root)`/`Vet (root)` steps mirror what `verify-module.sh` already does for
+every nested module (its own `go build ./...`/`go vet ./...`, steps 3 and
+4) — until this change, the root module was the only one with no explicit
+build or vet step of its own. `archcheck` (`go list -e -json ./...` in
+`internal/cmd/archcheck/loader.go`) and the `golangci-lint-action` lint
+step already cover the whole root module unconditionally, same as the new
+build/vet steps; only `scripts/ci/go-test.sh`'s test step is scoped to
+`ciselect`'s selection — the packages it selected in `affected` mode, or
+every included package in `full` mode (see "Modes and fail-safe rules").
+Both new steps run with `GOFLAGS=-mod=vendor`, right after `go mod tidy &&
+go mod vendor` and `go mod download`, and before `archcheck`, so they see
+the same vendored dependency tree every later root step does; `./...` from
+the repository root lists only root-module packages — each nested module
+has its own `go.mod`, so the go tool already excludes it, and `vendor/`
+itself is never listed either (`GOROOT= GOWORK=off GOFLAGS=-mod=vendor
+go list ./...` returns 47 packages, 0 of them under `publisher/` or
+`vendor/`). `govulncheck` is
 installed once per matrix job unconditionally (both the root and every
 nested module need it), then run against the root with
 `GOFLAGS=-mod=vendor` right after its own coverage summary, and against

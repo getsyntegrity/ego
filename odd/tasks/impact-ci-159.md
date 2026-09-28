@@ -367,3 +367,54 @@ matrix is empty, the `modules` job is *skipped*, not green.
     allow-file fields, matching rules, how to add or retire an entry, the
     exact wiring).
 - **T3 follow-up `d440ffa`:** `internal/cmd/vulngate/` added to both global path lists (root lane full-fallback and module graph), so a change to the gate is verified against every module. RED: `TestModuleGraph_GlobalChange/internal/cmd/vulngate/main.go` and `TestSelect_Modules_CIPathChangeSelectsEveryModule` failed; GREEN after the change. `go test -count=1 ./internal/cmd/ciselect/... ./internal/cmd/vulngate/...` ok.
+- **T3 reopened — reason: root build/vet gap (user request after #167 run
+  36374007217/head 36860b2)**, then re-closed (commit below): when the root
+  module's matrix entry (`.`) runs, both workflows already ran vendor/tidy,
+  `archcheck`, the root's own lint, `scripts/ci/go-test.sh` (ciselect's
+  selected packages in a PR, every included package with `-all`), coverage
+  and `govulncheck`+`vulngate` — but never an explicit `go build ./...` nor
+  `go vet ./...` over the **whole** root module, independent of whatever
+  `ciselect` selected. Nested modules already got this from
+  `scripts/ci/verify-module.sh` (its own steps 3–4); the root module was the
+  only one without it.
+  - **Fix**: added a `Build (root)` and a `Vet (root)` step to both
+    `.github/workflows/pull_request.yml` and `.github/workflows/build.yml`,
+    `if: matrix.module == '.'`, `env: GOFLAGS: -mod=vendor` (matching every
+    other root-only step), placed right after `Install dependencies` (`go
+    mod download`, itself right after `go mod tidy && go mod vendor`) and
+    before `Check architecture boundaries`, so they see the same vendored
+    tree every later root step does and run before the PR's test selection.
+  - **Evidence `./...` from the root stays root-only**: nested modules each
+    carry their own `go.mod` (`benchmark`, `example/cluster`,
+    `publisher/{kafka,nats,pulsar,websocket}`, `test/compat`), so the go
+    tool already excludes them from the root's own `./...`, and `vendor/` is
+    never listed either. Confirmed, not assumed:
+    `GOROOT= GOWORK=off GOFLAGS=-mod=vendor go list ./...` printed 47
+    packages, 0 matching `publisher/`, 0 matching `/vendor/`.
+  - **`docs/ci.md`**: made explicit, in four places ("What each workflow
+    runs", the `pull_request.yml` numbered walkthrough, the `build.yml`
+    paragraph, and "Root module in the matrix" → "Root-only steps"), that
+    (a) build and vet always cover the whole root module whenever `.` is
+    selected, (b) tests run only the packages `ciselect` selected in a PR
+    (`affected` mode) or every included package in `full` mode, and (c)
+    main/`workflow_dispatch` always run the full suite via `-all`. Also
+    corrected an inaccurate claim in "Root-only steps" that `archcheck` and
+    lint were themselves scoped to `ciselect`'s selection — they are not:
+    `archcheck` already runs `go list -e -json ./...`
+    (`internal/cmd/archcheck/loader.go:77`) and the `golangci-lint-action`
+    step already lints the whole module by default; only the test step was
+    ever scoped. This is a documentation correction, not a behavior change.
+  - **Unchanged, as scoped**: the `plan` job, the dynamic matrix, the
+    `-all` fallback, `ci-gate`, the govulncheck exception list
+    (`scripts/ci/govulncheck-allow.json`), `vulngate`, `ciselect` selection,
+    and `scripts/ci/go-test.sh`'s package selection.
+  - Verification: `GOROOT= GOWORK=off GOFLAGS=-mod=mod go build ./...` and
+    `GOROOT= GOWORK=off GOFLAGS=-mod=mod go vet ./...` both clean at the
+    repository root on today's code (proving the new steps pass as of this
+    commit); `GOROOT= go run github.com/rhysd/actionlint/cmd/actionlint@latest
+    .github/workflows/pull_request.yml .github/workflows/build.yml` — 0
+    findings; both workflows parse as YAML (`python3`/`PyYAML`); every
+    inline `run:` block in both workflows (35 total, including the four new
+    build/vet steps) parses with `bash -n`; `GOROOT= GOWORK=off go test
+    -count=1 ./internal/cmd/ciselect/... ./internal/cmd/vulngate/...` still
+    green.
