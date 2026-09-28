@@ -102,16 +102,12 @@ type apiRun struct {
 	HTMLURL    string    `json:"html_url"`
 }
 
+// toRun converts apiRun to Run via a plain struct conversion: both types
+// declare the same fields, in the same order, with the same underlying
+// types (only the json tags differ), so Go's conversion rules already do
+// exactly the field-by-field copy a hand-written literal would.
 func (a apiRun) toRun() Run {
-	return Run{
-		ID:         a.ID,
-		HeadSHA:    a.HeadSHA,
-		Event:      a.Event,
-		Status:     a.Status,
-		Conclusion: a.Conclusion,
-		CreatedAt:  a.CreatedAt,
-		HTMLURL:    a.HTMLURL,
-	}
+	return Run(a)
 }
 
 // ListBuildRuns returns every build.yml run GitHub reports for the exact

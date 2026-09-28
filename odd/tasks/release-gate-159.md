@@ -108,13 +108,21 @@ bounded, independently-verified unit.
   page, pagination across 2 pages/101 runs, 401 non-OK status, malformed
   JSON, no-token omits Authorization header, NewClient defaults). `gofmt
   -l` clean.
-- [ ] **T3 — CLI with bounded wait.** `internal/cmd/releasegate/main.go`:
+- [x] **T3 — CLI with bounded wait.** `internal/cmd/releasegate/main.go`:
   flags `-repo -sha -on-main -timeout -interval`, `GITHUB_TOKEN` env,
-  injectable clock/sleeper. Tests: pass, fail, wait-then-timeout (fake
-  clock/sleeper, no real sleeping), `-timeout 0` single-check mode, missing
-  required flag/env. Check: `go test -count=1 -v
-  ./internal/cmd/releasegate/...` RED then GREEN; `go vet
-  ./internal/cmd/releasegate/...`; `staticcheck ./internal/cmd/releasegate/...`.
+  injectable clock/sleeper (`fakeClock`/`fakeSleeper` advance a virtual
+  clock instead of really sleeping). RED observed: compile failure, `run`
+  undefined. GREEN: `go test -count=1 -v ./internal/cmd/releasegate/...`
+  — 25/25 PASS across all three files (pass, fail, off-main fails fast with
+  0 GitHub calls, wait-then-timeout at exactly 3 polls/2 sleeps for a
+  2m/1m timeout/interval, `-timeout 0` is exactly 1 check/0 sleeps, missing
+  `GITHUB_TOKEN`, 4 invalid-flag cases). `go build`/`go vet
+  ./internal/cmd/releasegate/...` clean. `gofmt -l` clean (one
+  pre-existing misalignment in main_test.go fixed by `gofmt -w`).
+  `staticcheck ./internal/cmd/releasegate/...`: found S1016 in
+  `client.go`'s `toRun` (hand-written struct literal instead of a type
+  conversion — apiRun and Run share identical fields/order/types); fixed
+  to `return Run(a)`; re-run: 0 findings.
 - [ ] **T4 — `release.yml` gate job.** Add `gate` (permissions
   `contents: read`, `actions: read`; `fetch-depth: 0`; dereference tag;
   `git merge-base --is-ancestor`; run `releasegate`); `release-ego` gains
