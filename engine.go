@@ -881,10 +881,8 @@ func (engine *Engine) spawnTenantScope(config *spawnConfig) (*extensions.EntityT
 		return extensions.NewEntityTenantScope(string(config.tenantID)), nil
 	}
 
-	if fixed, ok := engine.tenantResolver.(tenancy.FixedTenantResolver); ok {
-		if tenantID, hasFixed := fixed.FixedTenant(); hasFixed {
-			return extensions.NewEntityTenantScope(string(tenantID)), nil
-		}
+	if tenantID, hasFixed := tenancy.FixedTenantOf(engine.tenantResolver); hasFixed {
+		return extensions.NewEntityTenantScope(string(tenantID)), nil
 	}
 
 	return nil, ErrSpawnTenantUndetermined

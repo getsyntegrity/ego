@@ -124,3 +124,110 @@ func TestWithSingleTenant_IndistinguishableFromAnyResolver(t *testing.T) {
 	require.True(t, ok1)
 	assert.Equal(t, gotID0, gotID1)
 }
+
+// advertisingResolver implements FixedTenantResolver and reports whatever
+// it was built with. With has=false it is the multi-tenant resolver the
+// FixedTenantResolver contract allows: it can be asked for a fixed tenant
+// but has none.
+type advertisingResolver struct {
+	fixedResolver
+	id  tenancy.TenantID
+	has bool
+}
+
+func (r advertisingResolver) FixedTenant() (tenancy.TenantID, bool) { return r.id, r.has }
+
+var _ tenancy.FixedTenantResolver = advertisingResolver{}
+
+// resolveCountingResolver implements FixedTenantResolver and counts Resolve
+// calls, which asking for a fixed tenant must never make.
+type resolveCountingResolver struct{ calls int }
+
+func (r *resolveCountingResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
+	r.calls++
+	return tenancy.TenantContext{}, nil
+}
+
+func (r *resolveCountingResolver) FixedTenant() (tenancy.TenantID, bool) { return "", false }
+
+func TestCapFixedTenant_IsAnUntypedConstant(t *testing.T) {
+	// Untyped: it converts to adapter.Capability without tenancy importing
+	// port/adapter (ego-arch-004 design §D3). Assigning it to a plain
+	// string and to a named string type both compile only if it is untyped.
+	type capability string
+	var asString string = tenancy.CapFixedTenant
+	var asNamed capability = tenancy.CapFixedTenant
+	assert.Equal(t, "tenancy.fixed-tenant", asString)
+	assert.Equal(t, capability("tenancy.fixed-tenant"), asNamed)
+}
+
+func TestAsFixedTenantResolver(t *testing.T) {
+	single, err := tenancy.WithSingleTenant(mustTenantID(t, "acme"))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		resolver tenancy.TenantResolver
+		want     bool
+	}{
+		{"nil resolver", nil, false},
+		{"plain resolver", fixedResolver{}, false},
+		{"single-tenant resolver", single, true},
+		{"resolver with a fixed tenant", advertisingResolver{id: "acme", has: true}, true},
+		// The capability is the interface ("can be asked"), not the
+		// answer: a multi-tenant resolver that implements it and reports
+		// no fixed tenant still has it.
+		{"multi-tenant resolver implementing the interface", advertisingResolver{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixed, ok := tenancy.AsFixedTenantResolver(tt.resolver)
+			assert.Equal(t, tt.want, ok)
+			if !tt.want {
+				assert.Nil(t, fixed)
+				return
+			}
+			require.NotNil(t, fixed)
+			var asResolver tenancy.TenantResolver = fixed
+			assert.Equal(t, tt.resolver, asResolver, "the accessor returns the resolver itself")
+		})
+	}
+}
+
+func TestFixedTenantOf(t *testing.T) {
+	single, err := tenancy.WithSingleTenant(mustTenantID(t, "acme"))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		resolver tenancy.TenantResolver
+		wantID   tenancy.TenantID
+		wantOK   bool
+	}{
+		{"nil resolver", nil, "", false},
+		{"plain resolver", fixedResolver{}, "", false},
+		{"single-tenant resolver", single, "acme", true},
+		{"resolver with a fixed tenant", advertisingResolver{id: "globex", has: true}, "globex", true},
+		// ego-arch-004 spec 3 scenario "a multi-tenant resolver that
+		// implements the interface": it reports no fixed tenant.
+		{"multi-tenant resolver implementing the interface", advertisingResolver{}, "", false},
+		// An ID reported next to false is not a fixed tenant.
+		{"resolver reporting an ID with false", advertisingResolver{id: "stale", has: false}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, ok := tenancy.FixedTenantOf(tt.resolver)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantID, id)
+		})
+	}
+}
+
+// Asking for a fixed tenant is not an execution-time resolution: neither
+// accessor calls Resolve (TENANT-003 T4).
+func TestFixedTenantAccessors_NeverResolve(t *testing.T) {
+	r := &resolveCountingResolver{}
+	_, _ = tenancy.FixedTenantOf(r)
+	_, _ = tenancy.AsFixedTenantResolver(r)
+	assert.Zero(t, r.calls)
+}

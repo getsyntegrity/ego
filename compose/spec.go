@@ -31,7 +31,9 @@
 // in a named field. There is no registry, no lookup by type and no
 // reflection-based wiring anywhere in this package (design §D2): the one
 // use of reflect is the typed-nil check in Validate, which inspects a value
-// the consumer already put in a named field.
+// the consumer already put in a named field. Rule V8 inspects declared
+// adapters only through port/adapter's and tenancy's accessors
+// (ego-arch-004 design §D6).
 //
 // This package imports contract packages only. It must not import package
 // ego, internal/extensions or the GoAkt runtime; internal/cmd/archcheck's
@@ -51,6 +53,7 @@ import (
 	"github.com/pablogore/ego/v4/eventadapter"
 	"github.com/pablogore/ego/v4/offsetstore"
 	"github.com/pablogore/ego/v4/persistence"
+	"github.com/pablogore/ego/v4/port/adapter"
 	"github.com/pablogore/ego/v4/port/publishing"
 	"github.com/pablogore/ego/v4/projection"
 	"github.com/pablogore/ego/v4/tenancy"
@@ -146,6 +149,22 @@ type Spec struct {
 //   - V7: ShutdownTimeout is not negative. Zero means the composition
 //     root's default; a negative value would otherwise fail only when the
 //     composition root builds its lifecycle, after New had succeeded.
+//   - V8 (ego-arch-004 design §D6): a value that declares an
+//     adapter.Descriptor tells the truth about itself. V8a: the slot's
+//     port (for example persistence.PortStateStore for StateStore) is one
+//     of its Ports. V8b: for every optional capability compose knows for
+//     that port — adapter.CapStart and adapter.CapReady for publishers,
+//     tenancy.CapFixedTenant for the tenant resolver — it declares the
+//     capability exactly when it implements it, as adapter.StarterOf,
+//     adapter.PingerOf and tenancy.AsFixedTenantResolver report.
+//     Capabilities the port already implies (Ping on stores) are not
+//     checked, and a declared capability compose does not know is
+//     accepted. V8c: it declares every capability its slot requires; no
+//     slot requires one in v4. A value that declares no descriptor is not
+//     inspected, so every Spec that validated before V8 still validates.
+//     V8 inspects a value only after V5 and V6 accepted it, so a typed nil
+//     or a duplicate publisher is reported once, and Describe is never
+//     called on a typed nil.
 func (s Spec) Validate() error {
 	var errs []error
 	report := func(rule, field, problem string) {
@@ -154,12 +173,23 @@ func (s Spec) Validate() error {
 	// check reports a literal nil under rule when the field is required,
 	// and a typed nil under V5 whether the field is required or not; an
 	// optional field passes required=false, so a literal nil is accepted.
-	check := func(value any, required bool, rule, field, why string) {
+	// It reports whether value is a non-nil value those rules accepted,
+	// which is what V8 may then inspect.
+	check := func(value any, required bool, rule, field, why string) bool {
 		switch {
 		case value == nil && required:
 			report(rule, field, "required "+why)
 		case value != nil && isTypedNil(value):
 			report("V5", field, "holds a typed nil value")
+		default:
+			return value != nil
+		}
+		return false
+	}
+	// slot applies check, then V8 to a value check accepted.
+	slot := func(value any, port adapter.Port, required bool, rule, field, why string) {
+		if check(value, required, rule, field, why) {
+			validateDeclared(value, port, field, report)
 		}
 	}
 
@@ -168,10 +198,10 @@ func (s Spec) Validate() error {
 	}
 
 	needsEvents := s.Families&(EventSourced|Saga) != 0 || len(s.Projections) > 0
-	check(s.EventsStore, needsEvents, "V2", "EventsStore", "when EventSourced or Saga is declared or projections are configured")
-	check(s.StateStore, s.Families&DurableState != 0, "V3", "StateStore", "when DurableState is declared")
-	check(s.SnapshotStore, false, "", "SnapshotStore", "")
-	check(s.OffsetStore, len(s.Projections) > 0, "V4", "OffsetStore", "when projections are configured")
+	slot(s.EventsStore, persistence.PortEventsStore, needsEvents, "V2", "EventsStore", "when EventSourced or Saga is declared or projections are configured")
+	slot(s.StateStore, persistence.PortStateStore, s.Families&DurableState != 0, "V3", "StateStore", "when DurableState is declared")
+	slot(s.SnapshotStore, persistence.PortSnapshotStore, false, "", "SnapshotStore", "")
+	slot(s.OffsetStore, offsetstore.PortOffsetStore, len(s.Projections) > 0, "V4", "OffsetStore", "when projections are configured")
 
 	names := make([]string, 0, len(s.Projections))
 	for name := range s.Projections {
@@ -188,19 +218,21 @@ func (s Spec) Validate() error {
 		check(opts.Handler, true, "V4", field+".Handler", "for every projection")
 	}
 
-	for i, adapter := range s.EventAdapters {
+	for i, eventAdapter := range s.EventAdapters {
 		field := fmt.Sprintf("EventAdapters[%d]", i)
-		if adapter == nil {
+		if eventAdapter == nil {
 			report("V5", field, "event adapter must not be nil")
 			continue
 		}
-		check(adapter, false, "", field, "")
+		// An event adapter is a schema transformer, not an adapter SPI
+		// port, so V8 does not apply to it.
+		check(eventAdapter, false, "", field, "")
 	}
-	check(s.Encryptor, false, "", "Encryptor", "")
-	check(s.TenantResolver, false, "", "TenantResolver", "")
+	slot(s.Encryptor, encryption.PortEncryptor, false, "", "Encryptor", "")
+	slot(s.TenantResolver, tenancy.PortTenantResolver, false, "", "TenantResolver", "")
 
-	validatePublishers(s.EventPublishers, "EventPublishers", "events", report)
-	validatePublishers(s.StatePublishers, "StatePublishers", "state", report)
+	validatePublishers(s.EventPublishers, publishing.PortEventPublisher, "EventPublishers", "events", report)
+	validatePublishers(s.StatePublishers, publishing.PortStatePublisher, "StatePublishers", "state", report)
 
 	if s.ShutdownTimeout < 0 {
 		report("V7", "ShutdownTimeout", fmt.Sprintf("must not be negative, got %s (zero means the default)", s.ShutdownTimeout))
@@ -209,11 +241,12 @@ func (s Spec) Validate() error {
 	return errors.Join(errs...)
 }
 
-// validatePublishers applies V5 and V6 to one kind of publisher. The engine
-// keys each kind's publishers by ID in its own map, so a duplicate ID
-// overwrites the first publisher and leaks its goroutine; uniqueness is
-// therefore checked per kind, not across kinds.
-func validatePublishers[P interface{ ID() string }](publishers []P, fieldName, kind string, report func(rule, field, problem string)) {
+// validatePublishers applies V5 and V6 to one kind of publisher, then V8
+// to every publisher they accepted. The engine keys each kind's publishers
+// by ID in its own map, so a duplicate ID overwrites the first publisher
+// and leaks its goroutine; uniqueness is therefore checked per kind, not
+// across kinds.
+func validatePublishers[P interface{ ID() string }](publishers []P, port adapter.Port, fieldName, kind string, report func(rule, field, problem string)) {
 	firstByID := make(map[string]int, len(publishers))
 	for i, publisher := range publishers {
 		field := fmt.Sprintf("%s[%d]", fieldName, i)
@@ -232,6 +265,93 @@ func validatePublishers[P interface{ ID() string }](publishers []P, fieldName, k
 			continue
 		}
 		firstByID[id] = i
+		validateDeclared(value, port, field, report)
+	}
+}
+
+// capabilityCheck is one optional capability compose knows for a port:
+// its name and how to tell, through the capability's single accessor,
+// whether a value implements it.
+type capabilityCheck struct {
+	capability  adapter.Capability
+	implemented func(value any) bool
+	// declarationOnly makes V8b one-directional for this capability:
+	// declared ⇒ implemented is checked, implemented ⇒ declared is not.
+	// Design §D6 requires it for the runtime port's capabilities (F-E),
+	// because the composite port/runtime interface makes every runtime
+	// implement every capability interface. No capability sets it yet.
+	declarationOnly bool
+}
+
+// publisherCapabilities are the optional capabilities of both publisher
+// ports.
+var publisherCapabilities = []capabilityCheck{
+	{capability: adapter.CapStart, implemented: func(v any) bool { _, ok := adapter.StarterOf(v); return ok }},
+	{capability: adapter.CapReady, implemented: func(v any) bool { _, ok := adapter.PingerOf(v); return ok }},
+}
+
+// knownCapabilities lists, per port, the optional capabilities V8b checks
+// in both directions. A port absent from it has none that compose knows:
+// every store port already has Ping (CapReady is implied, never checked),
+// and the encryptor has no optional capability. A declared capability not
+// listed for the slot's port is accepted; the adapter's own conformance
+// tests check it (AT-1). So a store that declares adapter.CapStart without
+// a Start method passes V8 on purpose: CapStart is unknown for store
+// ports, whose adapters the composition root never starts, and catching
+// that mismatch is AT-1's job.
+var knownCapabilities = map[adapter.Port][]capabilityCheck{
+	publishing.PortEventPublisher: publisherCapabilities,
+	publishing.PortStatePublisher: publisherCapabilities,
+	tenancy.PortTenantResolver: {{
+		capability: tenancy.CapFixedTenant,
+		implemented: func(v any) bool {
+			// v comes from Spec.TenantResolver, so this assertion to the
+			// port interface always succeeds; it only restores the static
+			// type AsFixedTenantResolver takes. Keeping one table with a
+			// uniform func(any) signature lets #11 and #24 add entries the
+			// same way for any port.
+			resolver, ok := v.(tenancy.TenantResolver)
+			if !ok {
+				return false
+			}
+			_, ok = tenancy.AsFixedTenantResolver(resolver)
+			return ok
+		},
+	}},
+}
+
+// requiredCapabilities lists, per port, the capabilities a declared
+// adapter in that slot must declare (V8c). In v4 no slot requires an
+// optional capability, so it is empty; #11 or #24 add a requirement as an
+// entry here, with a test, instead of a type assertion where it is used.
+var requiredCapabilities = map[adapter.Port][]adapter.Capability{}
+
+// validateDeclared applies V8 to one slot value that V5 and V6 already
+// accepted (non-nil, not a typed nil, a unique publisher ID). A value that
+// declares no descriptor is not inspected: undeclared adapters validate
+// exactly as before V8.
+func validateDeclared(value any, port adapter.Port, field string, report func(rule, field, problem string)) {
+	desc, ok := adapter.Describe(value)
+	if !ok {
+		return
+	}
+	name := fmt.Sprintf("adapter %q", desc.Name)
+	if !desc.Serves(port) {
+		report("V8", field, fmt.Sprintf("%s does not list the slot's port %s among its ports %v", name, port, desc.Ports))
+	}
+	for _, c := range knownCapabilities[port] {
+		declared, implemented := desc.Declares(c.capability), c.implemented(value)
+		switch {
+		case declared && !implemented:
+			report("V8", field, fmt.Sprintf("%s declares capability %s but does not implement it", name, c.capability))
+		case implemented && !declared && !c.declarationOnly:
+			report("V8", field, fmt.Sprintf("%s implements capability %s but does not declare it", name, c.capability))
+		}
+	}
+	for _, c := range requiredCapabilities[port] {
+		if !desc.Declares(c) {
+			report("V8", field, fmt.Sprintf("%s does not declare capability %s, which the slot requires", name, c))
+		}
 	}
 }
 
