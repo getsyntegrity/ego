@@ -295,13 +295,21 @@ var publisherCapabilities = []capabilityCheck{
 // every store port already has Ping (CapReady is implied, never checked),
 // and the encryptor has no optional capability. A declared capability not
 // listed for the slot's port is accepted; the adapter's own conformance
-// tests check it (AT-1).
+// tests check it (AT-1). So a store that declares adapter.CapStart without
+// a Start method passes V8 on purpose: CapStart is unknown for store
+// ports, whose adapters the composition root never starts, and catching
+// that mismatch is AT-1's job.
 var knownCapabilities = map[adapter.Port][]capabilityCheck{
 	publishing.PortEventPublisher: publisherCapabilities,
 	publishing.PortStatePublisher: publisherCapabilities,
 	tenancy.PortTenantResolver: {{
 		capability: tenancy.CapFixedTenant,
 		implemented: func(v any) bool {
+			// v comes from Spec.TenantResolver, so this assertion to the
+			// port interface always succeeds; it only restores the static
+			// type AsFixedTenantResolver takes. Keeping one table with a
+			// uniform func(any) signature lets #11 and #24 add entries the
+			// same way for any port.
 			resolver, ok := v.(tenancy.TenantResolver)
 			if !ok {
 				return false
