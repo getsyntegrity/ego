@@ -179,7 +179,17 @@ import (
 
 type pinger interface{ Ping(context.Context) error }
 
+type alias = adapter.Pinger
+
+type bareAlias = Starter
+
+type wrapper interface{ adapter.Describer }
+
 func qualified(v any)  { _, _ = v.(adapter.Starter) }
+func embedded(v any)   { _, _ = v.(interface{ adapter.Pinger }) }
+func aliased(v any)    { _, _ = v.(alias) }
+func bareAliased(v any) { _, _ = v.(bareAlias) }
+func wrapped(v any)    { _, _ = v.(wrapper) }
 func bare(v any)       { _, _ = v.(Describer) }
 func inline(v any)     { _, _ = v.(interface{ Ping(context.Context) error }) }
 func local(v any)      { _, _ = v.(pinger) }
@@ -207,11 +217,15 @@ func unrelated(v any) {
 		t.Fatal(err)
 	}
 	want := []string{
+		"sample/sample.go:aliased",
 		"sample/sample.go:bare",
+		"sample/sample.go:bareAliased",
+		"sample/sample.go:embedded",
 		"sample/sample.go:inline",
 		"sample/sample.go:local",
 		"sample/sample.go:qualified",
 		"sample/sample.go:switched",
+		"sample/sample.go:wrapped",
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
@@ -269,9 +283,10 @@ func assertionSites(rel string, src []byte) ([]string, error) {
 	return sites, nil
 }
 
-// isOptionalInterface reports whether typ names an optional interface, is
-// an inline interface made only of optional methods, or names a local
-// interface that is.
+// isOptionalInterface reports whether typ names an optional interface
+// (qualified or not), names a local type that is one, or is an inline
+// interface made only of optional methods and embedded optional
+// interfaces.
 func isOptionalInterface(typ ast.Expr, local map[string]bool) bool {
 	switch t := typ.(type) {
 	case *ast.Ident:
@@ -279,7 +294,7 @@ func isOptionalInterface(typ ast.Expr, local map[string]bool) bool {
 	case *ast.SelectorExpr:
 		return slices.Contains(optionalInterfaces, t.Sel.Name)
 	case *ast.InterfaceType:
-		return onlyOptionalMethods(t)
+		return onlyOptionalMethods(t, local)
 	case *ast.ParenExpr:
 		return isOptionalInterface(t.X, local)
 	default:
@@ -287,30 +302,47 @@ func isOptionalInterface(typ ast.Expr, local map[string]bool) bool {
 	}
 }
 
-// localOptionalInterfaces returns the file's interface types whose own
-// methods are all optional methods.
+// localOptionalInterfaces returns the file's type declarations that are an
+// optional interface under another name: an interface made only of
+// optional methods and embedded optional interfaces, or a type or alias
+// whose type names one (`type P = adapter.Pinger`). It repeats until
+// nothing changes, so a local type built on another local one is found
+// too.
 func localOptionalInterfaces(file *ast.File) map[string]bool {
-	out := map[string]bool{}
+	var specs []*ast.TypeSpec
 	ast.Inspect(file, func(n ast.Node) bool {
 		if spec, ok := n.(*ast.TypeSpec); ok {
-			if iface, ok := spec.Type.(*ast.InterfaceType); ok && onlyOptionalMethods(iface) {
-				out[spec.Name.Name] = true
-			}
+			specs = append(specs, spec)
 		}
 		return true
 	})
+	out := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for _, spec := range specs {
+			if !out[spec.Name.Name] && isOptionalInterface(spec.Type, out) {
+				out[spec.Name.Name] = true
+				changed = true
+			}
+		}
+	}
 	return out
 }
 
-// onlyOptionalMethods reports whether iface declares at least one method,
-// embeds nothing, and declares only optional methods.
-func onlyOptionalMethods(iface *ast.InterfaceType) bool {
+// onlyOptionalMethods reports whether iface has at least one element and
+// every element is an optional method or an embedded optional interface.
+func onlyOptionalMethods(iface *ast.InterfaceType, local map[string]bool) bool {
 	if iface.Methods == nil || len(iface.Methods.List) == 0 {
 		return false
 	}
 	for _, field := range iface.Methods.List {
 		if len(field.Names) == 0 {
-			return false // an embedded interface or a type constraint
+			// An embedded interface (or a type constraint): optional only
+			// when it names an optional interface.
+			if !isOptionalInterface(field.Type, local) {
+				return false
+			}
+			continue
 		}
 		for _, name := range field.Names {
 			if !slices.Contains(optionalMethods, name.Name) {
