@@ -239,3 +239,164 @@ A new command, `internal/cmd/releaseplan`, reads every `go.mod` in the repositor
 - Commits: T1 `fa064c7`, T2 `2039d0b`, T3 `f184638`, T4 `c7128ec`, all on
   `feat/159-f4a-releaseplan`. Not pushed; no PR opened (per scope — push
   and PR are the user's decision after this report).
+
+## Review fixes (PR #169)
+
+The maintainer accepted 5 of 6 independent-review findings on PR #169 and
+asked for them fixed on this branch. Applied in the worktree
+`.claude/worktrees/159-impact-ci`, one work-unit commit per finding, all
+under `internal/cmd/releaseplan/**` (no other path touched — `docs/ci.md`
+needed no change, see below).
+
+### R1 — `writeOutputs` all-or-nothing (`836601d`)
+
+- Finding (MINOR): `writeOutputs` (`main.go:168-176` at PR #169 head
+  `743692a`) iterated a `map[string]string`, so `plan.json` and
+  `summary.md` were written in random order, and an I/O failure partway
+  through could leave one file without the other.
+- Fix: each output is now written to a temp file in `-out-dir` first
+  (`writeTempFile`, a package-level `var` seam so a test can inject a
+  failure on a specific call), then both temps are renamed into place
+  only once both writes succeed — `plan.json` first, a fixed order, not a
+  map's random one. Any write or rename failure removes every temp file
+  and any already-renamed final file, so a caller never observes one
+  output without the other.
+- TDD: `TestWriteOutputs_SecondWriteFailure_LeavesNoPartialOutput` written
+  first against the not-yet-existing `writeTempFile` seam; RED confirmed
+  (`undefined: writeTempFile`, build failure). Implemented `writeTempFile`
+  and the temp-then-rename `writeOutputs`; GREEN. Added a second test,
+  `TestWriteOutputs_RenameFailure_UndoesTheFirstFile` (summary.md
+  pre-seeded as a directory so its rename fails after plan.json's already
+  succeeded), covering the other half of the contract — GREEN on first
+  run, no separate RED needed since it exercises the same new code path
+  the first test already forced into existence.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R2 — 3+-node cycle and a cycle confined to unreleased modules (`a1723cd`)
+
+- Finding (MINOR): cycle coverage was thin — only a 2-node cycle
+  (`testdata/cycle`, `moda <-> modb`), and no test that a cycle among
+  modules nobody released still gets refused.
+- Added `testdata/cycle-3node` (`. -> moda -> modb -> .`, a 3-node cycle)
+  and `TestDetectCycle_ThreeNodeCycle` in `order_test.go`; added
+  `testdata/unreleased-cycle` (`modx <-> mody` cycle, only `.` released)
+  and `TestBuildPlan_CycleConfinedToUnreleasedModules` in `plan_test.go`,
+  exercised end-to-end through `buildPlan`.
+- Honest result: both passed immediately, no RED. `detectCycle` already
+  traverses the whole discovered graph regardless of cycle length (T1's
+  own note: "Cycle detection runs over every discovered module, not only
+  the released set"), and `buildPlan` already calls `detectCycle` before
+  `releasedSet`, so a cycle confined to unreleased modules was already
+  refused. These are regression tests for behavior the implementation
+  already had, not a bugfix — recorded here rather than claiming a RED
+  that never happened.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R3 — tag prefix collision tests (`7f2cd6e`)
+
+- Finding (MINOR): no test that `tagPrefix`'s dir-based prefix can't
+  accidentally match a different module's tag (`publisher/kafka` vs.
+  `publisher/kafka-x`, the root's `v` vs. a nested module's tag, and the
+  reverse).
+- Added three pure unit tests on `latestTag` in `tags_test.go` (no
+  fixture needed — `latestTag`/`tagPrefix` take a `dir` and a `[]string`
+  of tags directly):
+  `TestLatestTag_IgnoresSiblingDirWithSharedPrefix` (`publisher/kafka`
+  vs. a `publisher/kafka-x/v9.9.9` tag), `TestLatestTag_
+  RootIgnoresNestedModuleTag` (root `v` prefix vs. a
+  `publisher/kafka/v1.0.0` tag), `TestLatestTag_NestedModuleIgnoresRootTag`
+  (`publisher/kafka` vs. the root's own `v4.9.9`).
+- Honest result: all three passed immediately, no RED.
+  `latestTag`'s `strings.CutPrefix(t, prefix)` already requires an exact
+  prefix match — `"publisher/kafka-x/..."` does not have
+  `"publisher/kafka/v"` as a prefix (the next character after
+  `"publisher/kafka"` is `-`, not `/`), and `"publisher/kafka/v1.0.0"`
+  does not start with `"v"`. Regression tests for existing correct
+  behavior, not a bugfix.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### R4 — comment on `TestRun_RealRepository`'s hard-coded count (`84db6a0`)
+
+- Finding (NIT): `main_test.go`'s `TestRun_RealRepository` hard-codes
+  `len(doc.Modules) != 5` with no note that this is deliberate.
+- Comment-only: added a comment above the assertion explaining it must
+  fail loudly the moment `scripts/ci/release-modules.txt` changes, rather
+  than silently track whatever count the file holds that day. No RED
+  needed (comment-only change, per the accepted finding).
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS
+  (unchanged); `go vet` → clean; `gofmt -l` → clean.
+
+### R5 — `skipDirs` matches ciselect's list plus `.claude` (`c59020b`)
+
+- Finding (NIT): `discover.go:40-48`'s `skipDirs` claimed to mirror
+  `internal/cmd/ciselect/main.go:56-64`'s `skipDirs` but differed:
+  releaseplan had `.claude` (ciselect doesn't), ciselect has `.atl`
+  (releaseplan didn't).
+- Fix: `skipDirs` now holds the union — ciselect's list plus `.claude`,
+  where this repository's local git worktrees live
+  (`.claude/worktrees/<name>`) — and the comment above it says so
+  instead of the inaccurate "mirroring ciselect's skipDirs". `ciselect`
+  itself was not touched (out of scope; the union goes the other
+  direction, into releaseplan only).
+- TDD: `TestDiscoverGraph_SkipsWorktreeAndAtlDirs` in `discover_test.go`
+  written first against `testdata/skip-worktree-dirs` (a `go.mod` under
+  both `.atl/child/` and `.claude/child/`, neither of which must be
+  discovered); RED confirmed (`dirs = [. .atl/child], want [.]` — `.atl`
+  was not yet in `skipDirs`, so its `go.mod` was discovered as a real
+  module). Added `.atl` to `skipDirs`; GREEN.
+- The fixture files under `testdata/skip-worktree-dirs/.atl/` and
+  `.claude/` are `git add -f`'d past this repository's own top-level
+  `.gitignore` entries for `.atl/` and `.claude/` (lines 24 and 17):
+  those entries exist to keep real worktree/tooling state out of the
+  repository, not to block a test fixture that exists specifically to
+  prove those directory names are skipped.
+- Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → PASS;
+  `go vet` and staticcheck → clean; `gofmt -l` → clean.
+
+### Finding 6 — NOT fixed (deliberate)
+
+- Finding (NIT): `parseSemver` (`tags.go`) accepts a component with
+  leading zeros (e.g. `01`) via `strconv.Atoi`, which silently drops the
+  leading zero rather than rejecting the tag as malformed.
+- Decision: leave as is. Rejecting a leading-zero tag would make
+  `parseSemver` silently *ignore* that tag (treat it as if it did not
+  match the module's prefix at all, via `latestTag`'s `ok` check), which
+  could make `nextTag` compute its next version from an older tag than
+  the true latest — a worse failure than accepting the odd tag and
+  parsing it as the (admittedly non-canonical) integer it represents. No
+  tag in this repository's own history has a leading zero, and D2 (a)
+  does not define behavior for one; the maintainer accepted leaving this
+  unfixed rather than trading a cosmetic wart for a "latest version"
+  correctness risk.
+
+### Overall verification (review fixes)
+
+- `GOROOT= GOWORK=off GOFLAGS=-mod=mod go test -count=1
+  ./internal/cmd/releaseplan/... ./internal/cmd/ciselect/...` → PASS (34
+  releaseplan `--- PASS` lines including subtests + ciselect's own suite,
+  all green).
+- `go vet ./internal/cmd/releaseplan/...` → clean.
+- `GOROOT= go run honnef.co/go/tools/cmd/staticcheck@latest
+  ./internal/cmd/releaseplan/...` → clean.
+- `gofmt -l internal/cmd/releaseplan` → clean (no output).
+- Real run, `-bump patch -tags /dev/null -release
+  scripts/ci/release-modules.txt`: same table as T3/T4's — root
+  (`v4.0.1`) then the four publishers (each `.../v0.0.1`,
+  `Requires: [github.com/pablogore/ego/v4]`) — confirming R1's rewrite of
+  `writeOutputs` and R5's `skipDirs` change left observable behavior on
+  this repository unchanged.
+- `git status -s` → clean after every commit; no stray build artifacts
+  (`go build` was never run in this worktree — only `go test`/`go run`).
+- `git diff --stat 743692a..HEAD` → only files under
+  `internal/cmd/releaseplan/**` changed (`discover.go`, `main.go`, five
+  `_test.go` files, and new `testdata/` fixtures); `docs/ci.md` needed no
+  edit — it documents `plan.json`/`summary.md` as outputs and describes
+  no write order or skip-list detail that R1 or R5 would have
+  contradicted.
+- Commits: R1 `836601d`, R2 `a1723cd`, R3 `7f2cd6e`, R4 `84db6a0`, R5
+  `c59020b`, all on `feat/159-f4a-releaseplan` in the
+  `.claude/worktrees/159-impact-ci` worktree. Not pushed; no PR update
+  made (per instructions — the coordinator handles push/branch update).
