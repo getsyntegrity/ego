@@ -4,6 +4,8 @@ on:
   pull_request:
     branches:
       - main
+      # develop is inactive until that branch exists.
+      - develop
       - 'docs/propose-*'
     paths-ignore:
       - '**/readme.md'

@@ -2,7 +2,9 @@ name: build
 
 on:
   push:
-    branches: [ main ]
+    # develop is inactive until that branch exists; once it does, a push to
+    # it gets the same full-suite gate as main.
+    branches: [ main, develop ]
     paths-ignore:
       - '**/readme.md'
       - '**/renovate.json'
