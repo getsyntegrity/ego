@@ -254,11 +254,12 @@ func TestModuleGraph_NestedGoModEditSelectsClosureAndRootFull(t *testing.T) {
 	assertFull(t, graphRoot(), res)
 }
 
-// A root package change reaches only the modules that require the root:
+// A stray Go file in the root (the module root holds none in practice) forces
+// the root lane to full and reaches only the modules that require the root:
 // it requires adapter/a, not the root, so the walk follows edges, not
 // proximity.
 func TestModuleGraph_RootPackageChangeFollowsEdges(t *testing.T) {
-	res := selectFixture([]string{"engine.go"}, fixtureModules())
+	res := selectFixture([]string{"stray.go"}, fixtureModules())
 
 	assertSameSet(t, moduleDirs(res.Modules), []string{"adapter/b"})
 	assertFull(t, graphRoot(), res)

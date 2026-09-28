@@ -72,9 +72,11 @@ func TestSelect_TestdataMapsToNearestAncestorPackage(t *testing.T) {
 	assertSameSet(t, res.Selected, want)
 }
 
-func TestSelect_RootPackageChangeIsFull(t *testing.T) {
+// The module root holds no Go files (archcheck enforces it), so a Go file
+// directly in the root is a stray that still forces the full suite.
+func TestSelect_StrayRootGoFileIsFull(t *testing.T) {
 	g := fixtureGraph()
-	res := Select(g, []string{"engine.go"}, satelliteOpts())
+	res := Select(g, []string{"stray.go"}, satelliteOpts())
 	assertFull(t, g, res)
 }
 
