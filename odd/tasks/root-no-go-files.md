@@ -57,7 +57,7 @@ Out: tags, releases, behaviour changes, splitting `engine` further (#159 A4/A5).
   tests. Route: same delegated writer.
 - [x] T4 Docs: readme, docs/ci.md, CHANGELOG `[Unreleased]` with BREAKING note and
   import map. Route: same delegated writer.
-- [ ] T5 Full gates for every module, external consumer check without `replace`,
+- [x] T5 Full gates for every module, external consumer check without `replace`,
   open the PR. Route: parent + per-action worker.
 
 ## Acceptance criteria
@@ -107,5 +107,16 @@ Out: tags, releases, behaviour changes, splitting `engine` further (#159 A4/A5).
 
 ### T5 (parent)
 
-- Pending: full gates and PR are the parent's step. Writer's verification lines are in the
-  writer report.
+- Writer gates (all exit 0): `go build ./...`, `go vet ./...`, archcheck (0 violations),
+  `go test -count=1 ./...`, `go test -race -count=1 ./...`, `scripts/ci/verify-module.sh` for
+  benchmark, example/cluster, test/compat and the four publishers.
+- Parent spot check: `find . -maxdepth 1 -name '*.go'` empty; build, vet, archcheck and
+  `go test ./internal/cmd/... ./compose/... ./migration/... ./port/...` pass.
+- `scripts/ci/verify-consumer.sh`: OK (root plus four publishers, no replace, local bare clone).
+- Real consumer via `GOPROXY=direct` on pushed `239e047`: `go get .../v4/engine@239e047`
+  resolves `v4.0.1-0.20260928211616-239e04731a55`, builds and runs; importing the old root
+  path fails with "not at required version", as expected for the documented break.
+- Not run: mockery regeneration (tool not installed), buf. golangci-lint reports 14
+  pre-existing `revive var-declaration` issues in untouched `command/errors.go` and
+  `tenancy/errors.go`.
+- [x] T5 done when the PR is open; next step: CI on the PR, human review.
