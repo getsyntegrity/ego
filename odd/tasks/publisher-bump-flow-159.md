@@ -636,3 +636,183 @@ Each finding is its own Conventional Commit, no AI-attribution trailer.
   leaves none; confirmed).
   Commit: `fix(releaseplan): drop unused stderr parameter flagged by
   revive (#159)`.
+
+- **Follow-up independent review at `5e21abf`** found one MAJOR, one
+  MINOR, and two NITs, all in `.github/workflows/release-publishers.yml`'s
+  "Create publisher GitHub releases" step. Fixed as a single work-unit
+  commit, worked sequentially (no parallel sub-agents sharing the index
+  this round, per the coordinator's instruction).
+
+  **MAJOR — a `jq` failure inside `done < <(jq ...)` did not trip
+  `set -e`/`pipefail`.** The old code read the plan with
+  `done < <(jq -r '...' "$SCRATCH/plan/plan.json")` feeding a `while read`
+  loop. If `jq` failed (malformed `plan.json`), the process substitution
+  produced no output, the loop saw immediate EOF, ran zero iterations, and
+  the step exited 0 having created no releases at all — silently. Fixed
+  by reading the plan with a plain command substitution into a variable,
+  `PLAN=$(jq -r '.modules[] | .dir + " " + .nextTag' "$SCRATCH/plan/plan.json")`,
+  which *does* carry `jq`'s exit status under `set -e` (a top-level
+  `VAR=$(cmd)` assignment's exit status is `cmd`'s, unlike the
+  `local var=$(cmd)` gotcha), plus an explicit
+  `if [ -z "$PLAN" ]; then ::error:: ...; exit 1; fi` to also catch a
+  successful-but-empty plan (an empty `modules` array), which would not
+  trip `set -e` on its own. Both loops in the step now read from
+  `$PLAN` via `<<< "$PLAN"` (a here-string, not process substitution), so
+  they run in the step's own shell and an `exit 1` inside them genuinely
+  fails the step.
+
+  **MINOR — `git ls-remote --tags origin "refs/tags/$TAG"` (a per-tag
+  filtered query) never returns the peeled `^{}` line, even for an
+  annotated tag** — so the old code's "prefer the peeled SHA, fall back
+  to plain" branch was dead: it always fell back to the plain SHA, which
+  for an annotated tag is the *tag object's own SHA*, not the commit it
+  points at, making the exact-SHA check fail spuriously for every
+  annotated publisher tag. Fixed by taking ONE unfiltered
+  `git ls-remote --tags origin` listing (which does include the peeled
+  line for every annotated tag) before the verification loop, and
+  resolving each planned tag's commit from that single listing.
+
+  Proven against a scratch bare repo under
+  `/home/pablog/.claude/jobs/e213d017/tmp/lsremote` (outside this
+  worktree, as instructed), one lightweight and one annotated tag both
+  pointing at the same commit `2a3c02272c4397769e2f2ca406cf021cdebdc3a8`:
+
+  ```
+  $ git init --bare -q bare.git   # acts as "origin"
+  $ git init -q work && cd work
+  $ echo hello > f.txt && git add f.txt && git commit -q -m init
+  $ git tag lightweight-tag 2a3c022...
+  $ git tag -a annotated-tag -m annotated 2a3c022...
+  $ git remote add origin ../bare.git && git push -q origin --tags
+
+  $ git ls-remote --tags origin
+  072c0f093eceaa4a8291904f0993774e1c9f6371	refs/tags/annotated-tag
+  2a3c02272c4397769e2f2ca406cf021cdebdc3a8	refs/tags/annotated-tag^{}
+  2a3c02272c4397769e2f2ca406cf021cdebdc3a8	refs/tags/lightweight-tag
+
+  $ git ls-remote --tags origin "refs/tags/annotated-tag"   # the OLD, buggy, filtered query
+  072c0f093eceaa4a8291904f0993774e1c9f6371	refs/tags/annotated-tag
+  ```
+  The filtered query returns only `072c0f09...` (the tag *object's* SHA)
+  — the peeled line carrying the real commit (`2a3c0227...`) never
+  appears. Resolving from the one unfiltered listing instead, for both
+  tags:
+  ```
+  annotated-tag  -> resolved=2a3c02272c4397769e2f2ca406cf021cdebdc3a8 (peeled=2a3c0227... plain=072c0f09...)
+  lightweight-tag -> resolved=2a3c02272c4397769e2f2ca406cf021cdebdc3a8 (peeled=(empty) plain=2a3c0227...)
+  ```
+  Both correctly resolve to the real commit `2a3c0227...`.
+
+  **NIT — all-or-nothing.** The step now runs two separate passes over
+  the same `$PLAN`: pass 1 verifies every planned tag exists on origin
+  and resolves to exactly `$SHA` (failing immediately, before any release
+  is created, on the first mismatch); pass 2, reached only if pass 1
+  completed for every entry, creates the releases. Since pass 1 is a
+  plain `while` loop (not a subshell), an `exit 1` inside it aborts the
+  whole step before pass 2 — the release-creating loop — is ever reached.
+
+  **NIT — removed the unused `publishers` output.** Confirmed with
+  `rg -n 'outputs.publishers|PUBLISHERS'` that nothing in the file
+  referenced `steps.compute-tags.outputs.publishers` any more (the
+  release step now derives each publisher's name from the plan's `.dir`
+  field via `basename`, not from that output) — removed the `PUBLISHERS`
+  variable computation and its `echo "publishers=..." >> "$GITHUB_OUTPUT"`
+  line from the `compute-tags` step entirely.
+
+  **Comments/doc-text correction.** The step's leading comment block,
+  which previously made the same false "prefer peeled, fall back to
+  plain" claim in prose, was rewritten to explain the real behavior (a
+  filtered `ls-remote` query never returns the peeled line) and points to
+  this section for the scratch-repo proof. No other file (`docs/ci.md`,
+  `docs/main-branch-policy.md`) made this specific claim, so no further
+  doc changes were needed — confirmed via
+  `rg -n -i 'peel|ls-remote' .github/workflows/release-publishers.yml docs/ci.md docs/main-branch-policy.md`.
+
+  **Sandbox note on the required "local bash -eo pipefail simulation."**
+  This session is worktree-isolated, and its Bash tool refuses to execute
+  any multi-line script (as a file, or inlined with a `while` loop, a
+  shell function definition, or a dynamically-invoked external command
+  such as a stubbed `gh`) that it cannot statically verify stays confined
+  to the worktree — regardless of whether the script actually touches
+  `git`. Running the step's script verbatim as one atomic unit was
+  therefore not possible here. Instead, every fragment of the exact same
+  logic (copied verbatim from the final YAML) was run as short,
+  non-looping `bash -eo pipefail -c '...'` commands, one per tag/scenario,
+  which the sandbox does permit:
+
+  *Scenario (a) — valid plan, real `ls-remote` data, stubbed `gh`,
+  verifies then creates:* using the same scratch origin, with two
+  additional realistic tags pushed, `publisher/kafka/v1.2.3` (lightweight)
+  and `publisher/nats/v2.0.0` (annotated), both at `2a3c0227...`:
+  ```
+  $ bash -eo pipefail -c '... kafka verify ...'
+  kafka(lightweight): peeled=[] plain=[2a3c0227...] actual=[2a3c0227...] expected=[2a3c0227...]
+  kafka verify: PASS
+
+  $ bash -eo pipefail -c '... nats verify ...'
+  nats(annotated): peeled=[2a3c0227...] plain=[a9f25b9e...] actual=[2a3c0227...] expected=[2a3c0227...]
+  nats verify: PASS
+
+  $ bash -eo pipefail -c '... kafka release (gh stubbed as an echo, no function def) ...'
+  STUB gh release create publisher/kafka/v1.2.3 --title "kafka publisher v1.2.3" --notes "Release of kafka publisher v1.2.3, updated to ego v4.5.0." --latest=false
+  Created release for kafka publisher v1.2.3
+
+  $ bash -eo pipefail -c '... nats release ...'
+  STUB gh release create publisher/nats/v2.0.0 --title "nats publisher v2.0.0" --notes "Release of nats publisher v2.0.0, updated to ego v4.5.0." --latest=false
+  Created release for nats publisher v2.0.0
+  ```
+
+  *Scenario (b) — malformed `plan.json` → step must fail:*
+  ```
+  $ bash -eo pipefail -c 'PLAN=$(jq -r "..." scenario-b-plan.json); echo "unreachable: PLAN=[$PLAN]"'
+  jq: parse error: Invalid literal at line 1, column 7
+  scenario-b-exit:5
+  ```
+  `"unreachable"` never printed; exit code 5 (jq's own) propagated via
+  `set -e`. For contrast, the OLD `done < <(jq ...)` pattern against the
+  same malformed file:
+  ```
+  jq: parse error: Invalid literal at line 1, column 7
+  OLD PATTERN: loop ran 0 times, step exit code so far implies success
+  old-pattern-exit:0
+  ```
+  — exit 0, confirming the silent-failure bug for real, not just by
+  argument.
+
+  *Scenario (c) — a planned tag resolves to a different commit than
+  `$SHA` → must fail before any release is created:* pushed a third
+  scratch tag, `publisher/pulsar/v1.0.0`, at a second commit
+  `1f4cf1fcd428148ab04786fcc7cacec46ab6fe35` (deliberately not the
+  expected `2a3c0227...`):
+  ```
+  $ bash -eo pipefail -c '... pulsar verify ...'
+  pulsar: peeled=[] plain=[1f4cf1fc...] actual=[1f4cf1fc...] expected=[2a3c0227...]
+  ::error::Planned tag publisher/pulsar/v1.0.0 points at 1f4cf1fc... on origin, expected 2a3c0227...
+  scenario-c-exit:1
+  ```
+  `"UNREACHABLE: pulsar verify PASS"` never printed. Combined with the
+  code structure (pass 1's `while` loop verifies every entry, in the
+  step's own shell, before pass 2's `while` loop — the one that calls
+  `gh release create` — is even reached), this proves the all-or-nothing
+  property: had `pulsar` been listed after `kafka`/`nats` in the same
+  pass-1 loop, `exit 1` here would abort the whole step before pass 2
+  ever ran, so zero releases would be created, not two.
+
+  **Verification (literal, all green):**
+  - `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release-publishers.yml'))"` → `YAML parse OK`.
+  - `bash -n` on all 11 extracted `run:` blocks (via the same
+    `yaml.safe_load` + `tempfile` + `subprocess` harness used for the
+    earlier fixes) → `ALL OK`.
+  - `rg -n '\$\{\{' .github/workflows/release-publishers.yml` → 22
+    matches, all in `env:`/`with:`/`if:` positions, none inside a `run:`
+    body (manually reviewed every line).
+  - `go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/release-publishers.yml` → exit 0, 0 findings.
+  - `go test -count=1 ./internal/cmd/releaseplan/...` → `ok` (sanity
+    check; this change is YAML-only and does not touch Go).
+  - `git status --short` → only `.github/workflows/release-publishers.yml`
+    modified before commit; no stray build artifacts (all scratch work
+    happened under `/home/pablog/.claude/jobs/e213d017/tmp/lsremote`,
+    outside this worktree).
+
+  Commit: `fix(release-publishers): read the plan safely, resolve tags
+  from one full ls-remote listing, and clean up dead output (#159)`.

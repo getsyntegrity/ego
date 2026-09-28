@@ -174,19 +174,9 @@ jobs:
             -continuation-check-tag-conflicts "$SCRATCH/tags-combined.txt" \
             -out-dir "$SCRATCH/plan"
 
-          PUBLISHERS=""
-          while IFS= read -r dir; do
-            case "$dir" in
-              ''|'#'*) continue ;;
-            esac
-            PUBLISHERS="$PUBLISHERS $(basename "$dir")"
-          done < "$SCRATCH/release-publishers-only.txt"
-          PUBLISHERS="${PUBLISHERS# }"
-
           TAGS=$(jq -r '.modules[].nextTag' "$SCRATCH/plan/plan.json" | tr '\n' ' ')
           TAGS="${TAGS% }"
 
-          echo "publishers=$PUBLISHERS" >> "$GITHUB_OUTPUT"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
           echo "Computed publisher tags: $TAGS"
 
@@ -267,8 +257,35 @@ jobs:
       # already on origin, or a concurrent dispatch of this same workflow,
       # could make such a lookup resolve to a different tag than the one
       # this run just pushed and create a release on the wrong version.
-      # Before releasing each planned tag, confirm it actually exists on
-      # origin and points at exactly $SHA.
+      #
+      # The plan is read with a plain command substitution
+      # (PLAN=$(jq ...)), not `done < <(jq ...)` feeding a `while read`
+      # loop: a `jq` failure inside process substitution does not trip
+      # `set -e`/`pipefail` -- the loop just sees EOF, runs zero
+      # iterations, and the step exits 0 having silently created no
+      # releases at all. A plain top-level `VAR=$(cmd)` assignment, by
+      # contrast, does carry `cmd`'s exit status under `set -e`, so a
+      # `jq` failure fails this step immediately; PLAN is also checked
+      # for emptiness explicitly, since a successful-but-empty plan
+      # (e.g. an empty modules array) would not trip `set -e` at all.
+      #
+      # Every planned tag is verified against ONE full, unfiltered
+      # `git ls-remote --tags origin` listing, not a per-tag filtered
+      # query: `git ls-remote --tags origin "refs/tags/<tag>"` returns
+      # only the tag object's own SHA and never the peeled "^{}" commit
+      # line, even for an annotated tag -- confirmed against a scratch
+      # bare repo (see "PR #172 review fixes" in
+      # odd/tasks/publisher-bump-flow-159.md for the exact commands and
+      # output). A per-tag query's "prefer the peeled SHA" branch is
+      # therefore dead code: it silently falls back to the tag object's
+      # own SHA and fails the exact-SHA check for every annotated tag.
+      # An unfiltered listing includes the peeled line for every
+      # annotated tag alongside its own plain line, so each tag's actual
+      # commit resolves correctly regardless of tag type.
+      #
+      # All-or-nothing: every planned tag is checked against that listing
+      # in one pass *before* any release is created, so a later mismatch
+      # never leaves some publishers released and others not.
       - name: Create publisher GitHub releases
         if: ${{ inputs.dry_run == false }}
         env:
@@ -278,31 +295,36 @@ jobs:
         run: |
           SCRATCH="$RUNNER_TEMP/release-publishers"
 
+          PLAN=$(jq -r '.modules[] | .dir + " " + .nextTag' "$SCRATCH/plan/plan.json")
+          if [ -z "$PLAN" ]; then
+            echo "::error::No planned publisher tags found in $SCRATCH/plan/plan.json -- refusing to run a release step that would silently create zero releases"
+            exit 1
+          fi
+
+          REMOTE_TAGS=$(git ls-remote --tags origin)
+
+          # Pass 1: verify every planned tag exists on origin and
+          # resolves to exactly $SHA before creating anything.
+          while IFS=' ' read -r DIR TAG; do
+            PEELED_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/${TAG}^{}" '$2 == ref {print $1}')
+            PLAIN_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/${TAG}" '$2 == ref {print $1}')
+            ACTUAL_SHA="${PEELED_SHA:-$PLAIN_SHA}"
+
+            if [ -z "$ACTUAL_SHA" ]; then
+              echo "::error::Planned tag ${TAG} for $(basename "$DIR") was not found on origin (expected it to already be pushed by the previous step)"
+              exit 1
+            fi
+            if [ "$ACTUAL_SHA" != "$SHA" ]; then
+              echo "::error::Planned tag ${TAG} for $(basename "$DIR") points at ${ACTUAL_SHA} on origin, expected ${SHA}"
+              exit 1
+            fi
+          done <<< "$PLAN"
+
+          # Pass 2: every planned tag is verified -- now create the releases.
           while IFS=' ' read -r DIR TAG; do
             PUB=$(basename "$DIR")
             PREFIX="publisher/${PUB}/v"
             VERSION="${TAG#${PREFIX}}"
-
-            REMOTE_REFS=$(git ls-remote --tags origin "refs/tags/${TAG}")
-            if [ -z "$REMOTE_REFS" ]; then
-              echo "::error::Planned tag ${TAG} for publisher ${PUB} was not found on origin (expected it to already be pushed by the previous step)"
-              exit 1
-            fi
-
-            # git ls-remote returns the tag object's own SHA for a plain
-            # "refs/tags/<tag>" line, and (for an annotated tag only) a
-            # second peeled "refs/tags/<tag>^{}" line carrying the commit
-            # it actually points at. Prefer the peeled commit SHA; fall
-            # back to the plain SHA for a lightweight tag, which has no
-            # peeled line at all.
-            PEELED_SHA=$(printf '%s\n' "$REMOTE_REFS" | awk -v ref="refs/tags/${TAG}^{}" '$2 == ref {print $1}')
-            PLAIN_SHA=$(printf '%s\n' "$REMOTE_REFS" | awk -v ref="refs/tags/${TAG}" '$2 == ref {print $1}')
-            ACTUAL_SHA="${PEELED_SHA:-$PLAIN_SHA}"
-
-            if [ "$ACTUAL_SHA" != "$SHA" ]; then
-              echo "::error::Planned tag ${TAG} for publisher ${PUB} points at ${ACTUAL_SHA} on origin, expected ${SHA}"
-              exit 1
-            fi
 
             gh release create "${TAG}" \
               --title "${PUB} publisher v${VERSION}" \
@@ -310,7 +332,7 @@ jobs:
               --latest=false
 
             echo "Created release for ${PUB} publisher v${VERSION}"
-          done < <(jq -r '.modules[] | .dir + " " + .nextTag' "$SCRATCH/plan/plan.json")
+          done <<< "$PLAN"
 
       # --- step (h), dry_run == true: print the plan, create nothing ---
       - name: Print dry-run plan
