@@ -22,6 +22,70 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SagaLifecycleStatus is the lifecycle status a saga actor reports in its
+// StateReply. It mirrors ego.SagaStatus; SAGA_LIFECYCLE_STATUS_NONE means the
+// replier did not report one (a non-saga reply, or a saga node built before
+// this field existed) and is read as running.
+type SagaLifecycleStatus int32
+
+const (
+	// No lifecycle status was reported.
+	SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE SagaLifecycleStatus = 0
+	// The saga is actively processing.
+	SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_RUNNING SagaLifecycleStatus = 1
+	// The saga finished successfully, or its compensation succeeded.
+	SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPLETED SagaLifecycleStatus = 2
+	// The saga is rolling back.
+	SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPENSATING SagaLifecycleStatus = 3
+	// The saga failed and its compensation also failed.
+	SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_FAILED SagaLifecycleStatus = 4
+)
+
+// Enum value maps for SagaLifecycleStatus.
+var (
+	SagaLifecycleStatus_name = map[int32]string{
+		0: "SAGA_LIFECYCLE_STATUS_NONE",
+		1: "SAGA_LIFECYCLE_STATUS_RUNNING",
+		2: "SAGA_LIFECYCLE_STATUS_COMPLETED",
+		3: "SAGA_LIFECYCLE_STATUS_COMPENSATING",
+		4: "SAGA_LIFECYCLE_STATUS_FAILED",
+	}
+	SagaLifecycleStatus_value = map[string]int32{
+		"SAGA_LIFECYCLE_STATUS_NONE":         0,
+		"SAGA_LIFECYCLE_STATUS_RUNNING":      1,
+		"SAGA_LIFECYCLE_STATUS_COMPLETED":    2,
+		"SAGA_LIFECYCLE_STATUS_COMPENSATING": 3,
+		"SAGA_LIFECYCLE_STATUS_FAILED":       4,
+	}
+)
+
+func (x SagaLifecycleStatus) Enum() *SagaLifecycleStatus {
+	p := new(SagaLifecycleStatus)
+	*p = x
+	return p
+}
+
+func (x SagaLifecycleStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SagaLifecycleStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_ego_ego_proto_enumTypes[0].Descriptor()
+}
+
+func (SagaLifecycleStatus) Type() protoreflect.EnumType {
+	return &file_ego_ego_proto_enumTypes[0]
+}
+
+func (x SagaLifecycleStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SagaLifecycleStatus.Descriptor instead.
+func (SagaLifecycleStatus) EnumDescriptor() ([]byte, []int) {
+	return file_ego_ego_proto_rawDescGZIP(), []int{0}
+}
+
 // Event defines the event that needs to be persisted onto the events store
 type Event struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -242,7 +306,11 @@ type StateReply struct {
 	// Specifies the sequence number
 	SequenceNumber uint64 `protobuf:"varint,3,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
 	// Specifies the timestamp
-	Timestamp     int64 `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Timestamp int64 `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// Specifies the saga lifecycle status. Only a saga actor sets it, in its
+	// reply to GetStateCommand; every other reply leaves it at
+	// SAGA_LIFECYCLE_STATUS_NONE.
+	SagaStatus    SagaLifecycleStatus `protobuf:"varint,5,opt,name=saga_status,json=sagaStatus,proto3,enum=egopb.SagaLifecycleStatus" json:"saga_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -303,6 +371,13 @@ func (x *StateReply) GetTimestamp() int64 {
 		return x.Timestamp
 	}
 	return 0
+}
+
+func (x *StateReply) GetSagaStatus() SagaLifecycleStatus {
+	if x != nil {
+		return x.SagaStatus
+	}
+	return SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE
 }
 
 // ErrorReply is used when a command processing has
@@ -887,13 +962,15 @@ const file_ego_ego_proto_rawDesc = "" +
 	"stateReply\x124\n" +
 	"\verror_reply\x18\x02 \x01(\v2\x11.egopb.ErrorReplyH\x00R\n" +
 	"errorReplyB\a\n" +
-	"\x05reply\"\xa6\x01\n" +
+	"\x05reply\"\xe3\x01\n" +
 	"\n" +
 	"StateReply\x12%\n" +
 	"\x0epersistence_id\x18\x01 \x01(\tR\rpersistenceId\x12*\n" +
 	"\x05state\x18\x02 \x01(\v2\x14.google.protobuf.AnyR\x05state\x12'\n" +
 	"\x0fsequence_number\x18\x03 \x01(\x04R\x0esequenceNumber\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"&\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\x12;\n" +
+	"\vsaga_status\x18\x05 \x01(\x0e2\x1a.egopb.SagaLifecycleStatusR\n" +
+	"sagaStatus\"&\n" +
 	"\n" +
 	"ErrorReply\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"\t\n" +
@@ -932,7 +1009,13 @@ const file_ego_ego_proto_rawDesc = "" +
 	"\x0ftenant_metadata\x18\a \x03(\v2'.egopb.DurableState.TenantMetadataEntryR\x0etenantMetadata\x1aA\n" +
 	"\x13TenantMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01Bt\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\xc7\x01\n" +
+	"\x13SagaLifecycleStatus\x12\x1e\n" +
+	"\x1aSAGA_LIFECYCLE_STATUS_NONE\x10\x00\x12!\n" +
+	"\x1dSAGA_LIFECYCLE_STATUS_RUNNING\x10\x01\x12#\n" +
+	"\x1fSAGA_LIFECYCLE_STATUS_COMPLETED\x10\x02\x12&\n" +
+	"\"SAGA_LIFECYCLE_STATUS_COMPENSATING\x10\x03\x12 \n" +
+	"\x1cSAGA_LIFECYCLE_STATUS_FAILED\x10\x04Bt\n" +
 	"\tcom.egopbB\bEgoProtoH\x02P\x01Z'github.com/pablogore/ego/v4/egopb;egopb\xa2\x02\x03EXX\xaa\x02\x05Egopb\xca\x02\x05Egopb\xe2\x02\x11Egopb\\GPBMetadata\xea\x02\x05Egopbb\x06proto3"
 
 var (
@@ -947,40 +1030,43 @@ func file_ego_ego_proto_rawDescGZIP() []byte {
 	return file_ego_ego_proto_rawDescData
 }
 
+var file_ego_ego_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_ego_ego_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_ego_ego_proto_goTypes = []any{
-	(*Event)(nil),              // 0: egopb.Event
-	(*CommandReply)(nil),       // 1: egopb.CommandReply
-	(*StateReply)(nil),         // 2: egopb.StateReply
-	(*ErrorReply)(nil),         // 3: egopb.ErrorReply
-	(*NoReply)(nil),            // 4: egopb.NoReply
-	(*GetStateCommand)(nil),    // 5: egopb.GetStateCommand
-	(*TenantBindingQuery)(nil), // 6: egopb.TenantBindingQuery
-	(*TenantBindingReply)(nil), // 7: egopb.TenantBindingReply
-	(*Offset)(nil),             // 8: egopb.Offset
-	(*ProjectionId)(nil),       // 9: egopb.ProjectionId
-	(*Snapshot)(nil),           // 10: egopb.Snapshot
-	(*DurableState)(nil),       // 11: egopb.DurableState
-	nil,                        // 12: egopb.Event.TenantMetadataEntry
-	nil,                        // 13: egopb.Snapshot.TenantMetadataEntry
-	nil,                        // 14: egopb.DurableState.TenantMetadataEntry
-	(*anypb.Any)(nil),          // 15: google.protobuf.Any
+	(SagaLifecycleStatus)(0),   // 0: egopb.SagaLifecycleStatus
+	(*Event)(nil),              // 1: egopb.Event
+	(*CommandReply)(nil),       // 2: egopb.CommandReply
+	(*StateReply)(nil),         // 3: egopb.StateReply
+	(*ErrorReply)(nil),         // 4: egopb.ErrorReply
+	(*NoReply)(nil),            // 5: egopb.NoReply
+	(*GetStateCommand)(nil),    // 6: egopb.GetStateCommand
+	(*TenantBindingQuery)(nil), // 7: egopb.TenantBindingQuery
+	(*TenantBindingReply)(nil), // 8: egopb.TenantBindingReply
+	(*Offset)(nil),             // 9: egopb.Offset
+	(*ProjectionId)(nil),       // 10: egopb.ProjectionId
+	(*Snapshot)(nil),           // 11: egopb.Snapshot
+	(*DurableState)(nil),       // 12: egopb.DurableState
+	nil,                        // 13: egopb.Event.TenantMetadataEntry
+	nil,                        // 14: egopb.Snapshot.TenantMetadataEntry
+	nil,                        // 15: egopb.DurableState.TenantMetadataEntry
+	(*anypb.Any)(nil),          // 16: google.protobuf.Any
 }
 var file_ego_ego_proto_depIdxs = []int32{
-	15, // 0: egopb.Event.event:type_name -> google.protobuf.Any
-	12, // 1: egopb.Event.tenant_metadata:type_name -> egopb.Event.TenantMetadataEntry
-	2,  // 2: egopb.CommandReply.state_reply:type_name -> egopb.StateReply
-	3,  // 3: egopb.CommandReply.error_reply:type_name -> egopb.ErrorReply
-	15, // 4: egopb.StateReply.state:type_name -> google.protobuf.Any
-	15, // 5: egopb.Snapshot.state:type_name -> google.protobuf.Any
-	13, // 6: egopb.Snapshot.tenant_metadata:type_name -> egopb.Snapshot.TenantMetadataEntry
-	15, // 7: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
-	14, // 8: egopb.DurableState.tenant_metadata:type_name -> egopb.DurableState.TenantMetadataEntry
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	16, // 0: egopb.Event.event:type_name -> google.protobuf.Any
+	13, // 1: egopb.Event.tenant_metadata:type_name -> egopb.Event.TenantMetadataEntry
+	3,  // 2: egopb.CommandReply.state_reply:type_name -> egopb.StateReply
+	4,  // 3: egopb.CommandReply.error_reply:type_name -> egopb.ErrorReply
+	16, // 4: egopb.StateReply.state:type_name -> google.protobuf.Any
+	0,  // 5: egopb.StateReply.saga_status:type_name -> egopb.SagaLifecycleStatus
+	16, // 6: egopb.Snapshot.state:type_name -> google.protobuf.Any
+	14, // 7: egopb.Snapshot.tenant_metadata:type_name -> egopb.Snapshot.TenantMetadataEntry
+	16, // 8: egopb.DurableState.resulting_state:type_name -> google.protobuf.Any
+	15, // 9: egopb.DurableState.tenant_metadata:type_name -> egopb.DurableState.TenantMetadataEntry
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_ego_ego_proto_init() }
@@ -997,13 +1083,14 @@ func file_ego_ego_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ego_ego_proto_rawDesc), len(file_ego_ego_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_ego_ego_proto_goTypes,
 		DependencyIndexes: file_ego_ego_proto_depIdxs,
+		EnumInfos:         file_ego_ego_proto_enumTypes,
 		MessageInfos:      file_ego_ego_proto_msgTypes,
 	}.Build()
 	File_ego_ego_proto = out.File
