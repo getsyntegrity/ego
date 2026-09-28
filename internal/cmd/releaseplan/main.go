@@ -156,7 +156,12 @@ func readLines(path string) ([]string, error) {
 }
 
 // writeOutputs writes plan.json and summary.md into outDir, creating it
-// if necessary.
+// if necessary, all-or-nothing: each is first written to a temp file in
+// outDir, and only once both writes succeed are they renamed into place,
+// plan.json first (a fixed, deterministic order — not the random order a
+// map range would give). If any write or rename fails, every temp file
+// and any already-renamed final file is removed, so a caller never
+// observes plan.json without summary.md or vice versa.
 func writeOutputs(outDir string, plan Plan, summary string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
@@ -165,14 +170,57 @@ func writeOutputs(outDir string, plan Plan, summary string) error {
 	if err != nil {
 		return fmt.Errorf("encoding plan.json: %w", err)
 	}
-	files := map[string]string{
-		"plan.json":  planJSON,
-		"summary.md": summary,
+
+	planTmp, err := writeTempFile(outDir, "plan.json", []byte(planJSON))
+	if err != nil {
+		return fmt.Errorf("writing plan.json: %w", err)
 	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(outDir, name), []byte(content), 0o600); err != nil {
-			return fmt.Errorf("writing %s: %w", name, err)
-		}
+	summaryTmp, err := writeTempFile(outDir, "summary.md", []byte(summary))
+	if err != nil {
+		_ = os.Remove(planTmp)
+		return fmt.Errorf("writing summary.md: %w", err)
+	}
+
+	planFinal := filepath.Join(outDir, "plan.json")
+	summaryFinal := filepath.Join(outDir, "summary.md")
+
+	if err := os.Rename(planTmp, planFinal); err != nil {
+		_ = os.Remove(planTmp)
+		_ = os.Remove(summaryTmp)
+		return fmt.Errorf("finalizing plan.json: %w", err)
+	}
+	if err := os.Rename(summaryTmp, summaryFinal); err != nil {
+		_ = os.Remove(planFinal)
+		_ = os.Remove(summaryTmp)
+		return fmt.Errorf("finalizing summary.md: %w", err)
 	}
 	return nil
+}
+
+// writeTempFile writes content to a new temp file in dir named after
+// finalName (e.g. "plan.json.tmp-<random>") and returns its path, or
+// removes the temp file and returns an error. It is a package-level
+// variable so tests can inject a failure on a specific call (e.g. the
+// second one) without relying on filesystem permissions to force the
+// failure at a precise point.
+var writeTempFile = func(dir, finalName string, content []byte) (string, error) {
+	f, err := os.CreateTemp(dir, finalName+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := f.Name()
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	return tmpName, nil
 }

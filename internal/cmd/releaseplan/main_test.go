@@ -25,6 +25,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,4 +186,77 @@ func TestRun_RealRepository(t *testing.T) {
 			t.Fatal("expected a major bump to be refused for the root or a publisher")
 		}
 	})
+}
+
+// TestWriteOutputs_SecondWriteFailure_LeavesNoPartialOutput exercises the
+// all-or-nothing contract writeOutputs must hold (PR #169 review finding
+// 1): plan.json and summary.md are written to temp files in -out-dir and
+// renamed into place only after both writes succeed, plan.json first
+// (deterministic order); on any error, the temps are removed and neither
+// final file is left behind. writeTempFile is the injectable seam: the
+// real filesystem write is overridden here to fail on its second call
+// (summary.md), without needing a read-only directory to force the
+// failure at a specific point.
+func TestWriteOutputs_SecondWriteFailure_LeavesNoPartialOutput(t *testing.T) {
+	dir := t.TempDir()
+
+	calls := 0
+	orig := writeTempFile
+	defer func() { writeTempFile = orig }()
+	writeTempFile = func(outDir, finalName string, content []byte) (string, error) {
+		calls++
+		if calls == 2 {
+			return "", fmt.Errorf("injected failure writing %s", finalName)
+		}
+		return orig(outDir, finalName, content)
+	}
+
+	plan := Plan{Bump: "patch", Modules: []PlanModule{{Dir: ".", Path: "example.com/root", NextTag: "v0.0.1"}}}
+	err := writeOutputs(dir, plan, "# Release plan\n")
+	if err == nil {
+		t.Fatal("expected writeOutputs to return an error when the second write fails")
+	}
+	if calls != 2 {
+		t.Fatalf("writeTempFile called %d times, want 2 (plan.json then summary.md)", calls)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "plan.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("plan.json must not exist after a failed write, stat error = %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "summary.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("summary.md must not exist after a failed write, stat error = %v", statErr)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading out-dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("out-dir must be empty after a failed write (no leftover temp files), got %v", entries)
+	}
+}
+
+// TestWriteOutputs_RenameFailure_UndoesTheFirstFile covers the other half
+// of the all-or-nothing contract: if renaming plan.json into place
+// succeeds but renaming summary.md fails, plan.json must be removed too,
+// so a caller never sees plan.json without summary.md.
+func TestWriteOutputs_RenameFailure_UndoesTheFirstFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// summary.md as a pre-existing directory makes os.Rename fail with
+	// ENOTEMPTY/EISDIR when writeOutputs tries to rename the summary.md
+	// temp file over it.
+	if err := os.Mkdir(filepath.Join(dir, "summary.md"), 0o755); err != nil {
+		t.Fatalf("seeding summary.md as a directory: %v", err)
+	}
+
+	plan := Plan{Bump: "patch"}
+	err := writeOutputs(dir, plan, "# Release plan\n")
+	if err == nil {
+		t.Fatal("expected writeOutputs to return an error when the summary.md rename fails")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "plan.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("plan.json must be undone when the summary.md rename fails, stat error = %v", statErr)
+	}
 }
