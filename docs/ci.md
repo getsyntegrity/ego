@@ -790,14 +790,24 @@ more) than a reviewer intended.
 
 **Matching.** A blocking finding is excepted only when an allow-file entry
 matches on all three of `module` (the directory `vulngate -module` was
-given), `id`, and `vulnerable_module`; an entry for a different module, or
-the same `id` surfacing through a different dependency, does not apply and
-the finding blocks. An excepted entry whose `review_by` has passed (`today
-> review_by`, `today` defaulting to now in UTC or overridden with `-today`
-for tests) fails as expired instead of excepted — an exception cannot
-silently outlive its review. An entry scoped to the module being scanned
-whose `id` no longer appears among that module's blocking findings fails as
-stale, forcing its removal once the underlying vulnerability is gone. An
+given), `id`, and `vulnerable_module`; an entry for a different module does
+not apply and the finding blocks. `id` and `vulnerable_module` together
+identify one exception, not `id` alone: `vulngate` tracks every blocking
+finding, and every allow-file entry scoped to the module, by the pair
+(`id`, `vulnerable_module`), because the same OSV ID can legitimately block
+through more than one dependency module (an OSV record can list several
+affected modules, e.g. a package and its fork). When the same `id` starts
+blocking through a *different* `vulnerable_module` than an existing entry
+names, that is **two** distinct, independently actionable facts, not one
+finding reported twice, and `vulngate` reports both: the new pair blocks
+(nothing names it), and the old entry goes stale (its own exact pair no
+longer has any blocking finding) — the blocked item's message names the
+stale entry's `vulnerable_module` explicitly, so a reader is not left to
+guess why the ID looks both new and already-listed. An excepted entry whose
+`review_by` has passed (`today > review_by`, `today` defaulting to now in
+UTC or overridden with `-today` for tests) fails as expired instead of
+excepted — an exception cannot silently outlive its review; the day named
+by `review_by` itself is still valid, only the day after it is expired. An
 entry scoped to a module this run did not scan is ignored entirely: never
 matched, and never reported stale (a `publisher/kafka` scan never
 evaluates, and never flags as stale, an entry written for

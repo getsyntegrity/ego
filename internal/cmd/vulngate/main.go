@@ -36,18 +36,30 @@
 // directly importable), so a finding blocks exactly when its first trace
 // frame names a function — the same set govulncheck's own text mode reports
 // as "Your code is affected". A finding whose vulnerable package is only
-// required or only imported, never called, never blocks.
+// required or only imported, never called, never blocks. The same OSV ID
+// can legitimately block through more than one dependency module in one
+// scan (an OSV record can list several affected modules, e.g. a package and
+// its fork), so vulngate tracks the pair (ID, vulnerable module), never the
+// bare ID.
 //
-// Exceptions are matched on the triple (scanned module directory, OSV ID,
-// vulnerable dependency module): an entry for a different module, or the
-// same ID surfacing through a different dependency, does not apply. Every
-// entry also carries a review_by date; once today is past it, the exception
-// no longer applies and the gate fails as expired, so an exception cannot
-// silently outlive its review. An entry scoped to the module being scanned
-// whose ID no longer appears among the module's blocking findings fails as
-// stale, so a fixed vulnerability's exception is forced out of the list
-// instead of lingering. An entry scoped to a module this run did not scan is
-// ignored entirely: it is neither matched nor ever reported stale.
+// An exception is identified by the triple (scanned module directory, OSV
+// ID, vulnerable dependency module) — all three, not just the first two:
+// an entry for a different module, or the same ID surfacing through a
+// different dependency module than the one the entry names, does not apply
+// and the finding blocks. Every entry also carries a review_by date; once
+// today is past it, the exception no longer applies and the gate fails as
+// expired, so an exception cannot silently outlive its review. An entry
+// scoped to the module being scanned whose exact (ID, vulnerable module)
+// pair no longer has any blocking finding fails as stale, so a fixed
+// vulnerability's exception is forced out of the list instead of
+// lingering — this is evaluated on the full triple too: if the same ID
+// starts blocking through a different module, the old entry goes stale
+// (its own pair is gone) at the same time as the new pair blocks (nothing
+// names it). Reporting both is correct, not a presentation bug: they are
+// two distinct fixable facts that happen to share an ID, and hiding either
+// one would let a reviewer miss it. An entry scoped to a module this run
+// did not scan is ignored entirely: it is neither matched nor ever reported
+// stale.
 //
 // See docs/ci.md, "The govulncheck exception gate (vulngate)", for the
 // allow-file format and how to add or retire an entry.
@@ -229,17 +241,26 @@ type reportLine struct {
 	Finding *findingMsg     `json:"finding"`
 }
 
-// parseReport decodes a govulncheck -format json stream and returns, for
-// every OSV ID with at least one call-level (blocking) finding, the module
-// of its vulnerable dependency (the finding's first trace frame). It fails
-// on malformed JSON, on a report with no decodable objects at all, and on a
-// report that never contained a "config" message — the first object every
-// real govulncheck JSON report writes, so its absence means the report is
-// truncated, was produced by something else, or is otherwise not trustworthy
-// input.
-func parseReport(r io.Reader) (map[string]string, error) {
+// findingID identifies one distinct blocking (called) vulnerability: an OSV
+// ID together with the dependency module its call trace actually reaches
+// (the finding's first trace frame). This pair, not the bare ID, is the
+// unit both a report's blocking findings and an allow-list entry's own
+// exception are keyed by — see the package doc comment for why.
+type findingID struct {
+	ID     string
+	Module string
+}
+
+// parseReport decodes a govulncheck -format json stream and returns the set
+// of every (OSV ID, vulnerable module) pair with at least one call-level
+// (blocking) finding. It fails on malformed JSON, on a report with no
+// decodable objects at all, and on a report that never contained a "config"
+// message — the first object every real govulncheck JSON report writes, so
+// its absence means the report is truncated, was produced by something
+// else, or is otherwise not trustworthy input.
+func parseReport(r io.Reader) (map[findingID]bool, error) {
 	dec := json.NewDecoder(r)
-	blocking := make(map[string]string)
+	blocking := make(map[findingID]bool)
 	sawConfig := false
 	count := 0
 	for {
@@ -264,7 +285,7 @@ func parseReport(r io.Reader) (map[string]string, error) {
 			// "Your code is affected" territory.
 			continue
 		}
-		blocking[line.Finding.OSV] = first.Module
+		blocking[findingID{ID: line.Finding.OSV, Module: first.Module}] = true
 	}
 	if count == 0 {
 		return nil, errors.New("report is empty")
@@ -275,9 +296,11 @@ func parseReport(r io.Reader) (map[string]string, error) {
 	return blocking, nil
 }
 
-// blockedItem is a blocking finding with no matching, valid exception: a
-// genuinely new ID, or a known ID surfacing through a different dependency
-// module than the one its exception names.
+// blockedItem is a blocking (ID, vulnerable module) pair with no matching,
+// valid exception: a genuinely new pair, or a known ID surfacing through a
+// different dependency module than the one an existing entry names (in
+// which case that entry is separately reported as stale — see (gateResult)
+// and blockedReason).
 type blockedItem struct {
 	ID     string
 	Module string
@@ -293,9 +316,11 @@ type exceptedItem struct {
 	ReviewBy string
 }
 
-// staleItem is an allow-list entry scoped to the scanned module whose ID no
-// longer has any blocking finding: the vulnerability this entry was written
-// for is gone, so the entry itself must be removed.
+// staleItem is an allow-list entry scoped to the scanned module whose exact
+// (ID, vulnerable module) pair no longer has any blocking finding: the
+// specific vulnerability instance this entry was written for is gone (fixed
+// outright, or now arriving through a different, uncovered dependency
+// module instead), so the entry itself must be removed.
 type staleItem struct {
 	ID     string
 	Module string
@@ -319,66 +344,95 @@ type gateResult struct {
 }
 
 // evaluate decides, for the module at moduleDir, which of its blocking
-// findings (osv id -> vulnerable module, as parseReport returns) are
-// excepted, blocked, or expired, and which of allow's entries scoped to
-// moduleDir are stale. Entries scoped to any other module are ignored
-// entirely: never matched, and never reported stale.
-func evaluate(moduleDir string, blocking map[string]string, allow []allowEntry, today string) gateResult {
-	scoped := make(map[string]allowEntry)
+// (ID, vulnerable module) pairs (as parseReport returns) are excepted,
+// blocked, or expired, and which of allow's entries scoped to moduleDir are
+// stale. Both blocking findings and allow-list entries are keyed by the
+// full (ID, vulnerable module) pair: an entry and a finding that share an ID
+// but name different vulnerable modules do not match each other at all —
+// the finding blocks (nothing names its exact pair) and the entry goes
+// stale (its own exact pair no longer has any blocking finding). That is
+// two distinct, independently actionable facts, not one finding reported
+// twice: fixing one (adding the finding's own entry) does not fix the other
+// (removing the now-pointless old entry), and vice versa.
+//
+// Entries scoped to any other module are ignored entirely: never matched,
+// and never reported stale.
+func evaluate(moduleDir string, blocking map[findingID]bool, allow []allowEntry, today string) gateResult {
+	scoped := make(map[findingID]allowEntry)
+	byID := make(map[string][]allowEntry) // every scoped entry sharing an ID, for a clearer blocked reason
 	for _, e := range allow {
 		if e.Module != moduleDir {
 			continue
 		}
-		scoped[e.ID] = e
+		scoped[findingID{ID: e.ID, Module: e.VulnerableModule}] = e
+		byID[e.ID] = append(byID[e.ID], e)
 	}
 
 	var res gateResult
-	for _, id := range sortedKeys(blocking) {
-		vulnModule := blocking[id]
-		entry, ok := scoped[id]
+	for _, key := range sortedFindingIDs(blocking) {
+		entry, ok := scoped[key]
 		switch {
 		case !ok:
-			res.Blocked = append(res.Blocked, blockedItem{
-				ID: id, Module: vulnModule,
-				Reason: fmt.Sprintf("no exception entry for %s in this module's allow list", id),
-			})
-		case entry.VulnerableModule != vulnModule:
-			res.Blocked = append(res.Blocked, blockedItem{
-				ID: id, Module: vulnModule,
-				Reason: fmt.Sprintf("exception entry names vulnerable_module %q, but the finding is in %q", entry.VulnerableModule, vulnModule),
-			})
+			res.Blocked = append(res.Blocked, blockedItem{ID: key.ID, Module: key.Module, Reason: blockedReason(key, byID[key.ID])})
 		case today > entry.ReviewBy:
-			res.Expired = append(res.Expired, expiredItem{ID: id, Module: vulnModule, ReviewBy: entry.ReviewBy})
+			res.Expired = append(res.Expired, expiredItem{ID: key.ID, Module: key.Module, ReviewBy: entry.ReviewBy})
 		default:
-			res.Excepted = append(res.Excepted, exceptedItem{ID: id, Module: vulnModule, Owner: entry.Owner, ReviewBy: entry.ReviewBy})
+			res.Excepted = append(res.Excepted, exceptedItem{ID: key.ID, Module: key.Module, Owner: entry.Owner, ReviewBy: entry.ReviewBy})
 		}
 	}
 
-	for _, id := range sortedAllowKeys(scoped) {
-		if _, blocking := blocking[id]; blocking {
+	for _, key := range sortedScopedFindingIDs(scoped) {
+		if blocking[key] {
 			continue
 		}
-		res.Stale = append(res.Stale, staleItem{ID: id, Module: scoped[id].VulnerableModule})
+		res.Stale = append(res.Stale, staleItem{ID: key.ID, Module: key.Module})
 	}
 
 	return res
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
+// blockedReason explains why key has no matching exception. When
+// otherEntries names at least one entry for the same ID under a different
+// vulnerable module, the reason says so explicitly — that other entry is
+// separately reported stale in the same gateResult, and a reader seeing
+// only "no exception entry" would otherwise have no way to connect the two.
+func blockedReason(key findingID, otherEntries []allowEntry) string {
+	if len(otherEntries) == 0 {
+		return fmt.Sprintf("no exception entry for %s in this module's allow list", key.ID)
+	}
+	named := make([]string, len(otherEntries))
+	for i, e := range otherEntries {
+		named[i] = e.VulnerableModule
+	}
+	sort.Strings(named)
+	return fmt.Sprintf("no exception entry names vulnerable_module %q for %s; this module's allow list has %s for vulnerable_module %s instead, which no longer matches any finding and is reported stale",
+		key.Module, key.ID, key.ID, strings.Join(named, ", "))
+}
+
+func sortFindingIDs(keys []findingID) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].ID != keys[j].ID {
+			return keys[i].ID < keys[j].ID
+		}
+		return keys[i].Module < keys[j].Module
+	})
+}
+
+func sortedFindingIDs(m map[findingID]bool) []findingID {
+	keys := make([]findingID, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sortFindingIDs(keys)
 	return keys
 }
 
-func sortedAllowKeys(m map[string]allowEntry) []string {
-	keys := make([]string, 0, len(m))
+func sortedScopedFindingIDs(m map[findingID]allowEntry) []findingID {
+	keys := make([]findingID, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sortFindingIDs(keys)
 	return keys
 }
 

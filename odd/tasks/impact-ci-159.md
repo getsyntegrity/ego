@@ -281,14 +281,44 @@ matrix is empty, the `modules` job is *skipped*, not green.
     it so a failed scan or a failed gate still leaves the report as
     evidence. `Install govulncheck` is now pinned to `@v1.8.0` in both
     workflows instead of `@latest`.
-  - **Judgement call**: staleness is keyed only on (scanned module, ID),
-    ignoring `vulnerable_module` — an entry whose ID is still present but
-    now surfaces through a different dependency module counts as *blocked*
-    (the entry no longer matches), not stale, and is not silently dropped
-    from the summary. Rejected alternative: also require
-    `vulnerable_module` to match before considering an ID "present", which
-    would make that case simultaneously stale and blocked for the same
-    root cause, double-reporting one problem.
+  - **Corrected (user review, before push)**: the first version of this
+    correction keyed staleness on (scanned module, ID) only, ignoring
+    `vulnerable_module` — an entry whose ID resurfaced through a different
+    dependency module was reported *blocked* only, deliberately not also
+    stale, reasoning that requiring `vulnerable_module` too would
+    "double-report one problem". The user reviewed this and identified it
+    as wrong: an exception must identify the triple (Ego module, ID,
+    vulnerable module), not just (Ego module, ID); reporting only "blocked"
+    silently drops the fact that the old entry (naming the *other*
+    vulnerable module) is now pointless and must be removed — that is a
+    second, independently actionable fact, not a duplicate of the first.
+    Fixed: `evaluate` now keys both blocking findings and allow-list
+    entries by the full pair `findingID{ID, Module}` (`Module` being the
+    vulnerable dependency), so the same ID under two different vulnerable
+    modules is two distinct keys. When the same ID's vulnerable module
+    changes, the gate now reports **both**: the new pair blocks (no entry
+    names it) and the old entry goes stale (its own pair has no finding
+    left); the blocked item's `Reason` names the stale entry's
+    `vulnerable_module` explicitly so the connection between the two is not
+    left implicit. **TDD**: rewrote
+    `TestEvaluate_SameIDInAnotherModuleBlocks` (renamed
+    `TestEvaluate_SameIDDifferentVulnerableModuleBlocksAndMarksOldEntryStale`)
+    to assert `len(res.Stale) == 1` (previously asserted `== 0`); RED
+    against the pre-fix code (compile failure first, since `blocking`'s type
+    changed from `map[string]string` to `map[findingID]bool` across every
+    test using it — 9 call sites updated), then GREEN after the `evaluate`/
+    `parseReport` rewrite; all 26 tests (25 previous + this rewritten one)
+    pass. Re-verified against the real `publisher/pulsar` report: unaffected
+    (still 3 excepted, 0 blocked/stale/expired, since the real
+    `vulnerable_module` values match exactly), plus a new real-data check —
+    an allow file with `GO-2026-5046`'s `vulnerable_module` deliberately
+    changed to a wrong value — correctly produced 1 blocked
+    (`GO-2026-5046` "found in `github.com/hamba/avro/v2`") **and** 1 stale
+    (`GO-2026-5046`, the wrong-module entry) together, with the blocked
+    item's reason naming the stale entry's module. `docs/ci.md`'s
+    "Matching" paragraph, which already (correctly) described the triple,
+    is corrected where it had drifted from the actual (buggy) staleness
+    behavior ("whose `id` no longer appears" → the full pair).
   - **Judgement call**: `review_by` is inclusive of its own day (`today >
     review_by` is expired, `today == review_by` is not) — the date names
     the last day the exception is still assumed valid, not the first day it

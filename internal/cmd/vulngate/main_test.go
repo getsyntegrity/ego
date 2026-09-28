@@ -107,8 +107,8 @@ func TestParseReport_CalledFindingBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseReport: %v", err)
 	}
-	if got, want := blocking["GO-2026-0001"], "example.com/vuln"; got != want {
-		t.Fatalf("blocking[GO-2026-0001] = %q, want %q", got, want)
+	if !blocking[findingID{ID: "GO-2026-0001", Module: "example.com/vuln"}] {
+		t.Fatalf("blocking = %v, want it to contain (GO-2026-0001, example.com/vuln)", blocking)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestLoadAllowList_BadDateFails(t *testing.T) {
 // --- evaluate ------------------------------------------------------------
 
 func TestEvaluate_ExceptedFinding(t *testing.T) {
-	blocking := map[string]string{"GO-1": "example.com/vuln"}
+	blocking := map[findingID]bool{{ID: "GO-1", Module: "example.com/vuln"}: true}
 	allow := []allowEntry{{Module: "mod", ID: "GO-1", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
 	res := evaluate("mod", blocking, allow, "2026-01-01")
 	if len(res.Excepted) != 1 || len(res.Blocked) != 0 || len(res.Stale) != 0 || len(res.Expired) != 0 {
@@ -210,28 +210,40 @@ func TestEvaluate_ExceptedFinding(t *testing.T) {
 }
 
 func TestEvaluate_NewIDBlocks(t *testing.T) {
-	blocking := map[string]string{"GO-2": "example.com/vuln"}
+	blocking := map[findingID]bool{{ID: "GO-2", Module: "example.com/vuln"}: true}
 	res := evaluate("mod", blocking, nil, "2026-01-01")
 	if len(res.Blocked) != 1 {
 		t.Fatalf("res.Blocked = %+v, want exactly one blocked finding for an unlisted ID", res.Blocked)
 	}
 }
 
-func TestEvaluate_SameIDInAnotherModuleBlocks(t *testing.T) {
-	blocking := map[string]string{"GO-3": "example.com/other-vuln"}
+// TestEvaluate_SameIDDifferentVulnerableModuleBlocksAndMarksOldEntryStale
+// covers an OSV ID that blocks through a different dependency module than
+// the one an existing exception names. An exception identifies the triple
+// (Ego module, ID, vulnerable module), not just (Ego module, ID): the
+// entry's own (GO-3, example.com/vuln) pair no longer has any blocking
+// finding, so it is stale, and the actual blocking pair (GO-3,
+// example.com/other-vuln) has no entry naming it, so it blocks. Reporting
+// both is correct, not a duplicate: they are two distinct facts about two
+// distinct (ID, module) pairs that only happen to share an ID.
+func TestEvaluate_SameIDDifferentVulnerableModuleBlocksAndMarksOldEntryStale(t *testing.T) {
+	blocking := map[findingID]bool{{ID: "GO-3", Module: "example.com/other-vuln"}: true}
 	allow := []allowEntry{{Module: "mod", ID: "GO-3", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
 	res := evaluate("mod", blocking, allow, "2026-01-01")
-	if len(res.Blocked) != 1 {
-		t.Fatalf("res.Blocked = %+v, want exactly one blocked finding when vulnerable_module does not match", res.Blocked)
+	if len(res.Blocked) != 1 || res.Blocked[0].Module != "example.com/other-vuln" {
+		t.Fatalf("res.Blocked = %+v, want exactly one blocked finding for example.com/other-vuln", res.Blocked)
 	}
-	if len(res.Stale) != 0 {
-		t.Fatalf("res.Stale = %+v, want none: the ID is present, just under a different module", res.Stale)
+	if len(res.Stale) != 1 || res.Stale[0].Module != "example.com/vuln" {
+		t.Fatalf("res.Stale = %+v, want the entry for example.com/vuln to be stale: its exact (ID, vulnerable module) pair no longer appears", res.Stale)
+	}
+	if len(res.Excepted) != 0 || len(res.Expired) != 0 {
+		t.Fatalf("res = %+v, want no excepted or expired findings", res)
 	}
 }
 
 func TestEvaluate_StaleEntryFails(t *testing.T) {
 	allow := []allowEntry{{Module: "mod", ID: "GO-4", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
-	res := evaluate("mod", map[string]string{}, allow, "2026-01-01")
+	res := evaluate("mod", map[findingID]bool{}, allow, "2026-01-01")
 	if len(res.Stale) != 1 {
 		t.Fatalf("res.Stale = %+v, want exactly one stale entry", res.Stale)
 	}
@@ -239,14 +251,14 @@ func TestEvaluate_StaleEntryFails(t *testing.T) {
 
 func TestEvaluate_EntryForAnotherModuleIsIgnored(t *testing.T) {
 	allow := []allowEntry{{Module: "other-mod", ID: "GO-5", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
-	res := evaluate("mod", map[string]string{}, allow, "2026-01-01")
+	res := evaluate("mod", map[findingID]bool{}, allow, "2026-01-01")
 	if len(res.Stale) != 0 || len(res.Blocked) != 0 {
 		t.Fatalf("res = %+v, want an entry scoped to another module to be entirely ignored", res)
 	}
 }
 
 func TestEvaluate_ExpiredReviewDateFails(t *testing.T) {
-	blocking := map[string]string{"GO-6": "example.com/vuln"}
+	blocking := map[findingID]bool{{ID: "GO-6", Module: "example.com/vuln"}: true}
 	allow := []allowEntry{{Module: "mod", ID: "GO-6", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
 	res := evaluate("mod", blocking, allow, "2026-12-29")
 	if len(res.Expired) != 1 {
@@ -258,7 +270,7 @@ func TestEvaluate_ExpiredReviewDateFails(t *testing.T) {
 }
 
 func TestEvaluate_ReviewDateOnTheDayItselfStillPasses(t *testing.T) {
-	blocking := map[string]string{"GO-7": "example.com/vuln"}
+	blocking := map[findingID]bool{{ID: "GO-7", Module: "example.com/vuln"}: true}
 	allow := []allowEntry{{Module: "mod", ID: "GO-7", VulnerableModule: "example.com/vuln", Owner: "@o", ReviewBy: "2026-12-28"}}
 	res := evaluate("mod", blocking, allow, "2026-12-28")
 	if len(res.Excepted) != 1 || len(res.Expired) != 0 {
