@@ -33,12 +33,12 @@ import (
 
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/persistence"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // waitTimeout bounds every wait on an asynchronous delivery. Tests wait on

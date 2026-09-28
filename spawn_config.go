@@ -25,8 +25,8 @@ package ego
 import (
 	"time"
 
-	runtimeport "github.com/pablogore/ego/v4/port/runtime"
-	"github.com/pablogore/ego/v4/tenancy"
+	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine

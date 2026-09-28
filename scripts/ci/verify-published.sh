@@ -32,7 +32,7 @@ fi
 
 module_dir=$1
 ego_version=$2
-root_module="github.com/pablogore/ego/v4"
+root_module="github.com/getsyntegrity/ego/v4"
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)

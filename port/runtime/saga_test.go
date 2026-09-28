@@ -27,7 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pablogore/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/v4/port/runtime"
 )
 
 func TestSagaStatusString(t *testing.T) {

@@ -31,7 +31,7 @@ import (
 // for the module-aware rules. A path belongs to the module with the longest
 // module path that equals it or prefixes it at a path-segment boundary,
 // which is how the go command itself assigns a directory to its nearest
-// go.mod: github.com/pablogore/ego/v4/publisher/kafka/internal/x belongs to
+// go.mod: github.com/getsyntegrity/ego/publisher/kafka/internal/x belongs to
 // the publisher/kafka module, not to the root module whose path also
 // prefixes it.
 type ModuleIndex struct {

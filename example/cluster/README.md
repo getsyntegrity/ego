@@ -433,7 +433,7 @@ ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
 
 ## Dependency Isolation
 
-This example is a **separate Go module** (`github.com/pablogore/ego/v4/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
+This example is a **separate Go module** (`github.com/getsyntegrity/ego/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
 
 ## Cleanup
 

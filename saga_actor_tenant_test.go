@@ -38,12 +38,12 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	mocks "github.com/pablogore/ego/v4/mocks/persistence"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	mocks "github.com/getsyntegrity/ego/v4/mocks/persistence"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // tenantMetadata is a small test helper converting a TenantContext into the

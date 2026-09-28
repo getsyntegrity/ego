@@ -35,14 +35,14 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/pause"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/pause"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // TestEventSourcedActorMarshalEventWritesTenantMetadata covers tasks

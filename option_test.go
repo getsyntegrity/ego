@@ -36,12 +36,12 @@ import (
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/projection"
-	"github.com/pablogore/ego/v4/tenancy"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // stubTenantResolver is a minimal tenancy.TenantResolver used across

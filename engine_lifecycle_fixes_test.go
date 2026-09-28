@@ -34,8 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // failingCloseEventPublisher is an EventPublisher whose Close always fails

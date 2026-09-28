@@ -32,11 +32,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	mockpersistence "github.com/pablogore/ego/v4/mocks/persistence"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/tenancy"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	mockpersistence "github.com/getsyntegrity/ego/v4/mocks/persistence"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // This file covers TENANT-003 T4's corrected spawn-time tenant design: CI

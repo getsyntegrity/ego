@@ -35,12 +35,12 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4"
-	"github.com/pablogore/ego/v4/compose"
-	egoakt "github.com/pablogore/ego/v4/compose/goakt"
-	samplepb "github.com/pablogore/ego/v4/example/examplepb"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego/v4/compose"
+	egoakt "github.com/getsyntegrity/ego/v4/compose/goakt"
+	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 func main() {

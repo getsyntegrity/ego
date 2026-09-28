@@ -29,8 +29,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/persistence"
 )
 
 // TestEventStoreReplayEventsAcceptsTheMigrationReplayBounds pins the bounds

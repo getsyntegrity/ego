@@ -26,11 +26,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/port/adapter"
-	"github.com/pablogore/ego/v4/port/adapter/adaptertest"
-	"github.com/pablogore/ego/v4/port/publishing"
-	"github.com/pablogore/ego/v4/port/publishing/publishingtest"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/port/adapter/adaptertest"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/port/publishing/publishingtest"
 )
 
 // The websocket publishers run both conformance suites against a real

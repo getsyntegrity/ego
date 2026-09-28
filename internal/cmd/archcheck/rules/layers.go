@@ -22,7 +22,10 @@
 
 package rules
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Layer groups the packages that share one set of dependency-direction
 // rules (design.md §3 names four: contracts, the application package
@@ -115,17 +118,44 @@ func ApplicationLayer(rootModulePath string) Layer {
 	}
 }
 
+// repoPathFromModule returns rootModulePath with a trailing Go major-version
+// path element ("/vN", N >= 2, e.g. "/v4") removed, or rootModulePath
+// unchanged when it has none. Since D1 (#134), a nested module under
+// publisher/ keeps the root's major-version-free repository identity in its
+// own module path (e.g. "github.com/getsyntegrity/ego/publisher/kafka"): it
+// never shares the root module's own "/vN" path
+// ("github.com/getsyntegrity/ego/v4"), so a rule that matches publisher
+// packages by prefix must match against the repository path, not the root
+// module path.
+func repoPathFromModule(rootModulePath string) string {
+	i := strings.LastIndexByte(rootModulePath, '/')
+	if i < 0 {
+		return rootModulePath
+	}
+	last := rootModulePath[i+1:]
+	if len(last) < 2 || last[0] != 'v' {
+		return rootModulePath
+	}
+	if n, err := strconv.Atoi(last[1:]); err != nil || n < 2 {
+		return rootModulePath
+	}
+	return rootModulePath[:i]
+}
+
 // ExternalAdapterLayer returns the layer named "Nested adapter modules:
 // publisher/*" in design.md §3: every package in a nested module rooted
-// under publisher/.
+// under publisher/. It matches by repository path (see repoPathFromModule),
+// not by rootModulePath, because publisher modules do not carry the root
+// module's own "/vN" suffix.
 func ExternalAdapterLayer(rootModulePath string) Layer {
+	repoPath := repoPathFromModule(rootModulePath)
 	return Layer{
 		Name: "external adapter modules (publisher/*)",
 		Match: func(pkg Package) bool {
 			if pkg.Kind != NestedModule {
 				return false
 			}
-			return hasPathOrSubpath(pkg.ImportPath, rootModulePath+"/publisher")
+			return hasPathOrSubpath(pkg.ImportPath, repoPath+"/publisher")
 		},
 	}
 }

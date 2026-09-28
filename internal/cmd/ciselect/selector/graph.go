@@ -38,7 +38,7 @@ import (
 // the selector needs.
 type Package struct {
 	// ImportPath is the package's full import path, e.g.
-	// "github.com/pablogore/ego/v4/internal/pause".
+	// "github.com/getsyntegrity/ego/v4/internal/pause".
 	ImportPath string
 	// Dir is the package's absolute directory on disk.
 	Dir string
@@ -62,7 +62,7 @@ type Package struct {
 // `go list -e -json ./...` run inside the module directory.
 type Graph struct {
 	// ModulePath is the module's import path, e.g.
-	// "github.com/pablogore/ego/v4".
+	// "github.com/getsyntegrity/ego/v4".
 	ModulePath string
 	// ModuleDir is the module's root directory on disk (absolute).
 	ModuleDir string

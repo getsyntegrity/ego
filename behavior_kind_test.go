@@ -37,7 +37,7 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // Compile-time proof that BehaviorKind and EntityKind (extension.Dependency)

@@ -37,7 +37,7 @@ import (
 // GoAkt, transport, auth library or other first-party runtime package.
 var commandArchitectureAllowedModules = []string{
 	"google.golang.org/protobuf",
-	"github.com/pablogore/ego/v4/tenancy",
+	"github.com/getsyntegrity/ego/v4/tenancy",
 }
 
 // TestCommandArchitecture enforces design.md's import allowlist for

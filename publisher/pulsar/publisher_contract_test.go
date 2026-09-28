@@ -29,8 +29,8 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/port/publishing"
 )
 
 // The publishers implement the contracts from port/publishing directly, with

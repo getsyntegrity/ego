@@ -25,9 +25,9 @@ package adaptertest
 import (
 	"testing"
 
-	"github.com/pablogore/ego/v4/offsetstore"
-	"github.com/pablogore/ego/v4/persistence"
-	"github.com/pablogore/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/v4/offsetstore"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/v4/port/adapter"
 )
 
 // The table of ports that imply CapReady is written as string literals,

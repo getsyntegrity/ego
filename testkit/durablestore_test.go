@@ -31,9 +31,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/persistence"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
 )
 
 // newAccountState builds a *egopb.DurableState for persistenceID at

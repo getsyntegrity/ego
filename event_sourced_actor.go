@@ -37,16 +37,16 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/pablogore/ego/v4/command"
-	"github.com/pablogore/ego/v4/egopb"
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/internal/extensions"
-	"github.com/pablogore/ego/v4/internal/runner"
-	"github.com/pablogore/ego/v4/persistence"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/runner"
+	"github.com/getsyntegrity/ego/v4/persistence"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 const (

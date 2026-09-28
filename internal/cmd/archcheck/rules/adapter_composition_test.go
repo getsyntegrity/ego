@@ -57,7 +57,7 @@ func TestExternalAdapterNoComposition_IsDefinedOnTheAdapterLayer(t *testing.T) {
 // and its reason names the import and what adapters may import instead.
 func TestExternalAdapterNoComposition_ExplorationSpikeFails(t *testing.T) {
 	graph := Graph{Packages: []Package{
-		{ImportPath: root + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: []string{root + "/port/publishing", root + "/compose/goakt"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: []string{root + "/port/publishing", root + "/compose/goakt"}},
 	}}
 	result, err := Evaluate(graph, rulesFor(t, adapterNoComposition), nil)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestExternalAdapterNoComposition_ExplorationSpikeFails(t *testing.T) {
 		t.Fatalf("len(Violations) = %d, want 1: %+v", len(result.Violations), result.Violations)
 	}
 	v := result.Violations[0]
-	if v.Rule != adapterNoComposition || v.Importer != root+"/publisher/kafka" || v.Import != root+"/compose/goakt" {
+	if v.Rule != adapterNoComposition || v.Importer != repoRoot+"/publisher/kafka" || v.Import != root+"/compose/goakt" {
 		t.Errorf("violation = %+v, want %s for publisher/kafka -> compose/goakt", v, adapterNoComposition)
 	}
 	for _, want := range []string{root + "/compose/goakt", "contract", "egopb"} {
@@ -84,9 +84,9 @@ func TestExternalAdapterNoComposition_ExplorationSpikeFails(t *testing.T) {
 func TestExternalAdapterNoComposition_ForbidsEveryCompositionPackage(t *testing.T) {
 	composition := []string{root + "/compose", root + "/compose/goakt", root + "/compose/internal/lifecycle"}
 	graph := withRepoModules(Graph{Packages: []Package{
-		{ImportPath: root + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: composition},
-		{ImportPath: root + "/publisher/kafka/cmd/demo", Name: "main", Kind: NestedModule, Imports: []string{root + "/compose"}},
-		{ImportPath: root + "/publisher/kafka/example", Name: "example", Kind: NestedModule, Imports: []string{root + "/compose/goakt"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: composition},
+		{ImportPath: repoRoot + "/publisher/kafka/cmd/demo", Name: "main", Kind: NestedModule, Imports: []string{root + "/compose"}},
+		{ImportPath: repoRoot + "/publisher/kafka/example", Name: "example", Kind: NestedModule, Imports: []string{root + "/compose/goakt"}},
 	}})
 	result, err := Evaluate(graph, rulesFor(t, adapterNoComposition, "no-cross-module-internal"), nil)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestExternalAdapterNoComposition_ForbidsEveryCompositionPackage(t *testing.
 		t.Errorf("%s reported %d edges, want 5 (3 from kafka, 1 from its main, 1 from its example): %v", adapterNoComposition, n, got[adapterNoComposition])
 	}
 	internal := got["no-cross-module-internal"]
-	if len(internal) != 1 || internal[0] != root+"/publisher/kafka -> "+root+"/compose/internal/lifecycle" {
+	if len(internal) != 1 || internal[0] != repoRoot+"/publisher/kafka -> "+root+"/compose/internal/lifecycle" {
 		t.Errorf("no-cross-module-internal reported %v, want only publisher/kafka -> compose/internal/lifecycle", internal)
 	}
 	stat, _ := ruleStat(result.RuleStats, adapterNoComposition)
@@ -117,7 +117,7 @@ func TestExternalAdapterNoComposition_ForbidsEveryCompositionPackage(t *testing.
 // with "compose" passes.
 func TestExternalAdapterNoComposition_AllowsLegitimateImporters(t *testing.T) {
 	graph := Graph{Packages: []Package{
-		{ImportPath: root + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: []string{root + "/port/publishing", root + "/egopb", root + "/composer", "github.com/segmentio/kafka-go"}},
+		{ImportPath: repoRoot + "/publisher/kafka", Name: "kafka", Kind: NestedModule, Imports: []string{root + "/port/publishing", root + "/egopb", root + "/composer", "github.com/segmentio/kafka-go"}},
 		{ImportPath: root + "/internal/cmd/tool", Name: "main", Kind: RootModule, Imports: []string{root + "/compose"}},
 		{ImportPath: root + "/example/eventssourced", Name: "main", Kind: RootModule, Imports: []string{root + "/compose", root + "/compose/goakt"}},
 		{ImportPath: root + "/compose/goakt", Name: "goakt", Kind: RootModule, Imports: []string{root + "/compose"}},

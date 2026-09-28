@@ -32,11 +32,11 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/pablogore/ego/v4/encryption"
-	"github.com/pablogore/ego/v4/eventadapter"
-	"github.com/pablogore/ego/v4/eventstream"
-	"github.com/pablogore/ego/v4/projection"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/v4/eventadapter"
+	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 func TestEventsStore(t *testing.T) {

@@ -35,7 +35,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pablogore/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/v4/egopb"
 )
 
 // ErrPublisherNotStarted is returned when an operation is attempted on a publisher that has not been started.

@@ -26,7 +26,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/pablogore/ego/v4/command"
+	"github.com/getsyntegrity/ego/v4/command"
 )
 
 // Saga defines a long-running business process that coordinates

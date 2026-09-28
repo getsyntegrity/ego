@@ -28,7 +28,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pablogore/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/v4/tenancy"
 )
 
 // maxCustomValueBytes bounds a custom metadata value's length (D6).

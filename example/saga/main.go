@@ -74,10 +74,10 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/pablogore/ego/v4"
-	samplepb "github.com/pablogore/ego/v4/example/examplepb"
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4"
+	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 func main() {

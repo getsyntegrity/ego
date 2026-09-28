@@ -23,8 +23,8 @@
 package ego
 
 import (
-	behaviorport "github.com/pablogore/ego/v4/port/behavior"
-	"github.com/pablogore/ego/v4/testkit"
+	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // The testkit declares the behavior subsets it needs rather than importing ego,

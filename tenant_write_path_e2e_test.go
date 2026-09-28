@@ -34,9 +34,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pablogore/ego/v4/tenancy"
-	testpb "github.com/pablogore/ego/v4/test/data/testpb"
-	"github.com/pablogore/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/v4/tenancy"
+	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
 )
 
 // tenancyProbeCreditEventSourcedBehavior is entity B's behavior in

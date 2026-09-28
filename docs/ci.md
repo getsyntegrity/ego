@@ -176,7 +176,7 @@ graph and computes:
   those, so one extra pass over the direct test-import edges is enough.
 
 This is why, for example, changing `internal/pause/pause.go` selects both
-`internal/pause` and the root package `github.com/pablogore/ego/v4`: no
+`internal/pause` and the root package `github.com/getsyntegrity/ego/v4`: no
 non-test file in the root package imports `internal/pause` — only the
 root package's `_test.go` files do — so `internal/pause` never appears in
 `R` via the build graph, but the root package is still correctly pulled in
@@ -276,12 +276,12 @@ Each rule applies to one layer and checks the direct import edges of every packa
 A failure names the importer, the forbidden import and the rule, for example:
 
 ```text
-github.com/pablogore/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: rule contract-allowlist (design.md §3): ...
+github.com/getsyntegrity/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: rule contract-allowlist (design.md §3): ...
 ```
 
 The fix is almost always to depend on a contract package instead of the runtime. Do not add a baseline entry to silence a new violation.
 
-A module-cycle failure names the requiring module as the importer and the required module as the import, and its reason spells out the cycle, for example `requires github.com/pablogore/ego/v4/contracts, which requires it back: github.com/pablogore/ego/v4 -> github.com/pablogore/ego/v4/contracts -> github.com/pablogore/ego/v4`. The go toolchain accepts module cycles, and `ciselect` does not check for them (a cycle there would only widen a selection), so archcheck is where one fails the build. Likewise, Go does not stop a module from importing another in-repository module's `internal/` package, because every module here shares the root module's path prefix; `no-cross-module-internal` does.
+A module-cycle failure names the requiring module as the importer and the required module as the import, and its reason spells out the cycle, for example `requires github.com/getsyntegrity/ego/v4/contracts, which requires it back: github.com/getsyntegrity/ego/v4 -> github.com/getsyntegrity/ego/v4/contracts -> github.com/getsyntegrity/ego/v4`. The go toolchain accepts module cycles, and `ciselect` does not check for them (a cycle there would only widen a selection), so archcheck is where one fails the build. Likewise, Go does not stop a module from importing another in-repository module's `internal/` package, because every module here shares the root module's path prefix; `no-cross-module-internal` does.
 
 The summary line counts modules too. On the S1 branch: `archcheck: 8 modules checked, 44 packages checked, 182 edges checked, 1 baselined, 0 violation(s), 0 stale entries` (before S1: `37 packages checked, 157 edges checked, 1 baselined`; the generalized `no-cross-module-internal` now also inspects root-module packages, and `test/compat` adds one package).
 
@@ -376,7 +376,7 @@ over the measured root-package time.
 | PR job wall-clock (old, full suite, `-race -p 1`, `go-acc`) | 12m27s–13m16s |
 | `build.yml` wall-clock (same) | 10m58s–13m16s |
 | "Run tests" step share of the PR job | >95% |
-| CI run `35868911889` (`-race -p 1`): root package `github.com/pablogore/ego/v4` | 593.7s of 609.7s total (97%) |
+| CI run `35868911889` (`-race -p 1`): root package `github.com/getsyntegrity/ego/v4` | 593.7s of 609.7s total (97%) |
 | Same run: the other 13 tested packages | 1–3s each |
 | Local, no race, `go test -count=1 ./...` | ~585s total, root package 582.5s |
 | Race detector overhead (measured) | ~2% |
@@ -387,7 +387,7 @@ over the measured root-package time.
 
 ## The honest limit of package selection
 
-The root package, `github.com/pablogore/ego/v4`, imports — directly or
+The root package, `github.com/getsyntegrity/ego/v4`, imports — directly or
 through its own test files — nearly every other package in the module.
 Almost any Go source change therefore selects the root package, and the
 root package alone is 97% of the measured test time. Selecting fewer
@@ -611,11 +611,11 @@ that does not depend on GitHub Actions, so a later portable pipeline
 {
   "global": false,
   "reasons": ["affected by 1 changed package(s)"],
-  "root": {"mode": "affected", "selected": ["github.com/pablogore/ego/v4", "…"]},
+  "root": {"mode": "affected", "selected": ["github.com/getsyntegrity/ego/v4", "…"]},
   "modules": [
-    {"dir": ".", "path": "github.com/pablogore/ego/v4", "selected": true,
+    {"dir": ".", "path": "github.com/getsyntegrity/ego/v4", "selected": true,
      "reason": "affected by 1 changed package(s)", "chain": ["."]},
-    {"dir": "publisher/kafka", "path": "github.com/pablogore/ego/v4/publisher/kafka",
+    {"dir": "publisher/kafka", "path": "github.com/getsyntegrity/ego/publisher/kafka",
      "selected": true, "reason": "publisher/kafka ← .", "chain": ["publisher/kafka", "."]}
   ]
 }
@@ -924,22 +924,29 @@ protection could require: the `modules` job is *skipped* (not green, not
 red) whenever `modules.json` is `[]`, and GitHub branch protection cannot
 require a check that a run sometimes never reports at all. `ci-gate` fixes
 this. It is the last job in both `pull_request.yml` and `build.yml` (on
-`build.yml`, `needs: [plan, modules, release-plan]`; `pull_request.yml`
-has no `release-plan` job, see "Release plan dry run" above), and runs
-with `if: always()` so it still runs even when an earlier job failed. Its
-one step reads `needs.plan.result`, `needs.modules.result` and, on
-`build.yml`, `needs.release-plan.result`, and fails if `plan` did not
-succeed, if `modules` finished as anything other than `success` or
-`skipped`, or if `release-plan` (on `build.yml`) did not succeed. Once
-`plan` itself succeeded, `modules` can only be "skipped" because `plan`'s
-own `modules.json` was `[]` — never a hidden failure. If `plan` itself
-fails, `modules` is skipped too (its `needs: plan` was not satisfied), but
-`ci-gate` already failed on `plan`'s own result, so that skip changes
-nothing. This makes `ci-gate` pass whether the matrix fanned out to zero,
-one, or many modules (root included), and fail visibly whenever `plan`, a
-real `modules` failure/cancellation, or (on `build.yml`) a broken release
-plan, would otherwise have left branch protection with nothing to
-require.
+`build.yml`, `needs: [plan, modules, release-plan, consumer]`;
+`pull_request.yml` has no `release-plan` job, see "Release plan dry run"
+above, and its `needs: [plan, modules, consumer]`), and runs with `if:
+always()` so it still runs even when an earlier job failed. Its one step
+reads `needs.plan.result`, `needs.modules.result`, `needs.consumer.result`
+and, on `build.yml`, `needs.release-plan.result`, and fails if `plan` did
+not succeed, if `modules` finished as anything other than `success` or
+`skipped`, if `release-plan` (on `build.yml`) did not succeed, or if
+`consumer` finished as anything other than `success` or (on
+`pull_request.yml` only) `skipped`. Once `plan` itself succeeded,
+`modules` can only be "skipped" because `plan`'s own `modules.json` was
+`[]`, and `consumer` (on `pull_request.yml`) can only be "skipped"
+because `plan`'s own `mode` was not `full` — never a hidden failure in
+either case (`consumer` never skips on `build.yml`, see "Verify clean
+consumer" above, so `success` is the only acceptable outcome there). If
+`plan` itself fails, `modules` and `consumer` are skipped too (their
+`needs: plan` was not satisfied), but `ci-gate` already failed on `plan`'s
+own result, so that skip changes nothing. This makes `ci-gate` pass
+whether the matrix fanned out to zero, one, or many modules (root
+included) and whether `consumer` ran or was legitimately skipped, and
+fail visibly whenever `plan`, a real `modules` or `consumer`
+failure/cancellation, or (on `build.yml`) a broken release plan, would
+otherwise have left branch protection with nothing to require.
 
 **Required check name: `CI Gate`.** Configure branch protection to require
 this one check (the job's `name:`, not its `ci-gate` id) on `main`; no
@@ -957,7 +964,7 @@ until [#124](https://github.com/getsyntegrity/ego/issues/124)) live in
 four publishers, each through a local `replace` (Go honors `replace` only in
 the main module, so it lists its whole in-repository closure), and nothing
 requires it. Its module path follows the current scheme,
-`github.com/pablogore/ego/v4/test/compat`, like `benchmark`: nothing outside
+`github.com/getsyntegrity/ego/test/compat`, like `benchmark`: nothing outside
 the repository ever resolves it, so it needs none of the module-path
 decisions (D1–D3) the contracts module waits for.
 
@@ -1100,7 +1107,7 @@ all by parsing every `.go` file in it — including `_test.go` files — with
 `go/parser` in imports-only mode (`discoverModuleImports`,
 `internal/cmd/ciselect/main.go`). That parser never evaluates build
 constraints, so it still sees `compat_test.go`'s `import
-"github.com/pablogore/ego/v4"` exactly as before the build tag was added.
+"github.com/getsyntegrity/ego/v4"` exactly as before the build tag was added.
 Consequently:
 
 - A change confined to `publisher/kafka/compat_test.go` alone still selects
@@ -1111,7 +1118,7 @@ Consequently:
   mode `full`, whose `Selected` set is every included root package; every
   nested module that imports any of them, which today means every nested
   module, is selected too (reason: "imports affected root package
-  `github.com/pablogore/ego/v4`"). Observed with `ciselect -changed
+  `github.com/getsyntegrity/ego/v4`"). Observed with `ciselect -changed
   <publisher.go>`: mode `full`, `modules.json` =
   `["benchmark","example/cluster","publisher/kafka","publisher/nats","publisher/pulsar","publisher/websocket"]`.
 
@@ -1172,33 +1179,124 @@ own wall time stays close to the "before" column (kafka measured 26.7s) —
 expected, since it is deliberately running the same historical build the
 default lane used to run on every `go test`.
 
-### Release verification: two different questions
+### Release verification: three different questions
 
-Two distinct claims exist about a nested module, and this repository
-checks both, separately:
+Three distinct claims exist about a nested module, and this repository
+checks each of them, separately:
 
 - **Does the monorepo build together, right now?** `verify-module.sh`
   above answers this on every PR and on every push to `main`, using the
-  module's checked-in `replace github.com/pablogore/ego/v4 => ../../`
+  module's checked-in `replace github.com/getsyntegrity/ego/v4 => ../../`
   (or `../` for `benchmark`) directive. This is "integrated verification"
   in `openspec/changes/ego-arch-001/design.md` §8.
-- **Does a real consumer, resolving the module from the proxy, actually
-  get something that builds?** A checked-in `replace` is invisible to a
-  consumer — Go ignores `replace` directives in a dependency, only in the
-  main module — so integrated verification says nothing about this.
-  `scripts/ci/verify-published.sh <module-dir> <ego-version>` answers it:
+- **Does a real consumer, with no local `replace`, resolve the published
+  module paths at all — the exact tags a release would create, from a
+  local remote it never had to actually publish?** `verify-consumer.sh`,
+  below, answers this before any tag exists.
+- **Does a real consumer, resolving the module from the public proxy,
+  actually get something that builds?** A checked-in `replace` is
+  invisible to a consumer — Go ignores `replace` directives in a
+  dependency, only in the main module — so integrated verification says
+  nothing about this, and neither does `verify-consumer.sh`, which never
+  talks to the public proxy. `scripts/ci/verify-published.sh
+  <module-dir> <ego-version>` answers it:
   it copies the module into a scratch directory, runs
-  `go mod edit -dropreplace=github.com/pablogore/ego/v4
-  -require=github.com/pablogore/ego/v4@<version>` in one edit (dropping
+  `go mod edit -dropreplace=github.com/getsyntegrity/ego/v4
+  -require=github.com/getsyntegrity/ego/v4@<version>` in one edit (dropping
   the replace and pointing at the target version together, so the module
   graph is never resolved against the old, unpublished requirement before
   the edit takes effect), then `go mod tidy && go build ./...`. If
-  `go list -m github.com/pablogore/ego/v4@<version>` cannot even resolve
+  `go list -m github.com/getsyntegrity/ego/v4@<version>` cannot even resolve
   the version, it fails fast with one `::error::` line instead of a
   confusing `go.sum`/build error. `release.yml` runs it for each
   publisher, right after that publisher's own `go get`/`go mod tidy` and
   before any tag is created, so a publisher release can never point at a
   root version that turns out not to build.
+
+### Verify clean consumer (`scripts/ci/verify-consumer.sh`)
+
+`scripts/ci/verify-consumer.sh` proves that every published module path in
+this repository resolves the way an outside consumer resolves it: a plain
+`go get`, with no local `replace`, against the exact tags a release would
+create (#134). It is the local-remote, pre-tag counterpart to
+`verify-published.sh` above: it runs on every full-suite CI run, long
+before any root tag exists to make the public-proxy check meaningful.
+
+**Why `go list -m <path>@<tag>` alone is not acceptance evidence.** It
+only asks the VCS whether *some* module exists at that path and tag; it
+succeeds even when the tagged commit's own `go.mod` declares a different
+module path — exactly the defect #134 was filed for, where every
+publisher's `go.mod` still declared the root module's own path with
+`/publisher/<name>` appended (repeating the root's `/v4` segment in the
+middle of the nested module's path), a path with no corresponding
+directory. It also never executes a single
+line of the module's code, so a corrupted generated file compiles but is
+never caught: a hand-edited protobuf `go_package` is one such case — the
+path sits inside a length-prefixed serialized descriptor, so a text
+rename still compiles but panics at init (measured in the pre-migration
+spike for #134). Only `go get` (which validates the module's own declared
+path against the requested import path), plus `go build` and `go run`
+(which executes every package's `init`), catch both failure modes; the
+script requires all three.
+
+**What it does.** It discovers everything it needs instead of hard-coding
+it: the root module path from the repository's own `go.mod`; the released
+publisher directories from `scripts/ci/release-modules.txt`; each
+publisher's own module path and the root version it requires from its own
+`go.mod`. (All released publishers must require the same root version, or
+the script fails with a clear message naming the mismatch.) It then:
+
+1. Clones the committed `HEAD` into a temporary bare repository —
+   uncommitted changes are never part of what it checks.
+2. Creates release tags **only in that temporary clone**: the root tag
+   (the version every publisher already requires), each publisher's
+   `<dir>/<VERIFY_CONSUMER_PUBLISHER_VERSION>` (default `v0.1.0`), and one
+   negative tag, `<first publisher dir>/v2.0.0`, which must be *rejected*
+   — a `v2+` tag on a module path with no `/v2` suffix is invalid under
+   Go's own major-version rule, and the script fails if it somehow
+   resolves.
+3. Points Go at that local clone instead of the real one, through an
+   isolated git configuration (`GIT_CONFIG_GLOBAL`, `protocol.file.allow`,
+   a `url.insteadOf` rule) and `GOPRIVATE` set to the repository's own
+   path, so nothing here ever reaches the public module proxy or
+   checksum database for this repository's own paths.
+4. From a fresh, empty consumer module, blank-imports the root module's
+   root package and every publisher's package (a blank import runs every
+   package's `init`, catching a corrupted descriptor a plain build
+   cannot), `go get`s each publisher at its tag, `go mod tidy`s, `go
+   build`s, and `go run`s the result — the run must print its success
+   line and exit `0`.
+5. Asserts, with an explicit message on failure: the consumer's `go.mod`
+   carries no `replace`; `go list -m all` shows every publisher and the
+   root at the expected version; each publisher resolves from the
+   subdirectory it actually lives in (`go list -m -f
+   '{{.Origin.Subdir}}'`, or `go list -m -json` and its `Origin.Subdir`
+   field on an older `go` that lacks the template field); and the negative
+   `v2.0.0` tag is rejected.
+
+**Usage.** `scripts/ci/verify-consumer.sh` — no arguments, run from
+anywhere inside the repository. `VERIFY_CONSUMER_PUBLISHER_VERSION`
+overrides the publisher tag version it creates in the temporary clone
+(default `v0.1.0`); the root tag is never configurable, since it is
+always the version the released publishers themselves require. Locally,
+it needs `jq` on `PATH` and reuses the caller's ordinary `GOCACHE`; when
+the caller already has a populated module download cache, its
+`cache/download` directory is added to `GOPROXY` as a read-only source
+for third-party modules only, purely so a repeated local run does not
+re-download the world (`GOPRIVATE` already bypasses any proxy for this
+repository's own paths, so this can never mask a stale copy of them).
+
+**CI wiring.** A `consumer` job runs it in both `pull_request.yml` and
+`build.yml`, and both `ci-gate` jobs require it to succeed or be
+legitimately skipped, exactly like `modules` (see "The `ci-gate` job"
+above). In `pull_request.yml` it only needs `plan` and only runs when
+`plan` already selected `full` mode: a PR confined to, say, one nested
+module's business logic never pays for an extra clone and module
+download, while any change that could actually affect module-path
+resolution (`go.mod`, a workflow, anything under `scripts/ci/`) already
+forces `full` mode on its own (see "Modes and fail-safe rules" above). In
+`build.yml` it always runs, with no mode condition, because `plan` there
+always selects the full suite anyway.
 
 ### Version policy
 
@@ -1216,7 +1314,7 @@ checks both, separately:
   and `release-ego` (see "Release gate" below). It discovers which
   directories under `publisher/` to release from `publisher/*/go.mod`
   (never a hand-written list), then for each one runs
-  `go get github.com/pablogore/ego/v4@<tag>`, `go mod tidy` and
+  `go get github.com/getsyntegrity/ego/v4@<tag>`, `go mod tidy` and
   `scripts/ci/verify-published.sh`, exactly as before this change. What
   changed is what happens to the result: instead of committing and
   pushing straight to `main`, the job creates a branch

@@ -22,7 +22,7 @@
 
 package main
 
-import "github.com/pablogore/ego/v4/internal/cmd/archcheck/rules"
+import "github.com/getsyntegrity/ego/v4/internal/cmd/archcheck/rules"
 
 // repoBaseline is the repository's current, explicit set of known
 // violations (odd/tasks/arch-boundary-check.md, "Baseline at the start").

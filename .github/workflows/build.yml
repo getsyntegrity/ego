@@ -256,9 +256,34 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # consumer proves that every published module path resolves the way an
+  # outside consumer resolves it — a plain `go get`, no local `replace` —
+  # against the exact tags a release would create (docs/ci.md, "Verify
+  # clean consumer"; #134). Unlike pull_request.yml's consumer job, this one
+  # always runs: plan on main always selects the full suite anyway (see
+  # plan's own comment above), so no mode condition is needed here.
+  consumer:
+    name: Verify clean consumer
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache-dependency-path: "**/*.sum"
+      - run: go version
+      - name: Verify clean consumer
+        shell: bash
+        run: scripts/ci/verify-consumer.sh
+
   ci-gate:
     name: CI Gate
-    needs: [plan, modules, release-plan]
+    needs: [plan, modules, release-plan, consumer]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -268,10 +293,12 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
           RELEASE_PLAN_RESULT: ${{ needs.release-plan.result }}
+          CONSUMER_RESULT: ${{ needs.consumer.result }}
         run: |
           echo "plan:         $PLAN_RESULT"
           echo "modules:      $MODULES_RESULT"
           echo "release-plan: $RELEASE_PLAN_RESULT"
+          echo "consumer:     $CONSUMER_RESULT"
           status=0
           if [ "$PLAN_RESULT" != "success" ]; then
             echo "::error::plan job did not succeed ($PLAN_RESULT)"
@@ -292,6 +319,12 @@ jobs:
           # (unlike modules) "success" is the only acceptable outcome here.
           if [ "$RELEASE_PLAN_RESULT" != "success" ]; then
             echo "::error::release-plan job did not succeed ($RELEASE_PLAN_RESULT)"
+            status=1
+          fi
+          # consumer has no skip condition on build.yml either (see its own
+          # comment above), so "success" is the only acceptable outcome here.
+          if [ "$CONSUMER_RESULT" != "success" ]; then
+            echo "::error::consumer job did not succeed ($CONSUMER_RESULT)"
             status=1
           fi
           exit "$status"
