@@ -57,9 +57,6 @@ func (s SagaStatus) String() string {
 }
 
 // SagaInfo holds runtime information about a saga.
-//
-// Known gap: the GoAkt adapter (*ego.Engine) never fills Status, so it always
-// reads SagaRunning (#153).
 type SagaInfo struct {
 	// ID is the saga's unique identifier.
 	ID string

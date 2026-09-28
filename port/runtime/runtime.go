@@ -139,9 +139,11 @@ type Sagas interface {
 	// ErrUndefinedEntityID when sagaID is empty, and an error when the saga is
 	// not found or the query fails.
 	//
-	// Known gap: the GoAkt adapter (*ego.Engine) never fills SagaInfo.Status,
-	// so it always reads SagaRunning (#153). Callers must not rely on Status
-	// until #153 is fixed.
+	// SagaInfo.Status is the saga's lifecycle status when it answers:
+	// SagaRunning, SagaCompensating, SagaCompleted or SagaFailed. An adapter
+	// that runs a compensation to its end before answering (the GoAkt adapter,
+	// *ego.Engine, does) reports SagaCompleted or SagaFailed rather than
+	// SagaCompensating.
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
 

@@ -93,6 +93,7 @@ type Sagas interface {
 	// GoAkt adapter never fills SagaInfo.Status, so it always reads
 	// SagaRunning (engine.go:1638-1641; follow-up FU-1, #153). Callers must
 	// not rely on Status until #153 is fixed.
+	// (Fixed by #163: SagaInfo.Status now carries the lifecycle status.)
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
 
@@ -407,7 +408,7 @@ No `-race` locally and no workbench; CI is the race gate. The two-node test of #
 
 **Named follow-ups for pre-existing bugs** (this change does not fix them; the maintainer opened an issue for each):
 
-- **FU-1** ([#153](https://github.com/getsyntegrity/ego/issues/153)) `Engine.SagaStatus` never fills `SagaInfo.Status`, so it always reads `SagaRunning` (`engine.go:1638-1641`; the actor tracks it at `saga_actor.go:58`). Recorded as a known gap in the `Sagas.SagaStatus` interface doc (§D1). #148's in-memory runtime should fill it.
+- **FU-1** ([#153](https://github.com/getsyntegrity/ego/issues/153)) `Engine.SagaStatus` never fills `SagaInfo.Status`, so it always reads `SagaRunning` (`engine.go:1638-1641`; the actor tracks it at `saga_actor.go:58`). Recorded as a known gap in the `Sagas.SagaStatus` interface doc (§D1). #148's in-memory runtime should fill it. *Fixed by [#163](https://github.com/getsyntegrity/ego/pull/163).*
 - **FU-2** ([#154](https://github.com/getsyntegrity/ego/issues/154)) Relocation default: `WithRelocation`'s doc says relocatable by default (`spawn_config.go:141`), the code disables it unless `WithRelocation(true)` (`engine.go:1903-1905`). `runtime.WithRelocation` documents the actual behavior (§D3); whether the default changes is for RUNTIME-003.
 
 ## 8. Alignment with PR #149 (adapter SPI)

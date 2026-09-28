@@ -1579,6 +1579,17 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 
 // SagaStatus returns the current status and state of the named saga.
 //
+// SagaInfo.Status is the lifecycle status the saga actor holds when it
+// answers: SagaRunning while it runs, SagaCompleted once an action completes
+// it or its compensation succeeds, and SagaFailed when its compensation
+// fails or cannot run. SagaCompensating is held only while the actor runs a
+// compensation, and the actor answers the query only after that compensation
+// finishes, so in practice a caller sees SagaCompleted or SagaFailed instead. A finished
+// saga actor keeps running, so it keeps answering with its final status. The
+// status is not persisted: a saga actor that restarts (after a crash or a
+// relocation) recovers its state from its events but reports SagaRunning
+// again.
+//
 // Parameters:
 //   - ctx: Execution context for managing timeouts and cancellations.
 //   - sagaID: The unique identifier of the saga.
@@ -1635,8 +1646,9 @@ func (engine *Engine) SagaStatus(ctx context.Context, sagaID string, timeout tim
 	}
 
 	return &SagaInfo{
-		ID:    sagaID,
-		State: state,
+		ID:     sagaID,
+		Status: sagaStatusFromProto(commandReply.GetStateReply().GetSagaStatus()),
+		State:  state,
 	}, nil
 }
 
