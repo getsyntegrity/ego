@@ -14,12 +14,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # plan is deliberately cheap: it only computes the diff, runs ciselect and
+  # publishes the decision. It never installs dependencies, lints or tests,
+  # so a PR that only touches a nested module (or nothing testable at all)
+  # never pays for the root module's vendoring, archcheck or lint either.
+  plan:
     runs-on: ubuntu-latest
     env:
       FORCE_COLOR: 1
     outputs:
+      mode: ${{ steps.select.outputs.mode }}
       modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache-dependency-path: "**/*.sum"
+      - run: go version
+      - name: Determine changed files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          git merge-base "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/base.txt"
+      - name: Select packages and modules
+        id: select
+        shell: bash
+        run: |
+          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")" -out-dir "$RUNNER_TEMP/ci"; then
+            :
+          else
+            echo "::warning::ciselect failed; falling back to the full suite"
+            go run ./internal/cmd/ciselect -all -reason "selector failed; full-suite fallback" -out-dir "$RUNNER_TEMP/ci"
+          fi
+          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
+          echo "modules=$(cat "$RUNNER_TEMP/ci/modules.json")" >> "$GITHUB_OUTPUT"
+      # The whole out-dir (mode, packages.txt, coverpkg, modules.json,
+      # plan.json, summary.md) is uploaded so build's "Run tests" step can
+      # reuse this exact decision instead of re-running ciselect a second
+      # time, which could in principle disagree with plan's own run. Only
+      # plan.json and summary.md are meant to be read by a human or another
+      # pipeline (docs/ci.md); the rest are ciselect's own working files for
+      # scripts/ci/go-test.sh.
+      - name: Upload the selection plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
+          retention-days: 7
+
+  # build only runs the root module's own checks (vendoring, archcheck,
+  # lint, package-level tests and coverage) when plan decided the root
+  # lane needs it at all; a PR confined to a nested module skips all of it.
+  build:
+    needs: plan
+    if: needs.plan.outputs.mode != 'none'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,29 +107,11 @@ jobs:
         with:
           version: v2.13.1
           args: --timeout 10m --config .golangci.yml
-      - name: Determine changed files
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
-          git merge-base "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/base.txt"
-      - name: Select packages
-        id: select
-        shell: bash
-        env:
-          GOFLAGS: -mod=vendor
-        run: |
-          if go run ./internal/cmd/ciselect -changed "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")" -out-dir "$RUNNER_TEMP/ci"; then
-            :
-          else
-            echo "::warning::ciselect failed; falling back to the full suite"
-            go run ./internal/cmd/ciselect -all -reason "selector failed; full-suite fallback" -out-dir "$RUNNER_TEMP/ci"
-          fi
-          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
-          echo "modules=$(cat "$RUNNER_TEMP/ci/modules.json")" >> "$GITHUB_OUTPUT"
+      - name: Download the selection plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
       - name: Run tests
         shell: bash
         env:
@@ -86,9 +128,9 @@ jobs:
           {
             echo "### Coverage"
             echo
-            echo "Selection mode: \`${{ steps.select.outputs.mode }}\`"
+            echo "Selection mode: \`${{ needs.plan.outputs.mode }}\`"
             echo
-            if [ "${{ steps.select.outputs.mode }}" = "affected" ]; then
+            if [ "${{ needs.plan.outputs.mode }}" = "affected" ]; then
               echo "In \`affected\` mode the total only reflects the packages that ran; the denominator is still every included package."
               echo
             fi
@@ -100,16 +142,16 @@ jobs:
         if: always() && hashFiles('coverage.out') == ''
         shell: bash
         run: |
-          echo "Coverage: no coverage.out was produced (selection mode: \`${{ steps.select.outputs.mode }}\`)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Coverage: no coverage.out was produced (selection mode: \`${{ needs.plan.outputs.mode }}\`)." >> "$GITHUB_STEP_SUMMARY"
 
   modules:
-    needs: build
-    if: needs.build.outputs.modules != '[]'
+    needs: plan
+    if: needs.plan.outputs.modules != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJSON(needs.build.outputs.modules) }}
+        module: ${{ fromJSON(needs.plan.outputs.modules) }}
     env:
       FORCE_COLOR: 1
     steps:
@@ -136,32 +178,39 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    needs: [build, modules]
+    needs: [plan, build, modules]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded, or been legitimately skipped
         shell: bash
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
         run: |
+          echo "plan:    $PLAN_RESULT"
           echo "build:   $BUILD_RESULT"
           echo "modules: $MODULES_RESULT"
           status=0
-          if [ "$BUILD_RESULT" != "success" ]; then
-            echo "::error::build job did not succeed ($BUILD_RESULT)"
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::plan job did not succeed ($PLAN_RESULT)"
             status=1
           fi
-          # modules only ever skips because build's own outputs.modules was
-          # "[]" (see modules' if:); when build succeeded, that is the only
-          # way modules can be "skipped", so it is not a failure here. Any
-          # other outcome (failure, cancelled) fails the gate.
-          case "$MODULES_RESULT" in
-            success | skipped) ;;
-            *)
-              echo "::error::modules job did not succeed ($MODULES_RESULT)"
-              status=1
-              ;;
-          esac
+          # build and modules only ever skip because plan's own outputs
+          # (mode == "none", or modules == "[]") said there was nothing for
+          # them to do; when plan itself succeeded, that is the only way
+          # either can be "skipped", so it is not a failure here. Any other
+          # outcome (failure, cancelled) fails the gate.
+          for job_result in "build:$BUILD_RESULT" "modules:$MODULES_RESULT"; do
+            name=${job_result%%:*}
+            result=${job_result#*:}
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error::$name job did not succeed ($result)"
+                status=1
+                ;;
+            esac
+          done
           exit "$status"

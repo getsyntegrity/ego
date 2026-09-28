@@ -8,12 +8,50 @@ on:
       - '**/renovate.json'
   workflow_dispatch: {}
 jobs:
-  build:
+  # plan always selects the full suite here (-all): main and
+  # workflow_dispatch keep the complete gate, never impact-based selection.
+  # It is still split from build so both workflows share one job shape, and
+  # so the modules matrix depends on the same cheap job pull_request.yml's
+  # does, not on the heavy root job.
+  plan:
     runs-on: ubuntu-latest
     env:
       FORCE_COLOR: 1
     outputs:
+      mode: ${{ steps.select.outputs.mode }}
       modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache-dependency-path: "**/*.sum"
+      - run: go version
+      - name: Select packages and modules (full suite)
+        id: select
+        shell: bash
+        run: |
+          go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"
+          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "mode=$(cat "$RUNNER_TEMP/ci/mode")" >> "$GITHUB_OUTPUT"
+          echo "modules=$(cat "$RUNNER_TEMP/ci/modules.json")" >> "$GITHUB_OUTPUT"
+      - name: Upload the selection plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
+          retention-days: 7
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.mode != 'none'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,15 +79,11 @@ jobs:
         with:
           version: v2.13.1
           args: --timeout 10m --config .golangci.yml
-      - name: Select packages (full suite)
-        id: select
-        shell: bash
-        env:
-          GOFLAGS: -mod=vendor
-        run: |
-          go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"
-          cat "$RUNNER_TEMP/ci/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          echo "modules=$(cat "$RUNNER_TEMP/ci/modules.json")" >> "$GITHUB_OUTPUT"
+      - name: Download the selection plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ciselect-plan
+          path: ${{ runner.temp }}/ci
       - name: Run tests
         shell: bash
         env:
@@ -79,13 +113,13 @@ jobs:
           echo "Coverage: no coverage.out was produced." >> "$GITHUB_STEP_SUMMARY"
 
   modules:
-    needs: build
-    if: needs.build.outputs.modules != '[]'
+    needs: plan
+    if: needs.plan.outputs.modules != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJSON(needs.build.outputs.modules) }}
+        module: ${{ fromJSON(needs.plan.outputs.modules) }}
     env:
       FORCE_COLOR: 1
     steps:
@@ -112,32 +146,39 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    needs: [build, modules]
+    needs: [plan, build, modules]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to have succeeded, or been legitimately skipped
         shell: bash
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
         run: |
+          echo "plan:    $PLAN_RESULT"
           echo "build:   $BUILD_RESULT"
           echo "modules: $MODULES_RESULT"
           status=0
-          if [ "$BUILD_RESULT" != "success" ]; then
-            echo "::error::build job did not succeed ($BUILD_RESULT)"
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::plan job did not succeed ($PLAN_RESULT)"
             status=1
           fi
-          # modules only ever skips because build's own outputs.modules was
-          # "[]" (see modules' if:); when build succeeded, that is the only
-          # way modules can be "skipped", so it is not a failure here. Any
-          # other outcome (failure, cancelled) fails the gate.
-          case "$MODULES_RESULT" in
-            success | skipped) ;;
-            *)
-              echo "::error::modules job did not succeed ($MODULES_RESULT)"
-              status=1
-              ;;
-          esac
+          # build and modules only ever skip because plan's own outputs
+          # (mode == "none", or modules == "[]") said there was nothing for
+          # them to do; when plan itself succeeded, that is the only way
+          # either can be "skipped", so it is not a failure here. Any other
+          # outcome (failure, cancelled) fails the gate.
+          for job_result in "build:$BUILD_RESULT" "modules:$MODULES_RESULT"; do
+            name=${job_result%%:*}
+            result=${job_result#*:}
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error::$name job did not succeed ($result)"
+                status=1
+                ;;
+            esac
+          done
           exit "$status"

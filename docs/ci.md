@@ -21,28 +21,62 @@ race detector.
 
 ## What each workflow runs
 
+Both workflows are now split into a cheap `plan` job and a heavier `build`
+job, so a pull request that never needs the root module's own checks never
+pays for them:
+
+- **`plan`** only checks out the repository, sets up Go, computes the diff
+  (`pull_request.yml`) or always requests the full suite (`build.yml`),
+  runs `internal/cmd/ciselect`, and uploads its whole output directory —
+  `mode`, `packages.txt`, `coverpkg`, `modules.json`, `plan.json` and
+  `summary.md` — as a `ciselect-plan` artifact (`actions/upload-artifact`).
+  It never installs dependencies, vendors, lints or tests anything.
+- **`build`** (`needs: plan`, `if: needs.plan.outputs.mode != 'none'`) does
+  the root module's own work: vendoring and tidy, `archcheck`, lint, then
+  downloads the `ciselect-plan` artifact (`actions/download-artifact`) and
+  runs `scripts/ci/go-test.sh` and the coverage summary against the exact
+  decision `plan` already made. On `pull_request.yml` this job is skipped
+  entirely when `plan` decided the root lane needs nothing (mode `none`);
+  on `build.yml`, `-all` never returns `none`, so `build` always runs there.
+  `build` re-running `ciselect` itself was considered and rejected: it
+  would compute the selection a second time from the same inputs, and if
+  it ever diverged (a flaky `go list`, a different fallback path taken)
+  `build` could test something other than what `plan`, and the `modules`
+  matrix below, already agreed on. Downloading `plan`'s own output makes
+  the decision made exactly once, by exactly one job.
+- **`modules`** (`needs: plan`, not `build`) fans out over
+  `plan`'s `modules.json`, unchanged by this split (see "The `modules`
+  matrix job" below).
+- **`ci-gate`** (`needs: [plan, build, modules]`) is the one required
+  status check; see "The `ci-gate` job" below.
+
 ### `pull_request.yml` (the fast lane)
 
-1. Checkout, Go setup, module cache, `go mod tidy && go mod vendor`,
-   `golangci-lint` — unchanged.
+1. **`plan`**: checkout, Go setup, module cache — no vendoring, no lint.
 2. **Determine changed files**: `git diff --name-only --no-renames
    "$BASE_SHA...$HEAD_SHA"` between the PR's base and head commits, written
    to `$RUNNER_TEMP/changed.txt`, and `git merge-base "$BASE_SHA"
    "$HEAD_SHA"` (the revision that three-dot diff starts from), written to
    `$RUNNER_TEMP/base.txt`.
-3. **Select packages**: `go run ./internal/cmd/ciselect -changed
+3. **Select packages and modules**: `go run ./internal/cmd/ciselect -changed
    "$RUNNER_TEMP/changed.txt" -base "$(cat "$RUNNER_TEMP/base.txt")"
    -out-dir "$RUNNER_TEMP/ci"` (`-base` is explained in "Module selection
    rules" below). If that command
    fails for any reason (a `go list` error, an unreadable file, a bug in
    the selector itself), the workflow logs a `::warning::` and re-runs with
-   `-all -reason "selector failed; full-suite fallback"` instead — if
-   *that* also fails, the job fails. Selection is never silently skipped.
-   The selector's own `summary.md` is appended to the job's
+   `-all -reason "selector failed; full-suite fallback" -out-dir` instead
+   — if *that* also fails, the `plan` job fails, and `build`/`modules` never
+   run for it (they `need: plan`), so `ci-gate` fails visibly instead of
+   silently testing less. Selection is never silently skipped. The
+   selector's own `summary.md` is appended to the job's
    `$GITHUB_STEP_SUMMARY`, so the exact package list and the reason for it
-   are visible on every PR run, not just inferred from logs.
-4. **Run tests**: `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`,
-   with `GO_TEST_RACE=1` (the race detector stays on for pull requests).
+   are visible on every PR run, not just inferred from logs. `ciselect`'s
+   output directory is uploaded as the `ciselect-plan` artifact for `build`
+   to reuse.
+4. **`build`** (only when `plan`'s `mode` is not `none`): vendoring and
+   tidy, `archcheck`, lint, then downloads `ciselect-plan` and **runs
+   tests**: `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`, with
+   `GO_TEST_RACE=1` (the race detector stays on for pull requests).
 5. **Coverage summary**: when `coverage.out` was produced, the workflow runs
    `go tool cover -func=coverage.out`, takes its final `total:` line, and
    appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
@@ -50,15 +84,18 @@ race detector.
    packages that actually ran — the denominator (`-coverpkg`) is still
    every included package, so an `affected`-mode total is not directly
    comparable to a `full`-mode total. When the mode is `none`, no
-   `coverage.out` exists and the summary says so in one line.
+   `coverage.out` exists (and `build` never even ran); a `none`-mode PR
+   still gets a step summary from `plan` explaining why.
 
 ### `build.yml` (the full-suite gate)
 
 Runs on every push to `main`, and can be triggered manually for any ref
-via the Actions "Run workflow" button (`workflow_dispatch`). It runs
-`go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` — always
-the full suite, no change detection — appends the summary to the job
-summary the same way, then `scripts/ci/go-test.sh` with the race detector
+via the Actions "Run workflow" button (`workflow_dispatch`). Its `plan` job
+runs `go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` —
+always the full suite, no change detection — appends the summary to the
+job summary the same way, and uploads it as `ciselect-plan`. `-all` never
+reports mode `none`, so `build` always runs here: it downloads
+`ciselect-plan`, then runs `scripts/ci/go-test.sh` with the race detector
 on, and appends the same coverage summary to the job summary. This is the
 mandatory gate and always runs the complete suite.
 
@@ -574,7 +611,8 @@ a root-package failure always did.
 ### The `modules` matrix job
 
 Both `pull_request.yml` and `build.yml` add a `modules` job that
-`needs: build`, runs only `if: needs.build.outputs.modules != '[]'`, and
+`needs: plan` (the cheap planning job — see "What each workflow runs"
+above), runs only `if: needs.plan.outputs.modules != '[]'`, and
 fans out one `strategy.matrix.module` entry per string in that JSON
 array, with `fail-fast: false` so one module's failure does not cancel
 the others mid-run. Each matrix job checks out the repository, sets up
@@ -585,7 +623,9 @@ every module (it runs `ciselect -all`); `pull_request.yml` selects
 whatever the module selection rules above decided for that PR. The module
 list is never hand-maintained: it comes from `modules.json`, so a new
 nested module is picked up the moment its `go.mod` exists, with no
-workflow edit.
+workflow edit. `modules` depends on `plan`, not on the heavier `build`
+job, so a PR that only touches a nested module runs its module job without
+waiting on (or paying for) the root module's vendoring, archcheck and lint.
 
 ### The `ci-gate` job: one required status check
 
@@ -594,17 +634,20 @@ protection could require: the `modules` job is *skipped* (not green, not
 red) whenever `modules.json` is `[]`, and GitHub branch protection cannot
 require a check that a run sometimes never reports at all. `ci-gate` fixes
 this. It is the last job in both `pull_request.yml` and `build.yml`,
-`needs: [build, modules]`, and runs with `if: always()` so it still runs
-even when an earlier job failed. Its one step reads `needs.build.result`
-and `needs.modules.result` and fails if `build` did not succeed, or if
-`modules` finished as anything other than `success` or `skipped` — a
-`skipped` `modules` job is only ever caused by `build` selecting zero
-nested modules (`modules`'s own `if: needs.build.outputs.modules != '[]'`),
-so once `build` itself succeeded, that is the only way `modules` can be
-skipped, never a hidden failure. This makes `ci-gate` pass whether the
-matrix fanned out to zero, one, or many modules, and fail visibly whenever
-`build`, or a real `modules` failure/cancellation, would otherwise have
-left branch protection with nothing to require.
+`needs: [plan, build, modules]`, and runs with `if: always()` so it still
+runs even when an earlier job failed. Its one step reads
+`needs.plan.result`, `needs.build.result` and `needs.modules.result`, and
+fails if `plan` did not succeed, or if `build` or `modules` finished as
+anything other than `success` or `skipped`. Once `plan` itself succeeded,
+`build` can only be "skipped" because `plan`'s own `mode` was `none`, and
+`modules` can only be "skipped" because `plan`'s own `modules.json` was
+`[]` — never a hidden failure. If `plan` itself fails, `build` and
+`modules` are skipped too (their `needs: plan` was not satisfied), but
+`ci-gate` already failed on `plan`'s own result, so that skip changes
+nothing. This makes `ci-gate` pass whether the matrix fanned out to zero,
+one, or many modules, and fail visibly whenever `plan`, `build`, or a real
+`modules` failure/cancellation, would otherwise have left branch
+protection with nothing to require.
 
 **Required check name: `CI Gate`.** Configure branch protection to require
 this one check (the job's `name:`, not its `ci-gate` id) on `main`; no

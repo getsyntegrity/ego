@@ -46,7 +46,7 @@ matrix is empty, the `modules` job is *skipped*, not green.
 ## Tasks
 
 - [x] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
-- [ ] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
+- [x] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
 - [ ] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
 - [ ] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
 - [ ] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6).
@@ -79,3 +79,33 @@ matrix is empty, the `modules` job is *skipped*, not green.
     ("compile: version ... does not match go tool version ..."). Running
     with `GOROOT` unset works around it; this is pre-existing and outside
     this feature's scope.
+- **T2 done** (commit below): split both workflows into `plan` (checkout,
+  setup-go, diff/base, `ciselect` with the existing `-all` fallback,
+  uploads the whole ciselect out-dir as the `ciselect-plan` artifact,
+  writes `summary.md` to `$GITHUB_STEP_SUMMARY`, outputs `mode`/`modules`)
+  and `build` (`needs: plan`, `if: needs.plan.outputs.mode != 'none'`:
+  vendoring/tidy, archcheck, lint, downloads `ciselect-plan`, runs
+  `scripts/ci/go-test.sh` and the coverage summary). `modules` now
+  `needs: plan`, not `build`. `ci-gate` now `needs: [plan, build, modules]`
+  and fails on `plan` not succeeding, or `build`/`modules` finishing as
+  anything but `success`/`skipped`.
+  - **Judgement call**: `build` downloads `plan`'s own `ciselect-plan`
+    artifact instead of re-running `ciselect` itself. Rejected alternative:
+    let `build` re-invoke `ciselect` with the same `-changed`/`-base`
+    inputs. Rejected because a second independent run could in principle
+    disagree with `plan`'s (a flaky `go list`, a different fallback path),
+    which would let `build` test something other than what `plan` and
+    `modules` already agreed on — the decision must be made exactly once.
+  - `build.yml`'s `plan` always uses `-all` (mode is always `full`, never
+    `none`), so its `build` job effectively always runs, per the scope
+    constraint that `main`/`workflow_dispatch` keep the full gate.
+  - `docs/ci.md` updated: "What each workflow runs" now describes the
+    plan/build split and the artifact hand-off; "The `modules` matrix job"
+    and "The `ci-gate` job" now reference `plan` instead of `build`.
+  - Verification: YAML parse OK for both workflows; every inline `run:`
+    block parses with `bash -n` (script-extracted via a small Python/yaml
+    check, since `actionlint` remains unavailable in this environment —
+    see the T1 note); `bash -n` OK for `scripts/ci/go-test.sh`,
+    `verify-module.sh`, `verify-published.sh` (unchanged by this task);
+    `go build ./internal/cmd/ciselect/...` green (with `GOROOT` unset, see
+    the T1 environment note).
