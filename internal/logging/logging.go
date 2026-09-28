@@ -21,18 +21,18 @@
 // SOFTWARE.
 
 // Package logging holds the logger-resolution glue that both the GoAkt
-// runtime adapter (package ego) and application-layer packages such as
+// runtime adapter (package engine) and application-layer packages such as
 // migration need: the default kit-logger instance and the typed-nil-safe
 // fallback used whenever a caller may hand in a nil or typed-nil Logger.
 //
 // It exists so that a package outside the runtime adapter — migration, at
 // this slice (#147, ego-arch-001 §3, S4-1) — can resolve a usable logger
-// without importing package ego, whose dependency closure includes the
+// without importing package engine, whose dependency closure includes the
 // GoAkt runtime. This package imports only kit-logger and the standard
 // library, so its own closure carries neither.
 //
-// ego.DefaultLogger and ego.ResolveLogger keep their exact signatures and
-// behavior in package ego; they delegate to DefaultLogger and ResolveLogger
+// engine.DefaultLogger and engine.ResolveLogger keep their exact signatures and
+// behavior in package engine; they delegate to DefaultLogger and ResolveLogger
 // here rather than duplicating the logic, so there is exactly one
 // typed-nil-detection implementation and one process-wide default.
 package logging

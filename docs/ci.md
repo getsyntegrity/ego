@@ -152,7 +152,7 @@ buckets, checked in this order:
 
 | Classification  | Matches                                                                                                                                                                                   | Effect |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
-| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the shared root package) | Forces mode `full` |
+| Full-fallback    | Exact files `go.mod`, `go.sum`, `Makefile`, `Dockerfile.ci`, `.golangci.yml`, `buf.yaml`, `buf.gen.yaml`; directories `.github/`, `protos/`, `internal/cmd/ciselect/`, `internal/cmd/vulngate/`, `scripts/ci/`, `egopb/`; and any `.go` file directly in the module root (the root holds none: `archcheck` fails on one, so such a file is a stray) | Forces mode `full` |
 | Satellite        | A directory that has its own `go.mod` on disk (`benchmark/`, `example/cluster/`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`)                          | Selects nothing in the root lane; selects that module in the nested module lane |
 | No-test          | Any `*.md` file, `openspec/`, `.spec-governance/`, `assets/`, `LICENSE`, `renovate.json`                                                                                                    | Selects nothing for that file |
 | Package          | A file whose directory is exactly a package's `Dir` (a file under a `testdata/` directory maps to the nearest ancestor package)                                                             | Adds that package to the changed set |
@@ -176,10 +176,10 @@ graph and computes:
   those, so one extra pass over the direct test-import edges is enough.
 
 This is why, for example, changing `internal/pause/pause.go` selects both
-`internal/pause` and the root package `github.com/getsyntegrity/ego/v4`: no
-non-test file in the root package imports `internal/pause` — only the
-root package's `_test.go` files do — so `internal/pause` never appears in
-`R` via the build graph, but the root package is still correctly pulled in
+`internal/pause` and the engine package `github.com/getsyntegrity/ego/v4/engine`: no
+non-test file in `engine` imports `internal/pause` — only
+its `_test.go` files do — so `internal/pause` never appears in
+`R` via the build graph, but `engine` is still correctly pulled in
 through the `TestImports` step.
 
 ### Exclusions are whole path segments, not substrings
@@ -265,11 +265,11 @@ Each rule applies to one layer and checks the direct import edges of every packa
 | Rule | Applies to | Constraint |
 |---|---|---|
 | `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` — and stdlib itself excludes `net/http`, `net/rpc`, `database/sql` and everything under them |
-| `application-no-runtime` | `migration` | Must not import package `ego`, `internal/extensions` or GoAkt |
-| `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `ego` or GoAkt |
+| `application-no-runtime` | `migration` | Must not import package `engine`, `internal/extensions` or GoAkt |
+| `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `engine` or GoAkt |
 | `no-cross-module-internal` | every package of every module, root and nested | Must not import an `internal/...` package that belongs to a different in-repository module, in either direction (generalized in ego-arch-006 slice S1 from "nested module to root `internal/`") |
 | `no-module-cycle` | the module table (`go.mod` requirements) | No in-repository module may require, directly or through other in-repository modules, a module that requires it back; every requirement edge on a cycle is reported (ego-arch-001 design §3, ego-arch-006 slice S1) |
-| `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `ego`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
+| `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `engine`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
 | `composition-leaf` | root-module packages outside `compose/`, except `main` packages and `example/...` | Must not import `compose` or anything under it (ego-arch-003 design §D8) |
 | `external-adapter-no-composition` | nested modules under `publisher/`, every package including `main` packages and examples inside them | Must not import `compose` or anything under it; the composition root depends on adapters, not the reverse (ego-arch-004 design §D7). The test side is covered by each publisher's `closure_test.go`, because archcheck does not read `_test.go` files |
 
@@ -300,7 +300,7 @@ The baseline started with five entries. S1b removed the four publishers importin
 3. Add unit tests in `internal/cmd/archcheck/rules/evaluate_test.go`: one graph that breaks the rule and one that satisfies it.
 4. Run `go run ./internal/cmd/archcheck` locally. If existing code violates the new rule and cannot be fixed in the same change, add baseline entries with owner, justification and removal criterion, and update the ADR if the rule is normative.
 
-**Adapter module roots.** `ExternalAdapterLayer` in `layers.go` matches only nested modules under `publisher/`, and both adapter rules (`external-adapter-no-runtime` and `external-adapter-no-composition`) use it. When the first adapter module outside `publisher/` appears (a store or telemetry adapter), add its directory root to that one layer in the same change, so both rules cover it; where such modules live is decided when the first one arrives (ego-arch-004 design §9, O6). Give the new module a `closure_test.go` like the publishers', which rejects GoAkt, the root package and `compose` in its unit-test closure.
+**Adapter module roots.** `ExternalAdapterLayer` in `layers.go` matches only nested modules under `publisher/`, and both adapter rules (`external-adapter-no-runtime` and `external-adapter-no-composition`) use it. When the first adapter module outside `publisher/` appears (a store or telemetry adapter), add its directory root to that one layer in the same change, so both rules cover it; where such modules live is decided when the first one arrives (ego-arch-004 design §9, O6). Give the new module a `closure_test.go` like the publishers', which rejects GoAkt, the engine package and `compose` in its unit-test closure.
 
 A rule whose layer matches no package fails the check, so a stale module path or a half-finished rename cannot pass vacuously. The flip side: when a change legitimately empties a layer (for example, deleting `migration` or moving the publishers out), remove or retarget its rule in the same change, or CI fails.
 
@@ -340,6 +340,13 @@ removed: it re-extracted ~700 MB on top of setup-go's restore and failed with
 tar "Cannot open: File exists" on every run.
 
 ## Race policy
+
+> **Package rename.** The measurements in this section and in "The honest limit of package
+> selection" were taken when the runtime was the root package
+> `github.com/getsyntegrity/ego/v4`. That package now lives at
+> `github.com/getsyntegrity/ego/v4/engine` and the module root holds no Go files
+> (`archcheck`, rule `root-no-go-files`); read "the root package" below as
+> `engine`. The numbers themselves are historical and were not re-measured.
 
 Both lanes run `-race` (`GO_TEST_RACE=1` by default in CI). Measured
 locally (`go test -count=1 ./...`, no race, ~585s total, root package
@@ -568,7 +575,7 @@ local `replace`, so it now has four in-repository edges besides the root.
 
 | Changed path | Root lane | Selected modules | `test/compat` reason (chain) |
 |---|---|---|---|
-| `port/publishing/publishing.go` | `affected` | all seven | `test/compat ← .` (it imports the affected root package `ego` directly, so the walk reaches it from the root first) |
+| `port/publishing/publishing.go` | `affected` | all seven | `test/compat ← .` (it imports the affected package `engine` of the root module directly, so the walk reaches it from the root first) |
 | `publisher.go` (the root file holding the aliases) | `full` | all seven | `test/compat ← .` |
 | `publisher/kafka/kafka.go` | `none` | `publisher/kafka`, `test/compat` | `test/compat ← publisher/kafka` (unfiltered: the publisher is a fully changed nested module) |
 | `migration/migration.go`, `compose/spec.go` | `affected` | none | not selected: "requires `.` but imports none of its affected packages" |
@@ -956,8 +963,8 @@ everything that must pass.
 ### Compatibility checks: the `test/compat` module (#102, S1)
 
 The historical alias and sentinel checks between the four publishers and
-package `ego` (`ego.EventPublisher`, `ego.StatePublisher`,
-`ego.ErrPublisherNotStarted`, ADR `ego-arch-001` §5, S1 criterion 3, kept
+package `ego` (`engine.EventPublisher`, `engine.StatePublisher`,
+`engine.ErrPublisherNotStarted`, ADR `ego-arch-001` §5, S1 criterion 3, kept
 until [#124](https://github.com/getsyntegrity/ego/issues/124)) live in
 `test/compat`, a nested module that is **never released** (ADR
 `ego-arch-006`, slice S1, decision D5). It requires the root module and the
@@ -972,11 +979,11 @@ Each publisher's `compat_test.go` held two kinds of checks. They moved as
 follows:
 
 - **The eight compile-time alias assertions** move to `test/compat`
-  unchanged: `_ ego.EventPublisher = (*<pub>.EventsPublisher)(nil)` and
-  `_ ego.StatePublisher = (*<pub>.DurableStatePublisher)(nil)`, for kafka,
+  unchanged: `_ engine.EventPublisher = (*<pub>.EventsPublisher)(nil)` and
+  `_ engine.StatePublisher = (*<pub>.DurableStatePublisher)(nil)`, for kafka,
   nats, pulsar and websocket.
 - **The runtime sentinel check** ("`Publish` on a stopped publisher returns
-  an error that matches `ego.ErrPublisherNotStarted`", events and state, per
+  an error that matches `engine.ErrPublisherNotStarted`", events and state, per
   publisher) is split in two:
   - inside each publisher module, `TestPublishBeforeStartMatchesPublishingSentinel`
     in `publisher_contract_test.go` checks that `Publish` before `Start`
@@ -989,10 +996,10 @@ follows:
     really was connected and closed, returns an error matching the same
     sentinel;
   - in `test/compat`, `TestEgoSentinelIsThePublishingSentinel` checks that
-    `ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
+    `engine.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
     `errors.Is` in both directions.
 
-  Together the two halves prove the original check: `ego.ErrPublisherNotStarted`
+  Together the two halves prove the original check: `engine.ErrPublisherNotStarted`
   is defined as `publishing.ErrPublisherNotStarted`, so any error that matches
   one matches the other. The split was a maintainer decision on PR #142
   (recorded in `openspec/changes/ego-arch-006/design.md` §6 S1). It keeps
@@ -1042,8 +1049,8 @@ longer exist; see the previous section. The measurements below are from
 S1b (above) switched the four publishers' *production* build to
 `port/publishing`, but each module's *tests* still imported package `ego`
 directly, through `compat_test.go`, to check the historical S1
-compatibility aliases (`ego.EventPublisher`, `ego.StatePublisher`,
-`ego.ErrPublisherNotStarted` — ADR `ego-arch-001` §5, S1 criterion 3, kept
+compatibility aliases (`engine.EventPublisher`, `engine.StatePublisher`,
+`engine.ErrPublisherNotStarted` — ADR `ego-arch-001` §5, S1 criterion 3, kept
 until [#124](https://github.com/getsyntegrity/ego/issues/124)). That import
 pulled the whole GoAkt runtime back into `go list -deps -test ./...`: 45
 GoAkt packages and the root package itself, even though production code
@@ -1107,7 +1114,7 @@ all by parsing every `.go` file in it — including `_test.go` files — with
 `go/parser` in imports-only mode (`discoverModuleImports`,
 `internal/cmd/ciselect/main.go`). That parser never evaluates build
 constraints, so it still sees `compat_test.go`'s `import
-"github.com/getsyntegrity/ego/v4"` exactly as before the build tag was added.
+"github.com/getsyntegrity/ego/v4/engine"` exactly as before the build tag was added.
 Consequently:
 
 - A change confined to `publisher/kafka/compat_test.go` alone still selects
@@ -1158,7 +1165,7 @@ used to.)
 **Regression guard.** Each publisher module gained
 `TestUnitTestClosureExcludesRuntimeAndRoot`, which shells out to `go list
 -deps -test ./...` from inside the test binary and fails if
-`github.com/tochemey/goakt/v4` (any subpackage) or the root package
+`github.com/tochemey/goakt/v4` (any subpackage) or the engine package
 reappears. It is a normal, untagged test, so it runs on every `go test
 ./...` and fails first if this ever regresses; it was observed failing
 (RED) against the pre-#122, single-file `compat_test.go` before the split.
@@ -1261,7 +1268,7 @@ the script fails with a clear message naming the mismatch.) It then:
    path, so nothing here ever reaches the public module proxy or
    checksum database for this repository's own paths.
 4. From a fresh, empty consumer module, blank-imports the root module's
-   root package and every publisher's package (a blank import runs every
+   `engine` package and every publisher's package (a blank import runs every
    package's `init`, catching a corrupted descriptor a plain build
    cannot), `go get`s each publisher at its tag, `go mod tidy`s, `go
    build`s, and `go run`s the result — the run must print its success

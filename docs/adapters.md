@@ -48,11 +48,11 @@ family of adapters, the root is decided when its first module arrives (maintaine
 design §9); adding that root to `ExternalAdapterLayer` in `internal/cmd/archcheck/rules/layers.go`
 is the one-line change mentioned above.
 
-Import only contract packages and `egopb`. Never import package `ego`, the GoAkt runtime, or
+Import only contract packages and `egopb`. Never import package `engine`, the GoAkt runtime, or
 `compose` and anything under it: archcheck's rules `external-adapter-no-runtime` and
 `external-adapter-no-composition` reject that in production code. archcheck does not read test
 files, so copy `closure_test.go` from an existing publisher; it runs `go list -deps -test ./...`
-and fails if your tests pull in the runtime, the root package or the composition root.
+and fails if your tests pull in the runtime, the engine package or the composition root.
 
 ## 3. Implement the port
 

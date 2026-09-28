@@ -35,7 +35,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Test behaviors (defined locally to avoid import cycles with the root package)
+// Test behaviors (defined locally to avoid import cycles with the engine package)
 // ---------------------------------------------------------------------------
 
 // accountEventSourcedBehavior implements EventSourcedBehavior for testing.

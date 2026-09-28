@@ -36,7 +36,7 @@ import (
 
 // TestRuntime_ConsumerDrivesTheAppEndToEnd is #147's end-to-end criterion
 // (ego-runtime-001 §D8): internal/runtimeconsumer, whose build closure holds
-// neither package ego nor GoAkt, spawns a behavior, sends it two commands
+// neither package engine nor GoAkt, spawns a behavior, sends it two commands
 // and reads its state through App.Runtime() on a real GoAkt application.
 func TestRuntime_ConsumerDrivesTheAppEndToEnd(t *testing.T) {
 	ctx := context.Background()

@@ -32,9 +32,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// EventSourcedBehavior is the subset of ego.EventSourcedBehavior the scenarios
+// EventSourcedBehavior is the subset of engine.EventSourcedBehavior the scenarios
 // exercise, declared here because the testkit cannot import ego (ego's own tests
-// import the testkit). Every ego.EventSourcedBehavior satisfies it structurally,
+// import the testkit). Every engine.EventSourcedBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
 // for the test. A compile-time assertion in the ego package keeps it that way.
 //
@@ -47,9 +47,9 @@ type EventSourcedBehavior interface {
 	HandleEvent(ctx context.Context, event proto.Message, priorState proto.Message) (state proto.Message, err error)
 }
 
-// DurableStateBehavior is the subset of ego.DurableStateBehavior the scenarios
+// DurableStateBehavior is the subset of engine.DurableStateBehavior the scenarios
 // exercise, declared here because the testkit cannot import ego (ego's own tests
-// import the testkit). Every ego.DurableStateBehavior satisfies it structurally,
+// import the testkit). Every engine.DurableStateBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
 // for the test. A compile-time assertion in the ego package keeps it that way.
 //

@@ -4,9 +4,9 @@ context: |
   Tech stack: Go 1.26.0 (toolchain at /home/pablog/sdk/go1.26.6/bin/go; `go` is NOT on PATH),
     protobuf-first, module github.com/pablogore/ego/v4 (fork of github.com/tochemey/ego, maintained independently).
   Architecture: CQRS / Event Sourcing framework built on github.com/tochemey/goakt/v4 actors.
-    Composition root is ego.NewEngine with functional Options in option.go.
-  Observability: OpenTelemetry (traces + metrics) wired in telemetry.go;
-    logging abstracted behind the ego.Logger interface in logger.go.
+    Composition root is engine.NewEngine with functional Options in engine/option.go.
+  Observability: OpenTelemetry (traces + metrics) wired in engine/telemetry.go;
+    logging abstracted behind the engine.Logger interface in engine/logger.go.
   Testing: `go test -mod=vendor -p 1 -timeout 0 -race ./...` via Makefile.
     NOTE: the repo does NOT carry a vendor/ tree (vendor is gitignored), so
     `go mod vendor` must be run out-of-band before any -mod=vendor command.

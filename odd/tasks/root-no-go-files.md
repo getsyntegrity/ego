@@ -46,16 +46,16 @@ Out: tags, releases, behaviour changes, splitting `engine` further (#159 A4/A5).
 
 ## Tasks
 
-- [ ] T1 Add an archcheck guard "no Go files at the module root" (RED), move the root
+- [x] T1 Add an archcheck guard "no Go files at the module root" (RED), move the root
   package to `engine/` with `git mv`, fix package clauses and in-module importers,
   make the architecture tests resolve the module root (GREEN).
   Route: delegated writer (writer trigger: 80+ files).
-- [ ] T2 Update nested modules and tooling: benchmark, example/cluster, test/compat,
+- [x] T2 Update nested modules and tooling: benchmark, example/cluster, test/compat,
   publisher `closure_test.go`, Makefile mockery target, scripts/ci.
   Route: same delegated writer.
-- [ ] T3 Update ciselect and archcheck assumptions about the root package and their
+- [x] T3 Update ciselect and archcheck assumptions about the root package and their
   tests. Route: same delegated writer.
-- [ ] T4 Docs: readme, docs/ci.md, CHANGELOG `[Unreleased]` with BREAKING note and
+- [x] T4 Docs: readme, docs/ci.md, CHANGELOG `[Unreleased]` with BREAKING note and
   import map. Route: same delegated writer.
 - [ ] T5 Full gates for every module, external consumer check without `replace`,
   open the PR. Route: parent + per-action worker.
@@ -71,4 +71,41 @@ Out: tags, releases, behaviour changes, splitting `engine` further (#159 A4/A5).
 
 ## Progress
 
-(empty)
+(Writer route: delegated writer, single thread. Trigger: writer trigger, 80+ files renamed.)
+
+### T1 (2d2b613)
+
+- RED: `GOWORK=off go test ./internal/cmd/archcheck` failed to compile (`undefined: rootGoFiles`),
+  then with the guard in place `GOWORK=off go run ./internal/cmd/archcheck` on the unmoved tree
+  failed: `archcheck: 82 root Go file(s), 0 violation(s), 0 stale baseline entries` (exit 1).
+- GREEN: 82 files moved to `engine/` (`package engine`), importers updated; `go build ./...`,
+  `go vet ./...` and `go run ./internal/cmd/archcheck` (0 violations) pass. The architecture
+  tests find the module root by walking up to `go.mod`; the logger seam file is now
+  `engine/logger.go`.
+- Rules `application-no-runtime`, `composition-no-runtime` and `external-adapter-no-runtime`
+  now forbid `<module>/engine` (helper `enginePackagePath` in `rules/rules.go`).
+
+### T2 (1bee3a4)
+
+- benchmark, example/cluster, test/compat retargeted; local variables named `engine` were
+  renamed to `eng` so they do not shadow the package. Publisher `closure_test.go` files reject
+  `<module>/engine`. Makefile mockery `--dir engine`. `verify-consumer.sh` blank-imports
+  `<root>/engine`.
+
+### T3 (4f8f6d1)
+
+- The selector never needed a root package: `rootImportersOf` scans every root-module package,
+  so the "root requires X but no root package imports it" fallback does not fire. Verified on
+  `port/publishing/publishing.go` (mode `affected`, 7 of 37 packages) and `engine/engine.go`
+  (mode `affected`, engine plus dependents). Only the fixtures changed (`stray.go`).
+
+### T4
+
+- readme, docs/ci.md, docs/adapters.md, CHANGELOG `[Unreleased]` (BREAKING and import map),
+  `openspec/config.yaml`. Historical records (`openspec/changes`, `docs/ci/baseline-159-a1.md`)
+  are left as written.
+
+### T5 (parent)
+
+- Pending: full gates and PR are the parent's step. Writer's verification lines are in the
+  writer report.

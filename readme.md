@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/getsyntegrity/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/build.yml?branch=main" alt="Build status"></a>
-  <a href="https://pkg.go.dev/github.com/getsyntegrity/ego/v4"><img src="https://pkg.go.dev/badge/github.com/getsyntegrity/ego/v4.svg" alt="Go reference"></a>
+  <a href="https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine"><img src="https://pkg.go.dev/badge/github.com/getsyntegrity/ego/v4/engine.svg" alt="Go reference"></a>
   <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/ego" alt="Go version"></a>
   <a href="https://github.com/getsyntegrity/ego/releases/latest"><img src="https://img.shields.io/github/v/release/getsyntegrity/ego?label=release" alt="Latest release"></a>
   <a href="https://github.com/getsyntegrity/ego/tags"><img src="https://img.shields.io/github/v/tag/getsyntegrity/ego?label=tag" alt="Pre-release"></a>
@@ -74,9 +74,11 @@ For production use, provide durable implementations of the stores your applicati
 go get github.com/getsyntegrity/ego/v4
 ```
 
+The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/v4/engine` (package `engine`). Earlier snippets that imported `github.com/getsyntegrity/ego/v4` and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md) for the migration map.
+
 ## Quick start
 
-Build one `ego.Config`, use it to construct the Go-Akt actor system, start that system, and then plug in the eGo engine:
+Build one `engine.Config`, use it to construct the Go-Akt actor system, start that system, and then plug in the eGo engine:
 
 ```go
 package main
@@ -88,7 +90,7 @@ import (
 
     accountpb "example.com/myapp/gen/account/v1"
     goakt "github.com/tochemey/goakt/v4/actor"
-    "github.com/getsyntegrity/ego/v4"
+    "github.com/getsyntegrity/ego/v4/engine"
     "github.com/getsyntegrity/ego/v4/projection"
     "github.com/getsyntegrity/ego/v4/testkit"
 )
@@ -109,14 +111,14 @@ func main() {
     }
     defer offsetStore.Disconnect(ctx)
 
-    cfg := ego.NewConfig(eventsStore,
-        ego.WithOffsetStore(offsetStore),
-        ego.WithProjection("account-balances", &projection.Options{
+    cfg := engine.NewConfig(eventsStore,
+        engine.WithOffsetStore(offsetStore),
+        engine.WithProjection("account-balances", &projection.Options{
             Handler:      NewAccountBalancesProjection(),
             BufferSize:   100,
             PullInterval: 500 * time.Millisecond,
         }),
-        ego.WithProjection("account-audit", &projection.Options{
+        engine.WithProjection("account-audit", &projection.Options{
             Handler:      NewAccountAuditProjection(),
             BufferSize:   100,
             PullInterval: time.Second,
@@ -133,30 +135,30 @@ func main() {
     }
     defer sys.Stop(ctx)
 
-    engine, err := ego.NewEngine(sys, cfg)
+    eng, err := engine.NewEngine(sys, cfg)
     if err != nil {
         log.Fatal(err)
     }
 
-    if err := engine.Start(ctx); err != nil {
+    if err := eng.Start(ctx); err != nil {
         log.Fatal(err)
     }
-    defer engine.Stop(ctx)
+    defer eng.Stop(ctx)
 
-    if err := engine.StartProjection(ctx, "account-balances"); err != nil {
+    if err := eng.StartProjection(ctx, "account-balances"); err != nil {
         log.Fatal(err)
     }
     
-    if err := engine.StartProjection(ctx, "account-audit"); err != nil {
+    if err := eng.StartProjection(ctx, "account-audit"); err != nil {
         log.Fatal(err)
     }
 
     account := NewAccountBehavior("account-123")
-    if err := engine.Entity(ctx, account); err != nil {
+    if err := eng.Entity(ctx, account); err != nil {
         log.Fatal(err)
     }
 
-    state, revision, err := engine.SendCommand(
+    state, revision, err := eng.SendCommand(
         ctx,
         account.ID(),
         &accountpb.OpenAccount{InitialBalance: 1000},
@@ -180,34 +182,34 @@ The engine does not own the actor system. Stop the engine before stopping the ac
 
 All commands, events, and states are protobuf messages.
 
-An event-sourced behavior implements `ego.EventSourcedBehavior`:
+An event-sourced behavior implements `engine.EventSourcedBehavior`:
 
 ```go
 type EventSourcedBehavior interface {
-    InitialState() ego.State
-    HandleCommand(context.Context, ego.Command, ego.State) ([]ego.Event, error)
-    HandleEvent(context.Context, ego.Event, ego.State) (ego.State, error)
+    InitialState() engine.State
+    HandleCommand(context.Context, engine.Command, engine.State) ([]engine.Event, error)
+    HandleEvent(context.Context, engine.Event, engine.State) (engine.State, error)
 }
 ```
 
 `HandleCommand` validates a command and returns zero or more events. eGo persists those events before committing the resulting state. `HandleEvent` must be deterministic because it is also used during recovery.
 
-A durable-state behavior implements `ego.DurableStateBehavior`:
+A durable-state behavior implements `engine.DurableStateBehavior`:
 
 ```go
 type DurableStateBehavior interface {
-    InitialState() ego.State
-    HandleCommand(context.Context, ego.Command, uint64, ego.State) (newState ego.State, newVersion uint64, err error)
+    InitialState() engine.State
+    HandleCommand(context.Context, engine.Command, uint64, engine.State) (newState engine.State, newVersion uint64, err error)
 }
 ```
 
 Configure a state store and spawn the behavior with `DurableStateEntity`:
 
 ```go
-cfg := ego.NewConfig(nil, ego.WithStateStore(stateStore))
+cfg := engine.NewConfig(nil, engine.WithStateStore(stateStore))
 
 // Build and start the actor system and engine as shown above.
-if err := engine.DurableStateEntity(ctx, behavior); err != nil {
+if err := eng.DurableStateEntity(ctx, behavior); err != nil {
     return err
 }
 ```
@@ -226,7 +228,7 @@ Behavior values are Go-Akt dependencies. In addition to the methods above, they 
 
 ## Configuration
 
-Engine-wide options are passed to `ego.NewConfig`:
+Engine-wide options are passed to `engine.NewConfig`:
 
 - `WithStateStore` enables durable-state entities.
 - `WithSnapshotStore` enables event-sourced snapshots.
@@ -247,28 +249,28 @@ Entity-specific options are passed when an entity is spawned:
 
 Event-sourced entities additionally support `WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, and `WithBatchFlushWindow`.
 
-API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/getsyntegrity/ego/v4).
+API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine).
 
 ## Snapshots and retention
 
 Snapshots reduce recovery work by restoring the most recent state and replaying only later events:
 
 ```go
-cfg := ego.NewConfig(eventsStore,
-    ego.WithSnapshotStore(snapshotStore),
+cfg := engine.NewConfig(eventsStore,
+    engine.WithSnapshotStore(snapshotStore),
 )
 
-err := engine.Entity(ctx, behavior,
-    ego.WithSnapshotInterval(100),
+err := eng.Entity(ctx, behavior,
+    engine.WithSnapshotInterval(100),
 )
 ```
 
 A snapshot interval of `0` disables automatic snapshots. Retention runs only after a snapshot has been successfully written:
 
 ```go
-err := engine.Entity(ctx, behavior,
-    ego.WithSnapshotInterval(100),
-    ego.WithRetentionPolicy(ego.RetentionPolicy{
+err := eng.Entity(ctx, behavior,
+    engine.WithSnapshotInterval(100),
+    engine.WithRetentionPolicy(engine.RetentionPolicy{
         DeleteEventsOnSnapshot:    true,
         DeleteSnapshotsOnSnapshot: true,
         EventsRetentionCount:      200,
@@ -283,9 +285,9 @@ Your `EventsStore` and `SnapshotStore` implementations must support the correspo
 Batching combines events produced by multiple commands into fewer store writes. It is disabled by default:
 
 ```go
-err := engine.Entity(ctx, behavior,
-    ego.WithBatchThreshold(10),
-    ego.WithBatchFlushWindow(5*time.Millisecond),
+err := eng.Entity(ctx, behavior,
+    engine.WithBatchThreshold(10),
+    engine.WithBatchFlushWindow(5*time.Millisecond),
 )
 ```
 
@@ -330,9 +332,9 @@ For workloads beyond what a single node can handle, build a clustered Go-Akt act
 Each projection has its own name, handler, offsets, and recovery settings. Register projections on the `Config`, then start them after the engine:
 
 ```go
-cfg := ego.NewConfig(eventsStore,
-    ego.WithOffsetStore(offsetStore),
-    ego.WithProjection("account-balances", &projection.Options{
+cfg := engine.NewConfig(eventsStore,
+    engine.WithOffsetStore(offsetStore),
+    engine.WithProjection("account-balances", &projection.Options{
         Handler:      accountBalancesHandler,
         BufferSize:   100,
         PullInterval: 500 * time.Millisecond,
@@ -342,7 +344,7 @@ cfg := ego.NewConfig(eventsStore,
             projection.WithRetryDelay(time.Second),
         ),
     }),
-    ego.WithProjection("account-audit", &projection.Options{
+    engine.WithProjection("account-audit", &projection.Options{
         Handler:           accountAuditHandler,
         BufferSize:        250,
         PullInterval:      time.Second,
@@ -356,10 +358,10 @@ cfg := ego.NewConfig(eventsStore,
 )
 
 // Build and start the actor system and engine as shown above.
-if err := engine.StartProjection(ctx, "account-balances"); err != nil {
+if err := eng.StartProjection(ctx, "account-balances"); err != nil {
     return err
 }
-if err := engine.StartProjection(ctx, "account-audit"); err != nil {
+if err := eng.StartProjection(ctx, "account-audit"); err != nil {
     return err
 }
 ```
@@ -376,7 +378,7 @@ The engine also supports:
 - `ProjectionLag` to report lag by shard
 - Recovery policies and dead-letter handlers for processing failures
 
-`Engine.Stop` does not stop projection actors because they belong to the caller-owned Go-Akt actor system. In the normal shutdown sequence, call `engine.Stop(ctx)` and then `sys.Stop(ctx)`; stopping the actor system terminates all projections. If the actor system must remain running, call `engine.StopProjection(ctx, name)` for each projection before stopping the engine.
+`Engine.Stop` does not stop projection actors because they belong to the caller-owned Go-Akt actor system. In the normal shutdown sequence, call `eng.Stop(ctx)` and then `sys.Stop(ctx)`; stopping the actor system terminates all projections. If the actor system must remain running, call `eng.StopProjection(ctx, name)` for each projection before stopping the engine.
 
 In a cluster, a projection runs as a singleton. Every node must register the same named projections because the hosting node resolves each handler from its local `Config`.
 
@@ -385,7 +387,7 @@ In a cluster, a projection runs as a singleton. Every node must register the sam
 Call `AddEventPublishers` or `AddStatePublishers` after the engine starts and before producing changes:
 
 ```go
-if err := engine.AddEventPublishers(eventPublisher); err != nil {
+if err := eng.AddEventPublishers(eventPublisher); err != nil {
     return err
 }
 ```
@@ -397,7 +399,7 @@ eGo includes connector modules for:
 - [Pulsar](./publisher/pulsar)
 - [WebSocket](./publisher/websocket)
 
-You can also implement `ego.EventPublisher` or `ego.StatePublisher`. Publisher payload timestamps are Unix nanoseconds, and each payload includes its source shard.
+You can also implement `engine.EventPublisher` or `engine.StatePublisher`. Publisher payload timestamps are Unix nanoseconds, and each payload includes its source shard.
 
 ## Sagas and process managers
 
@@ -422,14 +424,14 @@ clusterConfig := goakt.NewClusterConfig().
     WithPartitionCount(partitions).
     WithMinimumPeersQuorum(quorum).
     WithReplicaCount(replicas).
-    WithKinds(ego.ClusterKinds()...) // eGo's actor kinds, required for relocation
+    WithKinds(engine.ClusterKinds()...) // eGo's actor kinds, required for relocation
 ```
 
 Also register every event-sourced, durable-state, and saga behavior type on every node:
 
 ```go
-cfg := ego.NewConfig(eventsStore,
-    ego.WithEntityKinds(
+cfg := engine.NewConfig(eventsStore,
+    engine.WithEntityKinds(
         new(AccountBehavior),
         new(OrderBehavior),
         new(CheckoutSaga),
@@ -506,7 +508,7 @@ Applications own store connectivity: connect stores before starting the actor sy
 
 ### Tenant scoping
 
-Every record-addressing method on `EventsStore`, `StateStore`, and `SnapshotStore` takes a `persistence.Scope`: a persisted record's effective identity is the pair `(Scope, persistence_id)`, never `persistence_id` alone. `persistence.Unscoped()` is the scope every call carries when no [`tenancy.TenantResolver`](./tenancy/resolver.go) is configured, so a deployment that never activates tenancy is unaffected. Registering one with `ego.WithTenantResolver` makes the engine resolve the caller's tenant and attach it to `ctx` at the command trust boundary (`SendCommand`/`Dispatch`, `SagaStatus`, `EraseEntity`) — a `TenantResolver` is invoked exactly once per call, never at spawn. Spawning an entity, durable-state entity, or saga instead declares its tenant with `ego.WithTenant(id)`, so the application states which tenant an aggregate belongs to rather than the engine inferring it; the built-in `tenancy.WithSingleTenant(id)` is the one exception, since a deployment with exactly one tenant can expose it as a fixed identity and needs no `WithTenant` or other per-call plumbing at all.
+Every record-addressing method on `EventsStore`, `StateStore`, and `SnapshotStore` takes a `persistence.Scope`: a persisted record's effective identity is the pair `(Scope, persistence_id)`, never `persistence_id` alone. `persistence.Unscoped()` is the scope every call carries when no [`tenancy.TenantResolver`](./tenancy/resolver.go) is configured, so a deployment that never activates tenancy is unaffected. Registering one with `engine.WithTenantResolver` makes the engine resolve the caller's tenant and attach it to `ctx` at the command trust boundary (`SendCommand`/`Dispatch`, `SagaStatus`, `EraseEntity`) — a `TenantResolver` is invoked exactly once per call, never at spawn. Spawning an entity, durable-state entity, or saga instead declares its tenant with `engine.WithTenant(id)`, so the application states which tenant an aggregate belongs to rather than the engine inferring it; the built-in `tenancy.WithSingleTenant(id)` is the one exception, since a deployment with exactly one tenant can expose it as a fixed identity and needs no `WithTenant` or other per-call plumbing at all.
 
 A custom store adapter must key its records on `(Scope, persistence_id)` structurally, e.g. a real tenant column in a SQL primary key and every `WHERE` clause — never by concatenating `Scope.String()`, which is a diagnostic rendering only. [`persistence/conformance`](./persistence/conformance) is the isolation acceptance suite: wire `conformance.RunEventsStoreConformance` (and its `RunStateStoreConformance`/`RunSnapshotStoreConformance` equivalents) into the adapter's own tests, the way [`testkit/conformance_test.go`](./testkit/conformance_test.go) does for the in-repo stores.
 
@@ -523,8 +525,8 @@ Adopting tenancy on a deployment that already has data written under `Unscoped()
 `WithTelemetry` accepts an OpenTelemetry tracer and meter:
 
 ```go
-cfg := ego.NewConfig(eventsStore,
-    ego.WithTelemetry(&ego.Telemetry{
+cfg := engine.NewConfig(eventsStore,
+    engine.WithTelemetry(&engine.Telemetry{
         Tracer: tracer,
         Meter:  meter,
     }),
@@ -546,12 +548,12 @@ logger := kitlog.New(kitlog.Config{
     GlobalFields: map[string]string{"service": "accounts"},
 })
 
-cfg := ego.NewConfig(eventStore, ego.WithLogger(logger))
+cfg := engine.NewConfig(eventStore, engine.WithLogger(logger))
 ```
 
-- When `WithLogger` is not used, eGo logs through `ego.DefaultLogger()`, which is kit-logger's process-wide logger (`logger.L()`). An application that installs its own logger with `logger.SetGlobal` before building the engine therefore needs no extra wiring.
-- `ego.DiscardLogger` drops every record and reports every level as disabled. Use it in tests and benchmarks.
-- `ego.ResolveLogger` applies eGo's nil-logger rule outside the engine: a nil or typed-nil logger resolves to `ego.DefaultLogger()`.
+- When `WithLogger` is not used, eGo logs through `engine.DefaultLogger()`, which is kit-logger's process-wide logger (`logger.L()`). An application that installs its own logger with `logger.SetGlobal` before building the engine therefore needs no extra wiring.
+- `engine.DiscardLogger` drops every record and reports every level as disabled. Use it in tests and benchmarks.
+- `engine.ResolveLogger` applies eGo's nil-logger rule outside the engine: a nil or typed-nil logger resolves to `engine.DefaultLogger()`.
 
 eGo's own records are structured: a fixed message plus snake_case fields such as `persistence_id`, `sequence_number`, `projection`, `saga_id` and `error`. Records written with a context go through kit-logger's `*Context` methods, so enabling kit-logger's OpenTelemetry decorator stamps `trace_id` and `span_id` on them, which joins a log line to the trace `WithTelemetry` produced:
 
