@@ -84,7 +84,7 @@ S0 (the selector) and S1 (the first leaf module and nested-to-nested edge) proce
 
 None in this change. When the slices land:
 
-- **S2** gives `egopb` and `port/publishing` new import paths under D2 (a) or (a'). Once a directory holds its own `go.mod`, the root can no longer serve the old path from it, so the new module lives in a new directory. The old directories stay in the root as **alias packages** until #124, per the window recorded in #128. The aliases are needed even though no release exists, because the root already resolves by pseudo-version (exploration §5) and someone may be pinned to a commit.
+- **S2** gives `egopb`, `port/publishing` and `port/adapter` (plus `port/adapter/adaptertest` once its tests stop importing root packages; D7 amendment) new import paths under D2 (a) or (a'). Once a directory holds its own `go.mod`, the root can no longer serve the old path from it, so the new module lives in a new directory. The old directories stay in the root as **alias packages** until #124, per the window recorded in #128. The aliases are needed even though no release exists, because the root already resolves by pseudo-version (exploration §5) and someone may be pinned to a commit.
 - **S3** changes the publishers' `go.mod` requirements and imports and, under D2, their module paths. At the baseline commit they cannot be resolved, so no consumer can depend on their old path. #130's `closure_test.go` hard-codes the root path and is updated in S3.
 - **S0 and S1** change only CI tooling and test code.
 

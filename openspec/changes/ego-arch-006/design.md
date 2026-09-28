@@ -40,7 +40,7 @@ Arrows mean "requires" in `go.mod`, resolved from the working tree through `repl
 ```mermaid
 flowchart BT
   contracts["contracts module (slice S2, D7 option i as amended)<br/>egopb + port/publishing + port/adapter (+ adaptertest)<br/>in a new directory (see D2)"]
-  root["root module github.com/…/ego/v4<br/>package ego (GoAkt runtime adapter + aliases),<br/>port/behavior, command, tenancy and the other root-level contracts,<br/>alias packages at the old egopb and port/publishing paths,<br/>internal/extensions, compose, migration, testkit, mocks, tools"]
+  root["root module github.com/…/ego/v4<br/>package ego (GoAkt runtime adapter + aliases),<br/>port/behavior, command, tenancy and the other root-level contracts,<br/>alias packages at the old egopb, port/publishing and port/adapter paths (and adaptertest once moved),<br/>internal/extensions, compose, migration, testkit, mocks, tools"]
   pubs["publisher/kafka, nats, pulsar, websocket<br/>(require contracts only after S3)"]
   compat["test/compat module<br/>unreleased integration consumer (S1)"]
   cons["benchmark, example/cluster<br/>unreleased consumers"]
@@ -75,7 +75,7 @@ Why there is no "leaf" production module first. #102's delivery plan suggests a 
 
 ### 2.3 What stays in the root module until #124
 
-Package `ego` (the engine, actors, options, telemetry and every compatibility alias), `internal/extensions`, all other `internal/*`, `compose` and `compose/goakt` (#125), `migration`, `port/behavior` (#131), the eight root-level contracts (unless a store adapter or an in-memory runtime pulls F1 earlier), the alias packages left at the old `egopb` and `port/publishing` paths (D2), `testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`, the three root examples and `internal/cmd/*`. #124 then removes the root's Go files and the aliases in a major release; that is the natural point for F1 to F3, because the import paths change anyway.
+Package `ego` (the engine, actors, options, telemetry and every compatibility alias), `internal/extensions`, all other `internal/*`, `compose` and `compose/goakt` (#125), `migration`, `port/behavior` (#131), the eight root-level contracts (unless a store adapter or an in-memory runtime pulls F1 earlier), the alias packages left at the old `egopb`, `port/publishing` and `port/adapter` paths, plus `port/adapter/adaptertest` once S2 moves it (D2, D7 amendment), `testkit`, `persistence/conformance`, `mocks/*`, `test/data/testpb`, the three root examples and `internal/cmd/*`. #124 then removes the root's Go files and the aliases in a major release; that is the natural point for F1 to F3, because the import paths change anyway.
 
 ## 3. Decisions for the maintainers
 
@@ -165,7 +165,7 @@ At exploration time the publishers imported exactly two root packages, `egopb` a
 
 **What changes.** The contracts module also holds `port/adapter`. It imports only the standard library (`context`, `reflect`, `slices`), so it adds no dependency to the module and no path back to the root. `port/behavior` still waits for F1; nothing else in D7 changes.
 
-**`port/adapter/adaptertest`: included, with a precondition.** It was not added by anticipation; the import map shows tests that need it outside the root: `publisher/websocket/conformance_test.go:31` and `port/publishing/publishingtest/unreachable_internal_test.go:31`. A module's requirements cover its tests' imports, so without `adaptertest` in the contracts module `publisher/websocket` would keep requiring the root for its tests. Its production code imports only `port/adapter`, the standard library and `testing`. But two of its own test files import root packages: `port/adapter/adaptertest/implied_internal_test.go:28-29` (`offsetstore`, `persistence`) and `port/adapter/adaptertest/adaptertest_test.go:37` (`persistence`). Moved as they are, the contracts module would require the root while the root requires it: a cycle forbidden by ego-arch-001 §3 and §6(5). So S2 first moves those test cases to the root side, next to the packages they exercise, and only then moves `adaptertest`. If that relocation is not possible without losing coverage, `adaptertest` stays in the root and S3 records `publisher/websocket` as the one publisher still requiring the root for tests.
+**`port/adapter/adaptertest`: included, with a precondition.** It was not added by anticipation; the import map shows tests that need it outside the root: `publisher/websocket/conformance_test.go:31` and `port/publishing/publishingtest/unreachable_internal_test.go:31`. A module's requirements cover its tests' imports, so without `adaptertest` in the contracts module `publisher/websocket` would keep requiring the root for its tests. Its production code imports only `port/adapter`, the standard library and `testing`. But two of its own test files import root packages: `port/adapter/adaptertest/implied_internal_test.go:28-29` (`offsetstore`, `persistence`) and `port/adapter/adaptertest/adaptertest_test.go:37` (`persistence`). Moved as they are, the contracts module would require the root while the root requires it: a cycle forbidden by ego-arch-001 §3 and §6(5). So S2 first moves those test cases to the root side, next to the packages they exercise, and only then moves `adaptertest`. If that relocation is not possible without losing coverage, `adaptertest` stays in the root, and **S3 is blocked**: the slice records the impediment (which test cases, why they cannot move, what would unblock them) and is not considered done. S3's goal is all four publishers requiring the contracts module only, production and tests; three out of four does not meet it.
 
 **Rejected.** Leaving `port/adapter` in the root: `publisher/websocket` would keep GoAkt and Olric in its module graph, which is exactly the benefit §6(2) credits to S2 and S3. Adding `adaptertest` unconditionally: it would create the cycle above.
 
@@ -393,7 +393,7 @@ This slice follows D7 option (i) as amended on 2026-09-28: it also moves `port/a
 - **Tasks:**
   1. Resolution proof for the chosen D2 layout: a scratch consumer module resolves the new path at a pseudo-version of the branch head (the exploration §5 method). Under D2 (b) this is a blocking spike, not a check.
   2. Create the module in its new directory, holding `egopb` (with `go_package` pointed at it) and `publishing`. The root requires it through a local `replace` for integrated verification, plus the pseudo-version of an already-merged commit. That makes it a two-step landing, because a commit cannot name its own hash.
-  3. Under D2 (a)/(a'), leave alias packages at the old root paths `…/v4/egopb` and `…/v4/port/publishing`, kept until #124. (Under D2 (b) the import paths do not change, so this task is empty: the packages move to `v4/<dir>` and need no alias.)
+  3. Under D2 (a)/(a'), leave alias packages at the old root paths `…/v4/egopb`, `…/v4/port/publishing` and `…/v4/port/adapter` (and `…/v4/port/adapter/adaptertest` once it moves), kept until #124. (Under D2 (b) the import paths do not change, so this task is empty: the packages move to `v4/<dir>` and need no alias.)
      - They have to be separate root packages in the old directories. Under D2 (a) or (a') an alias cannot share a directory with the new module's `go.mod`.
      - They are needed even before the first release, because the root already resolves by pseudo-version.
      - Package `ego`'s `publisher.go` aliases re-point to the new path.
@@ -405,7 +405,7 @@ This slice follows D7 option (i) as amended on 2026-09-28: it also moves `port/a
   - the resolution-proof output is recorded in the PR.
 - **CI measurement:** the contract draft PR again. A change to the contracts module selects it, the root (seeded) and the publishers. An `egopb` change is global-equivalent; record it once.
 
-### S3 — Publishers require the contracts module only (gate: S2 merged)
+### S3 — Publishers require the contracts module only (gate: S2 merged, including `port/adapter/adaptertest`; see the D7 amendment)
 
 - **Owns:** `publisher/*/go.mod`, `publisher/*/go.sum`, the publishers' imports (switched to the new contracts path), `publisher/*/closure_test.go`, and the publishers' own module paths only if D2 changes them; `docs/ci.md`.
 - **Tasks:**
