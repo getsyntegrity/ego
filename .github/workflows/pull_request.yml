@@ -277,9 +277,34 @@ jobs:
         shell: bash
         run: scripts/ci/verify-consumer.sh
 
+  # actionlint checks every workflow in .github/workflows on every pull
+  # request, independent of plan and the modules matrix. A PR that only
+  # edits a release workflow (release.yml, release-publishers.yml) selects
+  # no module to test (docs/ci.md), so this job is what stops a broken
+  # workflow before merge instead of on the next tag push or dispatch.
+  # The tool version is pinned; shellcheck and pyflakes integration are
+  # disabled so the result does not depend on whatever shellcheck version
+  # the runner image happens to ship.
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache: false
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Lint workflows
+        run: actionlint -color -shellcheck= -pyflakes=
+
   ci-gate:
     name: CI Gate
-    needs: [plan, modules, consumer]
+    needs: [plan, modules, consumer, actionlint]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -289,11 +314,20 @@ jobs:
           PLAN_RESULT: ${{ needs.plan.result }}
           MODULES_RESULT: ${{ needs.modules.result }}
           CONSUMER_RESULT: ${{ needs.consumer.result }}
+          ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
         run: |
-          echo "plan:     $PLAN_RESULT"
-          echo "modules:  $MODULES_RESULT"
-          echo "consumer: $CONSUMER_RESULT"
+          echo "plan:       $PLAN_RESULT"
+          echo "modules:    $MODULES_RESULT"
+          echo "consumer:   $CONSUMER_RESULT"
+          echo "actionlint: $ACTIONLINT_RESULT"
           status=0
+          # actionlint has no if: and no needs:, so it is never legitimately
+          # skipped: anything but success (failure, cancelled, skipped)
+          # fails the gate.
+          if [ "$ACTIONLINT_RESULT" != "success" ]; then
+            echo "::error::actionlint job did not succeed ($ACTIONLINT_RESULT)"
+            status=1
+          fi
           if [ "$PLAN_RESULT" != "success" ]; then
             echo "::error::plan job did not succeed ($PLAN_RESULT)"
             status=1

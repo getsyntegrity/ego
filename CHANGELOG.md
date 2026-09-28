@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### 🧹 Improvements
+
+- **CI: every pull request lints the GitHub Actions workflows with a pinned `actionlint`.** A new `actionlint` job in `pull_request.yml`, independent of `plan` and the modules matrix, runs `actionlint` v1.7.12 over `.github/workflows/` (shellcheck and pyflakes integration disabled for a reproducible result), and `CI Gate` requires it to succeed. A pull request that only edits a release workflow (`release.yml`, `release-publishers.yml`) now fails before merge on a detectable workflow error instead of on the next tag push or dispatch. See `docs/ci.md`, "Workflow lint (actionlint)".
+
 ### 🐛 Bug Fixes
 
 - **`release-publishers.yml` defaults `bump` to `minor`, so the first publisher release is `v0.1.0` (#134).** An untagged, suffix-less publisher starts from `v0.0.0`, so the previous `patch` default planned `publisher/<name>/v0.0.1` for all four publishers instead of the intended `v0.1.0`. `TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher` (`internal/cmd/releaseplan`) reads the workflow's default and runs the publishers-only plan against this repository with only `v4.0.0` tagged, and requires `v0.1.0` for every publisher. A later fix release passes `bump: patch` explicitly.

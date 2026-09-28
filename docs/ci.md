@@ -948,6 +948,45 @@ fail visibly whenever `plan`, a real `modules` or `consumer`
 failure/cancellation, or (on `build.yml`) a broken release plan, would
 otherwise have left branch protection with nothing to require.
 
+On `pull_request.yml`, `ci-gate` also needs `actionlint` (see "Workflow
+lint (actionlint)" below) and requires it to be `success`: `actionlint`
+has no `needs:` and no `if:`, so it is never legitimately skipped, and a
+failure, cancellation or skip fails the gate.
+
+### Workflow lint (actionlint)
+
+Every pull request runs an `actionlint` job in `pull_request.yml`. It
+does not depend on `plan` and is not part of the `modules` matrix: it
+checks out the repository, installs a pinned `actionlint`
+(`go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`), and
+lints every workflow under `.github/workflows/` with `actionlint -color
+-shellcheck= -pyflakes=`. It catches workflow syntax and schema errors,
+invalid `${{ }}` expressions and contexts, wrong `needs:`/output
+references, and bad action inputs before merge.
+
+This matters most for a pull request that only edits a release workflow
+(`release.yml`, `release-publishers.yml`): such a workflow never runs on
+a pull request, and the selector may select no module to test for it, so
+without this job a broken release workflow would first fail on the next
+tag push or `workflow_dispatch`. What such a pull request verifies:
+
+| Job | Runs? |
+|---|---|
+| `plan` | yes (cheap: diff + `ciselect`) |
+| `modules` matrix | only for the modules `ciselect` selects |
+| `consumer` | only when `plan`'s mode is `full` |
+| `actionlint` | always |
+| `CI Gate` | always; fails unless `plan` and `actionlint` succeeded |
+
+Limits: shellcheck and pyflakes integration are disabled on purpose, so
+the result does not depend on the shellcheck version the runner image
+ships; `run:` scripts are therefore not shell-linted by this job. The job
+only runs on pull requests; `build.yml` (a push to `main` or `develop`)
+does not re-lint, so a workflow change pushed directly to `main`, bypassing
+a pull request, is not checked by it. To run it locally: `go install
+github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 && actionlint
+-shellcheck= -pyflakes=` from the repository root.
+
 **Required check name: `CI Gate`.** Configure branch protection to require
 this one check (the job's `name:`, not its `ci-gate` id) on `main`; no
 other job needs to be listed, because `ci-gate` already depends on
