@@ -102,7 +102,7 @@ An adapter's identity has two parts, kept separate on purpose because today they
 - **Adapter type:** `Descriptor.Ports` plus `Descriptor.Name`, for example `{Ports: ["publishing.EventPublisher"], Name: "kafka"}`. Error messages, logs and capability validation use it. The slot's port must be one of `Ports` (§D6). (This document says "adapter type" for this pair and keeps "kind" for the two publisher kinds, events and state, as ego-arch-003 does.)
 - **Instance:** the existing `ID()` for publishers, unchanged. V6 keeps requiring it to be unique per publisher kind (events, state). Stores, encryptors and resolvers have no instance identity and do not need one: each sits in a single-value slot, and the slot's field name already identifies it.
 
-An adapter that does not implement `Describer` is **undeclared**. It keeps working exactly as today. Inspection reports it as `(Descriptor{}, false)`, and the composition root names it by its slot, as `compose/goakt` already does (`compose/goakt/app.go:246-257`).
+An adapter that does not implement `Describer` is **undeclared**. It keeps working exactly as today. Inspection reports it as `(Descriptor{}, false)`, and the composition root names it by its slot, as `compose/goakt` already does (`compose/goakt/app.go:246-257`). A nil or typed-nil value is undeclared too, whatever its type's method set: `Describe`, `StarterOf` and `PingerOf` report it as absent and never call its methods.
 
 The fact that every publisher's `ID()` is a type-wide constant (`"ego-kafka"`, `kafka.go:84-86`) is a real limitation, but fixing it changes publisher configuration, not the SPI; decision O3 (§9) adds an optional `ID` to each publisher `Config` (follow-up F-C).
 
@@ -180,7 +180,7 @@ ego-arch-003 §9 left this to #106. The maintainers decided on 2026-09-27 to kee
 
 V8 runs only on adapters that declare a descriptor, so every `Spec` that validates today still validates. That is deliberate for v4 compatibility: an undeclared resolver that implements `FixedTenantResolver` keeps working as today and is reported by inspection as undeclared. O7 asks whether #124 makes declaring mandatory.
 
-**Ordering.** V8 runs after V5 and V6 and skips every slot value they already rejected (a typed nil, a nil publisher). Calling `Describe` on a typed-nil pointer can dereference nil and panic, and one problem should produce one error. It is static: it inspects values the consumer already placed in named fields, with no I/O and no reflection beyond the existing typed-nil check (ego-arch-003 §D2 allows exactly that one use).
+**Ordering.** V8 runs after V5 and V6 and skips every slot value they already rejected (a typed nil, a nil publisher, a duplicate publisher ID). It runs value by value, right after V5 and V6 accepted that value, so its problems keep `Validate`'s Spec field order. Calling `Describe` on a typed-nil pointer can dereference nil and panic, and one problem should produce one error. It is static: it inspects values the consumer already placed in named fields, with no I/O. Its only reflection is nilness: `compose`'s existing typed-nil check (ego-arch-003 §D2 allows exactly that one use in `compose`), and the nilness check (`isNil`) inside `port/adapter`'s accessors, which inspects whether a value is nil and never discovers methods.
 
 `compose` imports `port/adapter` for V8. That is a contract import, which `composition-no-runtime` allows (`internal/cmd/archcheck/rules/rules.go:202-214`).
 

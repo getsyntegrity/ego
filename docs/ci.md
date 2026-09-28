@@ -616,7 +616,11 @@ follows:
     in `publisher_contract_test.go` checks that `Publish` before `Start`
     returns an error matching `publishing.ErrPublisherNotStarted`, for
     events and state. It builds the stopped publisher with a struct
-    literal, which only code inside the package can do;
+    literal, which only code inside the package can do. `publisher/websocket`
+    no longer has this test: since ego-arch-004 spec 2 (#158) the same
+    check is PT-1 of `port/publishing/publishingtest`, run in its
+    `conformance_test.go` against a publisher that really was connected and
+    closed;
   - in `test/compat`, `TestEgoSentinelIsThePublishingSentinel` checks that
     `ego.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted`, and
     `errors.Is` in both directions.
@@ -645,8 +649,8 @@ four publishers (kafka 21 modules, nats 13, pulsar 72, websocket 7). The
 publishers still require the root module itself for `egopb` and
 `port/publishing` until slice S3. Each publisher keeps
 `publisher_contract_test.go` (the `publishing`-only assertions, including
-the runtime half of the sentinel check above) and
-`TestUnitTestClosureExcludesRuntimeAndRoot`.
+the runtime half of the sentinel check above, which websocket now runs as
+PT-1) and `TestUnitTestClosureExcludesRuntimeAndRoot`.
 
 `test/compat` is verified like any other nested module: the `modules` job
 discovers it from its `go.mod` (no workflow change), and
