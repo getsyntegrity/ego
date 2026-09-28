@@ -31,7 +31,6 @@ import (
 
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -39,6 +38,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/egopb"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/internal/runner"
 	"github.com/getsyntegrity/ego/v4/persistence"
 	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
@@ -64,7 +64,7 @@ type DurableStateActor struct {
 	actorSystem     goakt.ActorSystem
 	persistenceID   string
 	tracer          trace.Tracer
-	metrics         *metrics
+	metrics         *instrumentation.Instruments
 
 	// Cached values computed once at startup to avoid per-command allocations.
 	shardNumber uint64
@@ -173,7 +173,7 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 	}
 	if telemetryExt != nil {
 		entity.tracer = telemetryExt.Tracer()
-		entity.metrics = newMetrics(telemetryExt.Meter())
+		entity.metrics = instrumentation.New(telemetryExt.Meter())
 	}
 
 	if err := runner.
@@ -191,9 +191,7 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 
-	if entity.metrics != nil {
-		entity.metrics.entitiesActive.Add(ctx.Context(), 1)
-	}
+	entity.metrics.EntityStarted(ctx.Context())
 
 	return nil
 }
@@ -238,9 +236,7 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 // direction: no tenant-less record is ever written. Legacy mode is
 // unaffected — it keeps today's unconditional flush.
 func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
-	if entity.metrics != nil {
-		entity.metrics.entitiesActive.Add(ctx.Context(), -1)
-	}
+	entity.metrics.EntityStopped(ctx.Context())
 	chain := runner.
 		New(runner.WithFailFast()).
 		AddRunner(func() error { return entity.stateStore.Ping(ctx.Context()) })
@@ -327,20 +323,13 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 
 	if entity.tracer != nil {
 		var span trace.Span
-		ctx, span = entity.tracer.Start(ctx, "ego.command",
-			trace.WithAttributes(
-				attribute.String("ego.persistence_id", entity.persistenceID),
-				attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
-			))
+		ctx, span = instrumentation.StartCommandSpan(ctx, entity.tracer, entity.persistenceID, command)
 		defer span.End()
 	}
 
 	if entity.metrics != nil {
-		entity.metrics.commandsTotal.Add(ctx, 1)
-		defer func() {
-			duration := float64(time.Since(startTime).Milliseconds())
-			entity.metrics.commandsDuration.Record(ctx, duration)
-		}()
+		entity.metrics.CommandReceived(ctx)
+		defer func() { entity.metrics.CommandCompleted(ctx, startTime) }()
 	}
 
 	// Pre-handler gate (T4-A): in tenant-aware mode, HandleCommand must never

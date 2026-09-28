@@ -1,0 +1,410 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	noopmetric "go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/v4/testkit"
+)
+
+// telemetryDumpEnv names an optional file the contract test writes its
+// normalized observation to, so two revisions can be diffed byte for byte.
+const telemetryDumpEnv = "EGO_TELEMETRY_CONTRACT_DUMP"
+
+// recordingMeter wraps the no-op meter and records every instrument the
+// engine creates and every measurement it takes. It only overrides the
+// instrument kinds the engine uses.
+type recordingMeter struct {
+	noopmetric.Meter
+
+	mu           sync.Mutex
+	instruments  map[string]string // name -> "kind|description|unit"
+	creations    map[string]int    // name -> number of creation calls
+	measurements map[string]map[string]int
+}
+
+func newRecordingMeter() *recordingMeter {
+	return &recordingMeter{
+		instruments:  make(map[string]string),
+		creations:    make(map[string]int),
+		measurements: make(map[string]map[string]int),
+	}
+}
+
+func (m *recordingMeter) created(name, kind, description, unit string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instruments[name] = kind + "|" + description + "|" + unit
+	m.creations[name]++
+}
+
+func (m *recordingMeter) measured(name string, set attribute.Set) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keys := make([]string, 0, set.Len())
+	for _, kv := range set.ToSlice() {
+		keys = append(keys, string(kv.Key))
+	}
+	sort.Strings(keys)
+	if m.measurements[name] == nil {
+		m.measurements[name] = make(map[string]int)
+	}
+	m.measurements[name]["{"+strings.Join(keys, ",")+"}"]++
+}
+
+func (m *recordingMeter) count(name string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	total := 0
+	for _, n := range m.measurements[name] {
+		total += n
+	}
+	return total
+}
+
+func (m *recordingMeter) Int64Counter(name string, opts ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	cfg := metric.NewInt64CounterConfig(opts...)
+	m.created(name, "Int64Counter", cfg.Description(), cfg.Unit())
+	return &recInt64Counter{meter: m, name: name}, nil
+}
+
+func (m *recordingMeter) Int64UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
+	cfg := metric.NewInt64UpDownCounterConfig(opts...)
+	m.created(name, "Int64UpDownCounter", cfg.Description(), cfg.Unit())
+	return &recInt64UpDownCounter{meter: m, name: name}, nil
+}
+
+func (m *recordingMeter) Int64Gauge(name string, opts ...metric.Int64GaugeOption) (metric.Int64Gauge, error) {
+	cfg := metric.NewInt64GaugeConfig(opts...)
+	m.created(name, "Int64Gauge", cfg.Description(), cfg.Unit())
+	return &recInt64Gauge{meter: m, name: name}, nil
+}
+
+func (m *recordingMeter) Float64Histogram(name string, opts ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+	cfg := metric.NewFloat64HistogramConfig(opts...)
+	m.created(name, "Float64Histogram", cfg.Description(), cfg.Unit())
+	return &recFloat64Histogram{meter: m, name: name}, nil
+}
+
+type recInt64Counter struct {
+	noopmetric.Int64Counter
+	meter *recordingMeter
+	name  string
+}
+
+func (c *recInt64Counter) Add(_ context.Context, _ int64, opts ...metric.AddOption) {
+	c.meter.measured(c.name, metric.NewAddConfig(opts).Attributes())
+}
+
+type recInt64UpDownCounter struct {
+	noopmetric.Int64UpDownCounter
+	meter *recordingMeter
+	name  string
+}
+
+func (c *recInt64UpDownCounter) Add(_ context.Context, _ int64, opts ...metric.AddOption) {
+	c.meter.measured(c.name, metric.NewAddConfig(opts).Attributes())
+}
+
+type recInt64Gauge struct {
+	noopmetric.Int64Gauge
+	meter *recordingMeter
+	name  string
+}
+
+func (g *recInt64Gauge) Record(_ context.Context, _ int64, opts ...metric.RecordOption) {
+	g.meter.measured(g.name, metric.NewRecordConfig(opts).Attributes())
+}
+
+type recFloat64Histogram struct {
+	noopmetric.Float64Histogram
+	meter *recordingMeter
+	name  string
+}
+
+func (h *recFloat64Histogram) Record(_ context.Context, _ float64, opts ...metric.RecordOption) {
+	h.meter.measured(h.name, metric.NewRecordConfig(opts).Attributes())
+}
+
+// telemetryObservation is the normalized, order-independent view of what the
+// engine emitted. Values that vary run to run (IDs, timings, counts) are left
+// out; the shape of every signal is kept.
+type telemetryObservation struct {
+	Spans        []string            `json:"spans"`
+	Instruments  map[string]string   `json:"instruments"`
+	Creations    map[string]int      `json:"creations"`
+	Measurements map[string][]string `json:"measurements"`
+	Propagator   []string            `json:"propagator"`
+}
+
+func describeSpan(span tracetest.SpanStub, names map[string]string) string {
+	keys := make([]string, 0, len(span.Attributes))
+	for _, kv := range span.Attributes {
+		switch kv.Key {
+		case "ego.command_type":
+			keys = append(keys, string(kv.Key)+"="+kv.Value.AsString())
+		default:
+			keys = append(keys, string(kv.Key))
+		}
+	}
+	sort.Strings(keys)
+
+	events := make([]string, 0, len(span.Events))
+	for _, event := range span.Events {
+		events = append(events, event.Name)
+	}
+
+	parent := "<root>"
+	if span.Parent.IsValid() {
+		parent = names[span.Parent.SpanID().String()]
+		if parent == "" {
+			parent = "<unexported>"
+		}
+	}
+
+	return fmt.Sprintf("%s kind=%s parent=%s attrs=[%s] status=%s events=[%s]",
+		span.Name, span.SpanKind, parent, strings.Join(keys, ","),
+		span.Status.Code, strings.Join(events, ","))
+}
+
+// TestTelemetryContract pins the observable telemetry of commands and
+// projections: span names, attributes, parentage and error status, the
+// instrument catalog (name, kind, description, unit) with the attribute keys
+// of every measurement, and the global propagator the engine installs.
+func TestTelemetryContract(t *testing.T) {
+	ctx := context.Background()
+
+	previous := otel.GetTextMapPropagator()
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	t.Cleanup(func() { _ = provider.Shutdown(ctx) })
+	tracer := provider.Tracer("ego-contract")
+	meter := newRecordingMeter()
+
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	stateStore := testkit.NewDurableStore()
+	require.NoError(t, stateStore.Connect(ctx))
+	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithStateStore(stateStore),
+		WithTelemetry(&Telemetry{Tracer: tracer, Meter: meter}),
+		WithProjection("discard", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: 50 * time.Millisecond,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+
+	propagator := otel.GetTextMapPropagator().Fields()
+	sort.Strings(propagator)
+
+	parentCtx, parent := tracer.Start(ctx, "test.parent")
+
+	eventSourcedID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(eventSourcedID)))
+	_, _, err := engine.SendCommand(parentCtx, eventSourcedID, &testpb.CreateAccount{AccountBalance: 42}, time.Minute)
+	require.NoError(t, err)
+
+	durableID := uuid.NewString()
+	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(durableID)))
+	_, _, err = engine.SendCommand(parentCtx, durableID, &testpb.CreateAccount{AccountBalance: 7}, time.Minute)
+	require.NoError(t, err)
+
+	_, _, err = engine.SendCommand(parentCtx, "missing-"+uuid.NewString(), &testpb.CreateAccount{AccountBalance: 1}, 10*time.Millisecond)
+	require.Error(t, err)
+	parent.End()
+
+	require.NoError(t, engine.StartProjection(ctx, "discard"))
+	require.Eventually(t, func() bool {
+		return meter.count("ego.projection.events.processed.total") > 0
+	}, 10*time.Second, 20*time.Millisecond, "the projection should handle the persisted event")
+	require.Eventually(t, func() bool {
+		return meter.count("ego.projection.lag_ms") > 1
+	}, 10*time.Second, 20*time.Millisecond, "the projection should record shard gauges")
+	require.NoError(t, engine.StopProjection(ctx, "discard"))
+	require.NoError(t, engine.Stop(ctx))
+	require.NoError(t, provider.ForceFlush(ctx))
+
+	spans := exporter.GetSpans()
+	names := make(map[string]string, len(spans))
+	for _, span := range spans {
+		names[span.SpanContext.SpanID().String()] = span.Name
+	}
+	seen := make(map[string]int)
+	for _, span := range spans {
+		seen[describeSpan(span, names)]++
+	}
+
+	meter.mu.Lock()
+	observation := telemetryObservation{
+		Instruments:  meter.instruments,
+		Creations:    meter.creations,
+		Measurements: make(map[string][]string),
+		Propagator:   propagator,
+	}
+	for name, sets := range meter.measurements {
+		for set := range sets {
+			observation.Measurements[name] = append(observation.Measurements[name], set)
+		}
+		sort.Strings(observation.Measurements[name])
+	}
+	meter.mu.Unlock()
+	for span, n := range seen {
+		observation.Spans = append(observation.Spans, fmt.Sprintf("%dx %s", n, span))
+	}
+	sort.Strings(observation.Spans)
+
+	if path := os.Getenv(telemetryDumpEnv); path != "" {
+		raw, err := json.MarshalIndent(observation, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, raw, 0o600))
+	}
+
+	const command = "ego.command_type=testpb.CreateAccount"
+	require.Equal(t, []string{
+		"1x ego.send_command kind=internal parent=test.parent attrs=[" + command + ",ego.entity_id] status=Error events=[exception]",
+		"1x test.parent kind=internal parent=<root> attrs=[] status=Unset events=[]",
+		"2x ego.command kind=internal parent=ego.send_command attrs=[" + command + ",ego.persistence_id] status=Unset events=[]",
+		"2x ego.send_command kind=internal parent=test.parent attrs=[" + command + ",ego.entity_id] status=Unset events=[]",
+	}, observation.Spans)
+
+	require.Equal(t, map[string]string{
+		"ego.commands.total":                    "Int64Counter|Total number of commands processed|",
+		"ego.commands.duration":                 "Float64Histogram|Duration of command processing in milliseconds|",
+		"ego.events.persisted.total":            "Int64Counter|Total number of events persisted|",
+		"ego.projection.events.processed.total": "Int64Counter|Total number of events processed by projections|",
+		"ego.entities.active":                   "Int64UpDownCounter|Number of currently active entities|",
+		"ego.projections.active":                "Int64UpDownCounter|Number of currently active projections|",
+		"ego.projection.lag_ms":                 "Int64Gauge|Projection lag in milliseconds per shard|",
+		"ego.projection.latest_offset":          "Int64Gauge|Current projection offset timestamp per shard|",
+		"ego.projection.events_behind":          "Int64Gauge|Approximate number of unprocessed events per shard|",
+	}, observation.Instruments)
+
+	shard := []string{"{projection_name,shard}"}
+	none := []string{"{}"}
+	require.Equal(t, map[string][]string{
+		"ego.commands.total":                    none,
+		"ego.commands.duration":                 none,
+		"ego.events.persisted.total":            none,
+		"ego.projection.events.processed.total": none,
+		"ego.entities.active":                   none,
+		"ego.projections.active":                none,
+		"ego.projection.lag_ms":                 shard,
+		"ego.projection.latest_offset":          shard,
+		"ego.projection.events_behind":          shard,
+	}, observation.Measurements)
+
+	// One instrument set per Engine.Start, per entity actor and per
+	// projection actor: construction happens where it always has.
+	for name, n := range observation.Creations {
+		require.Equal(t, 4, n, "creation calls for %s", name)
+	}
+
+	require.Equal(t, []string{"baggage", "traceparent", "tracestate"}, observation.Propagator)
+}
+
+// TestTelemetryDisabled pins the behavior without WithTelemetry: commands
+// and projections run, and the engine leaves the global propagator alone.
+func TestTelemetryDisabled(t *testing.T) {
+	ctx := context.Background()
+
+	previous := otel.GetTextMapPropagator()
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+	sentinel := propagation.NewCompositeTextMapPropagator()
+	otel.SetTextMapPropagator(sentinel)
+
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("discard", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: 50 * time.Millisecond,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
+	require.Nil(t, engine.metrics)
+
+	entityID := uuid.NewString()
+	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 42}, time.Minute)
+	require.NoError(t, err)
+	_, _, err = engine.SendCommand(ctx, "missing-"+uuid.NewString(), &testpb.CreateAccount{AccountBalance: 1}, 10*time.Millisecond)
+	require.Error(t, err)
+
+	require.NoError(t, engine.StartProjection(ctx, "discard"))
+	require.Eventually(t, func() bool {
+		running, err := engine.IsProjectionRunning(ctx, "discard")
+		return err == nil && running
+	}, 10*time.Second, 20*time.Millisecond, "the projection should run without telemetry")
+	require.NoError(t, engine.StopProjection(ctx, "discard"))
+	require.NoError(t, engine.Stop(ctx))
+
+	require.Empty(t, otel.GetTextMapPropagator().Fields(), "the engine must not install a propagator without telemetry")
+}

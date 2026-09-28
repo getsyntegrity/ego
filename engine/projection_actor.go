@@ -33,6 +33,7 @@ import (
 
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
 	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 )
 
 // runnerFailed is the internal message the projection runner sends to its
@@ -61,7 +62,7 @@ func newProjectionSupervisor() *supervisor.Supervisor {
 // Only a single instance of this will run throughout the cluster
 type ProjectionActor struct {
 	runner  *projectionRunner
-	metrics *metrics
+	metrics *instrumentation.Instruments
 }
 
 // implements the Actor contract
@@ -140,7 +141,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 	if telemetryExt != nil {
-		x.metrics = newMetrics(telemetryExt.Meter())
+		x.metrics = instrumentation.New(telemetryExt.Meter())
 		if x.metrics != nil {
 			opts = append(opts, withMetrics(x.metrics))
 		}
@@ -156,9 +157,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 
-	if x.metrics != nil {
-		x.metrics.projectionsActive.Add(context.Background(), 1)
-	}
+	x.metrics.ProjectionStarted(context.Background())
 
 	return nil
 }
@@ -182,8 +181,6 @@ func (x *ProjectionActor) Receive(ctx *goakt.ReceiveContext) {
 
 // PostStop prepares the actor to gracefully shutdown
 func (x *ProjectionActor) PostStop(ctx *goakt.Context) error {
-	if x.metrics != nil {
-		x.metrics.projectionsActive.Add(ctx.Context(), -1)
-	}
+	x.metrics.ProjectionStopped(ctx.Context())
 	return x.runner.Stop()
 }

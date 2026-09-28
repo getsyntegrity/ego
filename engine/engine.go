@@ -38,10 +38,6 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/passivation"
 	"github.com/tochemey/goakt/v4/supervisor"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 
@@ -51,6 +47,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/internal/syncmap"
 	"github.com/getsyntegrity/ego/v4/offsetstore"
 	"github.com/getsyntegrity/ego/v4/persistence"
@@ -247,7 +244,7 @@ type Engine struct {
 	statesStreams *syncmap.Map[string, *statesStream]
 	eventAdapters []eventadapter.EventAdapter
 	telemetry     *Telemetry
-	metrics       *metrics
+	metrics       *instrumentation.Instruments
 	encryptor     encryption.Encryptor
 
 	// tenantResolver is the effective tenancy.TenantResolver carried over
@@ -428,15 +425,10 @@ func (engine *Engine) Start(_ context.Context) error {
 	}
 
 	if engine.telemetry != nil {
-		engine.metrics = newMetrics(engine.telemetry.Meter)
-		// Set the global OTel text map propagator so that trace context is
-		// propagated across process boundaries (HTTP headers, gRPC metadata,
-		// goakt remote calls). This is required for end-to-end distributed
-		// tracing — without it, each service/node starts a new root trace.
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
+		engine.metrics = instrumentation.New(engine.telemetry.Meter)
+		// Trace context must cross process boundaries for end-to-end
+		// distributed tracing; see instrumentation.InstallPropagator.
+		instrumentation.InstallPropagator()
 	}
 	engine.started.Store(true)
 	return nil
@@ -1148,18 +1140,8 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 	// request span) to the command dispatch, providing end-to-end visibility.
 	if engine.telemetry != nil && engine.telemetry.Tracer != nil {
 		var span trace.Span
-		ctx, span = engine.telemetry.Tracer.Start(ctx, "ego.send_command",
-			trace.WithAttributes(
-				attribute.String("ego.entity_id", entityID),
-				attribute.String("ego.command_type", string(env.Payload().ProtoReflect().Descriptor().FullName())),
-			))
-		defer func() {
-			if err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-			}
-			span.End()
-		}()
+		ctx, span = instrumentation.StartSendCommandSpan(ctx, engine.telemetry.Tracer, entityID, env.Payload())
+		defer func() { instrumentation.EndSendCommandSpan(span, err) }()
 	}
 
 	ref := engine.actorSystem.Load()

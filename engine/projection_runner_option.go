@@ -30,6 +30,7 @@ import (
 	"github.com/getsyntegrity/ego/v4/encryption"
 	"github.com/getsyntegrity/ego/v4/eventadapter"
 	"github.com/getsyntegrity/ego/v4/eventstream"
+	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
 	"github.com/getsyntegrity/ego/v4/projection"
 )
 
@@ -108,7 +109,7 @@ func withEventAdapters(adapters []eventadapter.EventAdapter) runnerOption {
 }
 
 // withMetrics sets the metrics for the projection runner
-func withMetrics(m *metrics) runnerOption {
+func withMetrics(m *instrumentation.Instruments) runnerOption {
 	return runnerOptionFunc(func(runner *projectionRunner) {
 		runner.metrics = m
 	})
