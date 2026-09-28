@@ -144,14 +144,36 @@ bounded, independently-verified unit.
   leaked outside `env:`). `git diff -- .github/workflows/release.yml`
   reviewed line by line: only the new `gate` job and the `needs: gate`
   line; every publisher step byte-for-byte unchanged.
-- [ ] **T5 — Docs + real dry-run.** `docs/ci.md` "Release gate" section
-  (what it checks, why exact SHA, bounded wait, how to test without
-  publishing, the lightweight-tag dereference note, the GH006 limitation,
-  a note that the file needs a rebase if PR #169 merges first). Run the
-  real read-only dry test against `getsyntegrity/ego` for a green main SHA,
-  a PR-branch SHA with no run, and record results. Check: dry-run output
-  captured in this file; `gofmt -l` clean; final full verification pass
-  (below).
+- [x] **T5 — Docs + real dry-run.** Added `docs/ci.md` "Release gate (#159,
+  F4 PR-B)" section, appended at the true end of the file (after
+  "Toolchain requirements," the last existing section), with a note that a
+  rebase will be needed if PR #169 merges first. Covers: what it checks
+  and why the exact SHA; the lightweight-vs-annotated tag dereference; why
+  main membership is computed with `git merge-base` rather than the
+  compare API; the "most recent completed run governs" rule and both
+  rejected alternatives; the `workflow_dispatch`-counts-too judgement
+  call; the bounded wait and its off-main fast path; how to test without
+  publishing; and the GH006 branch-protection limitation. Real read-only
+  dry runs against `getsyntegrity/ego` (`GITHUB_TOKEN=$(gh auth token) go
+  run ./internal/cmd/releasegate ... -timeout 0`, all `exit status 1` or
+  `0`, nothing written):
+  - `8b3962acc109ac06da3a4ada4c3186be7d46cfa5` (`-on-main=true`): **PASS**,
+    run 36420765355, conclusion `success`.
+  - `743692a7804005408355e5066d165debc885f9f4` (PR #169's branch,
+    `-on-main=false`): **FAIL** "not reachable from origin/main," 0 GitHub
+    calls (verified this is the CLI's off-main fast path, matching
+    `TestRun_OffMainFailsFastWithoutCallingGitHub`).
+  - Same SHA, `-on-main=true` forced only to illustrate the no-run path:
+    **FAIL** "no build.yml run found yet" (`build.yml` never runs on a PR
+    branch).
+  - `ddf9337092a5b4e43a6d90897914f34ed52f453f` (a real main commit with a
+    genuinely failed `build.yml` run, found via `gh api
+    ".../runs?branch=main"`, confirmed it is the only run for that SHA):
+    **FAIL**, run 35120281495, conclusion `failure`.
+  - No real `cancelled` main run existed to test the same way (`gh api
+    ".../runs?branch=main&status=cancelled"` → empty); documented as
+    relying on the `TestDecide_CancelledConclusionFails` fixture instead.
+  `gofmt -l internal/cmd/releasegate/` clean.
 
 ## Delivery
 
