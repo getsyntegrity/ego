@@ -48,7 +48,7 @@ matrix is empty, the `modules` job is *skipped*, not green.
 - [x] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
 - [x] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
 - [x] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
-- [ ] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
+- [x] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
 - [ ] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6).
 
 ## Follow-up chain (not in this spec)
@@ -163,3 +163,33 @@ matrix is empty, the `modules` job is *skipped*, not green.
     (`govulncheck` is not installed in this environment, which exercises
     the intended local skip path; a full nested-module run also needs
     network access this environment does not exercise for this task).
+- **T4 done** (commit below): re-checked the existing selector test suite
+  first — the C3 scenarios the mapper flagged as possibly missing
+  ("runtime change with no publisher consumer", "a global file", "summary
+  lists module/cause") already exist:
+  `TestSelect_Modules_RootLeafChangeNotImportedByAnyModuleSelectsNoneAndKeepsRootFastLane`,
+  `TestModuleGraph_GlobalChange`/`TestSelect_Modules_CIPathChangeSelectsEveryModule`,
+  and `TestSelect_Modules_SatelliteChangeIsReportedAsModuleLane`/
+  `TestModuleGraph_SummaryHasWhyTable`, respectively — so nothing was added
+  for those (per instructions: "only add cases genuinely missing"). The one
+  real gap was the package-graph load-error path (`main.go:119-127`,
+  `if len(loadErrs) > 0 { return ... }`), which had no test at all.
+  - Added `TestRun_ChangedFailsOnPackageLoadError` and
+    `TestRun_AllFailsOnPackageLoadError` to
+    `internal/cmd/ciselect/modules_test.go`, with a new
+    `writeUnparsablePackage` fixture (a `.go` file `go list -e -json`
+    reports as a package-level `Error`, not a `DepsErrors` entry — verified
+    manually against real `go list -e -json` output before writing the
+    fixture). Both tests **passed immediately** against the existing code
+    (the guard already existed; this is a coverage-only addition, not a
+    bugfix), so I verified they are not vacuous: temporarily disabled the
+    check (`if false && len(loadErrs) > 0`) and re-ran — both failed as
+    expected (`-changed` failed for a different reason, proving a second,
+    independent guard also exists in `discoverModuleImports`; `-all`
+    **succeeded silently**, proving the check is load-bearing for `-all`
+    specifically), then restored the original file (`git diff` empty
+    afterward) and confirmed GREEN again.
+  - Verification: `GOWORK=off go test ./internal/cmd/ciselect/...` green
+    (both new tests plus the full existing suite), `GOWORK=off go vet
+    ./internal/cmd/ciselect/...` clean (`GOROOT` unset, per the T1
+    environment note).

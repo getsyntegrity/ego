@@ -378,6 +378,54 @@ func writeRootPackage(t *testing.T, root string) {
 	writeFile(t, filepath.Join(root, "root.go"), "package root\n")
 }
 
+// writeUnparsablePackage writes a root-module Go file that `go list -e
+// -json` cannot even parse, so it reports a package-level load error
+// (Error.Err set) rather than a DepsErrors entry on some other package.
+// This is the fixture for the package-graph load-error path: main.go's
+// run() must fail closed on it instead of silently building a partial
+// graph, in both -changed and -all mode.
+func writeUnparsablePackage(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "broken", "broken.go"), "this is not valid go source at all !!! ###\n")
+}
+
+// A package-level load error (`go list -e -json`'s Error field) must fail
+// the whole selection, exactly like an unreadable nested go.mod: ciselect
+// must never silently select from a partial or wrong package graph
+// (main.go's run(), the "package graph has load errors" check).
+func TestRun_ChangedFailsOnPackageLoadError(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	writeUnparsablePackage(t, root)
+	changed := filepath.Join(t.TempDir(), "changed.txt")
+	writeFile(t, changed, "moda/x.go\n")
+
+	err := run([]string{"-changed", changed, "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatalf("run() error = nil, want a package-graph load error to fail the selection")
+	}
+	if !strings.Contains(err.Error(), "load errors") {
+		t.Fatalf("run() error = %v, want it to mention the package graph's load errors", err)
+	}
+}
+
+// Unlike an unreadable nested go.mod (which -all's directory-only fallback
+// tolerates, see TestRun_AllSurvivesBrokenNestedGoMod), a load error in the
+// root module's own package graph is not something -all can route around:
+// goListPackages/the load-error check run before -all's module-discovery
+// fallback even applies, so -all must fail too, never silently select
+// less than the true package set.
+func TestRun_AllFailsOnPackageLoadError(t *testing.T) {
+	root := writeModuleTree(t)
+	writeRootPackage(t, root)
+	writeUnparsablePackage(t, root)
+
+	err := run([]string{"-all", "-module-dir", root, "-repo-root", root, "-out-dir", t.TempDir()}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatalf("run(-all) error = nil, want a package-graph load error to fail even the -all fallback")
+	}
+}
+
 // A selector run on a changed-file list fails on an unreadable nested
 // go.mod, so the workflow's `-all` fallback takes over.
 func TestRun_ChangedFailsOnBrokenNestedGoMod(t *testing.T) {
