@@ -478,3 +478,45 @@ publishers are tagged only from a commit that already passed `build.yml`
 on `main`, through an explicit, auditable, human-dispatched step. The
 binding maintainer decisions from the Problem/Why sections above are all
 satisfied.
+
+## PR #172 review fixes
+
+Fix-up round on the same branch (`ci/159-publisher-bump-flow`) after PR
+#172 review, addressing findings in `.github/workflows/release-publishers.yml`.
+Each finding is its own Conventional Commit, no AI-attribution trailer.
+
+- **Finding #2 (MAJOR) — fixed.** `Create publisher GitHub releases`
+  derived each publisher's tag with
+  `git tag -l "${PREFIX}*" --sort=-version:refname | head -1` instead of
+  using the tag this run actually planned and pushed — with an
+  out-of-band higher tag already on origin, or a concurrent dispatch of
+  the same workflow, this could create a release on the wrong version.
+  Fixed: the step now iterates `dir`/`nextTag` pairs read directly from
+  `$SCRATCH/plan/plan.json` via
+  `jq -r '.modules[] | .dir + " " + .nextTag'`, using
+  `done < <(jq ...)` process substitution (not a pipe into `while read`,
+  which would run the loop in a subshell where `exit 1` only exits the
+  subshell, not the step). Before calling `gh release create` for a
+  planned tag, the step confirms it exists on `origin` and points at
+  exactly `$SHA` (the workflow's `sha` input) via
+  `git ls-remote --tags origin "refs/tags/$TAG"`: `git ls-remote` returns
+  the tag object's own SHA for the plain `refs/tags/$TAG` line, and (for
+  an annotated tag only) a second peeled `refs/tags/$TAG^{}` line
+  carrying the commit it actually points at; the fix prefers the peeled
+  SHA and falls back to the plain SHA when there is no peeled line
+  (lightweight tag) via `ACTUAL_SHA="${PEELED_SHA:-$PLAIN_SHA}"`. A
+  missing or wrong-commit tag fails the step immediately with `::error::`
+  naming the tag and what was found/expected, before that or any later
+  `gh release create` call runs. `--title`/`--notes` text is unchanged
+  byte-for-byte.
+  Verification (literal output): YAML parse → `YAML_OK`. `bash -n` on the
+  extracted step script → `BASH_N_OK`. `rg -n '\$\{\{'
+  .github/workflows/release-publishers.yml` → every match sits in an
+  `env:`/`with:`/`if:` mapping, none inside a `run:` body. `rg -n
+  'git tag -l.*PREFIX' .github/workflows/release-publishers.yml` → no
+  matches (exit 1; the explanatory comment was worded to avoid
+  accidentally still matching this pattern, same discipline T4 used for
+  its `gh pr create` grep check). `actionlint` on the whole file → exit 0,
+  no output (0 findings).
+  Commit: `fix(release-publishers): create releases from the planned
+  tags, not git tag -l (#159)`.

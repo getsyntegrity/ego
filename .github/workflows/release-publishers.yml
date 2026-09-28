@@ -251,30 +251,56 @@ jobs:
           git push --atomic origin $TAGS
           echo "Pushed all publisher tags."
 
-      # Preserved verbatim from the old release-publishers job's "Create
-      # publisher GitHub releases" step (moved out by T1): same loop, same
-      # gh release create flags, same notes text. The only change is that
-      # EGO_VERSION and PUBLISHERS now arrive through env: instead of raw
-      # ${{ }} interpolation inside the run: body.
+      # Derives each publisher's tag from the plan this exact run computed
+      # and just pushed ($SCRATCH/plan/plan.json), not from a fresh
+      # highest-version tag lookup by prefix: an out-of-band higher tag
+      # already on origin, or a concurrent dispatch of this same workflow,
+      # could make such a lookup resolve to a different tag than the one
+      # this run just pushed and create a release on the wrong version.
+      # Before releasing each planned tag, confirm it actually exists on
+      # origin and points at exactly $SHA.
       - name: Create publisher GitHub releases
         if: ${{ inputs.dry_run == false }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EGO_VERSION: ${{ inputs.ego_version }}
-          PUBLISHERS: ${{ steps.compute-tags.outputs.publishers }}
+          SHA: ${{ inputs.sha }}
         run: |
-          for PUB in $PUBLISHERS; do
-            PREFIX="publisher/${PUB}/v"
-            LATEST=$(git tag -l "${PREFIX}*" --sort=-version:refname | head -1)
-            VERSION="${LATEST#${PREFIX}}"
+          SCRATCH="$RUNNER_TEMP/release-publishers"
 
-            gh release create "${LATEST}" \
+          while IFS=' ' read -r DIR TAG; do
+            PUB=$(basename "$DIR")
+            PREFIX="publisher/${PUB}/v"
+            VERSION="${TAG#${PREFIX}}"
+
+            REMOTE_REFS=$(git ls-remote --tags origin "refs/tags/${TAG}")
+            if [ -z "$REMOTE_REFS" ]; then
+              echo "::error::Planned tag ${TAG} for publisher ${PUB} was not found on origin (expected it to already be pushed by the previous step)"
+              exit 1
+            fi
+
+            # git ls-remote returns the tag object's own SHA for a plain
+            # "refs/tags/<tag>" line, and (for an annotated tag only) a
+            # second peeled "refs/tags/<tag>^{}" line carrying the commit
+            # it actually points at. Prefer the peeled commit SHA; fall
+            # back to the plain SHA for a lightweight tag, which has no
+            # peeled line at all.
+            PEELED_SHA=$(printf '%s\n' "$REMOTE_REFS" | awk -v ref="refs/tags/${TAG}^{}" '$2 == ref {print $1}')
+            PLAIN_SHA=$(printf '%s\n' "$REMOTE_REFS" | awk -v ref="refs/tags/${TAG}" '$2 == ref {print $1}')
+            ACTUAL_SHA="${PEELED_SHA:-$PLAIN_SHA}"
+
+            if [ "$ACTUAL_SHA" != "$SHA" ]; then
+              echo "::error::Planned tag ${TAG} for publisher ${PUB} points at ${ACTUAL_SHA} on origin, expected ${SHA}"
+              exit 1
+            fi
+
+            gh release create "${TAG}" \
               --title "${PUB} publisher v${VERSION}" \
               --notes "Release of \`${PUB}\` publisher v${VERSION}, updated to ego ${EGO_VERSION}." \
               --latest=false
 
             echo "Created release for ${PUB} publisher v${VERSION}"
-          done
+          done < <(jq -r '.modules[] | .dir + " " + .nextTag' "$SCRATCH/plan/plan.json")
 
       # --- step (h), dry_run == true: print the plan, create nothing ---
       - name: Print dry-run plan
