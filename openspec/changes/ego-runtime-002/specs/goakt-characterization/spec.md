@@ -39,16 +39,18 @@ Its production closure test keeps rejecting the root package and GoAkt. Its `all
 
 Each task's pull-request commit MUST write the measured result into the design (§2, §D4, §D11 or the Q2 table, as named in the task), replacing the word "provisional". Spec 1 MUST NOT start until all four are recorded.
 
+**When a measurement contradicts a maintainer decision** (§5, "Maintainer decisions recorded") or a recommendation the maintainer relied on, spec 0 does not amend the design. It records the measurement in the pull request, marks the affected rule "blocked on maintainer", and stops. Spec 1 waits for the maintainer's answer.
+
 ## Tasks (4)
 
-1. **Harness.** `Scenarios`, `Trace`, `Stores`, `awaitCondition`, `awaitStream`, and the allowlist growing by exactly `persistence` and `egopb`. *Check:* normalizer unit tests (timestamps, shard, key IDs and failure text removed; a multiset comparison catches a duplicate); `awaitStream` fails on a deadline instead of returning a short slice; the closure test passes.
+1. **Harness.** `Scenarios`, `Trace`, `Stores`, `awaitCondition`, `awaitStream`, and the allowlist growing by exactly `persistence` and `egopb`. The comment above `TestProductionClosureExcludesRootAndGoAkt` (`closure_test.go:74-75`), which says the GoAkt end-to-end test lives in `compose/goakt`, is updated to name this package's GoAkt test files too. *Check:* normalizer unit tests (timestamps, shard, key IDs and failure text removed; a multiset comparison catches a duplicate); `awaitStream` fails on a deadline instead of returning a short slice; the closure test passes.
 2. **Liveness after failures.** `EntityExists` after a failed write (a `mocks/` events store), after an out-of-sync conflict and after an in-sync conflict. Also a command queued behind a failed write: its reply, and whether it runs. *Check:* the scenario passes on `compose/goakt`; the results are recorded in design §2.1 and §D4.
 3. **Panics.** A handler panic under `RestartDirective` and under `StopDirective`: the reply, `EntityExists`, and the state recovered by the next command or spawn. *Check:* the scenario passes on `compose/goakt`; the results are recorded in design §2.5, §D4 and the Q2 table.
 4. **Passivation activity and ignored options.**
-   - Passivation: a refused command (tenant mismatch) and a no-event command each keep the entity alive past the idle period; a passivating durable-state entity writes **and** publishes its state.
+   - Passivation: spawn with `WithPassivateAfter(d)`, `d ≥ 1 s`. Send a refused command (tenant mismatch) and, in a separate run, a no-event command, each more than 100 ms after the previous message. Wait with `awaitCondition` until `EntityExists` is false, and assert that the time elapsed since the last message is at least `d − 100 ms`. Do not assert that the entity is still alive at a given moment: GoAkt coalesces deadline renewal to once per 100 ms and does not re-check activity when the deadline fires (design §2.5). A passivating durable-state entity writes **and** publishes its state.
    - Ignored options: spawning with `WithPlacement(Random|LeastLoad|Local)` and `WithRelocation(true)` behaves as without them; a saga spawned with options other than `WithTenant` behaves as without them.
    
-   *Check:* the scenarios pass on `compose/goakt` (with `WithPassivateAfter(100 ms)` and `awaitCondition`, no sleeps); the results are recorded in design §2.5, §D11 and the Q2 table.
+   *Check:* the scenarios pass on `compose/goakt`, with no sleeps (the spacing between messages is kept with `awaitCondition` on elapsed time); the results are recorded in design §2.5, §D11 and the Q2 table.
 
 ## Checks
 

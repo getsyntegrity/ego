@@ -36,16 +36,16 @@ Where #166's final text differs from this summary, #166 wins, and this spec is r
 
 1. **RED**: erasure tests per #166 (full and non-full; tenant-scoped and legacy; fail-closed with `full == false`; the scenario above). *Check:* they fail against the placeholder.
 2. **Implementation**, and the spec 1 method table row changes. *Check:* the tests pass; closure test and `go run ./internal/cmd/archcheck`.
-3. **Documentation.** If spec 5 has merged, remove the `EraseEntity` limitation sentence from `compose/inmem`'s package documentation. *Check:* review; apidiff shows no report (a doc change).
+3. **Shared table, documentation and changelog.** Add an erasure scenario to the shared table in `internal/runtimeconsumer`; #166 also fixes GoAkt, so it runs on both roots. If spec 5 has merged, remove the `EraseEntity` limitation sentence from `compose/inmem`'s package documentation. Add a `CHANGELOG.md` line, because `EraseEntity` on `compose/inmem` goes from `ErrUnsupported` to working, an observable change although apidiff has no report. *Check:* the scenario passes on both roots; review of the documentation and changelog; apidiff shows no report.
 
 ## Checks
 
-- `go test ./internal/inmemruntime/ ./compose/...`
+- `go test ./internal/inmemruntime/ ./internal/runtimeconsumer/ ./compose/...`
 - apidiff: no report for any public package
 
 ## File ownership
 
-`internal/inmemruntime/**` (erasure files); one sentence of `compose/inmem`'s package documentation.
+`internal/inmemruntime/**` (erasure files); `internal/runtimeconsumer/**` (the erasure scenario); one sentence of `compose/inmem`'s package documentation; `CHANGELOG.md`.
 
 ## Dependencies
 

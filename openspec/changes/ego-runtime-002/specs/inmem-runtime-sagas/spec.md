@@ -66,7 +66,7 @@ This spec makes the in-memory runtime run sagas the way `saga_actor.go` does, te
 
 ## File ownership
 
-`internal/inmemruntime/**`: new saga files, plus one enqueue call in the entity event path. `port/runtime/runtime.go`: one sentence in the `Sagas` documentation.
+`internal/inmemruntime/**`: new saga files, plus one enqueue call in the entity event path. `port/runtime/runtime.go`: one sentence in the `Sagas` documentation. FU-E (the `SendCommand` contract text) and #166 (the `EraseEntity` contract) also edit `port/runtime/runtime.go`; whichever lands second rebases.
 
 ## Dependencies
 

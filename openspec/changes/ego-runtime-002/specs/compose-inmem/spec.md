@@ -33,7 +33,7 @@ The package documentation MUST state:
 - that the runtime is for tests and local development;
 - which guarantees are in-memory-only (design §D7);
 - that the order in which sagas receive events is **unspecified**, without naming any order (Q8);
-- that `EraseEntity` returns `ErrUnsupported` until spec 7 lands, and that this **does not meet** the `port/runtime` erasure contract;
+- that `EraseEntity` returns `ErrUnsupported` until crypto-shredding lands ([#166](https://github.com/getsyntegrity/ego/issues/166)), and that this **does not meet** the `port/runtime` erasure contract. The public text refers to #166, not to an internal spec number;
 - what differs from `compose/goakt`: three start steps, M1, and no `WithCluster`, `WithActorSystemOptions`, `WithTelemetry` or clock option.
 
 ### Requirement: GoAkt-free closure
