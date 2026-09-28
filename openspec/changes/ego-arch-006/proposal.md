@@ -27,7 +27,7 @@ Adopt a module topology and a selection rule that satisfy #102 without breaking 
 - **Selector first.** `ciselect` reads every `go.mod`, builds the graph of in-repository requirements, and selects every module that transitively depends on a changed one. It gives a reason chain for each module, forces the full gate on global paths, and treats a new or removed `go.mod` as a boundary change. No list is maintained by hand.
 - **Then a few modules, one per pull request, each passing §6:**
   1. an unreleased `test/compat` integration module;
-  2. one contracts module holding `egopb` and `port/publishing`, which are exactly the two root packages the publishers import (D7 option i);
+  2. one contracts module holding `egopb`, `port/publishing` and `port/adapter` (plus `port/adapter/adaptertest` once its own tests stop importing root packages): the root packages the publishers import, production and tests (D7 option i, amended 2026-09-28 in design §3 "D7 amendment");
   3. the four publishers switched to require only the contracts module.
 
   `port/behavior` (PR #131) stays in the root under that recommendation. It imports `command`, which imports `tenancy`, and both stay in the root. Putting `port/behavior` in the contracts module alone would create a module cycle, which ego-arch-001 §3 forbids, and would pull GoAkt back into the publishers' module graph. D7 (ii), moving `command` and `tenancy` along, is the alternative.
@@ -75,7 +75,7 @@ Design §3 gives the options and tradeoffs. The maintainers approved D2–D7 as 
 | D4 | `go.work` policy | Generated on demand by a script, not committed. CI always runs with `GOWORK=off`. | F5 only |
 | D5 | Allow new *unreleased* integration modules (like `benchmark`) | Yes, provided no released module requires them. | S1 |
 | D6 | Confirm that CI speed alone never justifies a module (ego-arch-001 §6(2)) | Confirm. | — |
-| D7 | Contents of the contracts module(s) | (i) `egopb` + `port/publishing` only; `port/behavior` waits for F1. Alternatives: (ii) also `port/behavior`, `command` and `tenancy`; (iii) two modules, schema plus port (rejected). | S2, S3 |
+| D7 | Contents of the contracts module(s) | (i) `egopb` + `port/publishing` only; `port/behavior` waits for F1. **Amended 2026-09-28:** also `port/adapter`, and `adaptertest` under a no-cycle precondition (design §3 "D7 amendment"). Alternatives: (ii) also `port/behavior`, `command` and `tenancy`; (iii) two modules, schema plus port (rejected). | S2, S3 |
 | D8 | §6(1) needs "one release" and §6(4) needs a published-verification job, and neither exists | (C): gate S2 on the release pipeline (F4), and amend §6(1) to count `main` builds since #117. Alternatives: (A) gate on F4 and a first release; (B) amend both. | S2, S3 |
 
 S0 (the selector) and S1 (the first leaf module and nested-to-nested edge) proceed now. S2 and S3 stay gated on F4 (the release pipeline with published-version verification, per D8 (C)) and on maintainer confirmation of the D1 target path. No module that the root requires is created before then.
@@ -84,7 +84,7 @@ S0 (the selector) and S1 (the first leaf module and nested-to-nested edge) proce
 
 None in this change. When the slices land:
 
-- **S2** gives `egopb` and `port/publishing` new import paths under D2 (a) or (a'). Once a directory holds its own `go.mod`, the root can no longer serve the old path from it, so the new module lives in a new directory. The old directories stay in the root as **alias packages** until #124, per the window recorded in #128. The aliases are needed even though no release exists, because the root already resolves by pseudo-version (exploration §5) and someone may be pinned to a commit.
+- **S2** gives `egopb`, `port/publishing` and `port/adapter` (plus `port/adapter/adaptertest` once its tests stop importing root packages; D7 amendment) new import paths under D2 (a) or (a'). Once a directory holds its own `go.mod`, the root can no longer serve the old path from it, so the new module lives in a new directory. The old directories stay in the root as **alias packages** until #124, per the window recorded in #128. The aliases are needed even though no release exists, because the root already resolves by pseudo-version (exploration §5) and someone may be pinned to a commit.
 - **S3** changes the publishers' `go.mod` requirements and imports and, under D2, their module paths. At the baseline commit they cannot be resolved, so no consumer can depend on their old path. #130's `closure_test.go` hard-codes the root path and is updated in S3.
 - **S0 and S1** change only CI tooling and test code.
 
