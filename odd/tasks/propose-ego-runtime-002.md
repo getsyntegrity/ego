@@ -12,13 +12,13 @@ in-memory runtime (RUNTIME-005) and `compose/inmem` (IMPL-6), but no design exis
 ## What changes
 
 Documentation only: `openspec/changes/ego-runtime-002/` with `proposal.md`, `design.md` (the GoAkt
-behavior to match, decisions D1–D10, open questions Q1–Q7 with recommendations, compatibility,
+behavior to match, decisions D1–D12, questions Q1–Q9 with the maintainer's decisions, compatibility,
 risks, chain and file ownership) and eight chained specs (0–7) of at most five tasks each. No production
 code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 ## Constraints
 
-- Design only; the maintainer answers Q1–Q7 and approves before spec 1.
+- Design only; the maintainer decided Q1–Q9 on 2026-09-27 (Q2 conditional on spec 0).
 - No v4 break, no baseline entry, no relaxed archcheck rule (none needed: one rule is added).
 - Route: direct inline (documentation; one delegated read-only exploration of the GoAkt actors,
   whose findings were re-verified on `57c4b11` because it read an older checkout).
@@ -73,6 +73,12 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
   - spec 0 fixes the stale `closure_test.go` comment;
   - this file's historical #166 line is marked.
 
+## Maintainer decisions (2026-09-27, after approval)
+
+- Q1, Q3, Q4, Q5, Q6 and the no-event part of Q7 are accepted as recommended.
+- Q2 is accepted conditional on spec 0: placement and relocation are a no-op (provisional pending RUNTIME-003, and #148's wording is amended), and the supervisor directive follows spec 0's measurement.
+- #148 closes only after spec 7. Specs 0–6 use "Refs #148" and state the `EraseEntity` limitation.
+
 ## Findings worth keeping
 
 - `eventstream` delivers each message to each subscriber in its own goroutine
@@ -86,4 +92,4 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 ## Next step
 
-Maintainer answers to the remaining open questions (Q1, Q3–Q6, placement and relocation in Q2, no-event text in Q7); then spec 0.
+Spec 0 (GoAkt characterization). #148 closes only with spec 7's pull request; specs 0–6 use "Refs #148".

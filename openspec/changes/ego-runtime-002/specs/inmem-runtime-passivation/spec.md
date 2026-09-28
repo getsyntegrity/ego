@@ -52,6 +52,7 @@ After that, `EntityExists` MUST report false, and `SendCommand`/`Dispatch` MUST 
 - `go test ./internal/inmemruntime/`; review check: no `time.Sleep`, no `pause.For` and no wall-clock ticker in this spec's tests
 - closure test and `go run ./internal/cmd/archcheck`
 - apidiff: no report for any public package
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

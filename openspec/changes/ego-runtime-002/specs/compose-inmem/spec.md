@@ -53,6 +53,7 @@ The package documentation MUST state:
 - `go test ./compose/...` (the shared `compose` and `compose/internal/...` tests pass unchanged)
 - `go run ./internal/cmd/archcheck`
 - apidiff: additions only for `compose/inmem`; no report for `compose`, `compose/goakt` or `ego`
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

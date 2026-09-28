@@ -56,6 +56,7 @@ Each task's pull-request commit MUST write the measured result into the design (
 
 - `go test ./internal/runtimeconsumer/` (no `-race` locally)
 - `go run ./internal/cmd/archcheck`; apidiff: no report for any public package
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

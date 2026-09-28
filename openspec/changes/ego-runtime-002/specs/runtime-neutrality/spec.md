@@ -46,13 +46,14 @@ Every wait goes through `awaitStream` or `awaitCondition` under a context deadli
    - ego-arch-003 §6: the IMPL-6 row marked done, with the §5.2 departure of design §D8.
    - ego-arch-001 §4: the map rows.
    
-   *Check:* the documentation is read back. The pull request maps each #148 criterion to its evidence, and states that `EraseEntity` is not covered until spec 7 and that projections meet the typed-error criterion only for their own capability (Q3).
+   *Check:* the documentation is read back. The pull request maps each #148 criterion to its evidence, and states that `EraseEntity` is not covered until spec 7, that projections meet the typed-error criterion only for their own capability (Q3), and that #148 remains open pending spec 7.
 
 ## Checks
 
 - `go test ./internal/runtimeconsumer/ ./compose/...`
 - the root lane `ciselect` picks (no selector change)
 - `go run ./internal/cmd/archcheck`; apidiff: no report for any public package
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 
@@ -60,7 +61,7 @@ Every wait goes through `awaitStream` or `awaitCondition` under a context deadli
 
 ## Dependencies
 
-Specs 3, 4 and 5 merged. After it lands, #148's neutrality criterion and #105's in-memory criterion have their evidence. The `EraseEntity` contract is **not** met until spec 7. #148's typed-error criterion is covered only for projections (Q3); for spawn settings it depends on Q2 and on the amendment of #148's wording. Closing either issue is the maintainer's call.
+Specs 3, 4 and 5 merged. After it lands, #148's neutrality criterion and #105's in-memory criterion have their evidence. The `EraseEntity` contract is **not** met until spec 7. #148's typed-error criterion is covered only for projections (Q3), and #148's wording is amended for spawn settings (Q2). **#148 stays open:** this spec's criteria mapping records #148 as open pending spec 7, and its pull request uses "Refs #148", never a closing keyword. Only spec 7's pull request closes #148 (design §8). Closing #105 remains the maintainer's call.
 
 ## Next in the chain
 

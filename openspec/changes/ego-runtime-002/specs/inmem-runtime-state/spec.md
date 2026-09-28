@@ -79,6 +79,7 @@ With `Config.TenantResolver` set:
 - `go test ./internal/inmemruntime/`
 - `go run ./internal/cmd/archcheck`; spec 1's closure test still passes
 - apidiff: no report for any public package
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

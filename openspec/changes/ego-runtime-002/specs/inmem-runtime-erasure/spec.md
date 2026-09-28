@@ -52,6 +52,10 @@ Where #166's final text differs from this summary, #166 wins, and this spec is r
 - Spec 2 merged (tenancy).
 - **[#166](https://github.com/getsyntegrity/ego/issues/166)'s GoAkt implementation merged**: the extension and the key granularity (blocking), since task 3 runs the erasure scenario on both roots. This spec does not decide the key granularity; it depends on #166 for it.
 
+## Closing #148
+
+This spec's pull request is the only one in the chain that carries the closing keyword, "Closes #148" (design §8, maintainer decision 2026-09-27). Specs 0–6 use "Refs #148".
+
 ## Next in the chain
 
 None.

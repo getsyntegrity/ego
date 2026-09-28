@@ -63,6 +63,7 @@ This spec makes the in-memory runtime run sagas the way `saga_actor.go` does, te
 - `go test ./internal/inmemruntime/ ./port/runtime/`
 - closure test and `go run ./internal/cmd/archcheck`
 - apidiff: no report for any public package (the `port/runtime` change is a doc comment)
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

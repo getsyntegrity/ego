@@ -6,7 +6,7 @@
 | Chain position | **Spec 1.** Previous: [Spec 0 — GoAkt characterization](../goakt-characterization/spec.md). Next: [Spec 2 — stream, durable state, publishers, tenancy](../inmem-runtime-state/spec.md) |
 | Tracker | [`#148`](https://github.com/getsyntegrity/ego/issues/148) |
 | Baseline | `main` at `57c4b11` |
-| Decisions applied | design §D1, §D2, §D3, §D4, §D7, §D11 (the internal clock, Q9). It assumes the recommendations for Q1, Q3, Q4 and the placement and relocation part of Q2; if the maintainer answers differently, the affected requirement is revised before implementation. The rules spec 0 measured are taken as recorded in the design |
+| Decisions applied | design §D1, §D2, §D3, §D4, §D7, §D11 (the internal clock, Q9). It applies the maintainer's 2026-09-27 decisions on Q1, Q3, Q4 and Q2 (Q2 conditional on spec 0). The rules spec 0 measured are taken as recorded in the design |
 
 ## Purpose
 
@@ -52,7 +52,7 @@ Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNo
 - **Commands.** `SendCommand` and `Dispatch` MUST run inside the entity's mailbox, one command at a time. They MUST apply the deadline checks, handler preference, precondition mapping, conflict result and no-event reply (current state and revision) of design §D4.
 - **Failures.** They MUST also apply the rules for failed writes, conflicts, queued commands and panics as spec 0 recorded them in design §D4.
 - **Writes.** Events MUST be written with one `WriteEvents` per command. Publishing them on the stream is spec 2.
-- **Spawn options.** Placement and relocation are ignored (Q2, provisional pending RUNTIME-003). Passivation is spec 4.
+- **Spawn options.** Placement and relocation are ignored (Q2, decided, provisional pending RUNTIME-003). Passivation is spec 4.
 
 #### Scenario: family before store
 
@@ -85,6 +85,7 @@ Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNo
 - `go test ./internal/inmemruntime/ ./internal/cmd/archcheck/...` (no `-race` locally)
 - `go run ./internal/cmd/archcheck`; `golangci-lint run ./internal/inmemruntime/... ./internal/cmd/archcheck/...`
 - apidiff: no report for any public package
+- the pull request uses "Refs #148", never a closing keyword, and states that `EraseEntity` does not yet meet the `port/runtime` contract (design §8)
 
 ## File ownership
 

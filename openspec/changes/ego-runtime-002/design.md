@@ -103,7 +103,7 @@ The contracts a new package needs are all GoAkt-free and outside package `ego`: 
 |---|---|---|
 | The in-memory runtime and `compose/inmem` | #148 (here) | Designs them |
 | The interface they implement | #147, ego-runtime-001 | Uses it unchanged |
-| Placement, supervision, passivation contracts | RUNTIME-003 | Recommends in-memory behavior, leaves the contract to RUNTIME-003 (Q2) |
+| Placement, supervision, passivation contracts | RUNTIME-003 | Decides in-memory behavior (Q2), leaves the contract to RUNTIME-003 |
 | Capability negotiation, a runtime `Descriptor` | RUNTIME-006, ego-arch-004 F-E | Declares nothing; call-time `ErrUnsupported` only |
 | Public conformance suite | RUNTIME-007 | Builds an internal table RUNTIME-007 can lift (§D10) |
 | Drain and shutdown policy | #24 | Mirrors today's GoAkt order, decides no policy |
@@ -139,7 +139,7 @@ func New(cfg Config) (*Runtime, error) // uses the wall clock (§D11)
 var _ runtimeport.Runtime = (*Runtime)(nil) // the #148 compile-time assertion
 ```
 
-**Why internal.** Consumers only need the runtime through `compose/inmem.App.Runtime()`, which returns `runtimeport.Runtime`. A public `inmemruntime.New` would be a second, unmanaged construction path, the same position `ego.NewEngine` is in next to `compose/goakt` (ego-arch-003 §D1), and it would be public v4 API that cannot be removed before #124. An internal package can be promoted later with an additive change. Rejected alternative: a public `runtime/inmem`. It would also add a top-level `runtime/` directory next to `port/runtime`, two packages named after the same idea. This choice is open question Q1.
+**Why internal.** Consumers only need the runtime through `compose/inmem.App.Runtime()`, which returns `runtimeport.Runtime`. A public `inmemruntime.New` would be a second, unmanaged construction path, the same position `ego.NewEngine` is in next to `compose/goakt` (ego-arch-003 §D1), and it would be public v4 API that cannot be removed before #124. An internal package can be promoted later with an additive change. Rejected alternative: a public `runtime/inmem`. It would also add a top-level `runtime/` directory next to `port/runtime`, two packages named after the same idea. This is decided (Q1, maintainer decision 2026-09-27).
 
 **Why `inmemruntime` and not `inmem`.** `compose/inmem` imports it, and two packages named `inmem` in one file would need an alias every time.
 
@@ -187,7 +187,7 @@ It reuses the denylist `application-no-runtime` and `composition-no-runtime` sha
 
 - `New` validates nothing a `compose.Spec` already validated and starts nothing. `Start` marks the runtime started. `Stop` is described in §D8.
 - Before `Start` and after `Stop`, every method returns `runtimeport.ErrEngineNotStarted` — except the unsupported ones, which return `*runtimeport.UnsupportedError` in every state, as `port/runtime/runtime.go` requires ("ErrUnsupported comes first").
-- Unsupported in this change: the five `Projections` methods. Each returns `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}` (and `StopProjection`, `IsProjectionRunning`, `RebuildProjection`, `ProjectionLag`), before any side effect. This is open question Q3.
+- Unsupported in this change: the five `Projections` methods. Each returns `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}` (and `StopProjection`, `IsProjectionRunning`, `RebuildProjection`, `ProjectionLag`), before any side effect. This is decided (Q3, maintainer decision 2026-09-27).
 - **`EraseEntity` is unsupported until spec 7 lands** (maintainer decision 2026-09-27, Q7). Until then it returns `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "EraseEntity"}` in every lifecycle state, before any side effect. It appears as such in spec 1's method table and in the `compose/inmem` package documentation (§D8). **This limitation does not satisfy the `EraseEntity` contract** (`port/runtime/runtime.go:115-119`). Nothing in this change presents it as doing so: not the proposal, the specs, the #148 criteria mapping or the pull request. Spec 7 implements #166's outcome.
 - The runtime's name in errors is the constant `"inmem"`.
 - Every sentinel it returns is the `port/runtime` value (`ErrUndefinedEntityID`, `ErrNotACommand`, `ErrEventsStoreRequired`, `ErrDurableStateStoreRequired`, `ErrEntityFamilyNotDeclared`, the three tenant spawn errors), so `errors.Is` holds under either name.
@@ -437,9 +437,9 @@ Several rules in §D4 and §D11 copy GoAkt behaviors that reading could not sett
 - **Contradictions.** **When a measurement contradicts a maintainer decision** (§5, "Maintainer decisions recorded") or a recommendation the maintainer relied on, spec 0 does not amend the design. It records the measurement in the pull request, marks the affected rule "blocked on maintainer", and stops. Spec 1 waits for the maintainer's answer.
 
 
-## 5. Open questions for the maintainer
+## 5. Questions and maintainer decisions
 
-Each open question has a recommendation, and this design decides none of them.
+Every question below was decided by the maintainer on 2026-09-27. The options and the reasoning are kept for the record.
 
 **Maintainer decisions recorded (2026-09-27).**
 
@@ -448,21 +448,32 @@ Each open question has a recommendation, and this design decides none of them.
 3. Saga delivery order is unspecified on every runtime (Q8).
 4. There is no public clock in this chain (Q9).
 5. `EraseEntity` gets its own spec, spec 7, blocked only by #166. It implements #166's crypto-shredding with entity-and-tenant key granularity (part of Q7).
+6. **Q1, Q3, Q4, Q5, Q6 and the no-event `SendCommand` part of Q7 are accepted as recommended:**
+   - Q1: the runtime is internal, in `internal/inmemruntime`.
+   - Q3: `ErrUnsupported` plus rule M1, with runner extraction as FU-A. This covers #148's typed-error criterion only for projections.
+   - Q4: the pure rules are duplicated now, with the shared table as the drift check; FU-B extracts them later, with #124.
+   - Q5: no neutral "entity not found" error in this chain (FU-D).
+   - Q6: no public quiescence helper.
+   - Q7: follow the code and fix the contract text (FU-E).
+7. **Q2 is accepted as recommended, conditional on spec 0's characterization.**
+   - Placement and relocation are a no-op, provisional pending RUNTIME-003, and #148's wording is amended.
+   - The supervisor directive is decided from spec 0's measurement.
+   - If spec 0's measurement contradicts these, spec 0 stops and returns to the maintainer (§D12, "Contradictions").
+8. **#148 closure rule (maintainer decision 2026-09-27).** #148 is closed only after spec 7, because until then `compose/inmem`'s `EraseEntity` returns `ErrUnsupported` and does not meet the `port/runtime` contract. Specs 0–6 may advance and merge separately. Each of their pull requests states that limitation, uses "Refs #148" and never a closing keyword, and does not mark #148 complete. Spec 6's criteria mapping records #148 as still open pending spec 7. Only spec 7's pull request carries the closing keyword ("Closes #148").
 
-Still open: Q1, Q3–Q6, placement and relocation in Q2, and the no-event text in Q7.
 
 **Q1 — Public or internal runtime package.**
 (a) `internal/inmemruntime`, reached only through `compose/inmem`. (b) Public `runtime/inmem` with its own `New`.
-*Recommendation: (a).* It keeps the new public API to `compose/inmem`, avoids a second construction path, and can be promoted additively later; (b) cannot be withdrawn inside v4.
+*Decided (2026-09-27): (a), as recommended.* It keeps the new public API to `compose/inmem`, avoids a second construction path, and can be promoted additively later; (b) cannot be withdrawn inside v4.
 
 **Q2 — Spawn settings: what the in-memory runtime does with each one.** Any choice here is **provisional pending RUNTIME-003**. ego-runtime-001 D4 rule 3 leaves unhonorable spawn settings to RUNTIME-003, so whatever the maintainer picks now is revisited when RUNTIME-003 writes the contract. The choice is kept inside one function of the spawn path so it can change.
 
 | Setting | GoAkt on a single node (evidence) | In-memory, as designed | Status |
 |---|---|---|---|
-| `WithPlacement` | Ignored: `SpawnOn` falls through to a local `Spawn` outside a cluster, before placement is read (`actor/spawn.go:295-297`, `:321`, goakt v4.5.4) | Ignored | **Open** (a) no-op, or (b) typed error for non-default values |
-| `WithRelocation` | Ignored: relocation happens only when a cluster node departs (`actor/spawn.go:1015-1054`) | Ignored | **Open**, same options |
+| `WithPlacement` | Ignored: `SpawnOn` falls through to a local `Spawn` outside a cluster, before placement is read (`actor/spawn.go:295-297`, `:321`, goakt v4.5.4) | Ignored | **Decided (2026-09-27): no-op**, conditional on spec 0 and provisional pending RUNTIME-003 |
+| `WithRelocation` | Ignored: relocation happens only when a cluster node departs (`actor/spawn.go:1015-1054`) | Ignored | **Decided (2026-09-27): no-op**, same conditions |
 | `WithPassivateAfter` | **Honored** (`engine.go:1910-1911`): an idle entity stops, `EntityExists` becomes false, `Dispatch` does not re-spawn | **Implemented with the same semantics**, including the activity rule and the write-and-publish on passivation (§D11, spec 4); spec 0 measures the activity cases | **Decided by the maintainer, 2026-09-27**: implement; fallback typed error only if the scope is unreasonable, and the design finds it reasonable |
-| `WithSupervisorDirective` | Applied to panics and handler errors; the observable result is not yet measured (§2.5) | Restart re-hydrates, stop removes (§D4) | **Open**. Spec 0 measures the GoAkt result and records it in this row and §D4 before spec 1 starts |
+| `WithSupervisorDirective` | Applied to panics and handler errors; the observable result is not yet measured (§2.5) | Restart re-hydrates, stop removes (§D4) | **Decided (2026-09-27): follows spec 0's measurement**, which is recorded in this row and §D4 before spec 1 starts; a contradiction with §D4's provisional rule returns to the maintainer (§D12) |
 | `WithTenant` | Honored | Honored (§D6) | not a question |
 | Write-side adapter settings (`WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, `WithBatchFlushWindow`) | Honored, GoAkt only | Ignored **by contract**: other runtimes cannot read another adapter's settings (ego-runtime-001 D3) | not a question |
 | Any option but `WithTenant` on `SpawnSaga` | Ignored (`engine.go:1497-1501`, `:1563-1567`); spec 0 measures it | Ignored | not a question |
@@ -471,29 +482,29 @@ Still open: Q1, Q3–Q6, placement and relocation in Q2, and the no-event text i
 For placement and relocation:
 (a) Treat them as a no-op, exactly as single-node GoAkt does. The table's ignored-settings scenario spawns with `Random`, `LeastLoad`, `Local` and `WithRelocation(true)` on both roots to prove it.
 (b) Fail the spawn with `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "SpawnEventSourced: WithRelocation(true)"}` (and similarly for a non-default placement) before anything is spawned.
-*Recommendation: (a).* The default placement (`RoundRobin`) cannot be told apart from an explicit one in `SpawnSettings`, so (b) could only reject non-default values. The same consumer code would then succeed on single-node GoAkt and fail in memory, which breaks the neutrality #105 asks for.
+*Decided (2026-09-27): (a), as recommended, conditional on spec 0.* The default placement (`RoundRobin`) cannot be told apart from an explicit one in `SpawnSettings`, so (b) could only reject non-default values. The same consumer code would then succeed on single-node GoAkt and fail in memory, which breaks the neutrality #105 asks for.
 
-**Maintainer action requested regardless of the answer.** #148's criterion "capabilities the in-memory runtime does not support (for example cluster placement) return an explicit typed error" should be amended. Under (a), cluster placement is not an error on either runtime, so the example is wrong. Under (b), the criterion stands for placement and relocation. Either way, ego-runtime-001 D4 rule 3 already flagged this amendment as the maintainer's.
+**#148's wording is amended** (maintainer decision 2026-09-27). The criterion "capabilities the in-memory runtime does not support (for example cluster placement) return an explicit typed error" no longer uses cluster placement as its example, since under (a) cluster placement is not an error on either runtime. ego-runtime-001 D4 rule 3 had flagged this amendment as the maintainer's.
 
 **Q3 — Projections.** Note on #148: returning `ErrUnsupported` for the five projection methods satisfies #148's typed-error criterion **only for the projection capability**. It says nothing about spawn settings, which Q2 covers.
 (a) Return `ErrUnsupported` now; `compose/inmem` rejects a `Spec` with projections (M1); follow-up FU-A extracts the projection runner. (b) Include a projection runner in this chain.
-*Recommendation: (a).* The runner is in package `ego` (§2.5), so (b) either duplicates about 870 lines of pull loop, backoff and offset logic, or moves them out of package `ego`, which touches the hot root package this chain otherwise leaves alone. The runner also polls the store on tickers, a background activity the in-memory runtime otherwise does not have (D7). FU-A can replace the runner's one `goakt.Tell` with a callback, move it to an internal package, and let both runtimes use it; M1 is then dropped.
+*Decided (2026-09-27): (a), as recommended.* The runner is in package `ego` (§2.5), so (b) either duplicates about 870 lines of pull loop, backoff and offset logic, or moves them out of package `ego`, which touches the hot root package this chain otherwise leaves alone. The runner also polls the store on tickers, a background activity the in-memory runtime otherwise does not have (D7). FU-A can replace the runner's one `goakt.Tell` with a callback, move it to an internal package, and let both runtimes use it; M1 is then dropped.
 
 **Q4 — Duplicate or extract the small pure rules of package `ego`.**
 (a) Re-implement them in `internal/inmemruntime` (deadline gate, result building, metadata derivation, event envelope, topic names), with the shared table (D10) as the drift check. (b) First move them from package `ego` into internal GoAkt-free packages that both runtimes import.
-*Recommendation: (a) for this chain, (b) as a follow-up (FU-B) aligned with #124.* (b) is the better end state, but it edits `engine.go`, `event_sourced_actor.go`, `durable_state_actor.go`, `saga_actor.go` and `reply_classification.go`, which have several concurrent writers, and it changes the GoAkt adapter while its behavior is the reference this chain measures against.
+*Decided (2026-09-27), as recommended: (a) for this chain, (b) as a follow-up (FU-B) aligned with #124.* (b) is the better end state, but it edits `engine.go`, `event_sourced_actor.go`, `durable_state_actor.go`, `saga_actor.go` and `reply_classification.go`, which have several concurrent writers, and it changes the GoAkt adapter while its behavior is the reference this chain measures against.
 
 **Q5 — A neutral "entity not found" error.**
 (a) Nothing in this chain: the in-memory runtime returns a descriptive error that wraps no sentinel, and the neutrality scenarios do not cover the case. (b) Add `runtimeport.ErrEntityNotFound` and make both runtimes wrap it; GoAkt would wrap `ErrActorNotFound` so both `errors.Is` checks hold.
-*Recommendation: (a) now, (b) as a small follow-up under RUNTIME-002 or #29,* because (b) edits `engine.go` and changes the error GoAkt callers see (wrapping keeps `errors.Is`, but not `==`).
+*Decided (2026-09-27), as recommended: (a) now, (b) as a small follow-up (FU-D) under RUNTIME-002 or #29,* because (b) edits `engine.go` and changes the error GoAkt callers see (wrapping keeps `errors.Is`, but not `==`).
 
 **Q6 — A public quiescence helper.** Should `compose/inmem.App` export something like `WaitIdle(ctx) error` (all mailboxes empty) for consumer tests?
-*Recommendation: no, not in this chain.* D7 already makes most facts true when `SendCommand` returns, and a public helper would be in-memory-only API that consumer tests then depend on, so the same test could not run on GoAkt. The runtime keeps an internal version for its own tests.
+*Decided (2026-09-27), as recommended: no, not in this chain.* D7 already makes most facts true when `SendCommand` returns, and a public helper would be in-memory-only API that consumer tests then depend on, so the same test could not run on GoAkt. The runtime keeps an internal version for its own tests.
 
 **Q7 — The two mismatches of §2.6.**
 - *`EraseEntity` (decided by the maintainer, 2026-09-27):* keep the contract's crypto-shredding promise, as [#166](https://github.com/getsyntegrity/ego/issues/166) specifies: an additive extension, and a key that belongs exclusively to the entity and tenant. The in-memory runtime gets it in its **own small spec, spec 7, blocked only by #166**. Specs 0–6 do not wait on #166. Until spec 7 lands, the in-memory `EraseEntity` returns `*UnsupportedError`. That limitation **does not satisfy the contract** (`port/runtime/runtime.go:115-119`), and no document in this change says it does (§D3).
-- *No-event `SendCommand` (still open):* should the in-memory runtime follow the code (the current state and revision) or the contract text (`port/runtime/runtime.go:95-96`, nil)?
-  *Recommendation: follow the code, and open an issue to correct the contract text (FU-E).* Following the text would make the two runtimes differ, which is exactly what the neutrality proof must not show.
+- *No-event `SendCommand` (decided by the maintainer, 2026-09-27):* should the in-memory runtime follow the code (the current state and revision) or the contract text (`port/runtime/runtime.go:95-96`, nil)?
+  *Decided, as recommended: follow the code, and correct the contract text (FU-E).* Following the text would make the two runtimes differ, which is exactly what the neutrality proof must not show.
 
 **Q8 — Saga delivery order (decided by the maintainer, 2026-09-27).** Saga delivery order is **unspecified on every runtime**, and the in-memory runtime promises no order. Consumer sagas may depend on order; the design does not forbid that, it only promises nothing. The check is that nothing promises an order:
 
@@ -542,6 +553,8 @@ apidiff: only spec 5 produces a report, and it must list additions only (a new p
 Specs 2, 3, 4 and 7 all write `internal/inmemruntime`, in different files. Run them one after another, or in parallel only on files agreed in advance. Spec 5 can run in parallel with specs 3 and 4. Spec 7 can land at any point after spec 2, whenever #166 is settled. If spec 5 has merged by then, spec 7 also removes the `EraseEntity` limitation sentence from `compose/inmem`'s documentation.
 
 **Hot spots.** No spec touches `engine.go`, `option.go`, any other root-package file, `.github/workflows/*` or `internal/cmd/ciselect/**`. The only shared tool file is archcheck's rule table, edited by spec 1 alone; rebase it onto any open archcheck change. `CHANGELOG.md` is edited by specs 5, 6 and 7. `port/runtime/runtime.go` gets one doc sentence in spec 3 (Q8), and FU-E and #166 also touch that file, so whichever lands second rebases.
+
+**#148 closure rule (maintainer decision 2026-09-27).** #148 is closed only after spec 7, because until then `compose/inmem`'s `EraseEntity` returns `ErrUnsupported` and does not meet the `port/runtime` contract. Specs 0–6 may advance and merge separately. Each of their pull requests states that limitation, uses "Refs #148" and never a closing keyword, and does not mark #148 complete. Spec 6's criteria mapping records #148 as still open pending spec 7. Only spec 7's pull request carries the closing keyword ("Closes #148").
 
 **Follow-ups named here (outside the chain):** FU-A projection runner for both runtimes (Q3); FU-B extract shared pure rules from package `ego` (Q4); FU-C ordered delivery in `eventstream` (§2.3, D6); FU-D neutral entity-not-found error (Q5); FU-E the no-event `SendCommand` contract text (Q7). The `EraseEntity` mismatch is [#166](https://github.com/getsyntegrity/ego/issues/166), which blocks spec 7 only.
 
