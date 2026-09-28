@@ -47,7 +47,7 @@ matrix is empty, the `modules` job is *skipped*, not green.
 
 - [x] T1 Stable `ci-gate` aggregate job in both workflows + `docs/ci.md` (C4).
 - [x] T2 `plan` job split from heavy work; `build` and `modules` consume its outputs (C1).
-- [ ] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
+- [x] T3 Root module as a matrix entry when affected; `govulncheck` in per-module verification (C2).
 - [ ] T4 Selector tests: load-error path and missing C3 scenarios (C1/C3).
 - [ ] T5 A1 baseline evidence and standalone-plan docs in `docs/ci.md` (A1/C6).
 
@@ -109,3 +109,57 @@ matrix is empty, the `modules` job is *skipped*, not green.
     `verify-module.sh`, `verify-published.sh` (unchanged by this task);
     `go build ./internal/cmd/ciselect/...` green (with `GOROOT` unset, see
     the T1 environment note).
+- **T3 done** (commit below): the root module (`.`) now appears in
+  `modules.json` (root first) whenever its `Plan` entry is `Selected`, and
+  the `modules` matrix job (both workflows) runs it in the same per-module
+  job shape, with root-only steps (download the plan, vendor/tidy,
+  archcheck, the root's `golangci-lint-action` lint, `go-test.sh`,
+  coverage) gated on `matrix.module == '.'` and `Verify module`
+  (`verify-module.sh`) gated on `matrix.module != '.'`. `govulncheck` is
+  installed once per matrix job and run: directly against the root
+  (`govulncheck ./...` after its coverage step) and inside
+  `verify-module.sh` for every nested module (skipped locally with one
+  line when the binary is not installed, since CI always installs it).
+  - **TDD (RED → GREEN)**: added
+    `TestWriteOutputs_ModulesJSONIncludesSelectedRoot` and
+    `TestWriteOutputs_ModulesJSONOmitsUnselectedRoot` to
+    `internal/cmd/ciselect/modules_test.go`. RED: the first failed with
+    `modules.json = "[]\n", want "[\".\",\"moda\"]\n"` before the fix (the
+    old `modulesJSON(result.Modules)` only ever saw nested modules).
+    GREEN after changing `writeOutputs` to call
+    `modulesJSON(selectedModuleDirs(result.Plan))`, where
+    `selectedModuleDirs` is a new helper returning every `Selected` plan
+    entry's directory, root included. Updated the pre-existing
+    `TestRun_AllSurvivesBrokenNestedGoMod` expectation from
+    `["moda","modb","modc"]` to `[".","moda","modb","modc"]`, since `-all`
+    now correctly also selects the root (this is a corrected assertion of
+    intended new behavior, not a preserved regression).
+  - **Judgement call**: `modules.json` folds `.` in directly (source: the
+    already-computed `Selected` field of `result.Plan`'s root entry, which
+    means exactly "the root lane is not `none`") rather than adding a
+    second `root_selected` output. Rejected alternative: a separate output
+    threaded through `plan`'s `GITHUB_OUTPUT` plus a second `if:` — this
+    would duplicate a decision `Plan` already records, with two places to
+    check it instead of one, for no behavioral difference. Recorded in
+    `docs/ci.md`, "Root module in the matrix (ego-arch-006 spec 1, C2)".
+  - `Result.Modules` (nested-only, drives the human-facing "Nested modules"
+    summary section) is intentionally untouched — it predates this change
+    and is not the workflow matrix's source.
+  - No Buf step exists anywhere in these workflows today, so "Buf if
+    present" from the task description had nothing to move; noted so a
+    future Buf step knows to gate on `matrix.module == '.'` too.
+  - Verification: `GOWORK=off go test ./internal/cmd/ciselect/...` green,
+    `GOWORK=off go vet ./internal/cmd/ciselect/...` clean, YAML parse OK
+    for both workflows, every inline `run:` block parses with `bash -n`,
+    `bash -n` OK for the modified `verify-module.sh`, `GOWORK=off go build
+    ./...` (repo root) green — all with `GOROOT` unset (T1 environment
+    note). `golangci-lint run` was attempted but fails repo-wide on
+    pre-existing vendor/go.mod drift unrelated to this change
+    ("inconsistent vendoring... not marked as explicit in
+    vendor/modules.txt"); not part of the required verification list for
+    this task, and out of scope to fix here (would mean running `go mod
+    vendor` and touching vendor/ broadly). `verify-module.sh`'s new
+    govulncheck step was reviewed but not executed end-to-end locally
+    (`govulncheck` is not installed in this environment, which exercises
+    the intended local skip path; a full nested-module run also needs
+    network access this environment does not exercise for this task).

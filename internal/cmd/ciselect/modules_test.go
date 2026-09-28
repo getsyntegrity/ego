@@ -409,8 +409,8 @@ func TestRun_AllSurvivesBrokenNestedGoMod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading modules.json: %v", err)
 	}
-	if string(modules) != "[\"moda\",\"modb\",\"modc\"]\n" {
-		t.Fatalf("modules.json = %q, want every discovered module", modules)
+	if string(modules) != "[\".\",\"moda\",\"modb\",\"modc\"]\n" {
+		t.Fatalf("modules.json = %q, want every discovered module, root included", modules)
 	}
 	// Without a readable go.mod the module path is unknown: plan.json
 	// omits the field instead of printing an empty path.
@@ -491,5 +491,56 @@ func TestWriteOutputs_PlanAndModulesJSON(t *testing.T) {
 	}
 	if m := plan.Modules[1]; m.Dir != "moda" || !m.Selected || m.Path != rootModule+"/moda" || m.Reason == "" {
 		t.Fatalf("plan.json modules[1] = %+v, want moda selected with its path and reason", m)
+	}
+}
+
+// modules.json drives the workflows' matrix, and the matrix now runs the
+// root module too (ego-arch-006 spec 1, C2): when the root's Plan entry is
+// Selected, "." must appear in modules.json exactly like any other
+// selected module, root first because Plan lists the root first.
+func TestWriteOutputs_ModulesJSONIncludesSelectedRoot(t *testing.T) {
+	res := selector.Result{
+		Mode:    selector.ModeAffected,
+		Reasons: []string{"affected by 1 changed package(s)"},
+		Plan: []selector.ModulePlan{
+			{Dir: ".", Path: rootModule, Selected: true, Reason: "affected by 1 changed package(s)"},
+			{Dir: "moda", Path: rootModule + "/moda", Selected: true, Reason: "changed files in moda", Chain: []string{"moda"}},
+			{Dir: "modb", Path: rootModule + "/modb", Reason: "not affected"},
+		},
+	}
+	out := t.TempDir()
+	if err := writeOutputs(out, res, "summary"); err != nil {
+		t.Fatalf("writeOutputs: %v", err)
+	}
+
+	modules, err := os.ReadFile(filepath.Join(out, "modules.json"))
+	if err != nil {
+		t.Fatalf("reading modules.json: %v", err)
+	}
+	if string(modules) != "[\".\",\"moda\"]\n" {
+		t.Fatalf("modules.json = %q, want %q (root included, root first)", modules, "[\".\",\"moda\"]\n")
+	}
+}
+
+// When the root's Plan entry is not Selected, modules.json keeps its
+// nested-only shape, "[]" when nothing at all was selected.
+func TestWriteOutputs_ModulesJSONOmitsUnselectedRoot(t *testing.T) {
+	res := selector.Result{
+		Mode: selector.ModeNone,
+		Plan: []selector.ModulePlan{
+			{Dir: ".", Path: rootModule, Reason: "not affected"},
+		},
+	}
+	out := t.TempDir()
+	if err := writeOutputs(out, res, "summary"); err != nil {
+		t.Fatalf("writeOutputs: %v", err)
+	}
+
+	modules, err := os.ReadFile(filepath.Join(out, "modules.json"))
+	if err != nil {
+		t.Fatalf("reading modules.json: %v", err)
+	}
+	if string(modules) != "[]\n" {
+		t.Fatalf("modules.json = %q, want %q", modules, "[]\n")
 	}
 }

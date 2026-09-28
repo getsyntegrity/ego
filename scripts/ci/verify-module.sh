@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # verify-module.sh downloads, checks go.mod/go.sum tidiness, builds, vets,
-# lints (against the root .golangci.yml) and, when the module has any
-# *_test.go file, tests one nested Go module: a directory with its own
-# go.mod, outside the root module's `go list ./...` graph and therefore
-# outside internal/cmd/ciselect's own coverage (see docs/ci.md). It
+# lints (against the root .golangci.yml), scans for known vulnerabilities
+# with govulncheck and, when the module has any *_test.go file, tests one
+# nested Go module: a directory with its own go.mod, outside the root
+# module's `go list ./...` graph and therefore outside
+# internal/cmd/ciselect's own coverage (see docs/ci.md). It
 # verifies the module the way it is checked out today, with its local
 # `replace` directives in effect ("integrated verification" in
 # openspec/changes/ego-arch-001/design.md §8) — release verification
@@ -114,6 +115,20 @@ echo "::group::golangci-lint ($module_dir)"
 golangci-lint run --modules-download-mode=mod --config "$repo_root/.golangci.yml" ./...
 echo "::endgroup::"
 steps+=("golangci-lint run")
+
+echo "::group::govulncheck ($module_dir)"
+if command -v govulncheck >/dev/null 2>&1; then
+  govulncheck ./...
+  steps+=("govulncheck ./...")
+else
+  # CI always installs govulncheck (see the "Install govulncheck" step in
+  # pull_request.yml/build.yml) before this script runs; only a local run
+  # without it installed hits this branch, and it must not fail a
+  # contributor's local check for a tool CI provides for them.
+  echo "govulncheck not found on PATH; skipping locally (CI installs it explicitly)."
+  steps+=("govulncheck: skipped (not installed locally)")
+fi
+echo "::endgroup::"
 
 tests_note=""
 if [ -n "$(find . -name '*_test.go' -print -quit)" ]; then

@@ -21,9 +21,9 @@ race detector.
 
 ## What each workflow runs
 
-Both workflows are now split into a cheap `plan` job and a heavier `build`
-job, so a pull request that never needs the root module's own checks never
-pays for them:
+Both workflows are now split into a cheap `plan` job and a `modules` matrix
+job that also runs the root module (ego-arch-006 spec 1, C2), so a pull
+request that never needs the root module's own checks never pays for them:
 
 - **`plan`** only checks out the repository, sets up Go, computes the diff
   (`pull_request.yml`) or always requests the full suite (`build.yml`),
@@ -31,24 +31,23 @@ pays for them:
   `mode`, `packages.txt`, `coverpkg`, `modules.json`, `plan.json` and
   `summary.md` — as a `ciselect-plan` artifact (`actions/upload-artifact`).
   It never installs dependencies, vendors, lints or tests anything.
-- **`build`** (`needs: plan`, `if: needs.plan.outputs.mode != 'none'`) does
-  the root module's own work: vendoring and tidy, `archcheck`, lint, then
-  downloads the `ciselect-plan` artifact (`actions/download-artifact`) and
-  runs `scripts/ci/go-test.sh` and the coverage summary against the exact
-  decision `plan` already made. On `pull_request.yml` this job is skipped
-  entirely when `plan` decided the root lane needs nothing (mode `none`);
-  on `build.yml`, `-all` never returns `none`, so `build` always runs there.
-  `build` re-running `ciselect` itself was considered and rejected: it
-  would compute the selection a second time from the same inputs, and if
-  it ever diverged (a flaky `go list`, a different fallback path taken)
-  `build` could test something other than what `plan`, and the `modules`
-  matrix below, already agreed on. Downloading `plan`'s own output makes
-  the decision made exactly once, by exactly one job.
-- **`modules`** (`needs: plan`, not `build`) fans out over
-  `plan`'s `modules.json`, unchanged by this split (see "The `modules`
-  matrix job" below).
-- **`ci-gate`** (`needs: [plan, build, modules]`) is the one required
-  status check; see "The `ci-gate` job" below.
+- **`modules`** (`needs: plan`) fans out one job per string in `plan`'s
+  `modules.json`, which now includes `.` (the root module's directory)
+  whenever the root lane is not `none`, exactly like any nested module (see
+  "The `modules` matrix job" below). The root entry of the matrix downloads
+  the `ciselect-plan` artifact (`actions/download-artifact`) and runs the
+  root module's own steps — vendoring and tidy, `archcheck`, lint,
+  `scripts/ci/go-test.sh` and the coverage summary — against the exact
+  decision `plan` already made, instead of recomputing it: a second,
+  independent `ciselect` run could in principle disagree with `plan`'s (a
+  flaky `go list`, a different fallback path taken), which would let the
+  root entry test something other than what `plan`, and every nested
+  module's selection, already agreed on. On `pull_request.yml` the whole
+  matrix (root included) is skipped when `plan` selected nothing (`modules`
+  == `[]`); on `build.yml`, `-all` always selects the root and every nested
+  module.
+- **`ci-gate`** (`needs: [plan, modules]`) is the one required status
+  check; see "The `ci-gate` job" below.
 
 ### `pull_request.yml` (the fast lane)
 
@@ -65,27 +64,29 @@ pays for them:
    fails for any reason (a `go list` error, an unreadable file, a bug in
    the selector itself), the workflow logs a `::warning::` and re-runs with
    `-all -reason "selector failed; full-suite fallback" -out-dir` instead
-   — if *that* also fails, the `plan` job fails, and `build`/`modules` never
-   run for it (they `need: plan`), so `ci-gate` fails visibly instead of
+   — if *that* also fails, the `plan` job fails, and `modules` never runs
+   for it (it `needs: plan`), so `ci-gate` fails visibly instead of
    silently testing less. Selection is never silently skipped. The
    selector's own `summary.md` is appended to the job's
    `$GITHUB_STEP_SUMMARY`, so the exact package list and the reason for it
    are visible on every PR run, not just inferred from logs. `ciselect`'s
-   output directory is uploaded as the `ciselect-plan` artifact for `build`
-   to reuse.
-4. **`build`** (only when `plan`'s `mode` is not `none`): vendoring and
-   tidy, `archcheck`, lint, then downloads `ciselect-plan` and **runs
-   tests**: `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`, with
-   `GO_TEST_RACE=1` (the race detector stays on for pull requests).
-5. **Coverage summary**: when `coverage.out` was produced, the workflow runs
-   `go tool cover -func=coverage.out`, takes its final `total:` line, and
-   appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
+   output directory is uploaded as the `ciselect-plan` artifact for the
+   root entry of `modules` to reuse.
+4. **`modules`, root entry** (`matrix.module == '.'`, present only when
+   `plan`'s `mode` is not `none`): vendoring and tidy, `archcheck`, lint,
+   then downloads `ciselect-plan` and **runs tests**:
+   `scripts/ci/go-test.sh "$RUNNER_TEMP/ci" coverage.out`, with
+   `GO_TEST_RACE=1` (the race detector stays on for pull requests), plus
+   `govulncheck ./...` (see "Root module in the matrix" below).
+5. **Coverage summary**: when `coverage.out` was produced, the root entry
+   runs `go tool cover -func=coverage.out`, takes its final `total:` line,
+   and appends it to the job's `$GITHUB_STEP_SUMMARY` together with the
    selection mode. In `affected` mode that total only reflects the
    packages that actually ran — the denominator (`-coverpkg`) is still
    every included package, so an `affected`-mode total is not directly
    comparable to a `full`-mode total. When the mode is `none`, no
-   `coverage.out` exists (and `build` never even ran); a `none`-mode PR
-   still gets a step summary from `plan` explaining why.
+   `coverage.out` exists (and the root entry of `modules` never even runs);
+   a `none`-mode PR still gets a step summary from `plan` explaining why.
 
 ### `build.yml` (the full-suite gate)
 
@@ -93,11 +94,13 @@ Runs on every push to `main`, and can be triggered manually for any ref
 via the Actions "Run workflow" button (`workflow_dispatch`). Its `plan` job
 runs `go run ./internal/cmd/ciselect -all -out-dir "$RUNNER_TEMP/ci"` —
 always the full suite, no change detection — appends the summary to the
-job summary the same way, and uploads it as `ciselect-plan`. `-all` never
-reports mode `none`, so `build` always runs here: it downloads
-`ciselect-plan`, then runs `scripts/ci/go-test.sh` with the race detector
-on, and appends the same coverage summary to the job summary. This is the
-mandatory gate and always runs the complete suite.
+job summary the same way, and uploads it as `ciselect-plan`. `-all` always
+selects the root module (mode `full`, never `none`), so the root entry of
+`modules` always runs here too: it downloads `ciselect-plan`, then runs
+`scripts/ci/go-test.sh` with the race detector on, `govulncheck ./...`, and
+appends the same coverage summary to the job summary. This is the
+mandatory gate and always runs the complete suite, root and every nested
+module.
 
 ### `scripts/ci/go-test.sh`
 
@@ -533,9 +536,14 @@ now also verifies `test/compat`: one more module job on such a PR.
 `ciselect` writes the selected module directories to
 `<out-dir>/modules.json`, a JSON array of strings — `[]`, never `null`,
 when nothing was selected — so a GitHub Actions job can feed it straight
-into a matrix's `fromJSON(...)` without any extra parsing step. Its
-shape is unchanged by #102: nested module directories only, never the
-root. The job summary (`summary.md`) gets a `## Nested modules` section
+into a matrix's `fromJSON(...)` without any extra parsing step. Since
+ego-arch-006 spec 1 (C2), `.` (the root module) appears in this list
+exactly like any nested module's directory, root first, whenever the
+root's own `Plan` entry is selected (its lane is not `none`) — the
+`modules` matrix job runs the root module the same way it runs every
+nested one (see "Root module in the matrix" below). Before that change the
+list held nested module directories only, never the root; the job summary
+(`summary.md`) still gets a `## Nested modules` section
 listing each selected module and its reason, or the line "no nested
 modules selected" when none were, followed by a `## Module plan` table
 with one row per discovered module, root included: `module | selected |
@@ -568,12 +576,14 @@ unreadable `go.mod`, modules are discovered by directory only, so their
 paths are unknown and each entry omits `path`. No workflow consumes `plan.json`
 yet.
 
-### `scripts/ci/verify-module.sh`: what runs for one selected module
+### `scripts/ci/verify-module.sh`: what runs for one selected nested module
 
-For each module `fromJSON(modules.json)` names, `scripts/ci/verify-module.sh
-<module-dir>` runs, with `GOWORK=off` and `GOFLAGS=` (both cleared/forced
-so a stray root `go.work` or an inherited `GOFLAGS=-mod=vendor` can never
-change what the module builds against):
+For each **nested** module `fromJSON(modules.json)` names (every entry
+except `.`; the root module's own steps are described in "Root module in
+the matrix" below), `scripts/ci/verify-module.sh <module-dir>` runs, with
+`GOWORK=off` and `GOFLAGS=` (both cleared/forced so a stray root `go.work`
+or an inherited `GOFLAGS=-mod=vendor` can never change what the module
+builds against):
 
 1. `go mod download`
 2. `go mod tidy -diff` — fails the job with the printed diff when the
@@ -591,7 +601,14 @@ change what the module builds against):
    `--modules-download-mode=mod`, overriding the root config's
    `modules-download-mode: vendor`, since nested modules do not check in
    a `vendor/` directory
-6. `go test ./...` only when the module has at least one `*_test.go`
+6. `govulncheck ./...` (ego-arch-006 spec 1, C2) — scans the module's
+   resolved dependency graph for known vulnerabilities reachable from its
+   code. CI always installs `govulncheck` first (the workflow's "Install
+   govulncheck" step, `go install golang.org/x/vuln/cmd/govulncheck@latest`),
+   so this step always runs there; a local run of `verify-module.sh` without
+   `govulncheck` on `PATH` prints one line and skips it instead of failing
+   a contributor's machine for a tool they have not installed.
+7. `go test ./...` only when the module has at least one `*_test.go`
    file; a module with none (no nested module today) reports "no tests"
    in the job summary instead of running `go test` against nothing.
    `-race` is added only when `GO_TEST_RACE=1`, which the CI matrix job
@@ -615,17 +632,64 @@ Both `pull_request.yml` and `build.yml` add a `modules` job that
 above), runs only `if: needs.plan.outputs.modules != '[]'`, and
 fans out one `strategy.matrix.module` entry per string in that JSON
 array, with `fail-fast: false` so one module's failure does not cancel
-the others mid-run. Each matrix job checks out the repository, sets up
-the same Go version as the root lane, installs the same pinned
-`golangci-lint` version, and runs `scripts/ci/verify-module.sh
-"${{ matrix.module }}"` with `GO_TEST_RACE=1`. `build.yml` always selects
-every module (it runs `ciselect -all`); `pull_request.yml` selects
-whatever the module selection rules above decided for that PR. The module
-list is never hand-maintained: it comes from `modules.json`, so a new
-nested module is picked up the moment its `go.mod` exists, with no
-workflow edit. `modules` depends on `plan`, not on the heavier `build`
-job, so a PR that only touches a nested module runs its module job without
-waiting on (or paying for) the root module's vendoring, archcheck and lint.
+the others mid-run. Every matrix job checks out the repository and sets up
+the same Go version; from there the steps differ by whether
+`matrix.module == '.'` (see "Root module in the matrix" below) or a nested
+module, which installs the same pinned `golangci-lint` version and runs
+`scripts/ci/verify-module.sh "${{ matrix.module }}"` with `GO_TEST_RACE=1`.
+`build.yml` always selects every module, root included (it runs
+`ciselect -all`); `pull_request.yml` selects whatever the module selection
+rules above decided for that PR. The module list is never hand-maintained:
+it comes from `modules.json`, so a new nested module is picked up the
+moment its `go.mod` exists, with no workflow edit. `modules` depends on
+`plan`, not on a separate heavy root job, so a PR that only touches a
+nested module runs its module job without waiting on (or paying for) the
+root module's vendoring, archcheck and lint.
+
+### Root module in the matrix (ego-arch-006 spec 1, C2)
+
+Before this change the root module was a permanent, unconditional job:
+every PR paid for its vendoring, `archcheck` and lint even when nothing in
+the root lane was affected, and root and nested-module CI were two
+differently-shaped jobs. Now the root module is `.` in `modules.json`,
+selected on exactly the same rule as any nested module — `plan`'s root
+`Plan` entry is `Selected` (its lane is not `none`) — and it runs inside
+the same `modules` matrix job, from the same directory (`.`) with the same
+`GOWORK=off` discipline nested modules already used.
+
+**Where `.` comes from.** `internal/cmd/ciselect`'s `writeOutputs` builds
+`modules.json` from every `Selected` entry of `result.Plan` (which already
+lists the root first, then nested modules sorted by directory), not from
+`result.Modules` (which stays nested-only — it also drives the `summary.md`
+"Nested modules" section, a human-facing pointer to the nested module lane
+that predates this change and is not about the workflow matrix). This was
+a deliberate choice among two ways to signal "the root is selected too" to
+the workflow:
+
+- **Chosen: fold `.` into `modules.json` itself.** One JSON array is
+  already the single source of truth the matrix reads
+  (`fromJSON(needs.plan.outputs.modules)`); `Plan`'s root entry already
+  carries exactly the right boolean (`Selected`), computed the same way as
+  every nested module's, so no new field or output was needed.
+- **Rejected: a separate `root_selected` output.** This would need a
+  second output threaded through `plan`'s `GITHUB_OUTPUT`, a second
+  `if:` on a dedicated root-only job (reintroducing the pre-this-task
+  split this task removes), and two places for a reader of the workflow to
+  check "is the root affected?" instead of one. It would not make the
+  selection logic any different — `Plan`'s root `Selected` field already
+  exists and already means exactly this — it would only duplicate it.
+
+**Root-only steps.** Inside the `modules` job, every step that only makes
+sense for the root module (downloading the `ciselect-plan` artifact,
+`go mod tidy && go mod vendor`, `archcheck`, the root's own
+`golangci-lint-action` lint step, `scripts/ci/go-test.sh` and its coverage
+summary) is `if: matrix.module == '.'`; the `Verify module`
+(`scripts/ci/verify-module.sh`) step, and installing `golangci-lint`
+manually for it, are `if: matrix.module != '.'`. `govulncheck` is
+installed once per matrix job unconditionally (both the root and every
+nested module need it), then run against the root with
+`GOFLAGS=-mod=vendor` right after its own coverage summary, and against
+each nested module inside `verify-module.sh` (see above).
 
 ### The `ci-gate` job: one required status check
 
@@ -634,19 +698,17 @@ protection could require: the `modules` job is *skipped* (not green, not
 red) whenever `modules.json` is `[]`, and GitHub branch protection cannot
 require a check that a run sometimes never reports at all. `ci-gate` fixes
 this. It is the last job in both `pull_request.yml` and `build.yml`,
-`needs: [plan, build, modules]`, and runs with `if: always()` so it still
-runs even when an earlier job failed. Its one step reads
-`needs.plan.result`, `needs.build.result` and `needs.modules.result`, and
-fails if `plan` did not succeed, or if `build` or `modules` finished as
-anything other than `success` or `skipped`. Once `plan` itself succeeded,
-`build` can only be "skipped" because `plan`'s own `mode` was `none`, and
-`modules` can only be "skipped" because `plan`'s own `modules.json` was
-`[]` — never a hidden failure. If `plan` itself fails, `build` and
-`modules` are skipped too (their `needs: plan` was not satisfied), but
+`needs: [plan, modules]`, and runs with `if: always()` so it still runs
+even when an earlier job failed. Its one step reads `needs.plan.result` and
+`needs.modules.result`, and fails if `plan` did not succeed, or if
+`modules` finished as anything other than `success` or `skipped`. Once
+`plan` itself succeeded, `modules` can only be "skipped" because `plan`'s
+own `modules.json` was `[]` — never a hidden failure. If `plan` itself
+fails, `modules` is skipped too (its `needs: plan` was not satisfied), but
 `ci-gate` already failed on `plan`'s own result, so that skip changes
 nothing. This makes `ci-gate` pass whether the matrix fanned out to zero,
-one, or many modules, and fail visibly whenever `plan`, `build`, or a real
-`modules` failure/cancellation, would otherwise have left branch
+one, or many modules (root included), and fail visibly whenever `plan`, or
+a real `modules` failure/cancellation, would otherwise have left branch
 protection with nothing to require.
 
 **Required check name: `CI Gate`.** Configure branch protection to require
