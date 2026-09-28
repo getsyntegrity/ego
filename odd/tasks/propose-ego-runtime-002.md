@@ -13,7 +13,7 @@ in-memory runtime (RUNTIME-005) and `compose/inmem` (IMPL-6), but no design exis
 
 Documentation only: `openspec/changes/ego-runtime-002/` with `proposal.md`, `design.md` (the GoAkt
 behavior to match, decisions D1–D10, open questions Q1–Q7 with recommendations, compatibility,
-risks, chain and file ownership) and five chained specs of at most five tasks each. No production
+risks, chain and file ownership) and six chained specs of at most five tasks each. No production
 code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 ## Constraints
@@ -27,8 +27,27 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
 
 - [x] **T1** Read #148, #105, #11, #10 and the merged designs (ego-runtime-001, ego-arch-003/004/006/001).
 - [x] **T2** Map the GoAkt runtime's observable behavior with `file:line` on `57c4b11` (design §2).
-- [x] **T3** Write proposal, design and the five specs.
-- [x] **T4** Open the pull request against `main` with the open questions and the spec chain.
+- [x] **T3** Write proposal, design and the specs.
+- [x] **T4** Open the pull request against `main` with the open questions and the spec chain (#165, head `3785827`).
+- [x] **T5** Apply the independent review's factual corrections (review of #165) and record the maintainer decisions of 2026-09-27 (passivation implemented, saga delivery order not in the contract, `EraseEntity` crypto-shredding per #166).
+
+## Review round 1 (2026-09-27)
+
+- **What the reviewer found that changed the design:**
+  - after a failed write or an out-of-sync conflict, GoAkt stops the entity, so the in-memory runtime removes it too;
+  - spawn checks the family before the store;
+  - the saga tenant rules SG4, SG5 and SG-DUR1, plus the not-running guard;
+  - the `runtimeconsumer` allowlist grows by `persistence` and `egopb`;
+  - stream messages are compared as a multiset, with a count-based stop;
+  - `Stop` waits for the turn in progress;
+  - an option-by-option table for Q2;
+  - evidence for the contract mismatches;
+  - Q8 added.
+- **Maintainer decisions recorded:**
+  - passivation is implemented (new spec 4, three tasks, with a manual clock for determinism);
+  - saga delivery order is not part of the contract, and a reversed-order run checks that no test depends on it;
+  - `EraseEntity` follows #166, which blocks spec 2.
+- **Chain:** now six specs (5, 5, 5, 3, 5, 5 tasks).
 
 ## Findings worth keeping
 
@@ -36,10 +55,11 @@ code, no `CHANGELOG.md` entry (design pull requests #149 and #151 added none).
   (`eventstream/stream.go:155`), so `Subscribe` and publishers get no ordering guarantee, even
   for one entity, on either runtime.
 - A command with no events returns the current state, not nil; `port/runtime`'s doc says nil.
-- `EraseEntity` does not delete the encryption key, although its comment says it does.
+- `EraseEntity` does not delete the encryption key, although the port contract and its comment say it does (#166). Keys are selected by persistence ID alone, so two tenants with the same ID would share a key.
+- A failed write (and an out-of-sync conflict) stops a GoAkt event-sourced entity: `EntityExists` then reports false.
 - `compose/inmem` is not covered by `composition-no-runtime` (its layer excludes runtime-specific
   roots), hence the new `inmem-no-runtime` rule.
 
 ## Next step
 
-Maintainer review of the open questions; then spec 1.
+Maintainer answers to the remaining open questions (Q1, Q3–Q6, placement and relocation in Q2, no-event text in Q7); then spec 1.
