@@ -214,7 +214,7 @@ type continuationParams struct {
 // first failure, so a caller always knows exactly which check failed.
 // This function is only ever called when at least one continuation flag
 // was set; the default (no new flags) codepath in run never reaches it.
-func runContinuation(p continuationParams, stdout, stderr io.Writer) error {
+func runContinuation(p continuationParams, stdout, _ io.Writer) error {
 	if p.checkSHA != "" {
 		if err := validateSHA(p.checkSHA); err != nil {
 			return err
