@@ -243,6 +243,16 @@ jobs:
           SHA: ${{ inputs.sha }}
           TAGS: ${{ steps.compute-tags.outputs.tags }}
         run: |
+          # An empty computed tag list should never happen -- the release
+          # list always has publishers -- but "git push --atomic origin"
+          # with no refspec (what an empty $TAGS would produce) is not the
+          # intended no-op; treat it as a bug and fail loudly instead of
+          # silently pushing nothing.
+          if [ -z "${TAGS// /}" ]; then
+            echo "::error::No publisher tags were computed (the computed tag list from the compute-tags step is empty) -- refusing to run an unscoped 'git push --atomic origin' with no refspec"
+            exit 1
+          fi
+
           for TAG in $TAGS; do
             git tag "$TAG" "${SHA}"
             echo "Created tag: $TAG"

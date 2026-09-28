@@ -519,4 +519,120 @@ Each finding is its own Conventional Commit, no AI-attribution trailer.
   its `gh pr create` grep check). `actionlint` on the whole file → exit 0,
   no output (0 findings).
   Commit: `fix(release-publishers): create releases from the planned
-  tags, not git tag -l (#159)`.
+  tags, not git tag -l (#159)` (`478d6c9`).
+
+- **Finding #3 (MINOR) — fixed.** `Create and push publisher tags` ran
+  `git push --atomic origin $TAGS` unconditionally, even if `$TAGS`
+  (from `steps.compute-tags.outputs.tags`) were empty — an empty `$TAGS`
+  means `git push --atomic origin` with no refspec, never the intended
+  behavior (the release list always has publishers), so an empty
+  computed tag list is a bug worth failing loudly on. Fixed: added an
+  emptiness check at the top of the step, before the tag-creation loop —
+  `if [ -z "${TAGS// /}" ]; then echo "::error::..."; exit 1; fi` (the
+  `${TAGS// /}` parameter expansion strips every space out of `$TAGS`,
+  so this also catches a value that is only whitespace, not just a
+  literal empty string). The `::error::` names that no publisher tags
+  were computed and that an unscoped `git push --atomic origin` is being
+  refused. Nothing else in the step changed.
+  Verification (literal output): YAML parse → `YAML_OK`. `bash -n` on
+  the changed step's extracted script → `BASH_N_OK`. `bash -n` on every
+  `run:` block in the whole file (all 11 steps that have one) →
+  `ALL_OK`. `rg -n '\$\{\{' .github/workflows/release-publishers.yml` →
+  same 22 matches as before, all in `env:`/`with:`/`if:` mappings, none
+  inside a `run:` body. `actionlint` on the whole file → exit 0, no
+  output (0 findings).
+  Commit: `fix(release-publishers): fail clearly on an empty computed
+  tag list instead of pushing with no refspec (#159)`.
+
+- **CI finding (2026-09-28, run 36449338645) — fixed.** `golangci-lint`
+  (revive `unused-parameter`) flagged
+  `internal/cmd/releaseplan/continuation.go:217`:
+  `func runContinuation(p continuationParams, stdout, stderr io.Writer) error`
+  — `stderr` is read by nothing in the function body (every message goes
+  to `stdout` via `fmt.Fprintf`; errors are returned, and only `main()` in
+  `main.go` writes a returned error to `os.Stderr` — `run()` only forwards
+  `stderr` into `fs.SetOutput(stderr)` and into `runContinuation`, which
+  never reads it). Fixed by renaming the parameter to `_`
+  (`func runContinuation(p continuationParams, stdout, _ io.Writer) error`).
+  No doc comment or other reference named the parameter `stderr`
+  specifically (checked: `rg -n stderr
+  internal/cmd/releaseplan/continuation.go` before the fix showed only the
+  signature line itself), so nothing else needed updating. The one call
+  site (`main.go`'s `run()`, `return runContinuation(continuationParams{...},
+  stdout, stderr)`) is positional and unaffected by a parameter rename.
+  Sweep for the same class of issue (`unused-parameter`, revive), per
+  `.golangci.yml`'s enabled linters (`gocyclo`, `gosec`, `misspell`,
+  `revive`, `staticcheck`, `whitespace`, `govet`, `goheader` — `golangci-lint`
+  itself will not run in this sandbox, built against a different Go
+  version than the pinned SDK):
+  `GOROOT= GOWORK=off /home/pablog/sdk/go1.26.6/bin/go run
+  github.com/mgechev/revive@latest -config /tmp/revive-unused-param.toml
+  ./internal/cmd/releaseplan/... ./internal/cmd/releasegate/...` with
+  `/tmp/revive-unused-param.toml` containing exactly `[rule.unused-parameter]`
+  — this minimal TOML worked directly, no fallback to the default rule set
+  needed. Before the fix it reported `continuation.go:217` plus 10 hits in
+  test files (`client_test.go:189,214`; `main_test.go:67,131,156,184,247,
+  282,316,353`); after the fix, `continuation.go:217` is gone and every
+  production file (`continuation.go`, `main.go` in both
+  `internal/cmd/releaseplan` and `internal/cmd/releasegate`, `client.go`)
+  is clean — the same 10 test-file hits remain, all the identical harmless
+  pattern `http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {...})`
+  where the stub server never reads `r`. Checked each one against `git
+  show 6fbc2d3 -- internal/cmd/releasegate/{client_test.go,main_test.go}`:
+  only 3 of the 10 sit inside functions this PR's T2 commit actually added
+  (`client_test.go:189` inside `TestClient_ListBuildRuns_ErrorClassification`;
+  `main_test.go:247` and `:282` inside
+  `TestRun_PermanentFetchErrorFailsFastWithoutRetrying` and
+  `TestRun_TimeoutZeroWithFetchErrorFails`); the other 7
+  (`client_test.go:214` in the pre-existing `TestClient_ListBuildRuns_MalformedJSON`;
+  `main_test.go:67,131,156,184,316,353` in pre-existing functions) predate
+  this PR and are out of scope regardless. Judgement call: left all 10
+  test-file hits unfixed, including the 3 in scope. Reasoning: it is the
+  same one-line stub-handler idiom repeated identically across every test
+  function in both files, in scope and out of scope alike; renaming `r` to
+  `_` in only the 3 in-scope occurrences while leaving the other 7
+  identical pre-existing ones untouched would make the file internally
+  inconsistent for zero behavioral or lint-severity gain (this task's own
+  instructions call test-only unused params "less commonly a real problem"
+  and explicitly leave this to judgement). Reported per the task's "report
+  what you found either way" instruction.
+  Also checked `.golangci.yml` for another `go run`-able linter over the
+  same file set: `gocyclo` (`go run github.com/fzipp/gocyclo/cmd/gocyclo@latest`)
+  flagged `runContinuation` (26) and `run` in `releaseplan/main.go` (16)
+  only at an arbitrary `-over 15` I chose for a quick look — golangci-lint's
+  actual default `min-complexity` for this linter is 30 and `.golangci.yml`
+  sets no override, so neither function would actually be flagged under
+  the real configured threshold; not a real finding, not touched.
+  `misspell` (`go run github.com/client9/misspell/cmd/misspell@latest`)
+  found nothing across the four production files. `gosec`
+  (`go run github.com/securego/gosec/v2/cmd/gosec@latest`) found 4
+  pre-existing findings (G204 subprocess-with-variable in
+  `releaseplan/discover.go:198`; two G304 file-inclusion-via-variable in
+  `releaseplan/main.go:138,163`; one G301 directory-permissions in
+  `releaseplan/main.go:192`) — all in functions this PR did not add or
+  modify (`goCommand`, `readReleaseList`, `readLines`, `writeOutputs`
+  predate this PR), all out of scope, left alone. `whitespace` and
+  `goheader` have no standalone `go run`-able CLI (they only exist as
+  golangci-lint-internal analyzers), so they were not checked directly;
+  `go vet` and `staticcheck` (run below) cover a meaningful, overlapping
+  part of the same ground for correctness-shaped issues, though neither
+  substitutes for `whitespace`'s formatting checks or `goheader`'s license-
+  header check (both of which `gofmt -l` and this repo's unchanged license
+  headers already satisfy by inspection).
+  Verification (all literal, all green): `go build ./...` → exit 0, no
+  output. `go test -count=1 ./internal/cmd/releasegate/...
+  ./internal/cmd/releaseplan/... ./internal/cmd/ciselect/...` → `ok` for
+  all four packages (`releasegate`, `releaseplan`, `ciselect`,
+  `ciselect/selector`). `go vet ./internal/cmd/releasegate/...
+  ./internal/cmd/releaseplan/...` → exit 0, no output. `go run
+  honnef.co/go/tools/cmd/staticcheck@latest ./internal/cmd/releasegate/...
+  ./internal/cmd/releaseplan/...` → exit 0, no output. `gofmt -l
+  internal/cmd/releasegate/ internal/cmd/releaseplan/` → no output
+  (clean). Revive `unused-parameter` re-run after the fix (shown above) →
+  `continuation.go:217` gone, only the 10 test-file hits (7 pre-existing,
+  3 judged-and-left) remain. `git status --short` at the end → only
+  `internal/cmd/releaseplan/continuation.go` modified, plus this task file
+  and the commit itself; no stray binaries or build artifacts (`go run`
+  leaves none; confirmed).
+  Commit: `fix(releaseplan): drop unused stderr parameter flagged by
+  revive (#159)`.
