@@ -1,28 +1,22 @@
-# Spec 1 of 6 — In-memory runtime core: event-sourced entities, commands, event stream (EGO-RUNTIME-005)
+# Spec 1 of 7 — In-memory runtime core: package, rule, clock, event-sourced entities and commands (EGO-RUNTIME-005)
 
 | Field | Value |
 |---|---|
 | Change | `ego-runtime-002` (umbrella: [`proposal.md`](../../proposal.md), [`design.md`](../../design.md)) |
-| Chain position | **Spec 1 of 6.** Previous: none. Next: [Spec 2 — durable state, publishers, tenancy, erasure](../inmem-runtime-state/spec.md) |
+| Chain position | **Spec 1.** Previous: [Spec 0 — GoAkt characterization](../goakt-characterization/spec.md). Next: [Spec 2 — stream, durable state, publishers, tenancy](../inmem-runtime-state/spec.md) |
 | Tracker | [`#148`](https://github.com/getsyntegrity/ego/issues/148) |
 | Baseline | `main` at `57c4b11` |
-| Decisions applied | design §D1, §D2, §D3, §D4, §D7. It assumes the recommendations for open questions Q1, Q3, Q4 and the placement and relocation part of Q2; if the maintainer answers differently, the affected requirement is revised before implementation |
+| Decisions applied | design §D1, §D2, §D3, §D4, §D7, §D11 (the internal clock, Q9). It assumes the recommendations for Q1, Q3, Q4 and the placement and relocation part of Q2; if the maintainer answers differently, the affected requirement is revised before implementation. The rules spec 0 measured are taken as recorded in the design |
 
 ## Purpose
 
-This spec creates the runtime package and the rule that keeps it free of GoAkt. It then makes the smallest useful slice work: event-sourced entities that recover from the stores, handle commands one at a time, persist events, and publish them on the event stream. The package implements the whole `port/runtime.Runtime` interface from its first pull request. What is not built yet answers with a typed error, as the table below says.
+This spec creates the runtime package, the rule that keeps it free of GoAkt, and the internal clock every later timer uses. It then makes event-sourced entities work: they recover from the stores and handle commands one at a time, with the failure, conflict and panic rules spec 0 measured on GoAkt. The package implements the whole `port/runtime.Runtime` interface from its first pull request. What is not built yet answers with a typed error, as the method table below says.
 
 ## Requirements
 
 ### Requirement: the package implements `port/runtime.Runtime` without GoAkt
 
-`internal/inmemruntime` MUST declare `var _ runtimeport.Runtime = (*Runtime)(nil)`. Its production and test dependency closures (`go list -deps` and `go list -deps -test`) MUST contain none of these: the root package `github.com/pablogore/ego/v4`, any `github.com/tochemey/goakt/v4` package, or `compose/goakt`.
-
-#### Scenario: closure test
-
-- GIVEN the package after this spec
-- WHEN `closure_test.go` runs both `go list` commands
-- THEN neither output contains a forbidden package
+`internal/inmemruntime` MUST declare `var _ runtimeport.Runtime = (*Runtime)(nil)`. Its production and test dependency closures (`go list -deps` and `go list -deps -test`) MUST contain none of these: the root package, any `github.com/tochemey/goakt/v4` package, or `compose/goakt`.
 
 ### Requirement: archcheck rule `inmem-no-runtime`
 
@@ -34,32 +28,31 @@ This spec creates the runtime package and the rule that keeps it free of GoAkt. 
 - WHEN `rules.Evaluate` runs
 - THEN it reports one `inmem-no-runtime` violation per edge, with the matching reason
 
-### Requirement: lifecycle, unsupported and not-yet-built methods
+### Requirement: the internal clock
 
-The runtime MUST answer all 14 methods of `port/runtime.Runtime` from this spec on, as follows:
+`internal/inmemruntime/clock.go` MUST hold the unexported `clock` interface, `wallClock` (used by `New`) and `manualClock`. `manualClock` is reachable only by the package's tests, through `newWithClock` (design §D11). `manualClock.advance(d)` MUST run every callback due at or before the new time, synchronously, in the caller's goroutine. It MUST order them by deadline, then by registration order, and repeat until none is due. Nothing about the clock is exported.
+
+### Requirement: the method table
+
+The runtime MUST answer all 14 methods of `port/runtime.Runtime` from this spec on:
 
 | Methods | After spec 1 | Changed by |
 |---|---|---|
-| `SpawnEventSourced`, `EntityExists`, `SendCommand`, `Dispatch` (event-sourced targets), `Subscribe` | implemented | — |
-| `StartProjection`, `StopProjection`, `IsProjectionRunning`, `RebuildProjection`, `ProjectionLag` | `*UnsupportedError{Runtime: "inmem", Operation: <method>}` in every lifecycle state, before any side effect | nobody in this chain (Q3) |
-| `SpawnDurableState`, `EraseEntity` | `*UnsupportedError{Runtime: "inmem", Operation: <method>}` in every lifecycle state, before any side effect, as a placeholder | spec 2 implements them |
-| `SpawnSaga`, `SagaStatus` | `*UnsupportedError`, as a placeholder | spec 3 implements them |
+| `SpawnEventSourced`, `EntityExists`, `SendCommand`, `Dispatch` | implemented | — |
+| `Subscribe`, `SpawnDurableState` | `*UnsupportedError{Runtime: "inmem", Operation: <method>}`, as a placeholder | spec 2 |
+| `SpawnSaga`, `SagaStatus` | `*UnsupportedError`, as a placeholder | spec 3 |
+| `EraseEntity` | `*UnsupportedError`. This does **not** satisfy the contract (`port/runtime/runtime.go:115-119`) | spec 7, after #166 |
+| the five `Projections` methods | `*UnsupportedError`, in every lifecycle state, before any side effect | nobody in this chain (Q3) |
 
-Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNotStarted`. The table test of task 2 is keyed by method, and each later spec updates its own rows from "unsupported placeholder" to the real behavior. At the end of the chain only the five projection rows remain unsupported.
-
-#### Scenario: precedence
-
-- GIVEN a runtime that was never started
-- WHEN `StartProjection` is called
-- THEN the error matches `runtimeport.ErrUnsupported` and `errors.ErrUnsupported`, not `ErrEngineNotStarted`
+Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNotStarted`. An unsupported method returns its error in every lifecycle state ("ErrUnsupported comes first"). The table test is keyed by method, and each later spec updates its own rows.
 
 ### Requirement: event-sourced entities
 
-- **Spawn.** `SpawnEventSourced` MUST check, in order: started, then family, then events store, then tenancy (design §D4). It MUST be idempotent for a live ID, and it MUST recover synchronously from the snapshot store (when set) and the events store.
-- **Commands.** `SendCommand` and `Dispatch` MUST run inside the entity's mailbox, one command at a time. They MUST apply the deadline checks, handler preference, precondition mapping and conflict result of design §D4, and the no-event reply (current state and revision).
-- **Writes.** Events MUST be written with one `WriteEvents` per command, and published to `topic.events` only after the write succeeds.
-- **Failed writes.** After a failed write, and after an out-of-sync conflict, the entity MUST be removed (design §D4, GoAkt behavior §2.1).
-- **Spawn options.** They MUST be read through `runtimeport.ResolveSpawnOptions`. Placement and relocation are ignored, a provisional choice under Q2 pending RUNTIME-003. Passivation is spec 4.
+- **Spawn.** `SpawnEventSourced` MUST check, in order: started, family, events store, tenancy. It MUST be idempotent for a live ID, and it MUST recover synchronously from the snapshot store (when set) and the events store.
+- **Commands.** `SendCommand` and `Dispatch` MUST run inside the entity's mailbox, one command at a time. They MUST apply the deadline checks, handler preference, precondition mapping, conflict result and no-event reply (current state and revision) of design §D4.
+- **Failures.** They MUST also apply the rules for failed writes, conflicts, queued commands and panics as spec 0 recorded them in design §D4.
+- **Writes.** Events MUST be written with one `WriteEvents` per command. Publishing them on the stream is spec 2.
+- **Spawn options.** Placement and relocation are ignored (Q2, provisional pending RUNTIME-003). Passivation is spec 4.
 
 #### Scenario: family before store
 
@@ -67,29 +60,11 @@ Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNo
 - WHEN `SpawnEventSourced` is called
 - THEN the error wraps `ErrEntityFamilyNotDeclared`, not `ErrEventsStoreRequired`
 
-#### Scenario: recovery
-
-- GIVEN an events store holding two events for ID `a`
-- WHEN `a` is spawned and sent a command that emits one event
-- THEN the returned revision is 3 and the state reflects all three events
-
 #### Scenario: no event
 
 - GIVEN a live entity at revision 2
 - WHEN a command emits no events
 - THEN `SendCommand` returns the current state (not nil) and revision 2
-
-#### Scenario: conflict
-
-- GIVEN a live entity at revision 2
-- WHEN `Dispatch` carries an expected revision of 1
-- THEN the result is `OutcomeRejected` with `command.CodeConcurrencyConflict`, `errors.As` recovers a `*persistence.ConflictError`, and the store is unchanged; and whether `EntityExists` is still true follows the in-sync rule of design §D4
-
-#### Scenario: failed write
-
-- GIVEN a live entity whose events store fails the next `WriteEvents` (a `mocks/` store)
-- WHEN a command emits an event
-- THEN the result is `OutcomeFailed`, `EntityExists` is false, and a later `SendCommand` does not re-spawn it
 
 #### Scenario: serialized mailbox
 
@@ -100,25 +75,24 @@ Otherwise, before `Start` and after `Stop` every method MUST return `ErrEngineNo
 ## Tasks (5)
 
 1. **Package and rule.** `internal/inmemruntime` with `Config`, `New`, `Runtime`, `Start`, `Stop`, the compile-time assertion and `closure_test.go`. The `inmem-no-runtime` layer and rule, with `evaluate_test.go` cases. The `docs/ci.md` rule-table row. *Check:* `go test ./internal/inmemruntime/ ./internal/cmd/archcheck/...`; `go run ./internal/cmd/archcheck` reports 0 violations and the unchanged baseline count.
-2. **Lifecycle and the 14-method table** (RED first). *Check:* the method-keyed table test before `Start`, after `Start` and after `Stop`, with the rows of the requirement above.
-3. **Spawn and recovery** for event-sourced entities, `EntityExists`, the family guard in GoAkt's order. *Check:* recovery, idempotent re-spawn, missing events store, family-before-store and undeclared-family tests.
-4. **Commands.** Mailbox, `SendCommand`, `Dispatch` with deadlines, preconditions, no-event reply, removal after a failed write or an out-of-sync conflict, and panics under each supervisor directive. *Check:* the scenarios above, plus a deadline-already-passed test, a canceled-context test, and a command queued behind a failed one (design §D4, provisional). No sleeps.
-5. **Event stream.** Publish to `topic.events` after the write, `Subscribe`, and clock timestamps. *Check:* a subscriber receives every event of a command sequence, compared as a multiset (design §2.3); a failed write publishes nothing.
+2. **Lifecycle and the method table** (RED first). *Check:* the method-keyed table test before `Start`, after `Start` and after `Stop`.
+3. **Clock.** `clock.go` with the three pieces. *Check:* `manualClock` unit tests (callbacks run inside `advance`, ordered by deadline then registration; a callback registered during `advance` that is already due also runs; a stopped callback does not run); an exported-API check that nothing clock-related is exported.
+4. **Spawn and recovery** for event-sourced entities, `EntityExists`, the family guard in GoAkt's order. *Check:* recovery, idempotent re-spawn, missing events store, family-before-store and undeclared-family tests.
+5. **Commands.** Mailbox, `SendCommand`, `Dispatch` with deadlines and preconditions, the no-event reply, and the failure, conflict, queued-command and panic rules as recorded by spec 0. *Check:* the scenarios above, a deadline-already-passed test and a canceled-context test, plus one test per rule spec 0 recorded. No sleeps.
 
 ## Checks
 
 - `go test ./internal/inmemruntime/ ./internal/cmd/archcheck/...` (no `-race` locally)
-- `go run ./internal/cmd/archcheck`
-- `golangci-lint run ./internal/inmemruntime/... ./internal/cmd/archcheck/...`
+- `go run ./internal/cmd/archcheck`; `golangci-lint run ./internal/inmemruntime/... ./internal/cmd/archcheck/...`
 - apidiff: no report for any public package
 
 ## File ownership
 
-`internal/inmemruntime/**` (new); `internal/cmd/archcheck/rules/layers.go`, `rules.go`, `evaluate_test.go`; `docs/ci.md` (one row in the rule table).
+`internal/inmemruntime/**` (new); `internal/cmd/archcheck/rules/layers.go`, `rules.go`, `evaluate_test.go`; `docs/ci.md` (one row in the rule table). This is the only spec that touches archcheck.
 
 ## Dependencies
 
-This design approved. No code dependency: `port/runtime` (#147) and `port/behavior` (#123) are on `main`. Rebase the archcheck files onto any open archcheck change.
+Spec 0 merged, with its results recorded in the design.
 
 ## Next in the chain
 

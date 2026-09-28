@@ -1,44 +1,38 @@
-# Spec 4 of 6 — Clock and passivation (EGO-RUNTIME-005)
+# Spec 4 of 7 — Passivation (EGO-RUNTIME-005)
 
 | Field | Value |
 |---|---|
 | Change | `ego-runtime-002` (umbrella: [`proposal.md`](../../proposal.md), [`design.md`](../../design.md)) |
-| Chain position | **Spec 4 of 6.** Previous: [Spec 2 — durable state, publishers, tenancy, erasure](../inmem-runtime-state/spec.md). Next: [Spec 5 — `compose/inmem`](../compose-inmem/spec.md) |
+| Chain position | **Spec 4.** Previous: [Spec 2](../inmem-runtime-state/spec.md). Next: [Spec 6 — neutrality proof](../runtime-neutrality/spec.md) |
 | Tracker | [`#148`](https://github.com/getsyntegrity/ego/issues/148) |
 | Baseline | `main` at `57c4b11` |
-| Decisions applied | design §D11; maintainer decision on passivation (2026-09-27): implement, with a typed error only as a fallback |
+| Decisions applied | design §D11; maintainer decision on passivation (2026-09-27): implement it, with a typed error only as a fallback; spec 0's recorded activity cases |
 
 ## Purpose
 
-On a single node, GoAkt honors `WithPassivateAfter`. An entity idle for that long is stopped, `EntityExists` then reports false, and `Dispatch` does not re-spawn it (`engine.go:1910-1911`). The maintainer decided that the in-memory runtime must not ignore the setting silently. This spec implements it with the same observable semantics. To keep tests deterministic, all of the runtime's time reads go through one clock that tests advance by hand.
+On a single node, GoAkt honors `WithPassivateAfter`. An entity idle for that long is stopped, `EntityExists` reports false, and `Dispatch` does not re-spawn it (`engine.go:1910-1911`). The maintainer decided that the in-memory runtime must not ignore the setting silently. This spec implements it with the same observable semantics, driven by the internal clock of spec 1, so its tests never wait on wall time.
 
 ## Requirements
 
-### Requirement: one clock
+### Requirement: activity
 
-`internal/inmemruntime` MUST read time only through `Clock` (`Now`, `AfterFunc`, design §D11). This covers event and state timestamps, idle timers and saga timeouts. A nil `Config.Clock` means the wall clock. An internal manual clock MUST run every due `AfterFunc` callback synchronously, inside `Advance(d)`.
-
-#### Scenario: no wall time in tests
-
-- GIVEN the manual clock
-- WHEN a test advances it past an entity's idle period
-- THEN the entity passivates without any real time passing (the test has no sleep and no ticker)
+Every item an entity's mailbox processes MUST reset its idle timer, except the passivate item itself. That includes commands, refused commands (for example a tenant mismatch) and no-event commands. Idle time counts from the start of the turn (design §D11, following GoAkt's `markActivity`, `actor/pid.go:2192-2196`).
 
 ### Requirement: passivation
 
-An event-sourced or durable-state entity spawned with `WithPassivateAfter(d)`, `d > 0`, MUST be passivated after being idle for `d`:
+An event-sourced or durable-state entity spawned with `WithPassivateAfter(d)`, `d > 0`, MUST be passivated after being idle for `d`, in these steps:
 
-- each completed mailbox turn resets its idle timer;
-- the timer enqueues a passivate item; when the item runs, it re-checks idleness against the clock;
-- a durable-state entity writes its state once more first;
-- then the entity is removed.
+1. the timer enqueues a passivate item;
+2. when the item runs, it re-checks idleness against the clock;
+3. a durable-state entity writes **and publishes** its state;
+4. the entity is removed.
 
-After that, `EntityExists` MUST report false, `SendCommand`/`Dispatch` MUST fail as for an unknown ID without re-spawning, and a new spawn MUST recover the state from the stores. Sagas MUST ignore the setting. `Stop` MUST stop every idle timer.
+After that, `EntityExists` MUST report false, and `SendCommand`/`Dispatch` MUST fail as for an unknown ID, without re-spawning. A new spawn MUST recover the state from the stores. Sagas MUST ignore the setting. `Stop` MUST stop every idle timer.
 
-#### Scenario: a command resets the timer
+#### Scenario: a refused command is activity
 
-- GIVEN an entity with `WithPassivateAfter(10s)`
-- WHEN the clock advances 6 s, a command runs, and the clock advances 6 s more
+- GIVEN an entity with `WithPassivateAfter(10s)` under the manual clock
+- WHEN the clock advances 6 s, a tenant-mismatched command is refused, and the clock advances 6 s more
 - THEN the entity is still alive; after 4 s more it passivates
 
 #### Scenario: the item races a command
@@ -49,24 +43,24 @@ After that, `EntityExists` MUST report false, `SendCommand`/`Dispatch` MUST fail
 
 ## Tasks (3)
 
-1. **Clock** (RED first): the `Clock` interface, the wall clock, the internal manual clock, and switching timestamps and spec 3's saga timeout to it. *Check:* manual-clock unit tests (callbacks run in `Advance`, stop prevents a callback); a timestamp test with a pinned clock.
-2. **Passivation**: idle timer, passivate item, durable-state final write, removal. *Check:* the two scenarios above; `EntityExists` false; `Dispatch` does not re-spawn; re-spawn recovers the state; sagas ignore the option.
-3. **Timers at `Stop`**. *Check:* `Stop` with pending idle timers leaves no goroutine or timer behind (checked with `awaitCondition` on the goroutine count, and the manual clock reports no pending callbacks).
+1. **Idle timer and activity** (RED first). *Check:* the refused-command scenario; a no-event command is activity; the item-races-a-command scenario.
+2. **Passivation and removal.** *Check:* a durable-state entity writes and publishes (checked with `awaitStream`) before removal; `EntityExists` is false; `Dispatch` does not re-spawn; a re-spawn recovers the state; sagas ignore the option.
+3. **Timers at `Stop`.** *Check:* after `Stop` with pending idle timers, the manual clock reports no pending callbacks and the goroutine count returns to its value before `Start` (`awaitCondition`).
 
 ## Checks
 
-- `go test ./internal/inmemruntime/` with no sleeps: a review check that the spec's tests contain no `time.Sleep`, `pause.For` or wall-clock ticker
+- `go test ./internal/inmemruntime/`; review check: no `time.Sleep`, no `pause.For` and no wall-clock ticker in this spec's tests
 - closure test and `go run ./internal/cmd/archcheck`
 - apidiff: no report for any public package
 
 ## File ownership
 
-`internal/inmemruntime/**`: new clock and passivation files; one call in the mailbox's turn-completion path.
+`internal/inmemruntime/**`: new passivation files, plus one call in the mailbox's turn path.
 
 ## Dependencies
 
-Specs 1 and 2 merged (the durable-state final write comes from spec 2). If spec 3 is still open, rebase its saga timeout onto the clock in whichever pull request lands second.
+Specs 1 (the clock) and 2 (the durable-state write and publish) merged.
 
 ## Next in the chain
 
-[Spec 5](../compose-inmem/spec.md), which exposes the clock as `WithClock`.
+[Spec 6](../runtime-neutrality/spec.md).

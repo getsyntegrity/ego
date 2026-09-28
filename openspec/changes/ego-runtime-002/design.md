@@ -26,6 +26,7 @@ Terms used below:
 - **archcheck**: `internal/cmd/archcheck`, the import-rule checker CI runs (`docs/ci.md`, "Architecture boundary check").
 - **Validation rule IDs**: `compose.Spec.Validate` reports rules V1–V8 (ego-arch-003 §D4a; V8 from ego-arch-004 §D6, whose part **V8b** checks that a declared capability and the implemented method agree). `compose/goakt` adds GoAkt-only rules **G1** (a cluster needs entity kinds) and **G2** (a valid actor-system name). This design adds `compose/inmem`-only rules with the prefix **M** ("memory"): only **M1** so far (§D8).
 - **FU-A … FU-E**: follow-ups this design names but does not deliver, listed in §8: FU-A projection runner, FU-B extract shared rules, FU-C ordered event stream, FU-D neutral entity-not-found error, FU-E the no-event `SendCommand` contract text.
+- **Characterization (spec 0)**: tests that run a scenario on the GoAkt runtime only and record what it does, so a behavior this design could not settle by reading becomes a measured fact before the in-memory runtime copies it (§D12).
 - **LIFE-004**: the flush and drain policy item of #24 (the lifecycle epic), which decides what happens to work in flight at shutdown.
 - **Closure test**: a test that runs `go list -deps` on a package and fails when a forbidden package appears anywhere in the dependency tree, direct or not (`internal/runtimeconsumer/closure_test.go` is the model).
 
@@ -73,9 +74,12 @@ The in-memory runtime must match this behavior, so it is recorded first. Every i
 - `SendCommand` (`engine.go:1313`) derives metadata from the context, calls `Dispatch`, and maps the `Result` back (`resultToLegacy`, `engine.go:1893`).
 - `EntityExists` (`engine.go:988-1000`) is a liveness probe: it never spawns or recovers. It asks `ActorExists` for the ID, so it also reports true for a live saga's ID.
 - Saga spawns ignore every option except `WithTenant` (`engine.go:1497-1501`, doc; `engine.go:1563-1567` spawns with fixed options).
-- `WithPassivateAfter` is honored on a single node (`engine.go:1910-1911`). An entity idle for that long is stopped: `EntityExists` then reports false, and `Dispatch` does not re-spawn it.
+- `WithPassivateAfter` is honored on a single node (`engine.go:1910-1911`). An entity idle for that long is stopped: `EntityExists` then reports false, and `Dispatch` does not re-spawn it. Two further details were read in goakt v4.5.4:
+  - **What counts as activity.** Every message the actor handles marks activity (`handleReceived` → `markActivity`, `actor/pid.go:2192-2196`), and the passivation manager measures idleness from that mark (`actor/passivation_manager.go:413-422`). That includes user commands, refused commands (for example a tenant mismatch) and internal messages such as persist responses and stash replays. Time counts from when the turn starts, not when it ends.
+  - **Coalescing.** The mark reaches the passivation manager at most once per 100 ms (`passivationTouchInterval`, `actor/pid.go:75`; `markActivity`, `:2440-2453`), so GoAkt's passivation time is approximate to about that interval.
+  - A passivated durable-state entity runs `PostStop`, which writes **and publishes** its state (§2.2).
 - `WithPlacement` and `WithRelocation` have no effect on a single node. `SpawnOn` falls through to a local `Spawn` outside a cluster, before placement is read (`actor/spawn.go:295-297`, `:321` in goakt v4.5.4). Relocation applies only when a cluster node departs (`actor/spawn.go:1015-1054`).
-- Behavior panics and handler errors follow the supervisor directive (`WithSupervisorDirective`, default restart). This design has not measured the observable result on GoAkt (reply, `EntityExists`, recovered state); the shared table measures it (§D10).
+- Behavior panics and handler errors follow the supervisor directive (`WithSupervisorDirective`, default restart). The observable result on GoAkt (reply, `EntityExists`, recovered state) cannot be settled by reading. **Spec 0 measures it and records it here before spec 1 starts** (maintainer decision 2026-09-27, §D12).
 - `EraseEntity` (`engine.go:1659`) scopes erasure to the caller's tenant in tenant-aware mode and, with `full`, deletes events and snapshots up to the latest sequence number. It touches no actor.
 - Projections run in `projection_runner.go` and `projection_actor.go`, both in package `ego` and importing GoAkt. The runner's pull loop uses GoAkt at two points only (a `*goakt.PID` field and one `goakt.Tell`, `projection_runner.go:168`, `:413`), but it lives in package `ego`, so another package cannot import it.
 
@@ -105,7 +109,7 @@ The contracts a new package needs are all GoAkt-free and outside package `ego`: 
 | Moving the engine, removing aliases | #124 | Nothing |
 | Write-side options | #12 | In-memory ignores them, as every non-GoAkt runtime does (ego-runtime-001 D3) |
 
-## 4. Decisions (D1–D11)
+## 4. Decisions (D1–D12)
 
 ### D1 — Package placement and names
 
@@ -113,7 +117,7 @@ The contracts a new package needs are all GoAkt-free and outside package `ego`: 
 |---|---|---|---|
 | `internal/inmemruntime` (package `inmemruntime`) | root | internal | The runtime: `Config`, `New`, `*Runtime` with `Start`, `Stop`, `AddEventPublishers`, `AddStatePublishers` and the `port/runtime` methods |
 | `compose/inmem` (package `inmem`) | root | public | The composition root: `New`, `App`, `Option`, step names |
-| `internal/runtimeconsumer` (exists) | root | internal | Gains the neutrality scenarios and their test (§D9, §D10) |
+| `internal/runtimeconsumer` (exists) | root | internal | Gains the characterization harness of spec 0 (§D12), then the neutrality scenarios and their test (§D9, §D10) |
 
 ```go
 // internal/inmemruntime
@@ -126,11 +130,10 @@ type Config struct {
 	Encryptor      encryption.Encryptor
 	TenantResolver tenancy.TenantResolver
 	Stream         eventstream.Stream // allocated by the composition root
-	Clock          Clock              // timestamps, idle timers, saga timeouts (§D11); nil means the wall clock
 	Logger         kitlog.Logger      // github.com/pablogore/kit-logger; nil means the global logger
 }
 
-func New(cfg Config) (*Runtime, error)
+func New(cfg Config) (*Runtime, error) // uses the wall clock (§D11)
 
 var _ runtimeport.Runtime = (*Runtime)(nil) // the #148 compile-time assertion
 ```
@@ -184,6 +187,7 @@ It reuses the denylist `application-no-runtime` and `composition-no-runtime` sha
 - `New` validates nothing a `compose.Spec` already validated and starts nothing. `Start` marks the runtime started. `Stop` is described in §D8.
 - Before `Start` and after `Stop`, every method returns `runtimeport.ErrEngineNotStarted` — except the unsupported ones, which return `*runtimeport.UnsupportedError` in every state, as `port/runtime/runtime.go` requires ("ErrUnsupported comes first").
 - Unsupported in this change: the five `Projections` methods. Each returns `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}` (and `StopProjection`, `IsProjectionRunning`, `RebuildProjection`, `ProjectionLag`), before any side effect. This is open question Q3.
+- **`EraseEntity` is unsupported until spec 7 lands** (maintainer decision 2026-09-27, Q7). Until then it returns `&runtimeport.UnsupportedError{Runtime: "inmem", Operation: "EraseEntity"}` in every lifecycle state, before any side effect. It appears as such in spec 1's method table and in the `compose/inmem` package documentation (§D8). **This limitation does not satisfy the `EraseEntity` contract** (`port/runtime/runtime.go:115-119`). Nothing in this change presents it as doing so: not the proposal, the specs, the #148 criteria mapping or the pull request. Spec 7 implements #166's outcome.
 - The runtime's name in errors is the constant `"inmem"`.
 - Every sentinel it returns is the `port/runtime` value (`ErrUndefinedEntityID`, `ErrNotACommand`, `ErrEventsStoreRequired`, `ErrDurableStateStoreRequired`, `ErrEntityFamilyNotDeclared`, the three tenant spawn errors), so `errors.Is` holds under either name.
 - **Unknown entity.** `SendCommand`/`Dispatch` to an ID that is not alive never spawns, like GoAkt, and returns an error from the runtime. There is no neutral sentinel for it in `port/runtime` today; GoAkt returns its own `ErrActorNotFound`. This design does not add one (Q5).
@@ -206,13 +210,13 @@ This is GoAkt's order (§2.1): family before store. So a runtime that declares o
 
 Otherwise the runtime recovers the entity synchronously before `Spawn` returns: event-sourced entities from the latest snapshot (when a snapshot store is set) plus the events after it, decrypted and adapted, through `HandleEvent`; durable-state entities from `GetLatestState`. A recovery error fails the spawn and registers nothing. Pinging the stores at spawn, as the GoAkt actor does, is kept.
 
-**Commands on an event-sourced entity** run inside the entity's mailbox, in this order: deadline check; `HandleEnvelope` or `HandleCommand` (same preference as §2.1); if no events, the result is `OutcomeSuccess` with the current state and revision (§2.1, not nil; §2.6); `HandleEvent` for each event; deadline check; one `WriteEvents` call with the precondition from the expected revision; on success, update memory, publish each `egopb.Event` to `topic.events` in sequence order, enqueue it to every live saga (§D5), and reply. On a conflict, the result is `OutcomeRejected` with `CodeConcurrencyConflict` and the `*persistence.ConflictError` as cause. **After any failed write, the entity is removed** from the map, exactly when GoAkt stops its actor (§2.1). The only exception is a conflict whose actual revision equals the entity's own revision, which leaves the entity alive and unchanged. Removal happens after the error reply. What happens to commands already queued behind the failed one is not settled by reading. GoAkt's `Shutdown` documents that the actor "completes processing of already enqueued messages" (`actor/receive_context.go:510-513`), and `replyDirect` unstashes before shutting down, so this design provisionally processes them before removal. Spec 1 measures GoAkt with a queued second command, and this sentence is corrected if the measurement differs. After that, `EntityExists` is false and a later command fails as for an unknown ID (§D3) until the caller spawns again, which recovers from the store. The shared table checks liveness after a failed write and after an out-of-sync conflict, on both runtimes (§D10).
+**Commands on an event-sourced entity** run inside the entity's mailbox, in this order: deadline check; `HandleEnvelope` or `HandleCommand` (same preference as §2.1); if no events, the result is `OutcomeSuccess` with the current state and revision (§2.1, not nil; §2.6); `HandleEvent` for each event; deadline check; one `WriteEvents` call with the precondition from the expected revision; on success, update memory, publish each `egopb.Event` to `topic.events` in sequence order, enqueue it to every live saga (§D5), and reply. On a conflict, the result is `OutcomeRejected` with `CodeConcurrencyConflict` and the `*persistence.ConflictError` as cause. **After any failed write, the entity is removed** from the map, exactly when GoAkt stops its actor (§2.1). The only exception is a conflict whose actual revision equals the entity's own revision, which leaves the entity alive and unchanged. Removal happens after the error reply. What happens to commands already queued behind the failed one is not settled by reading. GoAkt's `Shutdown` documents that the actor "completes processing of already enqueued messages" (`actor/receive_context.go:510-513`), and `replyDirect` unstashes before shutting down. So this design provisionally processes them before removal. **Spec 0 measures a command queued behind a failed write on GoAkt** (its reply, and whether it runs), and the result replaces this provisional rule before spec 1 starts. After that, `EntityExists` is false and a later command fails as for an unknown ID (§D3) until the caller spawns again, which recovers from the store. Spec 0 measures liveness after a failed write, an out-of-sync conflict and an in-sync conflict on GoAkt. Spec 6 compares both runtimes (§D10).
 
-**Handler panics and errors** follow the resolved `SupervisorDirective`: `RestartDirective` (the default) re-hydrates the entity from the store and keeps it alive; `StopDirective` removes it. The reply is `OutcomeFailed`. Since GoAkt's observable result has not been measured (§2.5), the shared table carries a restart and a stop panic scenario, and if GoAkt differs this paragraph is corrected before spec 1 merges.
+**Handler panics and errors** follow the resolved `SupervisorDirective`: `RestartDirective` (the default) re-hydrates the entity from the store and keeps it alive; `StopDirective` removes it. The reply is `OutcomeFailed`. This is provisional: **spec 0 measures a panic under each directive on GoAkt** (the reply, `EntityExists`, the recovered state) and records the result here before spec 1 starts.
 
 **Commands on a durable-state entity** follow §2.2: the new version must be the prior version plus one, else `OutcomeFailed`; one `WriteState`; then memory; then publish the `egopb.DurableState` to `topic.states`.
 
-**Envelope fields.** Persistence ID, sequence or version number, the payload packed in `anypb.Any` (encrypted when an encryptor is set, events only), `Timestamp` from `Config.Clock`, encryption key ID and flag, tenant metadata in tenant-aware mode. `Shard` is computed by a documented deterministic function of the persistence ID. It cannot equal GoAkt's, which comes from the actor system's partitioner, so the neutrality proof excludes it (§D9). Shard numbers matter to projections, which the in-memory runtime does not run.
+**Envelope fields.** Persistence ID, sequence or version number, the payload packed in `anypb.Any` (encrypted when an encryptor is set, events only), `Timestamp` from the runtime clock (§D11), encryption key ID and flag, tenant metadata in tenant-aware mode. `Shard` is computed by a documented deterministic function of the persistence ID. It cannot equal GoAkt's, which comes from the actor system's partitioner, so the neutrality proof excludes it (§D9). Shard numbers matter to projections, which the in-memory runtime does not run.
 
 **Results.** The runtime builds `command.Result` values directly, with the same outcome and failure code the GoAkt runtime produces for the same cause: canceled, timed out, concurrency conflict, failed. It does not reproduce GoAkt's wire round-trip or its message strings; failure messages are not part of the observable contract (§D9).
 
@@ -223,7 +227,7 @@ Otherwise the runtime recovers the entity synchronously before `Spawn` returns: 
 ### D5 — Sagas
 
 - `SpawnSaga` checks lifecycle, the events store, the saga family and tenancy like an entity spawn, recovers the saga's own events through `ApplyEvent`, and registers the saga as an event recipient. `WithTenant` is the only spawn option it reads, as in GoAkt (`engine.go`, `spawnSaga` doc).
-- **Event delivery.** When an entity persists events, the runtime enqueues each one to every live saga's mailbox, in persist order, before the entity replies to the command. Sagas do not read the event stream. This is stronger than GoAkt, where a saga reads its own stream subscriber and inherits §2.3's lack of ordering. A behavior that is correct under the weaker guarantee is correct under the stronger one, and the stronger one is what makes saga tests deterministic.
+- **Event delivery.** When an entity persists events, the runtime enqueues each one to every live saga's mailbox before the entity replies to the command. Sagas do not read the event stream. **The order in which a saga receives events is unspecified** (maintainer decision on Q8, 2026-09-27). The implementation may happen to deliver one entity's events in persist order, but nothing promises it. No documentation names an order, no exported symbol, option or hook selects or reports one, and no test asserts one.
 - In its mailbox, the saga runs `HandleEvent`, persists the action's events to the events store (not to the stream, as `saga_actor.go` does), applies them with `ApplyEvent`, then sends each command through the runtime's internal dispatch with the saga's tenant and metadata derived from its root metadata (the rule of `saga_actor.go:740-749`), default timeout 5 s, and calls `HandleResult` or `HandleError`.
 - A saga command to an entity waits for that entity's reply while the saga's own mailbox is busy. That cannot deadlock: an entity never waits on a saga, and delivery to a saga's mailbox never blocks (the queue is unbounded).
 - `Complete` sets `SagaCompleted`. `Compensate` runs `behavior.Compensate` and every compensation command in the same mailbox turn, then sets `SagaCompleted` or `SagaFailed` exactly as `saga_actor.go:806-829`. So, as in GoAkt, `SagaCompensating` is never returned by `SagaStatus`.
@@ -234,12 +238,11 @@ Otherwise the runtime recovers the entity synchronously before `Spawn` returns: 
   - **SG4**: a live event's tenant metadata is decoded, and invalid metadata drops the event. A bound saga verifies the event's tenant against its bound tenant before `HandleEvent` and drops a mismatch fail-closed, so a foreign payload never reaches the behavior. In memory a tenant-aware saga is always bound at spawn (as in GoAkt since TENANT-003 T4), so the unbound "bind after an actionable `HandleEvent`" branch never applies.
   - **SG5**: every replayed saga event must carry the spawn-bound tenant; a mismatch fails the spawn and registers nothing.
   - **SG-DUR1**: replay recognizes the `emptypb.Empty` binding marker and skips it instead of calling `ApplyEvent`. The in-memory runtime never writes new markers, as a tenant-aware GoAkt saga no longer does, but it must read journals that contain them.
-- **Delivery order is a known divergence.** Direct delivery in persist order is stronger than GoAkt's (§2.3). By maintainer decision (Q8), the order is not part of the contract and no test may depend on it.
 
 ### D6 — Tenancy, erasure, the event stream and publishers
 
 - **Tenancy** follows GoAkt: the spawn tenant is `WithTenant`, else the resolver's fixed tenant (`tenancy.FixedTenantOf`), else `ErrSpawnTenantUndetermined`; the resolver's `Resolve` is called at `Dispatch`, never at spawn; a command whose resolved tenant differs from the entity's binding is refused; persistence uses `persistence.NewTenantScope`. In memory there is no need to query a binding over the wire, so `ErrSpawnTenantUnverified` is never returned. Without a resolver the runtime uses `persistence.Unscoped()`.
-- **`EraseEntity`** follows the outcome of [#166](https://github.com/getsyntegrity/ego/issues/166), not today's GoAkt code. The maintainer decided on 2026-09-27 that the port contract's promise is kept: erasure crypto-shreds through an additive extension, deleting a key that belongs exclusively to the affected entity and tenant. In tenant-aware mode the in-memory runtime resolves the caller's tenant and fails closed with `tenancy.ErrDenied`, even when `full == false`. It then deletes the entity's key as #166 specifies, and only when `full` also deletes events and snapshots up to the latest sequence number. The key granularity (entity plus tenant rather than persistence ID alone) is a **dependency on #166**: ego-runtime-002 does not resolve it, and spec 2 implements whatever #166 settles.
+- **`EraseEntity`** is spec 7, blocked only by [#166](https://github.com/getsyntegrity/ego/issues/166) (maintainer decision 2026-09-27). Until spec 7 lands it returns `*UnsupportedError`, which does **not** satisfy the contract (§D3). Spec 7 implements #166's outcome. The port contract's crypto-shredding promise is kept, through an additive extension that deletes a key belonging exclusively to the affected entity and tenant. In tenant-aware mode the caller's tenant is resolved first, failing closed with `tenancy.ErrDenied` even when `full == false`. With `full`, events and snapshots up to the latest sequence number are also deleted. The key granularity is a dependency on #166 (keys are selected by persistence ID alone today, §2.6), not something ego-runtime-002 resolves.
 - **`Subscribe`** adds a subscriber to `Config.Stream` subscribed to `topic.events` and `topic.states`. The two topic names are repeated as constants in `internal/inmemruntime`; the shared table (§D10) checks they match what GoAkt publishes.
 - **Publishers.** `AddEventPublishers`/`AddStatePublishers` are methods of `*inmemruntime.Runtime`, not of `port/runtime` (they are wiring, ego-runtime-001 D1). Like `engine.go:1391`, each publisher gets its own stream subscriber and goroutine and receives only messages published after it was attached; a duplicate ID is rejected. Ordering is what §2.3 describes for GoAkt, because both use package `eventstream`. Making the stream ordered would be a change to `eventstream` for both runtimes, follow-up FU-C.
 
@@ -250,7 +253,7 @@ Otherwise the runtime recovers the entity synchronously before `Spawn` returns: 
 | One entity runs one command at a time, in arrival order | yes (mailbox) | yes (actor mailbox) |
 | A command's events are persisted before its reply | yes | yes |
 | After `SendCommand` returns, the command's events are in the store and queued to every live saga | yes | store yes; saga delivery asynchronous |
-| A saga sees one entity's events in persist order | yes (divergence, Q8) | no (§2.3) |
+| Order in which a saga receives one entity's events | unspecified (the implementation may be ordered) | unspecified (§2.3) |
 | `Subscribe` and publishers see one entity's events in order | no (package `eventstream`, §2.3) | no |
 | Order across entities | none beyond the caller's own sequencing | none |
 | Entity passivates when idle | yes, with `WithPassivateAfter` (§D11, maintainer decision) | yes, with `WithPassivateAfter` (§2.5) |
@@ -287,9 +290,7 @@ func (a *App) Stop(ctx context.Context) error
 func (a *App) Runtime() runtimeport.Runtime // nil before a successful Start and for good after a failed one
 
 func WithLogger(logger kitlog.Logger) Option
-func WithClock(clock Clock) Option // timestamps, passivation and saga timers; tests pin it (§D11)
-
-type Clock interface { Now() time.Time; AfterFunc(d time.Duration, f func()) (stop func() bool) }
+// No clock option in this chain (maintainer decision on Q9); adding one later is additive.
 ```
 
 **Validation.** `New` runs `spec.Validate()` (V1–V8, unchanged and shared), then its own rule, and joins every problem as `compose/goakt.New` does:
@@ -313,13 +314,19 @@ GoAkt's steps 2 and 3 ("start actor system", "start engine") build two objects; 
 
 **This departs from ego-arch-003 §5.2.** That section expected `compose/inmem` to differ from `compose/goakt` "only in step 2 of D6 (build an in-memory runtime instead of a GoAkt actor system) and step 4 of D7 (stop that runtime instead of `sys.Stop`)". This design differs in three more ways: it merges start steps 2 and 3 into one, it has no projections step, and it adds validation rule M1. ego-arch-003 §5.2 was written before `port/runtime` existed, when an in-memory "engine" and "runtime" were expected to be two objects. Spec 6 records the departure in ego-arch-003 §6 next to the IMPL-6 row.
 
-**Stop.** `lifecycle.Sequence.Stop` undoes the steps in reverse: publishers attached in step 3 have no undo of their own, and step 2's undo is `Runtime.Stop`, which (1) marks the runtime stopped, so new calls get `ErrEngineNotStarted`; (2) closes the publishers and the stream, like `Engine.Stop`; (3) stops every entity and saga, bounded by the cleanup context `Stop` receives. For each one it waits until the mailbox turn in progress, if any, has finished, so no command is cut off halfway. Only then does a durable-state entity write its state once more, unconditionally, as `PostStop` does in GoAkt. The wait is also what joins the drain goroutines. If the context expires first, `Stop` returns an error naming the entities still busy and skips their final write rather than racing the turn in progress. The final state write therefore happens after publishers are closed, which is the order `compose/goakt`'s `TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown` records for GoAkt.
+**Stop.** `lifecycle.Sequence.Stop` undoes the steps in reverse: publishers attached in step 3 have no undo of their own, and step 2's undo is `Runtime.Stop`, which (1) marks the runtime stopped, so new calls get `ErrEngineNotStarted`; (2) closes the publishers and the stream, like `Engine.Stop`; (3) stops every entity and saga, bounded by the cleanup context `Stop` receives. For each one it waits until the mailbox turn in progress, if any, has finished, so no command is cut off halfway. Only then does a durable-state entity write its state once more, unconditionally, as `PostStop` does in GoAkt. The wait is also what joins the drain goroutines. If the context expires first, `Stop` returns an error naming the entities still busy and skips their final write rather than racing the turn in progress. **Skipping the final write on timeout is provisional**: it is part of the drain policy #24 (LIFE-004) owns, and it follows #24's decision on both runtimes. The final state write therefore happens after publishers are closed, which is the order `compose/goakt`'s `TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown` records for GoAkt.
 
 **Queued items at `Stop` (provisional).** Items still queued in a mailbox behind the current turn are answered with `ErrEngineNotStarted` rather than run. This is a provisional choice: what happens to work in flight at shutdown is #24's drain policy (LIFE-004), and when #24 decides, this rule follows it on both runtimes.
 
 **`Runtime()`** returns the runtime as `runtimeport.Runtime` with the same nil rule as `compose/goakt` (ego-runtime-001 D6): an untyped nil before `Start` succeeds and after a failed `Start`, the stopped runtime after `Stop`.
 
-**Package documentation** states: the runtime is for tests and local development; which guarantees are in-memory-only (§D7); that the order in which sagas receive events is **not part of the contract** even though the runtime produces persist order (maintainer decision on Q8); and what differs from `compose/goakt`.
+**Package documentation** states:
+
+- the runtime is for tests and local development;
+- which guarantees are in-memory-only (§D7);
+- that the order in which sagas receive events is **unspecified**, naming no order (maintainer decision on Q8);
+- that `EraseEntity` returns `ErrUnsupported` until spec 7 lands, and that this does not meet the `port/runtime` erasure contract;
+- what differs from `compose/goakt`.
 
 **Tests carry over in shape.** The IMPL-2/IMPL-3 test shapes apply unchanged: `compose/spec_test.go` and `compose/internal/lifecycle` are shared code and are not touched. `compose/inmem/app_test.go` mirrors `compose/goakt/app_test.go` one for one where the step exists: valid `Spec` runs a runtime, missing dependency fails at `New` with nothing started, every problem reported at once, failure injected at each step releases everything, cancelled context starts nothing, `Stop` before `Start` closes publishers, `Stop` twice is a no-op, stop order, undeclared family returns the typed error, publisher failure at *k*, V8 rejects a lying publisher, plus M1. Failure injection uses the same `hooks.afterStep` pattern as `compose/goakt/app.go`.
 
@@ -341,7 +348,7 @@ It uses the existing account behavior plus one durable-state behavior and one sa
 - each `SendCommand`/`Dispatch` result: outcome, failure code, revision, and the state (compared with `proto.Equal`);
 - the journal from `EventsStore.ReplayEvents` per persistence ID: sequence number, payload, `IsDeleted`, tenant metadata;
 - the latest durable state from `StateStore.GetLatestState`: version and payload;
-- the stream messages received through `Subscribe`: topic, persistence ID and sequence or version number, compared as a **multiset**, since §2.3 gives no order. A multiset is a sorted slice, so a duplicated message is caught where a set would hide it. Collection stops when the count reaches what the journal and the latest states imply: one message per persisted event, plus one per durable-state write. It also stops when the context deadline passes, and that counts as a failure, never as a shorter trace;
+- the stream messages received through `Subscribe`: topic, persistence ID and sequence or version number, compared as a **multiset**, since §2.3 gives no order. A multiset is a sorted slice, so a duplicated message is caught where a set would hide it. Collection stops when the count reaches what the journal and the latest states imply: one message per persisted event, plus one per durable-state write, including the write a durable-state entity makes and publishes when it passivates (§D11). It also stops when the context deadline passes, and that counts as a failure, never as a shorter trace;
 - the saga's final `SagaInfo.Status` and state;
 - `EntityExists` for each ID.
 
@@ -359,63 +366,87 @@ Removed before comparison: timestamps, `Shard`, encryption key IDs, failure mess
 
 ### D10 — Testing strategy and the shared table
 
-- **Deterministic.** No `time.Sleep` and no `pause.For` anywhere. The in-memory runtime's guarantees (D7) let unit tests assert right after `SendCommand` returns. Asynchronous facts are awaited with two named helpers in `internal/runtimeconsumer`:
+- **Deterministic.** No `time.Sleep` and no `pause.For` anywhere. The in-memory runtime's guarantees (D7) let unit tests assert right after `SendCommand` returns. Asynchronous facts are awaited with two named helpers that spec 0 adds to `internal/runtimeconsumer`:
   - `awaitStream(ctx, sub, want int) ([]Message, error)` receives from the subscriber until it holds `want` messages. It fails when `ctx` expires first.
-  - `awaitCondition(ctx, check func(context.Context) (bool, error)) error` re-evaluates `check` until it reports true or `ctx` expires. It is the same pattern as the repository's `waitFor` (`publisher_test.go:138`). It is used only where no channel exists: `SagaStatus` on GoAkt, and `EntityExists` after GoAkt passivation.
-  
-  On the in-memory side, the internal fake clock of §D11 makes passivation and saga timeouts fire when the test advances the clock, never on wall time.
-- **No test depends on saga delivery order** (maintainer decision on Q8, §5). No saga in the shared table or the neutrality test may give a different result when it receives one entity's events in a different order. Spec 6 checks this by running every saga scenario a second time on the in-memory runtime with delivery order to sagas reversed through an internal test hook. The results must be equal.
+  - `awaitCondition(ctx, check func(context.Context) (bool, error)) error` re-evaluates `check` until it reports true or `ctx` expires. It follows the pattern of the repository's `waitFor` (`publisher_test.go:138`). It is used only where no channel exists: `SagaStatus` on GoAkt, and `EntityExists` after passivation.
+
+  Inside `internal/inmemruntime`, unit tests drive passivation and saga timeouts with the internal manual clock (§D11), never with wall time.
+- **Saga delivery order in tests** (maintainer decision on Q8). No test asserts a delivery order. The shared table's own comparison fixtures (the sagas `Observe` uses) must produce the same trace under any delivery order. That is a constraint on those fixtures only, not on consumer behaviors, which may depend on order.
 - **No `-race` locally, no workbench.** CI remains the race gate; `internal/inmemruntime` must be race-clean there.
 - **Unit tests** in `internal/inmemruntime` (package-internal, to reach the mailbox) cover each rule of D3–D7 with `testkit` stores and the `mocks/` stores for failure injection.
-- **The shared table.** `internal/runtimeconsumer` holds `Scenarios`, a slice of `{Name string; Run func(ctx, runtimeport.Runtime, Stores) (Trace, error)}`. `Observe` is its first entry. The others cover the rules that were duplicated from package `ego` instead of imported, plus the behaviors this design could not settle by reading:
+- **The shared table.** `internal/runtimeconsumer` holds `Scenarios`, a slice of `{Name string; Run func(ctx, runtimeport.Runtime, Stores) (Trace, error)}`. Spec 0 creates the table and its GoAkt-only runner. Spec 6 adds `Observe` and runs every entry on both roots. The entries cover the rules that were duplicated from package `ego` instead of imported, plus the behaviors this design could not settle by reading, which spec 0 measures on GoAkt first:
   - D4 "Results", the deadline gates, the no-event reply, the topic names and the conflict mapping;
   - **spawn order**: with only `DurableState` declared and no events store, `SpawnEventSourced` returns `ErrEntityFamilyNotDeclared`;
-  - **liveness after failure**: `EntityExists` after a failed write and after an out-of-sync conflict (false), and after an in-sync conflict (true);
+  - **liveness after failure**: `EntityExists` after a failed write, an out-of-sync conflict and an in-sync conflict, plus a command queued behind a failed write (its reply and whether it runs);
   - **panics**: a handler panic under `RestartDirective` and under `StopDirective`, recording the reply, `EntityExists` and the recovered state;
-  - **ignored settings**: spawning with `WithPlacement(Random)`, `WithPlacement(LeastLoad)`, `WithPlacement(Local)` and `WithRelocation(true)` behaves as a spawn without them;
-  - **passivation** (§D11): an idle entity stops, `EntityExists` becomes false, `Dispatch` does not re-spawn it, and a new spawn recovers its state;
+  - **ignored settings**: spawning with `WithPlacement(Random)`, `WithPlacement(LeastLoad)`, `WithPlacement(Local)` and `WithRelocation(true)` behaves as a spawn without them, and a saga spawned with options other than `WithTenant` behaves as one spawned without them;
+  - **passivation** (§D11): an idle entity stops, `EntityExists` becomes false, `Dispatch` does not re-spawn it, and a new spawn recovers its state. A refused command and a no-event command both count as activity, and a passivating durable-state entity writes and publishes its state;
   - **`EntityExists` on a saga ID** (true while the saga lives).
   
-  The neutrality test runs every scenario on both roots. This is how drift in duplicated logic is caught, and how a guessed GoAkt behavior is turned into a measured one.
+  The neutrality test runs every scenario on both roots. This is how drift in duplicated logic is caught.
 - **Not RUNTIME-007.** The table is internal, compares two runtimes with each other rather than against written expectations, and has no public API. RUNTIME-007 can lift it into a public package such as `port/runtime/runtimetest` later; nothing here fixes that package's name or shape.
 
 ### D11 — Passivation (maintainer decision 2026-09-27)
 
 **Decision recorded.** On 2026-09-27 the maintainer decided that passivation must be observable behavior, never silently ignored. The preferred option is to implement `WithPassivateAfter` in the in-memory runtime with the observable semantics of single-node GoAkt (§2.5). The fallback, used only if implementing it is not a reasonable scope, is an `*UnsupportedError` returned at spawn when `WithPassivateAfter` is set.
 
-**This design takes the preferred option: implement it.** The scope is small and fits one spec, spec 4 (`inmem-runtime-passivation`), with three tasks. The runtime already has the pieces it needs. Every entity has a mailbox that serializes work, and there is a removal path, since failed writes and `StopDirective` remove entities (§D4). A durable-state final write already exists for `Stop` (§D8). Passivation adds one timer per entity that has a non-zero `PassivateAfter()`, and one mailbox item kind. The fallback would save about one spec of work, but every consumer that sets `WithPassivateAfter` would then fail on the in-memory runtime while succeeding on GoAkt, which is the kind of divergence #105 forbids.
+**This design takes the preferred option: implement it.** The scope is small and fits one spec, spec 4 (`inmem-runtime-passivation`), with three tasks, since the clock is built in spec 1. The runtime already has the pieces it needs. Every entity has a mailbox that serializes work, and there is a removal path, since failed writes and `StopDirective` remove entities (§D4). A durable-state final write already exists for `Stop` (§D8). Passivation adds one timer per entity that has a non-zero `PassivateAfter()`, and one mailbox item kind. The fallback would save about one spec of work, but every consumer that sets `WithPassivateAfter` would then fail on the in-memory runtime while succeeding on GoAkt, which is the kind of divergence #105 forbids.
 
-**Semantics.**
+**Semantics** (the GoAkt details of §2.5; spec 0 measures the activity cases before spec 1 starts):
 
-- After each completed mailbox turn, the entity's idle timer is reset to `PassivateAfter()`.
-- When the timer fires, it enqueues a *passivate* item. The item runs in the mailbox like any command, so it never interleaves with one. When it runs, it checks against the clock that the entity has really been idle for the whole period, since a command may have arrived between the timer firing and the item running. If so, it removes the entity. A durable-state entity first writes its state once more, as GoAkt's `PostStop` does on passivation.
-- After removal, `EntityExists` reports false, `SendCommand`/`Dispatch` fail as for an unknown ID and do not re-spawn, and a new spawn recovers the state from the stores.
-- Sagas ignore the setting, as in GoAkt (§2.5).
-- `Stop` stops every idle timer, and the goroutine-leak checks cover them.
+- **Activity.** Every item the entity's mailbox processes resets the idle timer, except the passivate item itself. That includes commands, refused commands (for example a tenant mismatch or a failed precondition) and no-event commands. Idle time counts from the start of the turn, as GoAkt's `markActivity` does. The in-memory runtime has no persist-response or stash messages; its single turn covers what those messages mark in GoAkt.
+- **Firing.** When the timer fires, it enqueues a *passivate* item. The item runs in the mailbox like any command, so it never interleaves with one. When it runs, it checks against the clock that the entity has really been idle for the whole period, since a command may have arrived between the timer firing and the item running.
+- **Removal.** If the entity has been idle, it is removed. A durable-state entity first writes **and publishes** its state, as GoAkt's `PostStop` does.
+- **After removal.** `EntityExists` reports false, `SendCommand`/`Dispatch` fail as for an unknown ID and do not re-spawn, and a new spawn recovers the state from the stores.
+- **Sagas** ignore the setting, as in GoAkt (§2.5).
+- **`Stop`** stops every idle timer, and the goroutine-leak checks cover them.
+- **Timing.** GoAkt's timing is approximate to about 100 ms (coalescing, §2.5), so the neutrality scenario compares outcomes, never exact times.
 
-**Determinism.** The runtime reads time only through an internal clock interface:
+**Determinism: an internal clock** (maintainer decision on Q9, 2026-09-27: no public clock in this chain). Spec 1 adds `internal/inmemruntime/clock.go` with three unexported pieces:
 
-```go
-// internal/inmemruntime
-type Clock interface {
-	Now() time.Time
-	AfterFunc(d time.Duration, f func()) (stop func() bool)
-}
-```
+- `clock`, an interface with `now() time.Time` and `afterFunc(d time.Duration, f func()) (stop func() bool)`;
+- `wallClock`, which `New` uses;
+- `manualClock`, reachable only by the package's own tests, through the unexported constructor `newWithClock(cfg Config, c clock)`.
 
-In production it is the wall clock. Tests use an internal manual clock whose `Advance(d)` runs every due `AfterFunc` callback synchronously, in the caller's goroutine, before it returns. A test therefore makes an entity idle by calling `Advance`, not by waiting. Because the callback only enqueues, the test then waits with `awaitCondition` on `EntityExists`, which returns as soon as the mailbox has run the item. No wall-clock time is involved. The same clock drives event timestamps (replacing the `func() time.Time` of §D1) and saga timeouts (§D5), so the saga-timeout tests become deterministic too.
+`manualClock.advance(d)` moves time forward and runs every callback whose deadline is at or before the new time, synchronously, in the caller's goroutine. It runs them ordered by deadline, then by registration order. It repeats until no callback is due, so a callback registered during `advance` with a due deadline also runs before `advance` returns. A unit test therefore makes an entity idle by calling `advance`, not by waiting. Because the callback only enqueues, the test then waits with an internal helper until the mailbox has run the item. No wall-clock time is involved. The same clock drives event timestamps and saga timeouts (§D5).
 
-`compose/inmem` exposes the clock as `WithClock(inmem.Clock)`. `inmem.Clock` is a public interface with the same two methods, so a consumer can pin time in its own tests. Whether `compose/inmem` should also export its manual clock is left to spec 5's review. Exporting it is additive, so leaving it out now does not close the door.
+`compose/inmem` uses the wall clock and exports no clock option. Adding `WithClock` later is additive.
 
-**The neutrality scenario.** The shared table's passivation scenario spawns with `WithPassivateAfter(d)` on both roots. It receives an `advance` hook: on `compose/inmem` the hook calls the manual clock's `Advance(d)`, and on `compose/goakt` it does nothing, since GoAkt passivates on wall time. The scenario then calls `awaitCondition` until `EntityExists` is false and checks that `Dispatch` does not re-spawn the entity. On GoAkt the wait is bounded by the context deadline and `d` is kept short (100 ms). This is still a condition wait, not a sleep.
+**The neutrality scenario.** The shared table's passivation scenario spawns with `WithPassivateAfter(100 ms)` on both roots and uses wall time on both, since neither composition root exposes a clock. It waits with `awaitCondition` until `EntityExists` is false, bounded by the context deadline, then checks that `Dispatch` does not re-spawn the entity. This is a condition wait, not a sleep. The deterministic, clock-driven cases live in `internal/inmemruntime`'s unit tests.
 
 **Rejected alternative: the fallback typed error.** Explained above: it is the smaller change but a visible divergence for any consumer that uses the option.
 
-**Rejected alternative: real timers in tests.** The in-memory side would inherit wall-clock flakiness for no benefit.
+**Rejected alternative: real timers in the in-memory unit tests.** They would inherit wall-clock flakiness for no benefit.
+
+**Rejected alternative: a public `WithClock` now.** Decided against by the maintainer on 2026-09-27 (Q9). It would be public API for a test concern, and it can be added later without a break.
+
+### D12 — Spec 0: characterizing GoAkt first (maintainer decision 2026-09-27)
+
+Several rules in §D4 and §D11 copy GoAkt behaviors that reading could not settle: a panic under each supervisor directive, a command queued behind a failed write, and which messages count as passivation activity. The maintainer decided on 2026-09-27 to measure them before any in-memory code is written, rather than correct the design afterwards.
+
+- **Where.** Spec 0 lives in `internal/runtimeconsumer`. The scenarios are neutral production code written against `port/runtime`, and they are the same entries spec 6 later runs on both roots. The GoAkt-only runner is in a `_test.go` file that uses `compose/goakt`. Spec 0 touches no hot spot and no root-package file.
+- **What it measures:**
+  - liveness after a failed write, an out-of-sync conflict and an in-sync conflict;
+  - a command queued behind a failed write: its reply, and whether it runs;
+  - a panic under `RestartDirective` and under `StopDirective`: the reply, `EntityExists` and the recovered state;
+  - passivation activity: a refused command, a no-event command, and a durable-state entity's write and publish on passivation;
+  - the ignored options: placement, relocation, and saga options other than `WithTenant`.
+- **Output.** Each measured result is written into §2, §D4, §D11 and the Q2 table in the spec 0 pull request, replacing the word "provisional". Specs 1–3 start only after that. From then on no rule in this design depends on a later measurement.
+
 
 ## 5. Open questions for the maintainer
 
-Each open question has a recommendation, and this design decides none of them. Three items were decided by the maintainer on 2026-09-27 and are recorded as decisions: passivation (part of Q2, §D11), `EraseEntity` crypto-shredding (part of Q7, #166) and saga delivery order (Q8). Q1, Q3–Q6, the rest of Q2 and the rest of Q7 stay open.
+Each open question has a recommendation, and this design decides none of them.
+
+**Maintainer decisions recorded (2026-09-27).**
+
+1. Passivation is implemented with single-node GoAkt semantics (part of Q2, §D11).
+2. Spec 0 characterizes GoAkt before spec 1 starts (§D12).
+3. Saga delivery order is unspecified on every runtime (Q8).
+4. There is no public clock in this chain (Q9).
+5. `EraseEntity` gets its own spec, spec 7, blocked only by #166. It implements #166's crypto-shredding with entity-and-tenant key granularity (part of Q7).
+
+Still open: Q1, Q3–Q6, placement and relocation in Q2, and the no-event text in Q7.
 
 **Q1 — Public or internal runtime package.**
 (a) `internal/inmemruntime`, reached only through `compose/inmem`. (b) Public `runtime/inmem` with its own `New`.
@@ -427,11 +458,11 @@ Each open question has a recommendation, and this design decides none of them. T
 |---|---|---|---|
 | `WithPlacement` | Ignored: `SpawnOn` falls through to a local `Spawn` outside a cluster, before placement is read (`actor/spawn.go:295-297`, `:321`, goakt v4.5.4) | Ignored | **Open** (a) no-op, or (b) typed error for non-default values |
 | `WithRelocation` | Ignored: relocation happens only when a cluster node departs (`actor/spawn.go:1015-1054`) | Ignored | **Open**, same options |
-| `WithPassivateAfter` | **Honored** (`engine.go:1910-1911`): an idle entity stops, `EntityExists` becomes false, `Dispatch` does not re-spawn | **Implemented with the same semantics** (§D11, spec 4) | **Decided by the maintainer, 2026-09-27**: implement; fallback typed error only if the scope is unreasonable, and the design finds it reasonable |
-| `WithSupervisorDirective` | Applied to panics and handler errors; the observable result is not yet measured (§2.5) | Restart re-hydrates, stop removes (§D4) | **Open**, and measured by the table's restart and stop panic scenarios before spec 1 merges |
+| `WithPassivateAfter` | **Honored** (`engine.go:1910-1911`): an idle entity stops, `EntityExists` becomes false, `Dispatch` does not re-spawn | **Implemented with the same semantics**, including the activity rule and the write-and-publish on passivation (§D11, spec 4); spec 0 measures the activity cases | **Decided by the maintainer, 2026-09-27**: implement; fallback typed error only if the scope is unreasonable, and the design finds it reasonable |
+| `WithSupervisorDirective` | Applied to panics and handler errors; the observable result is not yet measured (§2.5) | Restart re-hydrates, stop removes (§D4) | **Open**. Spec 0 measures the GoAkt result and records it in this row and §D4 before spec 1 starts |
 | `WithTenant` | Honored | Honored (§D6) | not a question |
 | Write-side adapter settings (`WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, `WithBatchFlushWindow`) | Honored, GoAkt only | Ignored **by contract**: other runtimes cannot read another adapter's settings (ego-runtime-001 D3) | not a question |
-| Any option but `WithTenant` on `SpawnSaga` | Ignored (`engine.go:1497-1501`, `:1563-1567`) | Ignored | not a question |
+| Any option but `WithTenant` on `SpawnSaga` | Ignored (`engine.go:1497-1501`, `:1563-1567`); spec 0 measures it | Ignored | not a question |
 | `Spec.Name`, an unused `Spec.OffsetStore` | Not observable through `port/runtime` or the stores' entity data | Accepted | not a question |
 
 For placement and relocation:
@@ -457,48 +488,59 @@ For placement and relocation:
 *Recommendation: no, not in this chain.* D7 already makes most facts true when `SendCommand` returns, and a public helper would be in-memory-only API that consumer tests then depend on, so the same test could not run on GoAkt. The runtime keeps an internal version for its own tests.
 
 **Q7 — The two mismatches of §2.6.**
-- *`EraseEntity` (decided by the maintainer, 2026-09-27, in [#166](https://github.com/getsyntegrity/ego/issues/166)):* keep the contract's crypto-shredding promise and implement it through an additive extension, with a key that belongs exclusively to the entity and tenant. The in-memory runtime follows #166's outcome (§D6), not today's no-key behavior. **#166 is a blocking dependency: spec 2 does not merge before #166 settles the extension and the key granularity.**
+- *`EraseEntity` (decided by the maintainer, 2026-09-27):* keep the contract's crypto-shredding promise, as [#166](https://github.com/getsyntegrity/ego/issues/166) specifies: an additive extension, and a key that belongs exclusively to the entity and tenant. The in-memory runtime gets it in its **own small spec, spec 7, blocked only by #166**. Specs 0–6 do not wait on #166. Until spec 7 lands, the in-memory `EraseEntity` returns `*UnsupportedError`. That limitation **does not satisfy the contract** (`port/runtime/runtime.go:115-119`), and no document in this change says it does (§D3).
 - *No-event `SendCommand` (still open):* should the in-memory runtime follow the code (the current state and revision) or the contract text (`port/runtime/runtime.go:95-96`, nil)?
-  *Recommendation: follow the code, and open an issue to correct the contract text.* Following the text would make the two runtimes differ, which is exactly what the neutrality proof must not show.
+  *Recommendation: follow the code, and open an issue to correct the contract text (FU-E).* Following the text would make the two runtimes differ, which is exactly what the neutrality proof must not show.
 
-**Q8 — Saga delivery order (decided by the maintainer, 2026-09-27).** The in-memory runtime delivers one entity's events to a saga in persist order (§D5); GoAkt does not guarantee that order (§2.3). **Decision:** the order in which sagas receive events is **not part of the contract**, even though the in-memory runtime happens to produce persist order. The `compose/inmem` package documentation (spec 5) says so. No test may depend on that order, including the neutrality test and the shared table. Spec 6 checks it by re-running every saga scenario with delivery order reversed through an internal hook (§D10). The residual risk remains that a consumer's own order-dependent saga passes on the in-memory runtime and fails on GoAkt. The documentation is the mitigation, since the neutrality test cannot see a consumer's sagas.
+**Q8 — Saga delivery order (decided by the maintainer, 2026-09-27).** Saga delivery order is **unspecified on every runtime**, and the in-memory runtime promises no order. Consumer sagas may depend on order; the design does not forbid that, it only promises nothing. The check is that nothing promises an order:
+
+- (a) the `port/runtime` and `compose/inmem` package documentation say the order is unspecified and name no order (spec 3 adds the sentence to `port/runtime`'s `Sagas` documentation; spec 5 adds it to `compose/inmem`);
+- (b) no exported symbol, option or hook selects or reports an order;
+- (c) no test asserts a delivery order.
+
+Only the shared table's comparison fixtures must produce the same trace under any order. That constrains the fixtures, not consumer behaviors.
+
+**Q9 — A public clock (decided by the maintainer, 2026-09-27).** A public `inmem.Clock` / `WithClock` is out of this chain. The manual clock stays internal to `internal/inmemruntime` (§D11). Adding a public clock later is additive.
 
 ## 6. Compatibility and apidiff
 
-| Package | Spec 1 | Spec 2 | Spec 3 | Spec 4 | Spec 5 | Spec 6 |
-|---|---|---|---|---|---|---|
-| `internal/inmemruntime` (new, internal) | new | extended | extended | extended | — | — |
-| `compose/inmem` (new, public) | — | — | — | — | new: additions only | — |
-| `internal/runtimeconsumer` (internal) | — | — | — | — | — | extended |
-| `internal/cmd/archcheck/rules` (internal) | one layer, one rule | — | — | — | — | — |
-| `ego`, `port/runtime`, `port/behavior`, `compose`, `compose/goakt`, `compose/internal/...`, `eventstream` | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged |
+| Package | Spec 0 | Spec 1 | Spec 2 | Spec 3 | Spec 4 | Spec 5 | Spec 6 | Spec 7 |
+|---|---|---|---|---|---|---|---|---|
+| `internal/runtimeconsumer` (internal) | extended | — | — | — | — | — | extended | — |
+| `internal/inmemruntime` (new, internal) | — | new | extended | extended | extended | — | — | extended |
+| `compose/inmem` (new, public) | — | — | — | — | — | new: additions only | — | one doc sentence |
+| `internal/cmd/archcheck/rules` (internal) | — | one layer, one rule | — | — | — | — | — | — |
+| `port/runtime` | — | — | — | doc comment only (Q8) | — | — | — | — |
+| `ego`, `port/behavior`, `compose`, `compose/goakt`, `compose/internal/...`, `eventstream` | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged |
 
-apidiff: only spec 5 produces a report, and it must list additions only (a new package, including `inmem.Clock` and `WithClock`). Every other spec must show no report for any public package. SemVer: a minor release. `CHANGELOG.md` gains one entry in spec 5 (the new package) and one line in spec 6 (the neutrality proof); specs 1–4 add none, since they change no public API. No `Deprecated:` marker is added anywhere (ego-arch-001 §10 as corrected by ego-runtime-001 Q1).
+apidiff: only spec 5 produces a report, and it must list additions only (a new package). Every other spec must show no report for any public package; spec 3's `port/runtime` change is a doc comment. SemVer: a minor release. `CHANGELOG.md` is edited by specs 5 and 6 only: one entry for the new package in spec 5, and one line for the neutrality proof in spec 6. Neither line may present the `EraseEntity` limitation as meeting the contract. No `Deprecated:` marker is added anywhere (ego-arch-001 §10 as corrected by ego-runtime-001 Q1).
 
 ## 7. Risks
 
 - **Drift between two implementations of the same rules.** Mitigated by the shared table (D10) and by FU-B. Residual risk: a rule no scenario exercises.
 - **The reference moves.** A GoAkt change (for example #24's drain policy or a RUNTIME-003 decision) makes the neutrality test fail on the in-memory side. That is the test working; the cost is that such changes now need a matching in-memory change.
 - **Ordering expectations.** A consumer who tests on the in-memory runtime may come to rely on D7's stronger saga ordering. The package documentation states which guarantees are in-memory-only.
-- **Test-only use in production.** The in-memory runtime has no clustering and keeps entities forever. Its documentation says it is for tests and local development (#11's own wording).
+- **Test-only use in production.** The in-memory runtime has no clustering, and it keeps every entity in memory until `Stop`, a failed write, a `StopDirective` or passivation removes it. Its documentation says it is for tests and local development (#11's own wording).
 - **Goroutine leaks on `Stop`.** Publisher goroutines and saga timers must be joined or stopped; specs 2, 3 and 4 each carry a leak check (`runtime.NumGoroutine` comparison around `Stop`, condition-waited).
 
 ## 8. Chain of specs and file ownership
 
 | # | Spec | Tasks | Depends on | Owns |
 |---|---|---|---|---|
-| 1 | `inmem-runtime-core` | 5 | this design | `internal/inmemruntime/**` (new); `internal/cmd/archcheck/rules/layers.go`, `rules.go`, `evaluate_test.go`; `docs/ci.md` (rule table row) |
-| 2 | `inmem-runtime-state` | 5 | spec 1; [#166](https://github.com/getsyntegrity/ego/issues/166) settled (blocking) | `internal/inmemruntime/**` (durable state, publishers, tenancy, erase files) |
-| 3 | `inmem-runtime-sagas` | 5 | spec 1; spec 2 for the tenant rules | `internal/inmemruntime/**` (saga files) |
-| 4 | `inmem-runtime-passivation` | 3 | specs 1, 2 | `internal/inmemruntime/**` (clock and passivation files) |
-| 5 | `compose-inmem` | 5 | specs 1, 2, 4 (`WithClock` needs the clock) | `compose/inmem/**` (new); `CHANGELOG.md` |
-| 6 | `runtime-neutrality` | 5 | specs 3, 5 | `internal/runtimeconsumer/**`; `CHANGELOG.md`; `openspec/changes/ego-arch-003/design.md` §6/§7 (IMPL-6 row and the §5.2 departure), `openspec/changes/ego-arch-001/design.md` §4 (map row) |
+| 0 | `goakt-characterization` | 4 | this design | `internal/runtimeconsumer/**`; this design's §2, §D4, §D11 and Q2 table (recording the measurements) |
+| 1 | `inmem-runtime-core` | 5 | spec 0 | `internal/inmemruntime/**` (new, including `clock.go`); `internal/cmd/archcheck/rules/layers.go`, `rules.go`, `evaluate_test.go`; `docs/ci.md` (rule table row) |
+| 2 | `inmem-runtime-state` | 5 | spec 1 | `internal/inmemruntime/**` (stream, durable state, encryption, publishers and `Stop`, tenancy files) |
+| 3 | `inmem-runtime-sagas` | 5 | specs 1, 2 | `internal/inmemruntime/**` (saga files); `port/runtime/runtime.go` (one doc sentence, Q8) |
+| 4 | `inmem-runtime-passivation` | 3 | specs 1, 2 | `internal/inmemruntime/**` (passivation files) |
+| 5 | `compose-inmem` | 5 | specs 1, 2 | `compose/inmem/**` (new); `CHANGELOG.md` |
+| 6 | `runtime-neutrality` | 4 | specs 3, 4, 5 | `internal/runtimeconsumer/**`; `CHANGELOG.md`; `openspec/changes/ego-arch-003/design.md` §6/§7 (IMPL-6 row and the §5.2 departure), `openspec/changes/ego-arch-001/design.md` §4 (map row) |
+| 7 | `inmem-runtime-erasure` | 3 | spec 2 and [#166](https://github.com/getsyntegrity/ego/issues/166) (blocking) | `internal/inmemruntime/**` (erasure files); one sentence of `compose/inmem`'s package documentation |
 
-Specs 2, 3 and 4 all write `internal/inmemruntime`, in different files. Run them one after another, or in parallel only on files agreed in advance. Spec 3 can run in parallel with spec 4 and spec 5.
+Specs 2, 3, 4 and 7 all write `internal/inmemruntime`, in different files. Run them one after another, or in parallel only on files agreed in advance. Spec 5 can run in parallel with specs 3 and 4. Spec 7 can land at any point after spec 2, whenever #166 is settled. If spec 5 has merged by then, spec 7 also removes the `EraseEntity` limitation sentence from `compose/inmem`'s documentation.
 
 **Hot spots.** No spec touches `engine.go`, `option.go`, any other root-package file, `.github/workflows/*` or `internal/cmd/ciselect/**`. The only shared tool file is archcheck's rule table, edited by spec 1 alone; rebase it onto any open archcheck change. `CHANGELOG.md` is edited by specs 5 and 6.
 
-**Follow-ups named here (outside the chain):** FU-A projection runner for both runtimes (Q3); FU-B extract shared pure rules from package `ego` (Q4); FU-C ordered delivery in `eventstream` (§2.3, D6); FU-D neutral entity-not-found error (Q5); FU-E the no-event `SendCommand` contract text (Q7). The `EraseEntity` mismatch is [#166](https://github.com/getsyntegrity/ego/issues/166), which blocks spec 2.
+**Follow-ups named here (outside the chain):** FU-A projection runner for both runtimes (Q3); FU-B extract shared pure rules from package `ego` (Q4); FU-C ordered delivery in `eventstream` (§2.3, D6); FU-D neutral entity-not-found error (Q5); FU-E the no-event `SendCommand` contract text (Q7). The `EraseEntity` mismatch is [#166](https://github.com/getsyntegrity/ego/issues/166), which blocks spec 7 only.
 
 ## 9. Evidence and reproduction
 
@@ -512,6 +554,7 @@ Specs 2, 3 and 4 all write `internal/inmemruntime`, in different files. Run them
 | Spawn checks family before store | `engine.go:758-775`, `:1517-1533` |
 | Durable-state type and version rules | `durable_state_actor.go:575-590` |
 | Saga tenant rules SG4, SG5, SG-DUR1 and the not-running guard | `saga_actor.go:86-94`, `:326`, `:346`, `:442-460`, `:482-484`, `:497`, `:686-706` |
+| Passivation activity and coalescing | goakt v4.5.4 `actor/pid.go:75`, `:2192-2196`, `:2440-2453`; `actor/passivation_manager.go:413-422` |
 | Passivation honored on one node; placement and relocation ignored | `engine.go:1910-1911`; goakt v4.5.4 `actor/spawn.go:295-297`, `:321`, `:1015-1054` |
 | Saga spawns ignore other options; `EntityExists` covers sagas | `engine.go:1497-1501`, `:1563-1567`, `:988-1000` |
 | No-event contract text and the test pinning the actual behavior | `port/runtime/runtime.go:95-96`; `event_sourced_actor_test.go:569-590` |
@@ -522,7 +565,7 @@ Specs 2, 3 and 4 all write `internal/inmemruntime`, in different files. Run them
 | `CompositionLayer` excludes runtime-specific roots | `internal/cmd/archcheck/rules/layers.go`, `CompositionLayer` doc and `Match` |
 | ciselect follows test imports | `docs/ci.md`, "Reverse-dependency expansion" |
 
-No spike was run for this design. The chain's specs each start with a RED test (strict TDD), and the behaviors that reading could not settle (panics under each supervisor directive, commands queued behind a failed write) are measured on GoAkt by the shared table before the in-memory rule is final.
+No spike was run for this design. The behaviors that reading could not settle are measured on GoAkt by spec 0 before spec 1 starts (§D12): panics under each supervisor directive, commands queued behind a failed write, and passivation activity. The chain's specs each start with a RED test (strict TDD).
 
 ## 10. Alternatives rejected (summary)
 
