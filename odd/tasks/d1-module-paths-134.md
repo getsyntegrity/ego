@@ -201,7 +201,15 @@ A new script, `scripts/ci/verify-consumer.sh`, proves the result the way a consu
     instructions ("if actionlint is available run it").
   - No Go code changed in this task; root/nested build-vet-test suites
     are unaffected and were not re-run for T3 alone.
-- Commit: `ci: verify a clean consumer resolves the published module paths (#134)` — SHA `<filled after commit>`.
+- Commit: `ci: verify a clean consumer resolves the published module paths (#134)` — SHA `50c0c26`.
+- Caught by the final `rg` residual check (T2/T3's own acceptance
+  criterion) before reporting done: the new `docs/ci.md` prose I added
+  had spelled out the old `github.com/pablogore/ego/v4/publisher/<name>`
+  path verbatim as an illustration. Fixed with a small follow-up commit,
+  `docs(ci): avoid restating the old owner path literally in docs/ci.md`
+  — SHA `d3a14b4`. `rg --hidden 'pablogore/ego\b' -g '!openspec/**' -g
+  '!odd/**' -g '!CHANGELOG.md' -g '!docs/ci/baseline-159-a1.md'` now
+  finds nothing.
 
 ## Next step
 
