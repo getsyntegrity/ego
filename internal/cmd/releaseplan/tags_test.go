@@ -151,6 +151,36 @@ func TestNextTag_UnknownBumpKind(t *testing.T) {
 	}
 }
 
+// Tag prefix collisions (PR #169 review finding 3): tagPrefix's dir-based
+// prefix must not accidentally match a tag belonging to a different
+// module. These are pure tests of latestTag/tagPrefix, no fixture needed.
+
+func TestLatestTag_IgnoresSiblingDirWithSharedPrefix(t *testing.T) {
+	// "publisher/kafka" must not match a tag belonging to the sibling
+	// directory "publisher/kafka-x" just because "publisher/kafka" is a
+	// textual prefix of "publisher/kafka-x".
+	tags := []string{"publisher/kafka-x/v9.9.9"}
+	if _, tag, found := latestTag("publisher/kafka", tags); found {
+		t.Fatalf("publisher/kafka matched %q, which belongs to publisher/kafka-x", tag)
+	}
+}
+
+func TestLatestTag_RootIgnoresNestedModuleTag(t *testing.T) {
+	// The root's "v" prefix must not match a nested module's own tag.
+	tags := []string{"publisher/kafka/v1.0.0"}
+	if _, tag, found := latestTag(".", tags); found {
+		t.Fatalf("root prefix \"v\" matched %q, which belongs to publisher/kafka", tag)
+	}
+}
+
+func TestLatestTag_NestedModuleIgnoresRootTag(t *testing.T) {
+	// A nested module must not match the root's own tag.
+	tags := []string{"v4.9.9"}
+	if _, tag, found := latestTag("publisher/kafka", tags); found {
+		t.Fatalf("publisher/kafka matched %q, which belongs to the root", tag)
+	}
+}
+
 func TestParseSemver(t *testing.T) {
 	cases := []struct {
 		in string
