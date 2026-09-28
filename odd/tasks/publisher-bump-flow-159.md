@@ -145,7 +145,7 @@ but pushing/PR is out of scope for this session regardless).
   AI-attribution trailer, only files under `internal/cmd/releasegate/`,
   `docs/ci.md`, and this task file staged).
 
-- [ ] **T3 — `releaseplan` continuation decision logic.** Add flags/functions
+- [x] **T3 — `releaseplan` continuation decision logic.** Add flags/functions
   for: (a) SHA (40 lowercase hex) and `ego_version` (`v\d+\.\d+\.\d+`) format
   validation; (d) per released publisher, does its `go.mod` `require` the
   root module at exactly the given version (using existing `readGoMod`,
@@ -243,4 +243,73 @@ but pushing/PR is out of scope for this session regardless).
   task's own scope). Commit: see repo `git log` on this branch (single
   Conventional Commit, no AI-attribution trailer; only files under
   `internal/cmd/releasegate/`, `docs/ci.md`, and this task file staged).
-- Next: T3.
+- **T3 done.** New file `internal/cmd/releaseplan/continuation.go` (pure
+  decision logic) plus `continuation_test.go` (table-driven, `testdata/`
+  fixtures, matching the package's existing style) and a new fixture
+  `testdata/required-version/` (root `example.com/repo` + `pub1` requiring
+  it at `v1.2.3`, `pub2` at the mismatched `v1.2.0`, both with the usual
+  local `replace`). `main.go` gained five new flags, purely additive (all
+  default to off/empty; the pre-existing flag set and default codepath are
+  untouched and still pass their own tests):
+  - `-continuation-check-sha <sha>`: validates exactly 40 lowercase hex
+    characters, no other flags required.
+  - `-continuation-check-version <version>`: validates `vX.Y.Z` (leading
+    `v`, no pre-release/build suffix), no other flags required.
+  - `-continuation-check-required-version <version>`: for every directory
+    in `-release` except `.` (root never requires itself), reads its
+    `go.mod` via the existing `readGoMod` and confirms the `require` line
+    for the root module equals `version` exactly (the `replace` directive
+    is ignored, as instructed); reuses `-repo-root`/`-release`; fails
+    naming every mismatched directory with both its actual and wanted
+    version.
+  - `-continuation-plan-publishers`: computes next tags (via the existing
+    `nextTag`) for exactly the directories in `-release`, which must
+    exclude `.`; reuses `-repo-root`/`-release`/`-tags`/`-bump`/`-out-dir`
+    and writes `plan.json`/`summary.md` exactly like the default full
+    plan (reusing `Plan`/`renderPlanJSON`/`renderSummary`/`writeOutputs`
+    unchanged) — chosen over a new ad hoc format because it is already the
+    tested, documented contract T4's workflow (and any human) can read.
+  - `-continuation-check-tag-conflicts <path>`: only valid together with
+    `-continuation-plan-publishers`; reads a combined local+origin tag
+    list from `path` and fails, naming every conflicting tag, before any
+    output is written, if a computed tag already exists there.
+  TDD: RED observed first for every piece (pure logic: `TestValidateSHA`,
+  `TestValidateVersion`, `TestCheckRequiredRootVersion_*`,
+  `TestPlanPublisherTags_*`, `TestCheckTagConflicts_*` all failed to
+  compile — undefined functions; CLI wiring: `TestRun_Continuation*` all
+  failed with "flag provided but not defined" before `main.go` was
+  touched), then GREEN after each implementation step.
+  Verification: `go test -count=1 ./internal/cmd/releaseplan/...` → all
+  ~40 tests pass (0.4s). `go vet` → clean. `staticcheck` → clean.
+  `gofmt -l internal/cmd/releaseplan/` → empty. Manual dry run against
+  this repository's real `scripts/ci/release-modules.txt` (all four real
+  publishers), wanting `v4.5.0`, correctly FAILED (all four publishers
+  require the root at `v4.4.3` today via their `require` line):
+  ```
+  required-root-version check failed for 4 module(s):
+    publisher/kafka: requires github.com/pablogore/ego/v4 v4.4.3, wanted v4.5.0
+    publisher/nats: requires github.com/pablogore/ego/v4 v4.4.3, wanted v4.5.0
+    publisher/pulsar: requires github.com/pablogore/ego/v4 v4.4.3, wanted v4.5.0
+    publisher/websocket: requires github.com/pablogore/ego/v4 v4.4.3, wanted v4.5.0
+  ```
+  captured by `TestRun_ContinuationCheckRequiredVersion_RealRepository`.
+  The `testdata/required-version` fixture proves the PASS direction too:
+  `TestCheckRequiredRootVersion_OK` /
+  `TestRun_ContinuationCheckRequiredVersion_PassAndFail` succeed against
+  `pub1` (requires exactly `v1.2.3`) and only fail, naming `pub2`, once
+  `pub2` (requires `v1.2.0`) is added to the checked list.
+  Judgement calls: (1) kept SHA and version validation as two separate
+  flags rather than one combined "-continuation-validate" mode, since each
+  checks an independently-meaningful input with its own error message; a
+  caller can still pass both in one invocation. (2) publishers-only tag
+  computation reuses the existing `plan.json`/`summary.md` output
+  contract instead of inventing a new format, since T4's workflow (and
+  `jq`) already knows how to read it. (3) `-continuation-plan-publishers`
+  refuses outright if `.` appears in `-release`, rather than silently
+  filtering it — the release list is an explicit, reviewable input
+  everywhere else in this package (`releasedSet`'s same philosophy), so a
+  root left in by mistake should fail loudly, not be silently dropped.
+  Commit: see repo `git log -1` on this branch (single Conventional
+  Commit, no AI-attribution trailer; only files under
+  `internal/cmd/releaseplan/` and this task file staged).
+- Next: T4.
