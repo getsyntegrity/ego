@@ -1,22 +1,22 @@
-# Spec 4 of 5 — `compose/inmem` composition root (#105 IMPL-6)
+# Spec 5 of 6 — `compose/inmem` composition root (#105 IMPL-6)
 
 | Field | Value |
 |---|---|
 | Change | `ego-runtime-002` (umbrella: [`proposal.md`](../../proposal.md), [`design.md`](../../design.md)) |
-| Chain position | **Spec 4 of 5.** Previous: [Spec 2](../inmem-runtime-state/spec.md) (spec 3 runs in parallel). Next: [Spec 5 — neutrality proof](../runtime-neutrality/spec.md) |
+| Chain position | **Spec 5 of 6.** Previous: [Spec 4 — clock and passivation](../inmem-runtime-passivation/spec.md) (spec 3 can run in parallel). Next: [Spec 6 — neutrality proof](../runtime-neutrality/spec.md) |
 | Tracker | [`#148`](https://github.com/getsyntegrity/ego/issues/148), [`#105`](https://github.com/getsyntegrity/ego/issues/105) IMPL-6 |
 | Baseline | `main` at `57c4b11` |
-| Decisions applied | design §D8; ego-arch-003 §D4–§D7; ego-arch-004 §D4, §D6 |
+| Decisions applied | design §D8, §D11; ego-arch-003 §D4–§D7 (with the §5.2 departure of design §D8); ego-arch-004 §D4, §D6; maintainer decision on Q8 (2026-09-27) |
 
 ## Purpose
 
-This spec adds the only new public package of the chain: a composition root that takes the same `compose.Spec` as `compose/goakt`, validates it with the same rules plus one of its own (M1, no projections), and starts, rolls back and stops the in-memory runtime with the same shared sequencer. Consumer code gets the runtime through `App.Runtime()`, typed as `port/runtime.Runtime`, exactly as it does from `compose/goakt`.
+This spec adds the only new public package of the chain: a composition root that takes the same `compose.Spec` as `compose/goakt`. It validates the `Spec` with the same rules plus one of its own (M1: no projections), and it starts, rolls back and stops the in-memory runtime with the same shared sequencer. Consumer code gets the runtime through `App.Runtime()`, typed as `port/runtime.Runtime`, exactly as it does from `compose/goakt`.
 
 ## Requirements
 
 ### Requirement: validation at `New`
 
-`New` MUST run `spec.Validate()` (V1–V8) and rule M1 (`Spec.Projections` empty) and return every problem joined, each a `*compose.ValidationError`, with nothing started. It MUST apply no naming rule to `Spec.Name`.
+`New` MUST run `spec.Validate()` (V1–V8) and rule M1 (`Spec.Projections` empty), return every problem joined, each a `*compose.ValidationError`, and start nothing. It MUST apply no naming rule to `Spec.Name`.
 
 #### Scenario: several problems at once
 
@@ -26,7 +26,9 @@ This spec adds the only new public package of the chain: a composition root that
 
 ### Requirement: start order and rollback
 
-`Start` MUST run the steps `probe stores`, `start runtime`, `attach publishers` through `compose/internal/lifecycle`, use `compose/internal/adapters.StartAndProbe` for publishers, and on failure return a `*compose.StartError` naming the step after undoing earlier steps and closing every publisher never attached (design §D8 table). The `App` MUST be single-use.
+- **Steps.** `Start` MUST run `probe stores`, `start runtime`, `attach publishers` through `compose/internal/lifecycle`, and use `compose/internal/adapters.StartAndProbe` for publishers.
+- **Failure.** On failure it MUST undo the earlier steps, close every publisher never attached, and return a `*compose.StartError` naming the step (design §D8 table).
+- **Single use.** The `App` MUST be single-use.
 
 #### Scenario: failure at each step
 
@@ -36,23 +38,32 @@ This spec adds the only new public package of the chain: a composition root that
 
 ### Requirement: stop
 
-`Stop` MUST undo the steps in reverse under the cleanup context (`context.WithoutCancel` bounded by `ShutdownTimeout`), attempt every undo and join errors, be idempotent, and close the publishers of an `App` that never started.
+`Stop` MUST undo the steps in reverse under the cleanup context (`context.WithoutCancel` bounded by `ShutdownTimeout`), attempt every undo and join the errors. It MUST be idempotent, and it MUST close the publishers of an `App` that never started. The runtime's own `Stop` behavior (waiting for the turn in progress, the provisional handling of queued items) is spec 2's.
 
-### Requirement: accessor
+### Requirement: accessor and clock
 
-`Runtime()` MUST return an untyped nil before a successful `Start` and for good after a failed one, and the stopped runtime after `Stop`, whose methods return `ErrEngineNotStarted`.
+`Runtime()` MUST return an untyped nil before a successful `Start`, and for good after a failed one. After `Stop` it MUST return the stopped runtime, whose methods return `ErrEngineNotStarted`. `WithClock(inmem.Clock)` MUST pass the clock to the runtime (design §D11).
+
+### Requirement: package documentation
+
+The package documentation MUST state:
+
+- that the runtime is for tests and local development;
+- which guarantees are in-memory-only (design §D7);
+- **that the order in which sagas receive events is not part of the contract**, even though this runtime produces persist order (maintainer decision on Q8);
+- what differs from `compose/goakt`: three start steps, M1, and no `WithCluster`, `WithActorSystemOptions` or `WithTelemetry`.
 
 ### Requirement: GoAkt-free closure
 
-`compose/inmem`'s production and test closures MUST contain neither the root package nor GoAkt nor `compose/goakt`; `inmem-no-runtime` (spec 1) covers its direct imports.
+`compose/inmem`'s production and test closures MUST contain neither the root package nor GoAkt nor `compose/goakt`. `inmem-no-runtime` (spec 1) covers its direct imports.
 
 ## Tasks (5)
 
-1. **`New`, options, M1** (RED first). *Check:* tests mirroring `compose/goakt/app_test.go`'s `TestNew_*` (missing dependency, starts nothing, negative timeout, reports every problem, V8 lying publisher) plus M1.
+1. **`New`, options, M1** (RED first). *Check:* tests mirroring the `TestNew_*` tests of `compose/goakt/app_test.go` (missing dependency, starts nothing, negative timeout, reports every problem, V8 rejects a lying publisher), plus M1.
 2. **Start steps and rollback.** *Check:* failure at each step, probe failure names the store, cancelled context starts nothing, publisher failure at *k*.
-3. **Stop.** *Check:* never-started `App` closes publishers, `Stop` after `Stop` is a no-op, recorded stop order, the durable-state flush happens after publishers close.
-4. **`Runtime()` and closure test.** *Check:* nil before `Start`, nil after a failed `Start`, the same runtime after `Start` and after `Stop`; `closure_test.go` over `go list -deps` and `-deps -test`.
-5. **Docs and changelog.** Package documentation (in-memory for tests and local development; which guarantees are in-memory-only, design §D7; what differs from `compose/goakt`); `CHANGELOG.md` Features entry. *Check:* apidiff on `compose/inmem` reports additions only; `go vet`, `golangci-lint`.
+3. **Stop.** *Check:* a never-started `App` closes its publishers; `Stop` after `Stop` is a no-op; the stop order is recorded; the durable-state flush happens after publishers close.
+4. **`Runtime()`, `WithClock` and the closure test.** *Check:* nil before `Start`; nil after a failed `Start`; the same runtime after `Start` and after `Stop`; a pinned clock reaches event timestamps; `closure_test.go` over `go list -deps` and `-deps -test`.
+5. **Docs and changelog.** The package documentation of the requirement above, and a `CHANGELOG.md` Features entry. *Check:* the documentation carries the saga-order sentence (review check); apidiff on `compose/inmem` reports additions only; `go vet`, `golangci-lint`.
 
 ## Checks
 
@@ -62,12 +73,12 @@ This spec adds the only new public package of the chain: a composition root that
 
 ## File ownership
 
-`compose/inmem/**` (new); `CHANGELOG.md`. It MUST NOT edit `compose/spec.go`, `compose/errors.go`, `compose/internal/**` or `compose/goakt/**`; if a shared helper needs a change, that is a separate pull request.
+`compose/inmem/**` (new); `CHANGELOG.md`. It MUST NOT edit `compose/spec.go`, `compose/errors.go`, `compose/internal/**` or `compose/goakt/**`. If a shared helper needs a change, that is a separate pull request.
 
 ## Dependencies
 
-Specs 1 and 2 merged (publishers and `Stop` order come from spec 2).
+Specs 1, 2 and 4 merged: publishers and the `Stop` order come from spec 2, and the clock from spec 4.
 
 ## Next in the chain
 
-[Spec 5](../runtime-neutrality/spec.md).
+[Spec 6](../runtime-neutrality/spec.md).
