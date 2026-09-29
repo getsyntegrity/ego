@@ -85,7 +85,7 @@ Delivery: single PR with one work-unit commit per slice (explicit user request).
 - [x] T2 `internal/engine/eventsource` with the cluster-kind wrapper and a wire-name pin.
 - [x] T3 `internal/engine/durablestate` and `internal/engine/saga` (one commit each).
 - [x] T4 `internal/engine/projection` (supervision key pinned) and `engine.go` split by responsibility.
-- [ ] T5 archcheck rule for `internal/engine/...`, architecture docs, full verification, PR.
+- [x] T5 archcheck rule for `internal/engine/...`, architecture docs, full verification, PR.
 
 ## Acceptance criteria
 
@@ -110,6 +110,8 @@ T3 (work units 3 and 4, one commit each): `durablestate.Actor` and `saga.Actor` 
 
 T4 (work units 5 and 6, one commit each): `projection.Actor` moved to `internal/engine/projection`; `ProjectionActor`, `projectionRunnerError`, `newProjectionSupervisor` and `NewProjectionActor` stay in `engine`, and `ProjectionActor.PreStart` binds the escalation hook (`Actor.SetEscalation`) before delegating, so the runner cause is wrapped once in `projectionRunnerError` as on the base. The supervision and escalation tests stayed in `engine`; `TestProjectionSupervisorContract` still pins the `engine.projectionRunnerError` key. Then `engine/engine.go` was split into `engine.go`, `errors.go`, `entities.go`, `spawn_tenancy.go`, `commands.go`, `sagas.go`, `projections.go`, `streams.go` and `spawn_options.go` as a pure move: a script that hashes every top-level declaration of package `engine` (source bytes including doc comment) gave identical output before and after (148 declarations), and `go doc -all ./engine` is byte-identical. Checks: `go build ./...`, `go vet ./engine/... ./internal/...`, archcheck (65 packages, 0 violations), `go test -count=1 ./...`, `gofmt -l`, `golangci-lint run ./engine/... ./internal/...` (0 issues), nested modules build and vet.
 
+T5: `archcheck` now forbids `internal/engine/...` wherever it forbids the engine package (`application-no-runtime`, `composition-no-runtime`, `external-adapter-no-runtime`). The new table cases (migration, compose and a publisher module importing `internal/engine/eventsource`, and the composition test extended) failed before the rule change and pass after; a contract package importing `internal/engine/protocol` was already rejected by the allowlist and is pinned. `docs/ci.md` lists the extended rules, and `docs/engine.md` describes the layout, linked from `readme.md`.
+
 ## Pending risks
 
 - The three persistence child actors (events writer, snapshots writer, events janitor) now report the GoAkt lifecycle metric kind label `eventsource.<name>` instead of `engine.<name>`. It only shows if a user enables GoAkt's optional metrics; eGo does not.
@@ -117,4 +119,4 @@ T4 (work units 5 and 6, one commit each): `projection.Actor` moved to `internal/
 
 ## Next step
 
-T5.
+Open the pull request (one PR, one commit per slice) under the repository policy.
