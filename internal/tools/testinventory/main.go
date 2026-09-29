@@ -180,7 +180,7 @@ func doUpdate(cfg config, stdout io.Writer, withRun bool) error {
 	if err := inventory.WriteInventory(invFile, inv); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(cfg.root, cfg.summaryFile), []byte(inventory.RenderMarkdown(inv)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.root, cfg.summaryFile), []byte(inventory.RenderMarkdown(inv)), 0o644); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "wrote %d tests to %s\n", len(inv.Tests), cfg.inventoryFile)

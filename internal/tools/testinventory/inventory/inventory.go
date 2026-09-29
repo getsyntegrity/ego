@@ -196,7 +196,7 @@ func WriteInventory(file string, inv Inventory) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(file, append(data, '\n'), 0o600)
+	return os.WriteFile(file, append(data, '\n'), 0o644)
 }
 
 type checkKey struct{ pkg, name string }
