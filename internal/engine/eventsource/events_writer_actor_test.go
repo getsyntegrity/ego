@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package eventswriter
+package eventsource
 
 import (
 	"context"
@@ -64,7 +64,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -86,7 +86,7 @@ func TestEventsWriterActor(t *testing.T) {
 			},
 		}
 
-		reply, err := goakt.Ask(ctx, pid, &request{
+		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
 			scope:        persistence.Unscoped(),
 			envelopes:    envelopes,
 			topic:        "topic.events.0",
@@ -95,7 +95,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*Response)
+		resp, ok := reply.(*persistEventsResponse)
 		require.True(t, ok)
 		assert.Nil(t, resp.Err)
 
@@ -143,7 +143,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -159,7 +159,7 @@ func TestEventsWriterActor(t *testing.T) {
 			},
 		}
 
-		reply, err := goakt.Ask(ctx, pid, &request{
+		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
 			scope:     persistence.Unscoped(),
 			envelopes: envelopes,
 			topic:     "topic.events.0",
@@ -167,7 +167,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*Response)
+		resp, ok := reply.(*persistEventsResponse)
 		require.True(t, ok)
 		assert.Error(t, resp.Err)
 		assert.ErrorIs(t, resp.Err, assert.AnError)
@@ -207,13 +207,13 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
 
-		reply, err := goakt.Ask(ctx, pid, &request{
+		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
 			scope:        persistence.Unscoped(),
 			envelopes:    nil,
 			topic:        "topic.events.0",
@@ -222,7 +222,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*Response)
+		resp, ok := reply.(*persistEventsResponse)
 		require.True(t, ok)
 		assert.Nil(t, resp.Err)
 
@@ -252,7 +252,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", New())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", newEventsWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
 		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
@@ -279,7 +279,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 

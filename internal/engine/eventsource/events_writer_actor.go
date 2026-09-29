@@ -20,12 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package eventswriter holds the GoAkt actor that writes an event-sourced
-// entity's events: it persists a batch of envelopes to the events store and,
-// only after the store confirms the write, publishes them on the in-process
-// events stream. The entity actor spawns it as a child with New, talks to it
-// only through Ask, and receives its outcome as a *Response.
-package eventswriter
+package eventsource
 
 import (
 	"context"
@@ -40,53 +35,49 @@ import (
 	"github.com/getsyntegrity/ego/persistence"
 )
 
-// request is sent from the entity actor to the events writer, through Ask, to
+// persistEventsRequest is sent from the entity actor to the events writer, through askEventsWriter, to
 // persist a batch of event envelopes and publish them to the event stream.
 //
 // scope carries the owning entity actor's bound persistence.Scope
 // (TENANT-003 T4). The writer is a separate child actor with no PreStart
 // access to the parent's dependencies, so the scope must travel on this
 // request rather than be re-derived here.
-type request struct {
+type persistEventsRequest struct {
 	envelopes    []*egopb.Event
 	topic        string
 	precondition persistence.WritePrecondition
 	scope        persistence.Scope
 }
 
-// Response is sent from the events writer back to the entity actor after an
-// attempt to persist events. A nil Err indicates success; a non-nil Err
-// carries the store write failure, or the transport failure Ask observed, so
-// the parent can decide whether to stop itself.
-//
-// Response is exported because it is the one message that crosses the
-// package boundary: Ask runs inside the parent's PipeTo, which delivers the
-// Response to the parent's mailbox.
-type Response struct {
+// persistEventsResponse is sent from the events writer back to the entity
+// actor after an attempt to persist events. A nil Err indicates success; a
+// non-nil Err carries the store write failure, or the transport failure
+// askEventsWriter observed, so the parent can decide whether to stop itself.
+type persistEventsResponse struct {
 	Err error
 }
 
-// actor persists events to the events store and publishes them to the event
+// eventsWriterActor persists events to the events store and publishes them to the event
 // stream. Events are published only after the store write succeeds, ensuring
 // that downstream consumers never observe events that failed to persist.
 //
-// This actor is spawned as a child of the entity actor. It receives request
-// messages via Ask and replies with a Response indicating success or failure.
-type actor struct {
+// This actor is spawned as a child of the entity actor. It receives persistEventsRequest
+// messages via askEventsWriter and replies with a persistEventsResponse indicating success or failure.
+type eventsWriterActor struct {
 	eventsStore  persistence.EventsStore
 	eventsStream eventstream.Stream
 }
 
-var _ goakt.Actor = (*actor)(nil)
+var _ goakt.Actor = (*eventsWriterActor)(nil)
 
-// New creates an events writer actor, to be spawned as a child of the entity
+// newEventsWriterActor creates an events writer actor, to be spawned as a child of the entity
 // actor whose events it writes.
-func New() goakt.Actor {
-	return &actor{}
+func newEventsWriterActor() *eventsWriterActor {
+	return &eventsWriterActor{}
 }
 
 // PreStart loads the events store and event stream from the actor system extensions.
-func (a *actor) PreStart(ctx *goakt.Context) error {
+func (a *eventsWriterActor) PreStart(ctx *goakt.Context) error {
 	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
@@ -101,12 +92,12 @@ func (a *actor) PreStart(ctx *goakt.Context) error {
 	return nil
 }
 
-// Receive handles incoming messages. Only request is expected.
-func (a *actor) Receive(ctx *goakt.ReceiveContext) {
+// Receive handles incoming messages. Only persistEventsRequest is expected.
+func (a *eventsWriterActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
 		// no-op
-	case *request:
+	case *persistEventsRequest:
 		a.handlePersistEvents(ctx, msg)
 	default:
 		ctx.Unhandled()
@@ -114,16 +105,16 @@ func (a *actor) Receive(ctx *goakt.ReceiveContext) {
 }
 
 // PostStop performs cleanup when the actor is stopped.
-func (a *actor) PostStop(_ *goakt.Context) error {
+func (a *eventsWriterActor) PostStop(_ *goakt.Context) error {
 	return nil
 }
 
 // handlePersistEvents writes events to the store and publishes them to the stream
 // only after the write succeeds. The result including any error is returned via
-// Response so the parent receives the reply through its Ask call.
-func (a *actor) handlePersistEvents(ctx *goakt.ReceiveContext, req *request) {
+// persistEventsResponse so the parent receives the reply through its Ask call.
+func (a *eventsWriterActor) handlePersistEvents(ctx *goakt.ReceiveContext, req *persistEventsRequest) {
 	if err := a.eventsStore.WriteEvents(ctx.Context(), req.scope, req.envelopes, req.precondition); err != nil {
-		ctx.Response(&Response{Err: err})
+		ctx.Response(&persistEventsResponse{Err: err})
 		return
 	}
 
@@ -131,18 +122,18 @@ func (a *actor) handlePersistEvents(ctx *goakt.ReceiveContext, req *request) {
 		a.eventsStream.Publish(req.topic, envelope)
 	}
 
-	ctx.Response(&Response{})
+	ctx.Response(&persistEventsResponse{})
 }
 
-// Ask sends envelopes to the events writer over a plain goakt.Ask call — safe
+// askEventsWriter sends envelopes to the events writer over a plain goakt.Ask call — safe
 // to run inside a plain goroutine via ctx.PipeTo, unlike ctx.Ask, which blocks
 // the calling dispatcher worker (see the entity actor's persistAsync and
 // flushBatch). Any transport-level failure is embedded in the returned
-// *Response's Err field rather than returned as a Go error, so PipeTo always
-// delivers a Response message that the entity actor already knows how to
+// *persistEventsResponse's Err field rather than returned as a Go error, so PipeTo always
+// delivers a persistEventsResponse message that the entity actor already knows how to
 // route.
-func Ask(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition, scope persistence.Scope) (*Response, error) {
-	reply, err := goakt.Ask(context.Background(), writer, &request{
+func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition, scope persistence.Scope) (*persistEventsResponse, error) {
+	reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
 		envelopes:    envelopes,
 		topic:        topic,
 		precondition: precondition,
@@ -150,16 +141,16 @@ func Ask(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time
 	}, timeout)
 
 	if err != nil {
-		return &Response{Err: err}, nil
+		return &persistEventsResponse{Err: err}, nil
 	}
 
 	if reply == nil {
-		return &Response{Err: fmt.Errorf("event writer returned no response")}, nil
+		return &persistEventsResponse{Err: fmt.Errorf("event writer returned no response")}, nil
 	}
 
-	resp, ok := reply.(*Response)
+	resp, ok := reply.(*persistEventsResponse)
 	if !ok {
-		return &Response{Err: fmt.Errorf("unexpected response type %T from event writer", reply)}, nil
+		return &persistEventsResponse{Err: fmt.Errorf("unexpected response type %T from event writer", reply)}, nil
 	}
 	return resp, nil
 }

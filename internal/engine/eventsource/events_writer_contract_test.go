@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package eventswriter
+package eventsource
 
 import (
 	"context"
@@ -101,7 +101,7 @@ func startWriter(t *testing.T, store persistence.EventsStore, stream eventstream
 	require.NoError(t, actorSystem.Start(ctx))
 	t.Cleanup(func() { _ = actorSystem.Stop(ctx) })
 
-	pid, err := actorSystem.Spawn(ctx, "events-writer", New())
+	pid, err := actorSystem.Spawn(ctx, "events-writer", newEventsWriterActor())
 	require.NoError(t, err)
 	return pid
 }
@@ -123,7 +123,7 @@ func TestWriterContract(t *testing.T) {
 		pid := startWriter(t, store, stream)
 		envelopes := contractEnvelopes(t)
 
-		resp, err := Ask(pid, envelopes, contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
+		resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
 
 		require.NoError(t, err)
 		require.NoError(t, resp.Err)
@@ -141,7 +141,7 @@ func TestWriterContract(t *testing.T) {
 		stream := &recordingStream{Stream: eventstream.New()}
 		pid := startWriter(t, store, stream)
 
-		resp, err := Ask(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
+		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
 
 		require.NoError(t, err)
 		var got *persistence.ConflictError
@@ -158,7 +158,7 @@ func TestWriterContract(t *testing.T) {
 		stream := &recordingStream{Stream: eventstream.New()}
 		pid := startWriter(t, store, stream)
 
-		resp, err := Ask(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), persistence.Unscoped())
+		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), persistence.Unscoped())
 
 		require.NoError(t, err)
 		assert.ErrorIs(t, resp.Err, assert.AnError)
@@ -172,7 +172,7 @@ func TestWriterContract(t *testing.T) {
 		stream := &recordingStream{Stream: eventstream.New()}
 		pid := startWriter(t, store, stream)
 
-		resp, err := Ask(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), scope)
+		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), scope)
 
 		require.NoError(t, err)
 		require.NoError(t, resp.Err)
@@ -185,7 +185,7 @@ func TestWriterContract(t *testing.T) {
 		pid := startWriter(t, store, stream)
 		require.NoError(t, pid.Shutdown(context.Background()))
 
-		resp, err := Ask(pid, contractEnvelopes(t), contractTopic, time.Second, persistence.Unconditional(), persistence.Unscoped())
+		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, time.Second, persistence.Unconditional(), persistence.Unscoped())
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)

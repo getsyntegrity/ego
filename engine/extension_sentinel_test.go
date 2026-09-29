@@ -31,7 +31,7 @@ import (
 )
 
 func TestMissingRequiredExtensionsSentinel(t *testing.T) {
-	// Actors outside this package (internal/eventswriter) wrap the sentinel
+	// Actors outside this package (internal/engine/...) wrap the sentinel
 	// owned by internal/extensions; callers match it through the public name.
 	assert.Same(t, extensions.ErrMissingRequiredExtensions, ErrMissingRequiredExtensions)
 	assert.EqualError(t, ErrMissingRequiredExtensions, "actor system is missing required ego extensions")

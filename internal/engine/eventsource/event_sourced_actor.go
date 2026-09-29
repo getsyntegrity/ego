@@ -42,7 +42,6 @@ import (
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/eventswriter"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/runner"
@@ -107,7 +106,7 @@ type batchEntry struct {
 // Actor persists state changes as a sequence of immutable events.
 //
 // Command processing generates events that are persisted through a child
-// events writer (internal/eventswriter) before the in-memory state is updated. This guarantees
+// [eventsWriterActor] before the in-memory state is updated. This guarantees
 // that the actor state always matches what is stored.
 //
 // The persistence write is dispatched asynchronously via goakt's PipeTo, so
@@ -320,8 +319,8 @@ func (entity *Actor) PreStart(ctx *goakt.Context) error {
 //
 // When event batching is enabled (batchThreshold > 0) additional internal
 // message types are handled: batchFlushTick triggers a timer-based flush,
-// and eventswriter.Response carries the result of an asynchronous batch write.
-// For non-batched entities, eventswriter.Response instead carries the result
+// and persistEventsResponse carries the result of an asynchronous batch write.
+// For non-batched entities, persistEventsResponse instead carries the result
 // of the single in-flight direct-path write (see persistAsync).
 func (entity *Actor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
@@ -334,7 +333,7 @@ func (entity *Actor) Receive(ctx *goakt.ReceiveContext) {
 		ctx.Response(protocol.AnswerTenantBinding(entity.tenantAware, entity.scope, msg))
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
-	case *eventswriter.Response:
+	case *persistEventsResponse:
 		if entity.batchEnabled() {
 			entity.handleBatchPersistResponse(ctx, msg)
 		} else {
@@ -531,7 +530,7 @@ func childSpawnOptions() []goakt.SpawnOption {
 func (entity *Actor) spawnChildren(ctx *goakt.ReceiveContext) {
 	opts := childSpawnOptions()
 
-	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, eventswriter.New(), opts...)
+	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, newEventsWriterActor(), opts...)
 
 	if entity.snapshotStore != nil {
 		entity.snapshotsWriter = ctx.Spawn(snapshotsWriterChildName, newSnapshotsWriterActor(), opts...)
@@ -1024,7 +1023,7 @@ func (entity *Actor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.
 	ctx.Stash()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return eventswriter.Ask(writer, envelopes, protocol.EventsTopic, timeout, precondition, scope)
+		return askEventsWriter(writer, envelopes, protocol.EventsTopic, timeout, precondition, scope)
 	})
 
 	entity.phase = phasePersisting
@@ -1033,7 +1032,7 @@ func (entity *Actor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.
 // handleDirectPersistResponse processes the result PipeTo delivers after the
 // eventsWriter completes a single (non-batched) command's write, mirroring
 // handleBatchPersistResponse for the batched path.
-func (entity *Actor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
+func (entity *Actor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *persistEventsResponse) {
 	if entity.phase != phasePersisting {
 		return
 	}
@@ -1608,7 +1607,7 @@ func (entity *Actor) flushBatch(ctx *goakt.ReceiveContext) {
 	scope := entity.scope
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return eventswriter.Ask(writer, envelopes, topic, timeout, precondition, scope)
+		return askEventsWriter(writer, envelopes, topic, timeout, precondition, scope)
 	})
 
 	entity.phase = phaseFlushing
@@ -1656,7 +1655,7 @@ func (entity *Actor) handleBatchFlushTick(ctx *goakt.ReceiveContext) {
 // stashed commands are unstashed so callers are notified, and the actor
 // shuts down after all replies have been sent so the supervisor can restart
 // it with clean state.
-func (entity *Actor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
+func (entity *Actor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *persistEventsResponse) {
 	if entity.phase != phaseFlushing {
 		return
 	}

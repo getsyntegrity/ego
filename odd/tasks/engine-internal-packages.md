@@ -112,6 +112,8 @@ T4 (work units 5 and 6, one commit each): `projection.Actor` moved to `internal/
 
 T5: `archcheck` now forbids `internal/engine/...` wherever it forbids the engine package (`application-no-runtime`, `composition-no-runtime`, `external-adapter-no-runtime`). The new table cases (migration, compose and a publisher module importing `internal/engine/eventsource`, and the composition test extended) failed before the rule change and pass after; a contract package importing `internal/engine/protocol` was already rejected by the allowlist and is pinned. `docs/ci.md` lists the extended rules, and `docs/engine.md` describes the layout, linked from `readme.md`.
 
+Reconciliation with #193 (`internal/eventswriter`, merged to main while this branch was in review): the branch was rebased onto it. `internal/extensions/lookup.go` keeps main's `Require` and `ErrMissingRequiredExtensions` and adds `Optional` and `BehaviorFrom`; `errors.go` keeps only `ErrEntityTenantScopeMissing`. The write-sequence test #193 added moved with the actor to `internal/engine/eventsource` because it spawns the actor directly, and `TestMissingRequiredExtensionsSentinel` stays in `engine`. A last, isolated commit folds `internal/eventswriter` into `internal/engine/eventsource` (private messages, one place to read the write path); revert that commit if the maintainer prefers the separate package.
+
 ## Pending risks
 
 - The three persistence child actors (events writer, snapshots writer, events janitor) now report the GoAkt lifecycle metric kind label `eventsource.<name>` instead of `engine.<name>`. It only shows if a user enables GoAkt's optional metrics; eGo does not.

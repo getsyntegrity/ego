@@ -81,6 +81,17 @@ are spawned locally by their parent and never resolved by name on a peer, so the
 with it. The only visible effect is the kind label on GoAkt's optional lifecycle
 metrics, which is now `eventsource.<name>` instead of `engine.<name>`.
 
+## The events writer
+
+The child that writes an entity's events to the store and publishes them once the
+write is confirmed was first extracted on its own as `internal/eventswriter` (#193).
+It is now part of `internal/engine/eventsource`, next to the actor that spawns it,
+because the two share private request and response messages and reading the write
+path should not mean hopping between packages. That move is one isolated commit
+(`refactor(engine): fold internal/eventswriter into internal/engine/eventsource`), so
+it can be reverted if a separate package is preferred. `internal/extensions` keeps
+`Require`, the typed lookup #193 introduced, and the missing-extension sentinel.
+
 ## Files of `engine`
 
 | File | Holds |
