@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	actor "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/compose"
@@ -43,6 +44,15 @@ import (
 )
 
 const projectionName = "balances"
+
+// errText is err's message, or "" for nil, so a text expectation on a missing
+// error fails on the expectation instead of panicking.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 // fixture is one fully wired Spec plus the fakes a test inspects.
 type fixture struct {
@@ -155,67 +165,69 @@ func TestApp_ValidSpecRunsAnEngine(t *testing.T) {
 // required store fails at New, before any I/O, and the consumer keeps
 // ownership of its publishers (design §D4a, §D5).
 func TestNew_MissingRequiredDependencyFailsWithNothingStarted(t *testing.T) {
-	pub := newEventPublisher("p")
-	app, err := New(compose.Spec{
-		Name:            "missing-store",
-		Families:        compose.EventSourced,
-		EventPublishers: []publishing.EventPublisher{pub},
+	specs.Describe(t, "New fails on a Spec missing a required store, before any I/O, and leaves publishers to the consumer", func(s *specs.Spec) {
+		s.It("returns no App and a V2 ValidationError on EventsStore, and closes no publisher", func(ctx *specs.Context) {
+			pub := newEventPublisher("p")
+			app, err := New(compose.Spec{
+				Name:            "missing-store",
+				Families:        compose.EventSourced,
+				EventPublishers: []publishing.EventPublisher{pub},
+			})
+			ctx.Expect(app).To(specs.BeNil())
+			var ve *compose.ValidationError
+			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
+			ctx.Expect(ve.Rule).ToEqual("V2")
+			ctx.Expect(ve.Field).ToEqual("EventsStore")
+			ctx.Expect(pub.closed.Load()).ToEqual(int32(0))
+		})
 	})
-	if app != nil {
-		t.Fatal("New must not return an App when validation fails")
-	}
-	var ve *compose.ValidationError
-	if !errors.As(err, &ve) || ve.Rule != "V2" || ve.Field != "EventsStore" {
-		t.Fatalf("New = %v, want a V2 ValidationError on EventsStore", err)
-	}
-	if pub.closed.Load() != 0 {
-		t.Fatal("a failed New must not close publishers: the consumer still owns them")
-	}
 }
 
 // TestNew_StartsNothing: New on a valid Spec does no I/O; the store probe
 // happens only at Start (design §D4).
 func TestNew_StartsNothing(t *testing.T) {
-	f := newFixture(t, "new-starts-nothing")
-	app := mustNew(t, f.spec)
-	if f.events.pings.Load() != 0 {
-		t.Fatal("New must not ping stores")
-	}
-	if app.Engine() != nil || app.sys != nil {
-		t.Fatal("New must not build an engine or an actor system")
-	}
+	specs.Describe(t, "New on a valid Spec does no I/O", func(s *specs.Spec) {
+		s.It("pings no store and builds no engine or actor system", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "new-starts-nothing")
+			app := mustNew(ctx.T, f.spec)
+			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
+			ctx.Expect(app.Engine()).To(specs.BeNil())
+			ctx.Expect(app.sys).To(specs.BeNil())
+		})
+	})
 }
 
 // TestNew_NegativeShutdownTimeoutFailsAtNew is maintainer decision 3: V7
 // rejects a negative ShutdownTimeout at New instead of at lifecycle.New.
 func TestNew_NegativeShutdownTimeoutFailsAtNew(t *testing.T) {
-	f := newFixture(t, "negative-timeout")
-	f.spec.ShutdownTimeout = -time.Second
-	_, err := New(f.spec)
-	var ve *compose.ValidationError
-	if !errors.As(err, &ve) || ve.Rule != "V7" {
-		t.Fatalf("New = %v, want a V7 ValidationError", err)
-	}
+	specs.Describe(t, "New rejects a negative ShutdownTimeout", func(s *specs.Spec) {
+		s.It("fails with a V7 ValidationError", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "negative-timeout")
+			f.spec.ShutdownTimeout = -time.Second
+			_, err := New(f.spec)
+			var ve *compose.ValidationError
+			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
+			ctx.Expect(ve.Rule).ToEqual("V7")
+		})
+	})
 }
 
 // TestNew_G1_ClusterRequiresEntityKinds: WithCluster without entity kinds
 // fails at New, not at the first remote spawn (design §D4a G1).
 func TestNew_G1_ClusterRequiresEntityKinds(t *testing.T) {
-	f := newFixture(t, "cluster-kinds")
+	specs.Describe(t, "New rejects WithCluster without entity kinds or without a cluster config", func(s *specs.Spec) {
+		s.It("reports the missing kinds and the nil config, and accepts a config with kinds", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "cluster-kinds")
 
-	_, err := New(f.spec, WithCluster(actor.NewClusterConfig()))
-	if !errors.Is(err, ErrClusterKindsRequired) {
-		t.Fatalf("New without kinds = %v, want ErrClusterKindsRequired", err)
-	}
-	_, err = New(f.spec, WithCluster(nil, &wallet{}))
-	if !errors.Is(err, ErrClusterConfigRequired) {
-		t.Fatalf("New with a nil cluster config = %v, want ErrClusterConfigRequired", err)
-	}
-	app, err := New(f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
-	if err != nil {
-		t.Fatalf("New with kinds = %v, want nil", err)
-	}
-	_ = app.Stop(context.Background())
+			_, err := New(f.spec, WithCluster(actor.NewClusterConfig()))
+			ctx.Expect(err).To(specs.MatchError(ErrClusterKindsRequired))
+			_, err = New(f.spec, WithCluster(nil, &wallet{}))
+			ctx.Expect(err).To(specs.MatchError(ErrClusterConfigRequired))
+			app, err := New(f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
+			ctx.Expect(err).To(specs.BeNil())
+			_ = app.Stop(context.Background())
+		})
+	})
 }
 
 // TestNew_G2_ActorSystemName agrees with GoAkt's own name check for every
@@ -240,12 +252,15 @@ func TestNew_G2_ActorSystemName(t *testing.T) {
 
 // TestNew_ReportsEveryProblem joins Spec and GoAkt problems in one error.
 func TestNew_ReportsEveryProblem(t *testing.T) {
-	_, err := New(compose.Spec{Name: "bad name", Families: compose.Saga}, WithCluster(actor.NewClusterConfig()))
-	for _, want := range []string{"(V2)", "(G2)", "(G1)"} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("New error %v does not report %s", err, want)
+	specs.Describe(t, "New joins Spec and GoAkt problems in one error", func(s *specs.Spec) {
+		_, err := New(compose.Spec{Name: "bad name", Families: compose.Saga}, WithCluster(actor.NewClusterConfig()))
+		for _, want := range []string{"(V2)", "(G2)", "(G1)"} {
+			s.It("reports "+want, func(ctx *specs.Context) {
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				ctx.Expect(err.Error()).To(specs.Contain(want))
+			})
 		}
-	}
+	})
 }
 
 // TestStart_FailureAtEachStepReleasesEverything injects a failure at the
@@ -307,19 +322,22 @@ func TestStart_FailureAtEachStepReleasesEverything(t *testing.T) {
 
 // TestStart_ProbeFailureNamesTheStore uses a real Ping failure, not a hook.
 func TestStart_ProbeFailureNamesTheStore(t *testing.T) {
-	f := newFixture(t, "probe-fails")
-	f.events.pingErr = errors.New("connection refused")
-	app := mustNew(t, f.spec)
+	specs.Describe(t, "Start reports a real store Ping failure as a probe StartError naming the store", func(s *specs.Spec) {
+		s.It("names EventsStore and closes every publisher", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "probe-fails")
+			f.events.pingErr = errors.New("connection refused")
+			app := mustNew(ctx.T, f.spec)
 
-	err := app.Start(context.Background())
+			err := app.Start(context.Background())
 
-	var se *compose.StartError
-	if !errors.As(err, &se) || se.Step != StepProbeStores || !strings.Contains(se.Err.Error(), "EventsStore") {
-		t.Fatalf("Start = %v, want a probe StartError naming EventsStore", err)
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatal("a failed probe must close every publisher")
-	}
+			var se *compose.StartError
+			ctx.Expect(err).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Step).ToEqual(StepProbeStores)
+			ctx.Expect(errText(se.Err)).To(specs.Contain("EventsStore"))
+			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
+			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
+		})
+	})
 }
 
 // TestStart_ActorSystemStepFailsForReal uses a real step-2 failure, no hook:
@@ -358,39 +376,40 @@ func TestStart_ActorSystemStepFailsForReal(t *testing.T) {
 // the lifecycle's ctx.Err() check fails the first step before it runs
 // (maintainer decision 1), and the publishers are still released.
 func TestStart_CancelledContextStartsNothing(t *testing.T) {
-	f := newFixture(t, "cancelled")
-	app := mustNew(t, f.spec)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	specs.Describe(t, "Start on a done context fails the first step before it runs and still releases publishers", func(s *specs.Spec) {
+		s.It("fails the probe step with context.Canceled, runs nothing and closes every publisher", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "cancelled")
+			app := mustNew(ctx.T, f.spec)
+			cctx, cancel := context.WithCancel(context.Background())
+			cancel()
 
-	err := app.Start(ctx)
+			err := app.Start(cctx)
 
-	var se *compose.StartError
-	if !errors.As(err, &se) || se.Step != StepProbeStores || !errors.Is(err, context.Canceled) {
-		t.Fatalf("Start = %v, want a StartError for the probe step carrying context.Canceled", err)
-	}
-	if f.events.pings.Load() != 0 || app.sys != nil {
-		t.Fatal("nothing may run on a done context")
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatal("publishers must be released")
-	}
+			var se *compose.StartError
+			ctx.Expect(err).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Step).ToEqual(StepProbeStores)
+			ctx.Expect(err).To(specs.MatchError(context.Canceled))
+			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
+			ctx.Expect(app.sys).To(specs.BeNil())
+			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
+			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
+		})
+	})
 }
 
 // TestStop_NeverStartedClosesPublishers: ownership moved to the App at
 // New, so Stop without Start closes them (design §D5).
 func TestStop_NeverStartedClosesPublishers(t *testing.T) {
-	f := newFixture(t, "never-started")
-	app := mustNew(t, f.spec)
-	if err := app.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatal("Stop on a never-started App must close every publisher")
-	}
-	if f.events.pings.Load() != 0 {
-		t.Fatal("Stop on a never-started App must not touch the stores")
-	}
+	specs.Describe(t, "Stop on a never-started App closes the publishers it took ownership of at New", func(s *specs.Spec) {
+		s.It("closes every publisher and touches no store", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "never-started")
+			app := mustNew(ctx.T, f.spec)
+			ctx.Expect(app.Stop(context.Background())).To(specs.BeNil())
+			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
+			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
+			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
+		})
+	})
 }
 
 // TestStop_AfterStopIsNoOp and Start after Stop is refused.
@@ -742,18 +761,19 @@ func (p *lyingStatePublisher) Describe() adapter.Descriptor {
 // a declared adapter whose declaration and methods disagree fails before
 // anything starts, and the consumer keeps owning its publishers.
 func TestNew_V8RejectsALyingPublisherWithNothingStarted(t *testing.T) {
-	f := newFixture(t, "lying-publisher")
-	liar := &lyingStatePublisher{statePublisher: newStatePublisher("states-1")}
-	f.spec.StatePublishers = []publishing.StatePublisher{liar}
-	app, err := New(f.spec)
-	if app != nil {
-		t.Fatal("New must not return an App when V8 fails")
-	}
-	var ve *compose.ValidationError
-	if !errors.As(err, &ve) || ve.Rule != "V8" || ve.Field != "StatePublishers[0]" {
-		t.Fatalf("New = %v, want a V8 ValidationError on StatePublishers[0]", err)
-	}
-	if f.events.pings.Load() != 0 || liar.closed.Load() != 0 {
-		t.Fatal("a failed New must not ping stores or close publishers")
-	}
+	specs.Describe(t, "New runs rule V8 and rejects a publisher whose declaration and methods disagree", func(s *specs.Spec) {
+		s.It("returns no App and a V8 ValidationError on StatePublishers[0], pinging and closing nothing", func(ctx *specs.Context) {
+			f := newFixture(ctx.T, "lying-publisher")
+			liar := &lyingStatePublisher{statePublisher: newStatePublisher("states-1")}
+			f.spec.StatePublishers = []publishing.StatePublisher{liar}
+			app, err := New(f.spec)
+			ctx.Expect(app).To(specs.BeNil())
+			var ve *compose.ValidationError
+			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
+			ctx.Expect(ve.Rule).ToEqual("V8")
+			ctx.Expect(ve.Field).ToEqual("StatePublishers[0]")
+			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
+			ctx.Expect(liar.closed.Load()).ToEqual(int32(0))
+		})
+	})
 }
