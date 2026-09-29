@@ -48,7 +48,6 @@ import (
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/pause"
 	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
 	mockadapter "github.com/getsyntegrity/ego/mocks/eventadapter"
 	mocksoffsetstore "github.com/getsyntegrity/ego/mocks/offsetstore"
@@ -1727,117 +1726,113 @@ func TestRunner(t *testing.T) {
 }
 
 func TestProjectionRunnerLagMetrics(t *testing.T) {
-	t.Run("lag resets to zero when projection is caught up", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "lag-test"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(3)
+	specs.Describe(t, "the runner commits the offset of processed events while recording lag metrics", func(s *specs.Spec) {
+		s.It("lag resets to zero when projection is caught up", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "lag-test"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(3)
 
-		journalStore := testkit2.NewEventsStore()
-		require.NoError(t, journalStore.Connect(ctx))
-		offsetStore := testkit2.NewOffsetStore()
-		require.NoError(t, offsetStore.Connect(ctx))
+			journalStore := testkit2.NewEventsStore()
+			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
+			offsetStore := testkit2.NewOffsetStore()
+			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
 
-		handler := projection.NewDiscardHandler()
-		meter := noopmetric.NewMeterProvider().Meter("test")
-		m := instrumentation.New(meter)
+			handler := projection.NewDiscardHandler()
+			meter := noopmetric.NewMeterProvider().Meter("test")
+			m := instrumentation.New(meter)
 
-		event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
-		require.NoError(t, err)
-		timestamp := time.Now().Unix()
+			event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
+			ctx.Expect(err).To(specs.BeNil())
+			timestamp := time.Now().Unix()
 
-		journals := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          event,
-				Timestamp:      timestamp,
-				Shard:          shardNumber,
-			},
-		}
-		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
+			journals := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event:          event,
+					Timestamp:      timestamp,
+					Shard:          shardNumber,
+				},
+			}
+			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
 
-		runner := New(projectionName, handler, journalStore, offsetStore,
-			WithPullInterval(time.Millisecond),
-			WithMetrics(m))
+			runner := New(projectionName, handler, journalStore, offsetStore,
+				WithPullInterval(time.Millisecond),
+				WithMetrics(m))
 
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
 
-		// Wait for the runner to process the event and then tick again with no events.
-		pause.For(time.Second)
+			// Wait for the runner to process the event; the caught-up ticks that follow
+			// only reset the lag gauges.
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
+			// Verify the offset was committed (projection processed the event).
+			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(timestamp), "the event offset to be committed")
+			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Expect(actual.GetValue()).ToEqual(timestamp)
 
-		// Verify the offset was committed (projection processed the event).
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
-		actual, err := offsetStore.GetCurrentOffset(ctx, projectionID)
-		require.NoError(t, err)
-		require.NotNil(t, actual)
-		assert.Equal(t, timestamp, actual.GetValue())
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-		require.NoError(t, runner.Stop())
-		require.NoError(t, journalStore.Disconnect(ctx))
-		require.NoError(t, offsetStore.Disconnect(ctx))
-	})
+		s.It("lag uses seconds-based offset and converts to milliseconds", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "lag-formula-test"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(5)
 
-	t.Run("lag uses seconds-based offset and converts to milliseconds", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "lag-formula-test"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(5)
+			journalStore := testkit2.NewEventsStore()
+			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
+			offsetStore := testkit2.NewOffsetStore()
+			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
 
-		journalStore := testkit2.NewEventsStore()
-		require.NoError(t, journalStore.Connect(ctx))
-		offsetStore := testkit2.NewOffsetStore()
-		require.NoError(t, offsetStore.Connect(ctx))
+			handler := projection.NewDiscardHandler()
+			meter := noopmetric.NewMeterProvider().Meter("test")
+			m := instrumentation.New(meter)
 
-		handler := projection.NewDiscardHandler()
-		meter := noopmetric.NewMeterProvider().Meter("test")
-		m := instrumentation.New(meter)
+			// Write an event with a timestamp 2 seconds in the past.
+			pastTimestamp := time.Now().Unix() - 2
+			event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
 
-		// Write an event with a timestamp 2 seconds in the past.
-		pastTimestamp := time.Now().Unix() - 2
-		event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
+			journals := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event:          event,
+					Timestamp:      pastTimestamp,
+					Shard:          shardNumber,
+				},
+			}
+			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
 
-		journals := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          event,
-				Timestamp:      pastTimestamp,
-				Shard:          shardNumber,
-			},
-		}
-		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
+			runner := New(projectionName, handler, journalStore, offsetStore,
+				WithPullInterval(time.Millisecond),
+				WithMetrics(m))
 
-		runner := New(projectionName, handler, journalStore, offsetStore,
-			WithPullInterval(time.Millisecond),
-			WithMetrics(m))
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
 
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
+			// Wait for the offset to be committed with the event's timestamp.
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
+			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(pastTimestamp), "the event offset to be committed")
+			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Expect(actual.GetValue()).ToEqual(pastTimestamp)
 
-		// Wait for processing and a subsequent caught-up tick.
-		pause.For(time.Second)
-
-		// Verify the offset was committed with the event's timestamp.
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
-		actual, err := offsetStore.GetCurrentOffset(ctx, projectionID)
-		require.NoError(t, err)
-		require.NotNil(t, actual)
-		assert.Equal(t, pastTimestamp, actual.GetValue())
-
-		require.NoError(t, runner.Stop())
-		require.NoError(t, journalStore.Disconnect(ctx))
-		require.NoError(t, offsetStore.Disconnect(ctx))
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
+		})
 	})
 }
 
@@ -1897,137 +1892,143 @@ func (a *noopRunnerAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.Any, error
 // batch of events commits its offset exactly once, and a caught-up shard is
 // not fetched again on subsequent pulls.
 func TestRunnerPullEfficiency(t *testing.T) {
-	t.Run("with caught-up shard skipped, offset cached and batch committed once", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
+	specs.Describe(t, "the runner pulls in proportion to the active shards", func(s *specs.Spec) {
+		s.It("with caught-up shard skipped, offset cached and batch committed once", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
-
-		event, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
-
-		const (
-			committedOffset = int64(100)
-			latestOffset    = int64(500)
-		)
-
-		events := []*egopb.Event{
-			{PersistenceId: persistenceID, SequenceNumber: 1, Event: event, Timestamp: 200, Shard: shardNumber},
-			{PersistenceId: persistenceID, SequenceNumber: 2, Event: event, Timestamp: 300, Shard: shardNumber},
-			{PersistenceId: persistenceID, SequenceNumber: 3, Event: event, Timestamp: latestOffset, Shard: shardNumber},
-		}
-
-		maxBufferSize := 10
-
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		// the committed offset must be resolved from the store exactly once:
-		// afterwards the runner serves it from its in-memory cache.
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(&egopb.Offset{
-			ShardNumber:    shardNumber,
-			ProjectionName: projectionName,
-			Value:          committedOffset,
-		}, nil).Once()
-		// the whole batch of three events must commit exactly once, with the
-		// batch next offset.
-		offsetStore.EXPECT().WriteOffset(mock.Anything, mock.MatchedBy(func(offset *egopb.Offset) bool {
-			return offset.GetShardNumber() == shardNumber && offset.GetValue() == latestOffset
-		})).Return(nil).Once()
-
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: latestOffset}, nil)
-		// once the shard is caught up (committed == latest), subsequent pulls
-		// must skip it entirely: a second fetch would violate Once().
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, committedOffset, uint64(maxBufferSize)).
-			Return(events, latestOffset, nil).Once()
-
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(10*time.Millisecond),
-			WithLogger(discardLogger),
-		)
-		runner.maxBufferSize = maxBufferSize
-
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
-
-		// many pull intervals elapse here; the Once() expectations above
-		// prove none of them re-fetched the caught-up shard.
-		pause.For(time.Second)
-
-		require.True(t, runner.running.Load())
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
-
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with events stream nudge and full buffer re-poll processing ahead of the pull interval", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-
-		eventsStore := testkit2.NewEventsStore()
-		require.NoError(t, eventsStore.Connect(ctx))
-		offsetStore := testkit2.NewOffsetStore()
-		require.NoError(t, offsetStore.Connect(ctx))
-
-		stream := eventstream.New()
-
-		handler := projection.NewDiscardHandler()
-		// the pull interval is far longer than the test: any processing that
-		// happens can only have been triggered by the stream nudge, and any
-		// processing beyond the first buffer only by the full-buffer re-poll.
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(10*time.Minute),
-			WithLogger(discardLogger),
-			WithEventsStream(stream, testEventsTopic),
-		)
-		runner.maxBufferSize = 2
-
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
-
-		event, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
-
-		count := 5
-		journals := make([]*egopb.Event, count)
-		for i := range count {
-			journals[i] = &egopb.Event{
-				PersistenceId:  persistenceID,
-				SequenceNumber: uint64(i + 1),
-				Event:          event,
-				Timestamp:      int64(i + 1),
-				Shard:          shardNumber,
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
 			}
-		}
-		require.NoError(t, eventsStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		// mimic what entity actors do after persisting events on this node
-		stream.Publish(testEventsTopic, journals[count-1])
+			event, err := anypb.New(&testpb.AccountCredited{})
+			ctx.Expect(err).To(specs.BeNil())
 
-		pause.For(time.Second)
+			const (
+				committedOffset = int64(100)
+				latestOffset    = int64(500)
+			)
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
-		actual, err := offsetStore.GetCurrentOffset(ctx, projectionID)
-		require.NoError(t, err)
-		// all five events were processed from a single nudge even though the
-		// buffer only holds two: the full-buffer re-poll drained the backlog.
-		require.EqualValues(t, journals[count-1].GetTimestamp(), actual.GetValue())
+			events := []*egopb.Event{
+				{PersistenceId: persistenceID, SequenceNumber: 1, Event: event, Timestamp: 200, Shard: shardNumber},
+				{PersistenceId: persistenceID, SequenceNumber: 2, Event: event, Timestamp: 300, Shard: shardNumber},
+				{PersistenceId: persistenceID, SequenceNumber: 3, Event: event, Timestamp: latestOffset, Shard: shardNumber},
+			}
 
-		require.NoError(t, eventsStore.Disconnect(ctx))
-		require.NoError(t, offsetStore.Disconnect(ctx))
-		require.NoError(t, runner.Stop())
+			maxBufferSize := 10
+
+			writes := atomic.NewInt32(0)
+			pulls := atomic.NewInt32(0)
+
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			// the committed offset must be resolved from the store exactly once:
+			// afterwards the runner serves it from its in-memory cache.
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(&egopb.Offset{
+				ShardNumber:    shardNumber,
+				ProjectionName: projectionName,
+				Value:          committedOffset,
+			}, nil).Once()
+			// the whole batch of three events must commit exactly once, with the
+			// batch next offset.
+			offsetStore.EXPECT().WriteOffset(mock.Anything, mock.MatchedBy(func(offset *egopb.Offset) bool {
+				return offset.GetShardNumber() == shardNumber && offset.GetValue() == latestOffset
+			})).Return(nil).Run(func(_ context.Context, _ *egopb.Offset) { writes.Inc() }).Once()
+
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: latestOffset}, nil).
+				Run(func(_ context.Context) { pulls.Inc() })
+			// once the shard is caught up (committed == latest), subsequent pulls
+			// must skip it entirely: a second fetch would violate Once().
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, committedOffset, uint64(maxBufferSize)).
+				Return(events, latestOffset, nil).Once()
+
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(10*time.Millisecond),
+				WithLogger(discardLogger),
+			)
+			runner.maxBufferSize = maxBufferSize
+
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
+
+			// once the batch is committed, several more pull intervals must elapse;
+			// the Once() expectations above prove none of them re-fetched the
+			// caught-up shard.
+			awaitCalls(ctx.T, writes, 1, "the batch offset to be committed")
+			pullsAtCommit := pulls.Load()
+			awaitCalls(ctx.T, pulls, pullsAtCommit+5, "five more pull passes after the commit")
+
+			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
+
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with events stream nudge and full buffer re-poll processing ahead of the pull interval", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
+
+			eventsStore := testkit2.NewEventsStore()
+			ctx.Expect(eventsStore.Connect(bg)).To(specs.BeNil())
+			offsetStore := testkit2.NewOffsetStore()
+			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
+
+			stream := eventstream.New()
+
+			handler := projection.NewDiscardHandler()
+			// the pull interval is far longer than the test: any processing that
+			// happens can only have been triggered by the stream nudge, and any
+			// processing beyond the first buffer only by the full-buffer re-poll.
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(10*time.Minute),
+				WithLogger(discardLogger),
+				WithEventsStream(stream, testEventsTopic),
+			)
+			runner.maxBufferSize = 2
+
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
+
+			event, err := anypb.New(&testpb.AccountCredited{})
+			ctx.Expect(err).To(specs.BeNil())
+
+			count := 5
+			journals := make([]*egopb.Event, count)
+			for i := range count {
+				journals[i] = &egopb.Event{
+					PersistenceId:  persistenceID,
+					SequenceNumber: uint64(i + 1),
+					Event:          event,
+					Timestamp:      int64(i + 1),
+					Shard:          shardNumber,
+				}
+			}
+			ctx.Expect(eventsStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
+
+			// mimic what entity actors do after persisting events on this node
+			stream.Publish(testEventsTopic, journals[count-1])
+
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
+			// all five events were processed from a single nudge even though the
+			// buffer only holds two: the full-buffer re-poll drained the backlog.
+			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(journals[count-1].GetTimestamp()), "the backlog to be drained")
+			ctx.Expect(actual.GetValue()).ToEqual(journals[count-1].GetTimestamp())
+
+			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
 	})
 }
 
@@ -2036,18 +2037,20 @@ func TestRunnerPullEfficiency(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestProjectionRunnerDefaultLogger(t *testing.T) {
-	t.Run("no withLogger option yields the discard logger", func(t *testing.T) {
-		runner := New("projection-name", testHandler1{}, nil, nil)
-		require.NotNil(t, runner.logger)
-		// A runner is always handed the actor system's logger by the
-		// projection actor; the construction default must stay silent.
-		assert.Same(t, discardLogger, runner.logger)
-	})
+	specs.Describe(t, "a Runner is silent unless it is given a logger", func(s *specs.Spec) {
+		s.It("no withLogger option yields the discard logger", func(ctx *specs.Context) {
+			runner := New("projection-name", testHandler1{}, nil, nil)
+			ctx.Expect(runner.logger).To(specs.Not(specs.BeNil()))
+			// A runner is always handed the actor system's logger by the
+			// projection actor; the construction default must stay silent.
+			ctx.Expect(runner.logger == discardLogger).To(specs.BeTrue())
+		})
 
-	t.Run("withLogger overrides the default", func(t *testing.T) {
-		custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
-		runner := New("projection-name", testHandler1{}, nil, nil, WithLogger(custom))
-		assert.Same(t, custom, runner.logger)
+		s.It("withLogger overrides the default", func(ctx *specs.Context) {
+			custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
+			runner := New("projection-name", testHandler1{}, nil, nil, WithLogger(custom))
+			ctx.Expect(runner.logger == custom).To(specs.BeTrue())
+		})
 	})
 }
 
