@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package projectionrunner
 
 import (
 	"testing"
@@ -44,77 +44,77 @@ func TestOption(t *testing.T) {
 	recovery := projection.NewRecovery()
 
 	t.Run("WithRefreshInterval", func(t *testing.T) {
-		var r projectionRunner
-		withPullInterval(ts).Apply(&r)
+		var r Runner
+		WithPullInterval(ts).Apply(&r)
 		assert.Equal(t, ts, r.pullInterval)
 	})
 	t.Run("WithMaxBufferSize", func(t *testing.T) {
-		var r projectionRunner
-		withMaxBufferSize(5).Apply(&r)
+		var r Runner
+		WithMaxBufferSize(5).Apply(&r)
 		assert.Equal(t, 5, r.maxBufferSize)
 	})
 	t.Run("WithStartOffset", func(t *testing.T) {
-		var r projectionRunner
-		withStartOffset(from).Apply(&r)
+		var r Runner
+		WithStartOffset(from).Apply(&r)
 		assert.Equal(t, from, r.startingOffset)
 	})
 	t.Run("WithResetOffset", func(t *testing.T) {
-		var r projectionRunner
-		withResetOffset(to).Apply(&r)
+		var r Runner
+		WithResetOffset(to).Apply(&r)
 		assert.Equal(t, to, r.resetOffsetTo)
 	})
 	t.Run("WithLogger", func(t *testing.T) {
-		var r projectionRunner
-		withLogger(DiscardLogger).Apply(&r)
-		assert.Same(t, DiscardLogger, r.logger)
+		var r Runner
+		WithLogger(discardLogger).Apply(&r)
+		assert.Same(t, discardLogger, r.logger)
 	})
 	t.Run("WithRecoveryStrategy", func(t *testing.T) {
-		var r projectionRunner
-		withRecoveryStrategy(recovery).Apply(&r)
+		var r Runner
+		WithRecoveryStrategy(recovery).Apply(&r)
 		assert.Equal(t, recovery, r.recovery)
 	})
 }
 
 func TestWithDeadLetterHandler(t *testing.T) {
 	dlh := projection.NewDiscardDeadLetterHandler()
-	var r projectionRunner
-	withDeadLetterHandler(dlh).Apply(&r)
+	var r Runner
+	WithDeadLetterHandler(dlh).Apply(&r)
 	require.NotNil(t, r.deadLetterHandler)
 	assert.Equal(t, dlh, r.deadLetterHandler)
 }
 
 func TestWithDeadLetterHandlerNil(t *testing.T) {
-	var r projectionRunner
-	withDeadLetterHandler(nil).Apply(&r)
+	var r Runner
+	WithDeadLetterHandler(nil).Apply(&r)
 	assert.Nil(t, r.deadLetterHandler)
 }
 
 func TestWithEventAdapters(t *testing.T) {
 	adapter := &runnerTestAdapter{}
 	adapters := []eventadapter.EventAdapter{adapter}
-	var r projectionRunner
-	withEventAdapters(adapters).Apply(&r)
+	var r Runner
+	WithEventAdapters(adapters).Apply(&r)
 	require.Len(t, r.eventAdapters, 1)
 	assert.Equal(t, adapter, r.eventAdapters[0])
 }
 
 func TestWithEventAdaptersEmpty(t *testing.T) {
-	var r projectionRunner
-	withEventAdapters(nil).Apply(&r)
+	var r Runner
+	WithEventAdapters(nil).Apply(&r)
 	assert.Nil(t, r.eventAdapters)
 }
 
 func TestWithMetrics(t *testing.T) {
 	m := &instrumentation.Instruments{}
-	var r projectionRunner
-	withMetrics(m).Apply(&r)
+	var r Runner
+	WithMetrics(m).Apply(&r)
 	assert.Equal(t, m, r.metrics)
 }
 
 func TestWithEncryptor(t *testing.T) {
 	enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
-	var r projectionRunner
-	withEncryptor(enc).Apply(&r)
+	var r Runner
+	WithEncryptor(enc).Apply(&r)
 	require.NotNil(t, r.encryptor)
 	assert.Equal(t, enc, r.encryptor)
 }

@@ -20,12 +20,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package projectionrunner
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,9 +119,9 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withEncryptor(encryptor),
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithEncryptor(encryptor),
 		)
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
@@ -127,7 +129,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		err = runner.Start(ctx)
 		require.NoError(t, err)
 
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -200,9 +202,9 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withEncryptor(encryptor),
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithEncryptor(encryptor),
 		)
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
@@ -210,7 +212,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		err = runner.Start(ctx)
 		require.NoError(t, err)
 
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -274,9 +276,9 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withEventAdapters([]eventadapter.EventAdapter{adapter}),
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithEventAdapters([]eventadapter.EventAdapter{adapter}),
 		)
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
@@ -284,7 +286,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 		err = runner.Start(ctx)
 		require.NoError(t, err)
 
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -325,11 +327,11 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, nil)
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// wait past the first retry backoff so the failed pull is retried
 		pause.For(storeRetryInitialDelay + 500*time.Millisecond)
@@ -340,7 +342,7 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 		assert.True(t, runner.running.Load())
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("with unprocessable event the projectionRunner stops", func(t *testing.T) {
+	t.Run("with unprocessable event the Runner stops", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -386,24 +388,37 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
 		// testHandler1 always fails and the default recovery policy is Fail
-		runner := newProjectionRunner(projectionName, testHandler1{}, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond))
+		runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond))
 		runner.maxBufferSize = maxBufferSize
 
+		failures := make(chan error, 2)
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, func(err error) { failures <- err })
 
 		// the unprocessable event stops the processing loop permanently
 		require.Eventually(t, func() bool {
 			return !runner.running.Load()
 		}, 2*time.Second, 10*time.Millisecond)
 
+		// the host is notified once, with the handler's own error: the
+		// runner's internal classification never leaks to the host
+		select {
+		case err := <-failures:
+			require.EqualError(t, err, "damn")
+			var internal *eventError
+			assert.False(t, errors.As(err, &internal))
+		case <-time.After(2 * time.Second):
+			t.Fatal("the failure callback was not invoked")
+		}
+		assert.Empty(t, failures)
+
 		eventsStore.AssertExpectations(t)
 		offsetStore.AssertExpectations(t)
 
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("with mixed store and event errors in one batch the projectionRunner stops", func(t *testing.T) {
+	t.Run("with mixed store and event errors in one batch the Runner stops", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -441,18 +456,28 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, 0, assert.AnError)
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, poisonShard, offsetValue, uint64(maxBufferSize)).Return(events, nextOffset, nil)
 
-		runner := newProjectionRunner(projectionName, testHandler1{}, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond))
+		runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond))
 		runner.maxBufferSize = maxBufferSize
 
+		failures := make(chan error, 2)
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, func(err error) { failures <- err })
 
 		// the unprocessable event outranks the store failure: the loop stops
 		// instead of retrying, since retrying cannot advance past the event
 		require.Eventually(t, func() bool {
 			return !runner.running.Load()
 		}, 2*time.Second, 10*time.Millisecond)
+
+		// the host is notified with the event error, never the store error
+		select {
+		case err := <-failures:
+			require.EqualError(t, err, "damn")
+			assert.NotErrorIs(t, err, assert.AnError)
+		case <-time.After(2 * time.Second):
+			t.Fatal("the failure callback was not invoked")
+		}
 
 		eventsStore.AssertExpectations(t)
 		offsetStore.AssertExpectations(t)
@@ -471,11 +496,11 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, assert.AnError)
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(time.Millisecond))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// wait for the first failed pull to enter its backoff wait, then stop
 		pause.For(100 * time.Millisecond)
@@ -491,7 +516,7 @@ func TestRunner(t *testing.T) {
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
 		shardNumber := uint64(9)
-		logger := DiscardLogger
+		logger := discardLogger
 
 		// set up the event store
 		eventsStore := testkit2.NewEventsStore()
@@ -508,7 +533,7 @@ func TestRunner(t *testing.T) {
 		handler := projection.NewDiscardHandler()
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond), withLogger(logger))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond), WithLogger(logger))
 		// start the projection
 		err := runner.Start(ctx)
 		require.NoError(t, err)
@@ -516,7 +541,7 @@ func TestRunner(t *testing.T) {
 		require.Equal(t, projectionName, runner.Name())
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// persist some events
 		event, err := anypb.New(&testpb.AccountCredited{})
@@ -580,13 +605,13 @@ func TestRunner(t *testing.T) {
 		// create a underlying that return successfully
 		handler := &testHandler1{}
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, journalStore, offsetStore, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// persist some events
 		event, err := anypb.New(&testpb.AccountCredited{})
@@ -639,9 +664,9 @@ func TestRunner(t *testing.T) {
 		// create a underlying that return successfully
 		handler := &testHandler1{}
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withRecoveryStrategy(projection.NewRecovery(
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithRecoveryStrategy(projection.NewRecovery(
 				projection.WithRecoveryPolicy(projection.RetryAndFail),
 				projection.WithRetries(2),
 				projection.WithRetryDelay(100*time.Millisecond))))
@@ -650,7 +675,7 @@ func TestRunner(t *testing.T) {
 		err := runner.Start(ctx)
 		require.NoError(t, err)
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// persist some events
 		event, err := anypb.New(&testpb.AccountCredited{})
@@ -705,9 +730,9 @@ func TestRunner(t *testing.T) {
 		// create a underlying that return successfully
 		handler := &testHandler2{counter: atomic.NewInt32(0)}
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withRecoveryStrategy(projection.NewRecovery(
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithRecoveryStrategy(projection.NewRecovery(
 				projection.WithRecoveryPolicy(projection.Skip),
 				projection.WithRetries(2),
 				projection.WithRetryDelay(100*time.Millisecond))))
@@ -715,7 +740,7 @@ func TestRunner(t *testing.T) {
 		err := runner.Start(ctx)
 		require.NoError(t, err)
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 		// persist some events
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
@@ -778,9 +803,9 @@ func TestRunner(t *testing.T) {
 		// create a underlying that return successfully
 		handler := &testHandler2{counter: atomic.NewInt32(0)}
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withRecoveryStrategy(projection.NewRecovery(
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithRecoveryStrategy(projection.NewRecovery(
 				projection.WithRecoveryPolicy(projection.RetryAndSkip),
 				projection.WithRetries(2),
 				projection.WithRetryDelay(100*time.Millisecond))))
@@ -788,7 +813,7 @@ func TestRunner(t *testing.T) {
 		err := runner.Start(ctx)
 		require.NoError(t, err)
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 		// persist some events
 		event, err := anypb.New(&testpb.AccountCredited{})
 		assert.NoError(t, err)
@@ -880,7 +905,7 @@ func TestRunner(t *testing.T) {
 			Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.maxBufferSize = maxBufferSize
 
 		// start the projection
@@ -888,7 +913,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -910,7 +935,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, offsetStore.Connect(ctx))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, nil, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, nil, offsetStore, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.Error(t, err)
@@ -928,7 +953,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, eventsStore.Connect(ctx))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, nil, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, nil, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.Error(t, err)
@@ -951,7 +976,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, offsetStore.Connect(ctx))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.NoError(t, err)
@@ -979,7 +1004,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().Ping(mock.Anything).Return(errors.New("fail ping"))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.Error(t, err)
@@ -1002,7 +1027,7 @@ func TestRunner(t *testing.T) {
 		offsetStore.EXPECT().Ping(mock.Anything).Return(errors.New("fail ping"))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		// start the projection
 		err := runner.Start(ctx)
 		require.Error(t, err)
@@ -1025,7 +1050,7 @@ func TestRunner(t *testing.T) {
 		offsetStore.EXPECT().ResetOffset(ctx, projectionName, resetOffsetTo.UnixMilli()).Return(errors.New("fail to reset offset"))
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		// purposefully for test
 		runner.resetOffsetTo = resetOffsetTo
 
@@ -1037,7 +1062,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.AssertExpectations(t)
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("when fail to write the offset the projectionRunner retries and keeps running", func(t *testing.T) {
+	t.Run("when fail to write the offset the Runner retries and keeps running", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 		persistenceID := uuid.NewString()
@@ -1088,7 +1113,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
 
@@ -1097,7 +1122,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1108,7 +1133,7 @@ func TestRunner(t *testing.T) {
 
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("when fail to fetch shard numbers the projectionRunner retries and keeps running", func(t *testing.T) {
+	t.Run("when fail to fetch shard numbers the Runner retries and keeps running", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 		handler := projection.NewDiscardHandler()
@@ -1125,7 +1150,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, assert.AnError)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
 
@@ -1134,7 +1159,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1145,7 +1170,7 @@ func TestRunner(t *testing.T) {
 
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("when fail to get current offset the projectionRunner retries and keeps running", func(t *testing.T) {
+	t.Run("when fail to get current offset the Runner retries and keeps running", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 		shardNumber := uint64(9)
@@ -1171,7 +1196,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
 
@@ -1180,7 +1205,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1191,7 +1216,7 @@ func TestRunner(t *testing.T) {
 
 		require.NoError(t, runner.Stop())
 	})
-	t.Run("when fail to get shard events the projectionRunner retries and keeps running", func(t *testing.T) {
+	t.Run("when fail to get shard events the Runner retries and keeps running", func(t *testing.T) {
 		ctx := context.TODO()
 		projectionName := "db-writer"
 
@@ -1226,7 +1251,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(nil, 0, assert.AnError)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
 
@@ -1235,7 +1260,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1289,12 +1314,12 @@ func TestRunner(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withEncryptor(encryptor))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithEncryptor(encryptor))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1340,12 +1365,12 @@ func TestRunner(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withEventAdapters([]eventadapter.EventAdapter{adapter}))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithEventAdapters([]eventadapter.EventAdapter{adapter}))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1393,12 +1418,12 @@ func TestRunner(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withMetrics(m))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithMetrics(m))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1444,14 +1469,14 @@ func TestRunner(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withRecoveryStrategy(projection.NewRecovery(
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithRecoveryStrategy(projection.NewRecovery(
 				projection.WithRecoveryPolicy(projection.Skip))),
-			withDeadLetterHandler(dlh))
+			WithDeadLetterHandler(dlh))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1498,14 +1523,14 @@ func TestRunner(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withRecoveryStrategy(projection.NewRecovery(
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithRecoveryStrategy(projection.NewRecovery(
 				projection.WithRecoveryPolicy(projection.Skip))),
-			withDeadLetterHandler(dlh))
+			WithDeadLetterHandler(dlh))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1543,12 +1568,12 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		startOffset := time.Now().Add(-time.Hour)
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withStartOffset(startOffset))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithStartOffset(startOffset))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1606,7 +1631,7 @@ func TestRunner(t *testing.T) {
 		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
 
 		// create an instance of the projection
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore, withPullInterval(time.Millisecond))
+		runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 		runner.resetOffsetTo = resetOffsetTo
 		runner.maxBufferSize = maxBufferSize
 
@@ -1615,7 +1640,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 
 		// run the projection
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		pause.For(time.Second)
 
@@ -1660,12 +1685,12 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withMetrics(m))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithMetrics(m))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// Wait for the runner to process the event and then tick again with no events.
 		pause.For(time.Second)
@@ -1717,12 +1742,12 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 		}
 		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
-		runner := newProjectionRunner(projectionName, handler, journalStore, offsetStore,
-			withPullInterval(time.Millisecond),
-			withMetrics(m))
+		runner := New(projectionName, handler, journalStore, offsetStore,
+			WithPullInterval(time.Millisecond),
+			WithMetrics(m))
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// Wait for processing and a subsequent caught-up tick.
 		pause.For(time.Second)
@@ -1742,6 +1767,10 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 		require.NoError(t, offsetStore.Disconnect(ctx))
 	})
 }
+
+// testEventsTopic is the in-process topic the tests publish persisted events
+// on; the host passes its own topic through WithEventsStream.
+const testEventsTopic = "topic.events"
 
 type testHandler1 struct{}
 
@@ -1843,14 +1872,14 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			Return(events, latestOffset, nil).Once()
 
 		handler := projection.NewDiscardHandler()
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(10*time.Millisecond),
-			withLogger(DiscardLogger),
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(10*time.Millisecond),
+			WithLogger(discardLogger),
 		)
 		runner.maxBufferSize = maxBufferSize
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		// many pull intervals elapse here; the Once() expectations above
 		// prove none of them re-fetched the caught-up shard.
@@ -1879,15 +1908,15 @@ func TestRunnerPullEfficiency(t *testing.T) {
 		// the pull interval is far longer than the test: any processing that
 		// happens can only have been triggered by the stream nudge, and any
 		// processing beyond the first buffer only by the full-buffer re-poll.
-		runner := newProjectionRunner(projectionName, handler, eventsStore, offsetStore,
-			withPullInterval(10*time.Minute),
-			withLogger(DiscardLogger),
-			withEventsStream(stream),
+		runner := New(projectionName, handler, eventsStore, offsetStore,
+			WithPullInterval(10*time.Minute),
+			WithLogger(discardLogger),
+			WithEventsStream(stream, testEventsTopic),
 		)
 		runner.maxBufferSize = 2
 
 		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx)
+		runner.Run(ctx, nil)
 
 		event, err := anypb.New(&testpb.AccountCredited{})
 		require.NoError(t, err)
@@ -1906,7 +1935,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 		require.NoError(t, eventsStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
 
 		// mimic what entity actors do after persisting events on this node
-		stream.Publish(eventsTopic, journals[count-1])
+		stream.Publish(testEventsTopic, journals[count-1])
 
 		pause.For(time.Second)
 
@@ -1932,16 +1961,40 @@ func TestRunnerPullEfficiency(t *testing.T) {
 
 func TestProjectionRunnerDefaultLogger(t *testing.T) {
 	t.Run("no withLogger option yields the discard logger", func(t *testing.T) {
-		runner := newProjectionRunner("projection-name", testHandler1{}, nil, nil)
+		runner := New("projection-name", testHandler1{}, nil, nil)
 		require.NotNil(t, runner.logger)
 		// A runner is always handed the actor system's logger by the
 		// projection actor; the construction default must stay silent.
-		assert.Same(t, DiscardLogger, runner.logger)
+		assert.Same(t, discardLogger, runner.logger)
 	})
 
 	t.Run("withLogger overrides the default", func(t *testing.T) {
 		custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
-		runner := newProjectionRunner("projection-name", testHandler1{}, nil, nil, withLogger(custom))
+		runner := New("projection-name", testHandler1{}, nil, nil, WithLogger(custom))
 		assert.Same(t, custom, runner.logger)
 	})
+}
+
+// TestProjectionRunnerStaysRuntimeNeutral checks the transitive dependency
+// closure, which archcheck does not see: projection execution must not reach
+// the actor runtime that hosts it.
+func TestProjectionRunnerStaysRuntimeNeutral(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("the go tool is not on PATH")
+	}
+
+	out, err := exec.Command(goBin, "list", "-deps", ".").CombinedOutput()
+	require.NoError(t, err, "go list -deps failed: %s", out)
+
+	deps := strings.Fields(string(out))
+	require.NotEmpty(t, deps)
+	for _, dep := range deps {
+		assert.Falsef(t, strings.HasPrefix(dep, "github.com/tochemey/goakt"),
+			"internal/projectionrunner must not depend on GoAkt; found %s", dep)
+		assert.Falsef(t, strings.HasSuffix(dep, "/v4/engine"),
+			"internal/projectionrunner must not depend on the engine package; found %s", dep)
+		assert.Falsef(t, strings.HasSuffix(dep, "/internal/extensions"),
+			"internal/projectionrunner must not depend on the GoAkt adapter's internals; found %s", dep)
+	}
 }

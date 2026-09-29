@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/supervisor"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/atomic"
@@ -782,14 +783,14 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		offsetStore := testkit.NewOffsetStore()
 		require.NoError(t, offsetStore.Connect(ctx))
 
-		// testHandler1 always fails and the default recovery policy is Fail
+		// failingProjectionHandler always fails and the default recovery policy is Fail
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
 			goakt.WithLogger(logger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(journalStore),
 				extensions.NewOffsetStore(offsetStore),
 				extensions.NewProjectionExtension(map[string]*projection.Options{
-					projectionName: {Handler: testHandler1{}, BufferSize: 500, PullInterval: 100 * time.Millisecond, Recovery: projection.NewRecovery()},
+					projectionName: {Handler: failingProjectionHandler{}, BufferSize: 500, PullInterval: 100 * time.Millisecond, Recovery: projection.NewRecovery()},
 				})),
 			goakt.WithActorInitMaxRetries(3))
 
@@ -833,6 +834,40 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		require.NoError(t, journalStore.Disconnect(ctx))
 		require.NoError(t, offsetStore.Disconnect(ctx))
 	})
+}
+
+func TestProjectionSupervisorContract(t *testing.T) {
+	t.Run("keys the stop directive by the engine error type name", func(t *testing.T) {
+		// goakt ships directive rules to peer nodes by type name with
+		// singleton spawns: the name must not change across versions.
+		var rule *supervisor.DirectiveRule
+		for _, candidate := range newProjectionSupervisor().Rules() {
+			if candidate.ErrorType == "engine.projectionRunnerError" {
+				rule = &candidate
+			}
+		}
+		require.NotNil(t, rule)
+		assert.Equal(t, supervisor.StopDirective, rule.Directive)
+	})
+	t.Run("stops on the error the runner failure is escalated with", func(t *testing.T) {
+		cause := errors.New("damn")
+		err := &projectionRunnerError{err: cause}
+
+		directive, ok := newProjectionSupervisor().Directive(err)
+		require.True(t, ok)
+		assert.Equal(t, supervisor.StopDirective, directive)
+		assert.EqualError(t, err, "damn")
+		assert.ErrorIs(t, err, cause)
+	})
+}
+
+// failingProjectionHandler always fails to handle an event.
+type failingProjectionHandler struct{}
+
+var _ projection.Handler = failingProjectionHandler{}
+
+func (failingProjectionHandler) Handle(context.Context, string, *anypb.Any, uint64) error {
+	return errors.New("damn")
 }
 
 // flakyEventsStore delegates to the wrapped events store but fails ShardOffsets

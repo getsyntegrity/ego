@@ -34,13 +34,37 @@ import (
 	"github.com/getsyntegrity/ego/v4/internal/extensions"
 	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
 	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
+	"github.com/getsyntegrity/ego/v4/internal/projectionrunner"
 )
 
-// runnerFailed is the internal message the projection runner sends to its
-// host actor when the processing loop stops permanently on an unprocessable
-// event.
+// runnerFailed is the internal message the projection actor sends itself when
+// the runner's processing loop stops permanently on an unprocessable event.
 type runnerFailed struct {
 	err error
+}
+
+// projectionRunnerError reports an event that cannot be processed: a failed
+// decryption, a failed event adaptation, or a handler error under the Fail
+// and RetryAndFail recovery policies. Retrying would only replay the same
+// event, so the processing loop stops permanently and the host actor
+// escalates the error through supervision to make the failure visible.
+//
+// The type stays in this package on purpose: goakt keys supervisor
+// directives by the error's type name ("engine.projectionRunnerError") and
+// ships those names to peer nodes with singleton spawns, so renaming or moving
+// the type would break supervision in a cluster running mixed versions.
+type projectionRunnerError struct {
+	err error
+}
+
+// Error returns the underlying runner error message.
+func (e *projectionRunnerError) Error() string {
+	return e.err.Error()
+}
+
+// Unwrap exposes the underlying runner error.
+func (e *projectionRunnerError) Unwrap() error {
+	return e.err
 }
 
 // newProjectionSupervisor returns the supervisor applied to projection actors:
@@ -61,7 +85,7 @@ func newProjectionSupervisor() *supervisor.Supervisor {
 // ProjectionActor defines the projection actor
 // Only a single instance of this will run throughout the cluster
 type ProjectionActor struct {
-	runner  *projectionRunner
+	runner  *projectionrunner.Runner
 	metrics *instrumentation.Instruments
 }
 
@@ -97,17 +121,17 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return fmt.Errorf("projection %q is not registered: register it with engine.WithProjection on every node", ctx.ActorName())
 	}
 
-	opts := []runnerOption{
-		withLogger(goaktlog.Backend(ctx.ActorSystem().Logger())),
-		withRecoveryStrategy(options.Recovery),
-		withStartOffset(options.StartOffset),
-		withResetOffset(options.ResetOffset),
-		withMaxBufferSize(options.BufferSize),
-		withPullInterval(options.PullInterval),
+	opts := []projectionrunner.Option{
+		projectionrunner.WithLogger(goaktlog.Backend(ctx.ActorSystem().Logger())),
+		projectionrunner.WithRecoveryStrategy(options.Recovery),
+		projectionrunner.WithStartOffset(options.StartOffset),
+		projectionrunner.WithResetOffset(options.ResetOffset),
+		projectionrunner.WithMaxBufferSize(options.BufferSize),
+		projectionrunner.WithPullInterval(options.PullInterval),
 	}
 
 	if options.DeadLetterHandler != nil {
-		opts = append(opts, withDeadLetterHandler(options.DeadLetterHandler))
+		opts = append(opts, projectionrunner.WithDeadLetterHandler(options.DeadLetterHandler))
 	}
 
 	eventAdaptersExt, err := optionalExtension[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
@@ -115,7 +139,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 	if eventAdaptersExt != nil {
-		opts = append(opts, withEventAdapters(eventAdaptersExt.Adapters()))
+		opts = append(opts, projectionrunner.WithEventAdapters(eventAdaptersExt.Adapters()))
 	}
 
 	// Events persisted on this node trigger an immediate pull instead of
@@ -125,7 +149,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 	if eventsStreamExt != nil {
-		opts = append(opts, withEventsStream(eventsStreamExt.Underlying()))
+		opts = append(opts, projectionrunner.WithEventsStream(eventsStreamExt.Underlying(), eventsTopic))
 	}
 
 	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
@@ -133,7 +157,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		return err
 	}
 	if encryptorExt != nil {
-		opts = append(opts, withEncryptor(encryptorExt.Encryptor()))
+		opts = append(opts, projectionrunner.WithEncryptor(encryptorExt.Encryptor()))
 	}
 
 	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
@@ -143,11 +167,11 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 	if telemetryExt != nil {
 		x.metrics = instrumentation.New(telemetryExt.Meter())
 		if x.metrics != nil {
-			opts = append(opts, withMetrics(x.metrics))
+			opts = append(opts, projectionrunner.WithMetrics(x.metrics))
 		}
 	}
 
-	x.runner = newProjectionRunner(ctx.ActorName(), options.Handler, eventsStore, offsetStore, opts...)
+	x.runner = projectionrunner.New(ctx.ActorName(), options.Handler, eventsStore, offsetStore, opts...)
 
 	// Use context.Background() instead of ctx.Context() because PreStart's
 	// context is ephemeral — goakt wraps it in context.WithTimeout and cancels
@@ -166,12 +190,16 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 func (x *ProjectionActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
-		// Hand the actor PID to the runner before the processing loop starts:
-		// a loop that dies on an unprocessable event sends runnerFailed back
-		// so the actor fails through the normal supervision path instead of
-		// staying healthy-looking with a dead runner.
-		x.runner.pid = ctx.Self()
-		x.runner.Run(ctx.Context())
+		// Hand the runner a way back to this actor before the processing loop
+		// starts: a loop that dies on an unprocessable event sends
+		// runnerFailed back so the actor fails through the normal supervision
+		// path instead of staying healthy-looking with a dead runner.
+		pid := ctx.Self()
+		x.runner.Run(ctx.Context(), func(cause error) {
+			// A failed delivery means the host actor is already stopping, in
+			// which case the projection is going down anyway.
+			_ = goakt.Tell(context.Background(), pid, &runnerFailed{err: &projectionRunnerError{err: cause}})
+		})
 	case *runnerFailed:
 		ctx.Err(msg.err)
 	default:

@@ -20,19 +20,26 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+// Package projectionrunner executes a projection: it pulls events from the
+// events store shard by shard, hands them to the projection handler under the
+// configured recovery policy, forwards failed events to the dead letter
+// handler, and commits the processed offsets. It knows nothing about the actor
+// runtime that hosts it: the host starts and stops the runner and is told,
+// through the callback passed to Run, when an unprocessable event stops the
+// processing loop permanently.
+package projectionrunner
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/flowchartsman/retry"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
-	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -68,9 +75,9 @@ type shardItem struct {
 	wg    *sync.WaitGroup
 }
 
-// projectionRunner defines the projection projectionRunner
-type projectionRunner struct {
-	// Name specifies the projectionRunner Name
+// Runner defines the projection Runner
+type Runner struct {
+	// Name specifies the Runner Name
 	name string
 	// logger is the kit-logger Logger every runner record is written to
 	logger kitlog.Logger
@@ -149,6 +156,7 @@ type projectionRunner struct {
 	// persisted on this node. Events persisted on peer nodes are picked up
 	// by the interval-based pull.
 	eventsStream     eventstream.Stream
+	eventsTopic      string
 	streamSubscriber eventstream.Subscriber
 
 	// nudge triggers an immediate pull pass. Capacity one so sends coalesce.
@@ -159,24 +167,28 @@ type projectionRunner struct {
 	// next tick.
 	sawFullBatch atomic.Bool
 
-	// pid, when set, receives a *runnerFailed message after the
-	// processing loop stops permanently because an event cannot be processed,
-	// so the host projection actor can escalate the error through supervision.
-	// Failed store round trips never notify the host actor: they are retried
-	// in place with exponential backoff.
-	pid *goakt.PID
+	// onFailure, when set, is called with the cause after the processing
+	// loop stops permanently because an event cannot be processed, so the
+	// host can escalate the error through supervision. Failed store round
+	// trips never notify the host: they are retried in place with
+	// exponential backoff.
+	onFailure func(error)
 }
 
-// newProjectionRunner create an instance of projectionRunner given the name of the projection, the underlying and the offsets store
+// discardLogger is the construction default: the host always hands the runner
+// its own logger, so a runner built without WithLogger stays silent.
+var discardLogger kitlog.Logger = kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
+
+// New create an instance of Runner given the name of the projection, the underlying and the offsets store
 // The name of the projection should be unique
-func newProjectionRunner(name string,
+func New(name string,
 	handler projection.Handler,
 	eventsStore persistence.EventsStore,
 	offsetStore offsetstore.OffsetStore,
-	opts ...runnerOption) *projectionRunner {
-	runner := &projectionRunner{
+	opts ...Option) *Runner {
+	runner := &Runner{
 		name:             name,
-		logger:           DiscardLogger,
+		logger:           discardLogger,
 		handler:          handler,
 		eventsStore:      eventsStore,
 		offsetsStore:     offsetStore,
@@ -185,8 +197,8 @@ func newProjectionRunner(name string,
 		running:          atomic.NewBool(false),
 		pullInterval:     time.Second,
 		maxBufferSize:    500,
-		startingOffset:   ZeroTime,
-		resetOffsetTo:    ZeroTime,
+		startingOffset:   time.Time{},
+		resetOffsetTo:    time.Time{},
 		committedOffsets: make(map[uint64]int64),
 		nudge:            make(chan struct{}, 1),
 	}
@@ -210,8 +222,8 @@ func newProjectionRunner(name string,
 	return runner
 }
 
-// Start starts the projection projectionRunner
-func (x *projectionRunner) Start(ctx context.Context) error {
+// Start starts the projection Runner
+func (x *Runner) Start(ctx context.Context) error {
 	if x.running.Load() {
 		return nil
 	}
@@ -269,7 +281,7 @@ func (x *projectionRunner) Start(ctx context.Context) error {
 	// trigger an immediate pull instead of waiting for the next tick.
 	if x.eventsStream != nil {
 		x.streamSubscriber = x.eventsStream.AddSubscriber()
-		x.eventsStream.Subscribe(x.streamSubscriber, eventsTopic)
+		x.eventsStream.Subscribe(x.streamSubscriber, x.eventsTopic)
 		go x.nudgeLoop(x.workerCtx)
 	}
 
@@ -280,8 +292,8 @@ func (x *projectionRunner) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the projection projectionRunner
-func (x *projectionRunner) Stop() error {
+// Stop stops the projection Runner
+func (x *Runner) Stop() error {
 	// CompareAndSwap ensures Stop is idempotent and race-free when called
 	// concurrently (e.g. from processingLoop on error and from the outside).
 	if !x.running.CompareAndSwap(true, false) {
@@ -297,13 +309,15 @@ func (x *projectionRunner) Stop() error {
 	return nil
 }
 
-// Name returns the projection projectionRunner Name
-func (x *projectionRunner) Name() string {
+// Name returns the projection Runner Name
+func (x *Runner) Name() string {
 	return x.name
 }
 
-// Run start the projectionRunner
-func (x *projectionRunner) Run(_ context.Context) {
+// Run start the Runner. onFailure, when not nil, is called with the cause
+// once the processing loop stops permanently on an unprocessable event.
+func (x *Runner) Run(_ context.Context, onFailure func(error)) {
+	x.onFailure = onFailure
 	x.ticker.Start()
 	// processingLoop receives the worker-pool context so that cancellation from
 	// Stop() propagates through both the dispatch select and the workers.
@@ -316,7 +330,7 @@ func (x *projectionRunner) Run(_ context.Context) {
 // complete before the next pull.  No goroutines or channels are allocated per
 // pull.  A pull is triggered by the ticker, by a nudge from the local events
 // stream, or by a full-buffer read reporting that more events are pending.
-func (x *projectionRunner) processingLoop(ctx context.Context) {
+func (x *Runner) processingLoop(ctx context.Context) {
 	for {
 		select {
 		case <-x.stopSignal:
@@ -342,7 +356,7 @@ func (x *projectionRunner) processingLoop(ctx context.Context) {
 // store round trip never stops the loop: offsets advance only after a
 // successful batch, so the pass is simply retried with exponential backoff
 // until the store recovers.
-func (x *projectionRunner) runPass(ctx context.Context) bool {
+func (x *Runner) runPass(ctx context.Context) bool {
 	shards, err := x.pendingShards(ctx)
 	if err != nil {
 		return x.retryAfterStoreFailure(ctx, fmt.Errorf("failed to fetch the list of shards: %w", err))
@@ -381,13 +395,13 @@ func (x *projectionRunner) runPass(ctx context.Context) bool {
 	// errors into the next pass. An unprocessable event outranks store
 	// failures: it is deterministic, so retrying cannot advance past it.
 	var storeErr error
-	var eventErr *projectionRunnerError
+	var eventErr *eventError
 
 drain:
 	for {
 		select {
 		case err := <-x.workerErrCh:
-			if runnerErr, ok := errors.AsType[*projectionRunnerError](err); ok {
+			if runnerErr, ok := errors.AsType[*eventError](err); ok {
 				if eventErr == nil {
 					eventErr = runnerErr
 				}
@@ -406,10 +420,8 @@ drain:
 		x.ticker.Stop()
 		_ = x.Stop()
 
-		// A failed delivery means the host actor is already stopping, in
-		// which case the projection is going down anyway.
-		if x.pid != nil {
-			_ = goakt.Tell(context.Background(), x.pid, &runnerFailed{err: eventErr})
+		if x.onFailure != nil {
+			x.onFailure(eventErr.err)
 		}
 		return false
 	}
@@ -433,7 +445,7 @@ drain:
 // exponential backoff before the pass loop pulls again. It reports whether
 // the loop should keep running: the wait is cut short when the runner stops
 // or the context is cancelled.
-func (x *projectionRunner) retryAfterStoreFailure(ctx context.Context, err error) bool {
+func (x *Runner) retryAfterStoreFailure(ctx context.Context, err error) bool {
 	x.storeFailures++
 	delay := storeRetryDelay(x.storeFailures)
 	x.logger.ErrorContext(ctx, "projection store round trip failed, retrying",
@@ -470,7 +482,7 @@ func storeRetryDelay(failures int) time.Duration {
 // resolves their offset on first encounter and an empty read is harmless.
 // The returned slice is backed by pendingBuf and only valid until the next
 // pass.
-func (x *projectionRunner) pendingShards(ctx context.Context) ([]uint64, error) {
+func (x *Runner) pendingShards(ctx context.Context) ([]uint64, error) {
 	shardOffsets, err := x.eventsStore.ShardOffsets(ctx)
 	if err != nil {
 		return nil, err
@@ -510,7 +522,7 @@ func (x *projectionRunner) pendingShards(ctx context.Context) ([]uint64, error) 
 
 // requestPull triggers an immediate pull pass. Safe to call from any
 // goroutine; sends coalesce because the nudge channel has capacity one.
-func (x *projectionRunner) requestPull() {
+func (x *Runner) requestPull() {
 	select {
 	case x.nudge <- struct{}{}:
 	default:
@@ -520,7 +532,7 @@ func (x *projectionRunner) requestPull() {
 // nudgeLoop requests a pull pass whenever events are persisted on this node.
 // The pull pass reads events from the journal, so the subscriber queue is
 // drained purely for its wake-up signal and the payloads are discarded.
-func (x *projectionRunner) nudgeLoop(ctx context.Context) {
+func (x *Runner) nudgeLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -540,7 +552,7 @@ func (x *projectionRunner) nudgeLoop(ctx context.Context) {
 
 // worker is one member of the persistent goroutine pool.  It reads shard items
 // from workCh and processes them until the pool context is cancelled.
-func (x *projectionRunner) worker(ctx context.Context) {
+func (x *Runner) worker(ctx context.Context) {
 	for {
 		select {
 		case item, ok := <-x.workCh:
@@ -563,7 +575,7 @@ func (x *projectionRunner) worker(ctx context.Context) {
 }
 
 // doProcess processes all events of a given persistent entity and hand them over to the handler
-func (x *projectionRunner) doProcess(ctx context.Context, shard uint64) error {
+func (x *Runner) doProcess(ctx context.Context, shard uint64) error {
 	if !x.running.Load() {
 		return nil
 	}
@@ -620,7 +632,7 @@ func (x *projectionRunner) doProcess(ctx context.Context, shard uint64) error {
 // currentOffset returns the committed offset for a projection shard,
 // consulting the offset store only on the first encounter of the shard and
 // the in-memory cache afterwards.
-func (x *projectionRunner) currentOffset(ctx context.Context, shard uint64) (int64, error) {
+func (x *Runner) currentOffset(ctx context.Context, shard uint64) (int64, error) {
 	x.committedOffsetsMu.RLock()
 	currOffset, cached := x.committedOffsets[shard]
 	x.committedOffsetsMu.RUnlock()
@@ -649,17 +661,17 @@ func (x *projectionRunner) currentOffset(ctx context.Context, shard uint64) (int
 // processEvents applies the projection handler to every event of the batch,
 // then commits the batch offset once. A failure mid-batch commits nothing, so
 // the whole batch is re-pulled on the next pass (at-least-once delivery).
-func (x *projectionRunner) processEvents(ctx context.Context, shard uint64, events []*egopb.Event, nextOffset int64) error {
+func (x *Runner) processEvents(ctx context.Context, shard uint64, events []*egopb.Event, nextOffset int64) error {
 	for _, envelope := range events {
 		if err := x.processEnvelope(ctx, envelope); err != nil {
-			return &projectionRunnerError{err: err}
+			return &eventError{err: err}
 		}
 	}
 	return x.commitOffset(ctx, shard, nextOffset, events[len(events)-1].GetPersistenceId())
 }
 
 // processEnvelope handles a single event.
-func (x *projectionRunner) processEnvelope(ctx context.Context, envelope *egopb.Event) error {
+func (x *Runner) processEnvelope(ctx context.Context, envelope *egopb.Event) error {
 	event := envelope.GetEvent()
 	seqNr := envelope.GetSequenceNumber()
 	persistenceID := envelope.GetPersistenceId()
@@ -696,7 +708,7 @@ func (x *projectionRunner) processEnvelope(ctx context.Context, envelope *egopb.
 }
 
 // handleWithPolicy executes the handler with the configured recovery policy.
-func (x *projectionRunner) handleWithPolicy(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64) error {
+func (x *Runner) handleWithPolicy(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64) error {
 	switch x.recovery.RecoveryPolicy() {
 	case projection.Fail:
 		if err := x.handleSafely(ctx, persistenceID, event, seqNr); err != nil {
@@ -727,7 +739,7 @@ func (x *projectionRunner) handleWithPolicy(ctx context.Context, persistenceID s
 }
 
 // retryHandle runs the handler with the pre-created retrier and optional per-attempt logging.
-func (x *projectionRunner) retryHandle(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64, logEachAttempt bool) error {
+func (x *Runner) retryHandle(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64, logEachAttempt bool) error {
 	err := x.retrier.Run(func() error {
 		handleErr := x.handleSafely(ctx, persistenceID, event, seqNr)
 		if handleErr != nil && logEachAttempt {
@@ -743,7 +755,7 @@ func (x *projectionRunner) retryHandle(ctx context.Context, persistenceID string
 }
 
 // handleSafely invokes the handler and converts panics into errors.
-func (x *projectionRunner) handleSafely(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64) (err error) {
+func (x *Runner) handleSafely(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = newHandlerPanicError(recovered)
@@ -754,7 +766,7 @@ func (x *projectionRunner) handleSafely(ctx context.Context, persistenceID strin
 }
 
 // sendToDeadLetter forwards a failed event to the dead letter handler if one is configured.
-func (x *projectionRunner) sendToDeadLetter(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64, cause error) {
+func (x *Runner) sendToDeadLetter(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64, cause error) {
 	if x.deadLetterHandler == nil {
 		return
 	}
@@ -768,7 +780,7 @@ func (x *projectionRunner) sendToDeadLetter(ctx context.Context, persistenceID s
 }
 
 // logHandlerError emits a consistent error message for handler failures.
-func (x *projectionRunner) logHandlerError(err error, persistenceID string, seqNr uint64) {
+func (x *Runner) logHandlerError(err error, persistenceID string, seqNr uint64) {
 	x.logger.Error("failed to process event",
 		"projection", x.name,
 		"persistence_id", persistenceID,
@@ -781,7 +793,7 @@ func (x *projectionRunner) logHandlerError(err error, persistenceID string, seqN
 // allocations that timestamppb.Now().AsTime().UnixMilli() would produce.
 // Note: *egopb.Offset is NOT pooled because the OffsetStore interface permits
 // implementations to retain the pointer after WriteOffset returns.
-func (x *projectionRunner) commitOffset(ctx context.Context, shard uint64, nextOffset int64, persistenceID string) error {
+func (x *Runner) commitOffset(ctx context.Context, shard uint64, nextOffset int64, persistenceID string) error {
 	offset := &egopb.Offset{
 		ShardNumber:    shard,
 		ProjectionName: x.name,
@@ -802,22 +814,23 @@ func (x *projectionRunner) commitOffset(ctx context.Context, shard uint64, nextO
 	return nil
 }
 
-// projectionRunnerError reports an event that cannot be processed: a failed
+// eventError reports an event that cannot be processed: a failed
 // decryption, a failed event adaptation, or a handler error under the Fail
 // and RetryAndFail recovery policies. Retrying would only replay the same
-// event, so the processing loop stops permanently and the host actor
-// escalates the error through supervision to make the failure visible.
-type projectionRunnerError struct {
+// event, so the processing loop stops permanently and hands the underlying
+// cause to the host, which escalates it through supervision to make the
+// failure visible.
+type eventError struct {
 	err error
 }
 
 // Error returns the underlying runner error message.
-func (e *projectionRunnerError) Error() string {
+func (e *eventError) Error() string {
 	return e.err.Error()
 }
 
 // Unwrap exposes the underlying runner error.
-func (e *projectionRunnerError) Unwrap() error {
+func (e *eventError) Unwrap() error {
 	return e.err
 }
 
@@ -841,7 +854,7 @@ func newHandlerPanicError(value any) error {
 }
 
 // preStart is used to perform some tasks before the projection starts
-func (x *projectionRunner) preStart(ctx context.Context) error {
+func (x *Runner) preStart(ctx context.Context) error {
 	if !x.resetOffsetTo.IsZero() {
 		if err := x.offsetsStore.ResetOffset(ctx, x.name, x.resetOffsetTo.UnixMilli()); err != nil {
 			x.logger.ErrorContext(ctx, "failed to reset projection offset", "projection", x.name, "error", err)
