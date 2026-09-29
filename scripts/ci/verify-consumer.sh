@@ -21,8 +21,10 @@ set -euo pipefail
 # `go run` (which executes every package's init), catch both failure
 # modes; this script requires all three.
 #
-# It never talks to the public module proxy or checksum database for
-# this repository's own module paths: it clones the committed HEAD into
+# It never talks to the public module proxy, the checksum database or
+# pkg.go.dev for this repository's own module paths (GOPRIVATE below
+# implies GONOPROXY and GONOSUMDB for them, so nothing here can look an
+# Ego path up outside the temporary clone): it clones the committed HEAD into
 # a temporary bare repository, creates the release tags only there, and
 # redirects this repository's module path (GOPRIVATE plus a git
 # url.insteadOf rule) to that local clone through an isolated git
@@ -42,9 +44,8 @@ set -euo pipefail
 #   VERIFY_CONSUMER_PUBLISHER_VERSION  the tag created for each released
 #                                      publisher directory in the
 #                                      temporary bare clone (default
-#                                      "v0.2.0", the first publisher release
-#                                      that requires the suffix-less root
-#                                      path). The root tag is never
+#                                      "v0.2.0": synthetic, never a retired
+#                                      name). The root tag is never
 #                                      configurable here: it is always the
 #                                      version every released publisher's
 #                                      go.mod already requires for the
@@ -151,6 +152,26 @@ done
 
 publisher_tag_version="${VERIFY_CONSUMER_PUBLISHER_VERSION:-v0.2.0}"
 
+# The synthetic tags below live only in the temporary clone, but a retired
+# name must not even be used there: those names were published and then
+# withdrawn (scripts/ci/retired-tags.txt), and a check that resolved them
+# would say nothing about the content now in the repository.
+retired_list="$script_dir/retired-tags.txt"
+if [ ! -f "$retired_list" ]; then
+  echo "verify-consumer.sh: $retired_list not found" >&2
+  exit 1
+fi
+synthetic_tags=("$root_version")
+for d in "${publisher_dirs[@]}"; do
+  synthetic_tags+=("$d/$publisher_tag_version")
+done
+for t in "${synthetic_tags[@]}"; do
+  if grep -qxF "$t" <(grep -vE '^[[:space:]]*(#|$)' "$retired_list"); then
+    echo "verify-consumer.sh: synthetic tag $t is a retired name (see $retired_list); pick another version" >&2
+    exit 1
+  fi
+done
+
 head_sha=$(git -C "$repo_root" rev-parse HEAD)
 if ! git -C "$repo_root" diff --quiet HEAD -- 2>/dev/null; then
   echo "verify-consumer.sh: note: the working tree has uncommitted changes; this check verifies the committed HEAD ($head_sha) only." >&2
@@ -171,8 +192,8 @@ bare_repo="$work_dir/repo.git"
 git clone -q --bare "$repo_root" "$bare_repo"
 
 # The bare clone inherits every tag of the repository it was cloned from:
-# the real release tags (the stray root v4.0.0 published under the old /v4
-# module path, publisher/<name>/v0.1.0, and later v1.x / v0.2.x),
+# any real release tag (none exists today; the retired names are listed in
+# scripts/ci/retired-tags.txt),
 # and, in a local clone, any upstream tags fetched into it. Drop them all,
 # so the only tags the consumer can resolve are the ones created below and
 # `git tag` cannot collide with a real release tag of the same name (#134).

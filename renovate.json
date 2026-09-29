@@ -3,5 +3,18 @@
   "extends": [
     "config:recommended",
     ":dependencyDashboardApproval"
+  ],
+  "ignoreDeps": [
+    "github.com/getsyntegrity/ego"
+  ],
+  "packageRules": [
+    {
+      "description": "Never look up this repository's own modules on the Go proxy or pkg.go.dev: they are resolved locally through replace directives",
+      "matchPackageNames": [
+        "github.com/getsyntegrity/ego",
+        "github.com/getsyntegrity/ego/**"
+      ],
+      "enabled": false
+    }
   ]
 }

@@ -3,7 +3,7 @@ module github.com/getsyntegrity/ego/benchmark
 go 1.26.0
 
 require (
-	github.com/getsyntegrity/ego v1.0.0
+	github.com/getsyntegrity/ego v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/tochemey/goakt/v4 v4.5.4
 )

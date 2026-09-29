@@ -3,7 +3,7 @@ module github.com/getsyntegrity/ego/test/compat
 go 1.26.2
 
 require (
-	github.com/getsyntegrity/ego v1.0.0
+	github.com/getsyntegrity/ego v0.0.0
 	github.com/getsyntegrity/ego/publisher/kafka v0.0.0
 	github.com/getsyntegrity/ego/publisher/nats v0.0.0
 	github.com/getsyntegrity/ego/publisher/pulsar v0.0.0

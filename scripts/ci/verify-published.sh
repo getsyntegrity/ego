@@ -18,7 +18,7 @@ set -euo pipefail
 #   <module-dir>   repo-relative path to the nested module, e.g.
 #                  "publisher/kafka".
 #   <ego-version>  the root module version to verify against, e.g.
-#                  "v1.0.0" (no local replace may satisfy this: it must
+#                  "v0.1.0" (no local replace may satisfy this: it must
 #                  already be resolvable from the module proxy).
 
 usage() {

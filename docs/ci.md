@@ -1257,7 +1257,7 @@ the script fails with a clear message naming the mismatch.) It then:
    uncommitted changes are never part of what it checks.
 2. Creates release tags **only in that temporary clone**: the root tag
    (the version every publisher already requires), each publisher's
-   `<dir>/<VERIFY_CONSUMER_PUBLISHER_VERSION>` (default `v0.2.0`), and one
+   `<dir>/<VERIFY_CONSUMER_PUBLISHER_VERSION>` (default `v0.2.0`, a synthetic version that is never a retired name), and one
    negative tag, `<first publisher dir>/v2.0.0`, which must be *rejected*
    — a `v2+` tag on a module path with no `/v2` suffix is invalid under
    Go's own major-version rule, and the script fails if it somehow
@@ -1307,10 +1307,11 @@ always selects the full suite anyway.
 
 ### Version policy
 
-- The root module is released first, as a semantic-version tag `v1.x.y`
-  (the root path `github.com/getsyntegrity/ego` has no `/vN` suffix, so it
-  carries v0 and v1 only; see "Root module path and versions" below). The
-  first root release is `v1.0.0`.
+- The root module is released first, as a semantic-version tag `vX.Y.Z`
+  with X in {0, 1} (the root path `github.com/getsyntegrity/ego` has no
+  `/vN` suffix, so it carries v0 and v1 only; see "Root module path and
+  versions" below). Which version comes first is decided by the
+  maintainers; nothing in this repository promises one.
 - Each publisher module is released only against a root version that
   already exists on the module proxy — never against an unpublished
   version, and never verified only through the local `replace`. Getting a
@@ -1335,8 +1336,8 @@ always selects the full suite anyway.
   hand, for example:
 
   ```bash
-  gh pr create --base main --head release/publishers-v1.0.0 \
-    --title "chore(publishers): update ego dependency to v1.0.0" \
+  gh pr create --base main --head release/publishers-<tag> \
+    --title "chore(publishers): update ego dependency to <tag>" \
     --body "..."
   ```
 
@@ -1355,15 +1356,12 @@ always selects the full suite anyway.
   contains the bump of the four publishers, requires the root at
   `ego_version`, and has a green `build.yml` run for that same SHA — usually
   the bump PR's merge commit, but a later commit of `main` that still meets
-  all three conditions is equally valid: the first release tagged the
-  publishers at `b0b00de`, a descendant of the bump merge `7263968`, because
-  `main` was red at `7263968` until #179 fixed it), `ego_version` (the root tag the publishers must require, e.g.
-  `v1.0.0`), `bump` (`patch`/`minor`/`major`, default `minor`: an
-  untagged publisher starts from `v0.0.0`, so its first release is
-  `v0.1.0`, never `v0.0.1`; the four publishers already carry `v0.1.0`,
-  so the same default gives `v0.2.0`, the breaking-change slot in v0 for
-  the root path change; pass `patch` explicitly for a later fix
-  release), and
+  all three conditions is equally valid), `ego_version` (the root tag the
+  publishers must require), `bump` (`patch`/`minor`/`major`, default
+  `minor`: an untagged suffix-less publisher starts from `v0.0.0`, so
+  `minor` plans `v0.1.0`, never `v0.0.1`; note that `v0.1.0` of every
+  publisher is a retired name, see "Retired tag names" below, so the first
+  real release needs a bump or version the maintainers choose), and
   `dry_run` (boolean, default `true`). The workflow validates every
   precondition before doing anything: `sha` and `ego_version` are
   well-formed, `sha` is genuinely reachable from `origin/main`,
@@ -1400,56 +1398,89 @@ checks named above (SHA/version format, required-version, publishers-only
 tag computation, tag-conflict detection) — for the real tag computation
 in stage 3, instead of duplicating that logic in shell.
 
-### Root module path and versions (the v1 migration)
+### Root module path and versions
 
 The root module used to be `github.com/getsyntegrity/ego/v4`. Its path is
 now `github.com/getsyntegrity/ego`, with no `/vN` suffix, so Go allows only
-`v0` and `v1` tags for it. The first release under the new path is
-`v1.0.0`. Publisher module paths did not change
-(`github.com/getsyntegrity/ego/publisher/<name>`).
+`v0` and `v1` tags for it: root tags are `vX.Y.Z` with X in {0, 1}, and
+publisher tags are `publisher/<name>/vX.Y.Z` (publisher paths did not
+change: `github.com/getsyntegrity/ego/publisher/<name>`). The root is
+tagged first, then the publishers.
 
-**What is already published.** `v4.0.0` (commit `6016ede`) exists under the
-old `/v4` path and stays on the proxy and in the checksum database: a
-published version cannot be removed or retracted from a different module
-path. Nothing under the new path can use it. The four publishers are tagged
-`publisher/<name>/v0.1.0` and still require the old root. No tag is ever
-deleted or moved.
+**No version is published.** The version `v0.0.0` in the nested modules'
+`go.mod` files (`require github.com/getsyntegrity/ego v0.0.0`, next to the
+local `replace ... => ../../`) is only the development placeholder that
+integrated verification resolves locally. It is not a tag, it does not
+exist on any proxy, and nothing can install it. Which version is the first
+release is decided later by the maintainers.
 
-**Release order and versions.**
+**Why `releaseplan` ignores tags of an illegal major.** The root's tag
+prefix is `v`, so a tag such as `v4.0.0` would match it, but a suffix-less
+path cannot have a v4 version. Instead of refusing the whole plan,
+`internal/cmd/releaseplan` ignores any tag whose major is not legal for the
+module's current path and lists it in the plan (`ignoredTags` in
+`plan.json`) and in the summary as "belongs to another major or module
+path". Legal means exactly `N` for a `/vN` suffix, and `0` or `1`
+otherwise. With no tags at all the root starts from a `v0.0.0` baseline:
+`-bump patch` plans `v0.0.1`, `-bump minor` plans `v0.1.0` and `-bump
+major` plans `v1.0.0`. The dry run applies one `-bump` to every module.
 
-1. Push the root tag `v1.0.0` by hand (a person, on a commit that is on
-   `main` with a green `build.yml`). `release.yml` runs: `gate`,
-   `release-ego`, then `prepare-publisher-bump`, which waits for
-   `github.com/getsyntegrity/ego@v1.0.0` on the proxy and the checksum
-   database (`modwait`, above) and pushes `release/publishers-v1.0.0`.
-2. A person opens and merges that bump PR.
-3. Dispatch `release-publishers.yml` with `ego_version: v1.0.0` and the
-   default `bump: minor`. Each publisher goes from `v0.1.0` to `v0.2.0`. A
-   minor bump is the breaking-change slot in v0, because the root
-   dependency of each publisher changes path.
+**Import rewrite.** Code that imported `github.com/getsyntegrity/ego/v4`
+imports `github.com/getsyntegrity/ego` instead, and `go.mod` requires the
+new path once a version exists.
 
-**Why `releaseplan` ignores `v4.0.0`.** The root's tag prefix is `v`, so
-`v4.0.0` matches it, but a `/vN`-less path cannot have a v4 version. Instead
-of refusing the whole plan, `internal/cmd/releaseplan` ignores any tag whose
-major is not legal for the module's current path and lists it in the plan
-(`ignoredTags` in `plan.json`) and in the summary as "belongs to another
-major or module path". Legal means exactly `N` for a `/vN` suffix, and `0`
-or `1` otherwise. The rejected alternative was to fail the plan when such a
-tag exists: it would make the dry run unusable for as long as the old tag
-exists, which is forever.
+### Retired tag names
 
-**What the `build.yml` dry run plans for the root.** With only `v4.0.0`
-present the root has no legal tag, so the plan bumps from the `v0.0.0`
-baseline: `-bump major` shows `v1.0.0`, `-bump minor` shows `v0.1.0`,
-`-bump patch` shows `v0.0.1`. The dry run uses one `-bump` for every
-module, so it cannot show `v1.0.0` for the root and `v0.2.0` for the
-publishers at once; the real first tag is chosen by a person, not derived
-from the plan. Verified against this repository's real tag list (output in
-the pull request).
+Five tag names were published and then withdrawn (their GitHub releases and
+tags were deleted): `v4.0.0`, `publisher/kafka/v0.1.0`,
+`publisher/nats/v0.1.0`, `publisher/pulsar/v0.1.0` and
+`publisher/websocket/v0.1.0`. **They must never be reused.** The Go module
+proxy and the checksum database keep the old content forever; a different
+commit tagged with the same name would be a checksum mismatch for every
+consumer that already saw the old one, and `go` would refuse it.
 
-**Import rewrite.** Consumers replace `github.com/getsyntegrity/ego/v4` with
-`github.com/getsyntegrity/ego` in imports and in `go.mod`, and require
-`v1.0.0`.
+The names are committed in `scripts/ci/retired-tags.txt` (one per line,
+`#` comments allowed) and enforced in four places:
+
+- `internal/cmd/releaseplan -retired scripts/ci/retired-tags.txt` refuses to
+  plan any tag in the list and refuses when one of them exists in `-tags`
+  (a withdrawn name pushed again). A missing list file is an error, never an
+  empty list. The `build.yml` release plan dry run passes it.
+- `-continuation-check-not-retired <tag>` (with `-retired`) checks one tag
+  and exits. `release-publishers.yml` runs it on `ego_version`, and passes
+  `-retired` to both publisher plan computations (the plan and the re-check
+  before tagging), so the continuation refuses before creating anything.
+- `release.yml`'s `gate` job runs the same check on the pushed tag first, so
+  a retired root tag stops the workflow before the release is created.
+- `scripts/ci/verify-consumer.sh` refuses to use a retired name for its
+  synthetic scratch-clone tags.
+
+A consequence worth knowing: `-bump minor` on an untagged publisher plans
+`publisher/<name>/v0.1.0`, which is retired, so the plan is refused. The
+first real publisher release needs another bump or version, chosen by the
+maintainers.
+
+### Which CI steps could look an Ego module up outside GitHub
+
+The rule: no PR or `main` workflow may ask `proxy.golang.org`,
+`sum.golang.org` or `pkg.go.dev` about an Ego module path, because a lookup
+of a path that does not exist yet is cached as "not found" and can poison a
+later real lookup (this is the same effect behind #189). Audit:
+
+| Step or file | Runs on | Verdict |
+|---|---|---|
+| `verify-module.sh` (`go mod download`, `tidy -diff`, `build`, `vet`, `test`) for nested modules | PR, `main` | Local: Ego is resolved through the checked-in `replace ... => ../../`, which Go never looks up on a proxy. Checked with the environment set to `GOPRIVATE`/`GONOSUMDB` for Ego. |
+| `go mod download` and the root `-mod=vendor` steps | PR, `main` | Root is the main module; third-party modules only. |
+| `govulncheck` (root and nested) | PR, `main` | Reads the vulnerability database (`vuln.go.dev`), not the proxy, sumdb or pkg.go.dev. Not one of the restricted services; noted for completeness because it works from module paths. |
+| `internal/cmd/{releaseplan,ciselect,archcheck}` (`go list`, `go mod edit -json`) | PR, `main` | Local: no network for Ego paths. |
+| `verify-consumer.sh` (`consumer` job) | full-mode PR, `main` | Local: a bare clone with synthetic tags plus `GOPRIVATE`, so Ego paths never reach the proxy or sumdb. Only third-party modules use the proxy. |
+| Release plan dry run (`build.yml`) | `main` | Local: `git tag -l` and `releaseplan`. |
+| `renovate.json` (Renovate) | Renovate bot | Could look up nested `require github.com/getsyntegrity/ego`. Now ignored (`ignoreDeps` and a disabled `packageRules` entry for `github.com/getsyntegrity/ego` and `github.com/getsyntegrity/ego/**`). |
+| README badges | Renderers | The pkg.go.dev badge was removed; the remaining badges query GitHub or unrelated services. |
+| `modwait` step in `release.yml` | Root tag push only | Intentionally public (proxy and sumdb): it verifies a real release. Never runs on PRs; its tests use fixtures and a fake `go`. |
+| `go get` and `verify-published.sh` in `release.yml` | Root tag push only | Intentionally public, after the tag exists. Never on PRs. |
+| `release-publishers.yml` | Manual dispatch | `releaseplan` and the GitHub API only. |
+| `stale.yml` | Schedule | No Go commands. |
 
 ### Toolchain requirements
 
@@ -1780,14 +1811,10 @@ At this point the `release/publishers-<tag>` branch has not been pushed
 nothing irreversible. A permanent failure needs the cause fixed first (a
 bad tag or a wrong module path), not a re-run.
 
-**Trying it without publishing anything.** Every call is read only. Against
-an already published version it should pass at once with `-timeout 0`:
-
-```sh
-# an already published version, under the module path it was published with
-go run ./internal/cmd/modwait -module github.com/getsyntegrity/ego/v4 -version v4.0.0 -timeout 0   # passes
-```
-
-Do not probe a version that does not exist yet: the checksum database
-caches negative answers, so an early probe can make a later real lookup
-fail. The post-publish consumer check is a separate concern (#190).
+**Testing it.** `go test -count=1 ./internal/cmd/modwait/...` covers every
+case with fixtures, a scripted prober, a fake clock and a fake `go`
+binary; nothing touches the network. Do not run the real probe against a
+version that does not exist yet, and do not run it against any Ego path
+before a real release: the checksum database caches negative answers, so
+an early probe can make a later real lookup fail. The post-publish
+consumer check is a separate concern (#190).

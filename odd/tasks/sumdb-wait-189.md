@@ -71,3 +71,20 @@ Judgement calls:
 - Docs keep historical mentions of the `/v4` path where they quote a past measurement or the real failing log of run 36474920456.
 
 Verification (root, on `4cc2206` plus the descriptor tests): `go build ./...`, `go vet ./...`, `go test -count=1 ./...` (all packages ok; `engine` 340 s), `go run ./internal/cmd/archcheck` (0 violations). Nested modules (`benchmark`, `example/cluster`, `test/compat`, `publisher/kafka|nats|pulsar|websocket`): `go mod tidy -diff` clean, `go build`, `go vet`, `go test -count=1` ok. `scripts/ci/verify-consumer.sh`: OK (root `v1.0.0`, four publishers `v0.2.0`, publisher `v2.0.0` rejected). `actionlint`: 0. Not run locally: `golangci-lint`, `govulncheck` (not installed / cannot load packages here), `scripts/ci/verify-module.sh` as a whole.
+
+## Follow-up C: pre-release state, no Ego lookups outside GitHub, retired tag names
+
+Maintainer direction after Follow-up B. All five earlier releases and tags were deleted on GitHub; their names are retired for ever (the Go proxy and checksum database keep the old content). Until further notice nothing here may query `proxy.golang.org`, `sum.golang.org` or `pkg.go.dev` for an Ego path, so every local `go` command ran with `GOPRIVATE` and `GONOSUMDB` set to `github.com/getsyntegrity/*`, and `modwait` was exercised through its unit tests only.
+
+- [x] C1 Retired-names guard, test first (RED: `undefined: readRetiredTags`, `checkNotRetired`). `scripts/ci/retired-tags.txt` holds the five names; `internal/cmd/releaseplan` gains `-retired` (refuses to plan a retired tag and refuses when one exists in `-tags`) and `-continuation-check-not-retired <tag>`; wired into the `build.yml` dry run, `release-publishers.yml` (the `ego_version` check and both publisher plan computations) and a new first step of `release.yml`'s `gate` job.
+- [x] C2 Development version: nested modules require `github.com/getsyntegrity/ego v0.0.0` (local `replace` kept). `verify-consumer.sh` keeps its synthetic root tag `v0.0.0` (it must equal what the publishers require) and publisher tag `v0.2.0`, refuses a retired name, and stays fully local (bare clone plus `GOPRIVATE`). `release-publishers.yml` text no longer promises versions.
+- [x] C3 Pre-release docs: `CHANGELOG.md` restarted with only an Unreleased section; `readme.md` has no pkg.go.dev badge or link and no installable version; `docs/ci.md` describes the scheme, the retired names and an audit table of CI steps; `renovate.json` ignores Ego modules.
+
+Judgement calls and open decisions for the maintainers:
+
+- The guard turns the release-publishers default (`bump: minor`, plans `publisher/<name>/v0.1.0`) into a refusal, because `v0.1.0` of every publisher is retired. The first real publisher release therefore needs another bump or version; I did not choose one. Rejected: silently skipping retired versions (it would hide the collision).
+- The guard also refuses when a retired name shows up in `-tags` (someone pushed it again), not only when it is planned.
+- The synthetic root tag in `verify-consumer.sh` is `v0.0.0`, not `v0.1.0`, because Go resolves the root at exactly the version the publishers require.
+- `govulncheck` reads `vuln.go.dev`, which is not one of the restricted services; noted in the audit table rather than changed.
+
+Not run, because each would query an Ego path on the proxy, sumdb or pkg.go.dev: the real `modwait` probe, `verify-published.sh`, `go get` of any Ego version, any public install test, pkg.go.dev or Go Report Card renders. Also not run locally: `golangci-lint` (fails to load packages here) and `govulncheck`.
