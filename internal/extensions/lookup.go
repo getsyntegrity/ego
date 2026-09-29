@@ -71,3 +71,34 @@ func Require[T any](ctx *goakt.Context, extensionID string) (T, error) {
 
 	return typed, nil
 }
+
+// Optional looks up the extension registered under extensionID on the actor
+// system reachable through ctx and asserts it to type T, but, unlike Require,
+// treats a missing registration as valid: it returns the zero value and a nil
+// error when no extension is registered under extensionID at all. This fits
+// PreStart paths for which the extension is a genuine optional dependency,
+// e.g. the snapshot store and encryptor of the snapshot writer.
+//
+// It still guards against the same crash-the-process failure mode described
+// on Require: if an extension IS registered under extensionID but under an
+// unexpected concrete type — for example because of a wiring bug that
+// registers the wrong extension under an existing ID — an unchecked ext.(T)
+// assertion would panic on the singleflight-driven PreStart goroutine and
+// crash the whole process. Optional returns a descriptive error wrapping
+// ErrMissingRequiredExtensions instead in that case.
+func Optional[T any](ctx *goakt.Context, extensionID string) (T, error) {
+	var zero T
+
+	ext := ctx.Extension(extensionID)
+	if ext == nil {
+		return zero, nil
+	}
+
+	typed, ok := ext.(T)
+	if !ok {
+		return zero, fmt.Errorf("%w: %s was registered with unexpected type %T (actor=%q)",
+			ErrMissingRequiredExtensions, extensionID, ext, ctx.ActorName())
+	}
+
+	return typed, nil
+}
