@@ -160,18 +160,11 @@ var (
 	newEnvelopeCapturingEventSourcedBehavior = enginetest.NewEnvelopeCapturingEventSourcedBehavior
 )
 
-type envelopeCapturingEventSourcedBehavior = enginetest.EnvelopeCapturingEventSourcedBehavior
-
-type (
-	AccountDurableStateBehavior      = enginetest.AccountDurableStateBehavior
-	tenancyProbeDurableStateBehavior = enginetest.TenancyProbeDurableStateBehavior
-)
+type AccountDurableStateBehavior = enginetest.AccountDurableStateBehavior
 
 var (
 	NewAccountDurableStateBehavior      = enginetest.NewAccountDurableStateBehavior
 	newTenancyProbeDurableStateBehavior = enginetest.NewTenancyProbeDurableStateBehavior
 )
-
-type envelopeCapturingDurableStateBehavior = enginetest.EnvelopeCapturingDurableStateBehavior
 
 var newEnvelopeCapturingDurableStateBehavior = enginetest.NewEnvelopeCapturingDurableStateBehavior
