@@ -26,16 +26,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestTicker(t *testing.T) {
-	intervals := 100 * time.Millisecond
-	ticker := New(intervals)
-	ticker.Start()
-	for i := 0; i < 5; i++ {
-		<-ticker.Ticks
-	}
-	ticker.Stop()
-	assert.False(t, ticker.Ticking())
+	specs.Describe(t, "Ticker delivers ticks until stopped", func(s *specs.Spec) {
+		s.It("stops ticking after five ticks and Stop", func(ctx *specs.Context) {
+			intervals := 100 * time.Millisecond
+			ticker := New(intervals)
+			ticker.Start()
+			for i := 0; i < 5; i++ {
+				<-ticker.Ticks
+			}
+			ticker.Stop()
+			ctx.Expect(ticker.Ticking()).To(specs.BeFalse())
+		})
+	})
 }
