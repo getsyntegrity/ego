@@ -30,77 +30,110 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestError_ReasonAccessor(t *testing.T) {
-	err := newError(ReasonMissing, "tenancy: tenant context missing", nil)
-	assert.Equal(t, ReasonMissing, err.Reason())
+	specs.Describe(t, "Error.Reason returns the reason the error was built with", func(s *specs.Spec) {
+		s.It("returns ReasonMissing for a missing error", func(ctx *specs.Context) {
+			err := newError(ReasonMissing, "tenancy: tenant context missing", nil)
+			ctx.Expect(err.Reason()).ToEqual(ReasonMissing)
+		})
+	})
 }
 
 func TestError_ErrorMessage(t *testing.T) {
-	err := newError(ReasonInvalid, "tenancy: tenant id must not be empty", nil)
-	assert.Equal(t, "tenancy: tenant id must not be empty", err.Error())
+	specs.Describe(t, "Error.Error returns the message the error was built with", func(s *specs.Spec) {
+		s.It("returns the message verbatim", func(ctx *specs.Context) {
+			err := newError(ReasonInvalid, "tenancy: tenant id must not be empty", nil)
+			ctx.Expect(err.Error()).ToEqual("tenancy: tenant id must not be empty")
+		})
+	})
 }
 
 func TestError_UnwrapReturnsCause(t *testing.T) {
-	cause := errors.New("store: tenant not found")
-	err := newError(ReasonInvalid, "tenancy: tenant identity invalid", cause)
+	specs.Describe(t, "Error.Unwrap returns the underlying cause", func(s *specs.Spec) {
+		s.It("exposes the cause through errors.Is and errors.Unwrap", func(ctx *specs.Context) {
+			cause := errors.New("store: tenant not found")
+			err := newError(ReasonInvalid, "tenancy: tenant identity invalid", cause)
 
-	require.ErrorIs(t, err, cause)
-	assert.Equal(t, cause, errors.Unwrap(err))
+			ctx.Expect(err).To(specs.MatchError(cause))
+			ctx.Expect(errors.Unwrap(err)).ToEqual(cause)
+		})
+	})
 }
 
 func TestError_UnwrapReturnsNilWithoutCause(t *testing.T) {
-	err := newError(ReasonDenied, "tenancy: tenant identity denied", nil)
-	assert.Nil(t, errors.Unwrap(err))
+	specs.Describe(t, "Error.Unwrap without a cause", func(s *specs.Spec) {
+		s.It("returns nil", func(ctx *specs.Context) {
+			err := newError(ReasonDenied, "tenancy: tenant identity denied", nil)
+			ctx.Expect(errors.Unwrap(err)).To(specs.BeNil())
+		})
+	})
 }
 
 func TestError_TenantAccessorWithoutAttribution(t *testing.T) {
-	err := newError(ReasonInvalid, "tenancy: tenant id must not be empty", nil)
+	specs.Describe(t, "Error.Tenant on an error without tenant attribution", func(s *specs.Spec) {
+		s.It("reports no tenant and the zero id", func(ctx *specs.Context) {
+			err := newError(ReasonInvalid, "tenancy: tenant id must not be empty", nil)
 
-	id, ok := err.Tenant()
-	assert.False(t, ok)
-	assert.Equal(t, TenantID(""), id)
+			id, ok := err.Tenant()
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(id).ToEqual(TenantID(""))
+		})
+	})
 }
 
 func TestError_TenantAccessorWithAttribution(t *testing.T) {
-	err := newErrorWithTenant(ReasonDenied, TenantID("acme-corp"), "tenancy: tenant identity denied", nil)
+	specs.Describe(t, "Error.Tenant on an error with tenant attribution", func(s *specs.Spec) {
+		s.It("reports the attributed tenant", func(ctx *specs.Context) {
+			err := newErrorWithTenant(ReasonDenied, TenantID("acme-corp"), "tenancy: tenant identity denied", nil)
 
-	id, ok := err.Tenant()
-	require.True(t, ok)
-	assert.Equal(t, TenantID("acme-corp"), id)
+			id, ok := err.Tenant()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(id).ToEqual(TenantID("acme-corp"))
+		})
+	})
 }
 
 func TestError_IsMatchesSentinelByReason(t *testing.T) {
-	tests := []struct {
-		name     string
-		reason   Reason
-		sentinel error
-	}{
-		{"missing", ReasonMissing, ErrMissing},
-		{"invalid", ReasonInvalid, ErrInvalid},
-		{"denied", ReasonDenied, ErrDenied},
-	}
+	specs.Describe(t, "errors.Is matches an Error to the sentinel of its reason", func(s *specs.Spec) {
+		tests := []struct {
+			name     string
+			reason   Reason
+			sentinel error
+		}{
+			{"missing", ReasonMissing, ErrMissing},
+			{"invalid", ReasonInvalid, ErrInvalid},
+			{"denied", ReasonDenied, ErrDenied},
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := newError(tt.reason, "boom", nil)
-			assert.True(t, errors.Is(err, tt.sentinel))
-		})
-	}
+		for _, tt := range tests {
+			s.It(tt.name, func(ctx *specs.Context) {
+				err := newError(tt.reason, "boom", nil)
+				ctx.Expect(err).To(specs.MatchError(tt.sentinel))
+			})
+		}
+	})
 }
 
 func TestError_IsDoesNotMatchOtherSentinels(t *testing.T) {
-	err := newError(ReasonMissing, "tenancy: tenant context missing", nil)
+	specs.Describe(t, "errors.Is does not match an Error to the sentinels of other reasons", func(s *specs.Spec) {
+		s.It("a missing error matches neither ErrInvalid nor ErrDenied", func(ctx *specs.Context) {
+			err := newError(ReasonMissing, "tenancy: tenant context missing", nil)
 
-	assert.False(t, errors.Is(err, ErrInvalid))
-	assert.False(t, errors.Is(err, ErrDenied))
+			ctx.Expect(err).To(specs.Not(specs.MatchError(ErrInvalid)))
+			ctx.Expect(err).To(specs.Not(specs.MatchError(ErrDenied)))
+		})
+	})
 }
 
 func TestSentinels_AreDistinctFromEachOther(t *testing.T) {
-	assert.False(t, errors.Is(ErrMissing, ErrInvalid))
-	assert.False(t, errors.Is(ErrMissing, ErrDenied))
-	assert.False(t, errors.Is(ErrInvalid, ErrDenied))
+	specs.Describe(t, "the tenancy sentinels are distinct", func(s *specs.Spec) {
+		s.It("no sentinel matches another", func(ctx *specs.Context) {
+			ctx.Expect(ErrMissing).To(specs.Not(specs.MatchError(ErrInvalid)))
+			ctx.Expect(ErrMissing).To(specs.Not(specs.MatchError(ErrDenied)))
+			ctx.Expect(ErrInvalid).To(specs.Not(specs.MatchError(ErrDenied)))
+		})
+	})
 }
