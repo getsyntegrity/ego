@@ -27,97 +27,119 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/command"
 )
 
 func TestErrorClassification(t *testing.T) {
-	cases := []struct {
-		name     string
-		sentinel error
-		other    []error
-	}{
-		{
-			name:     "rejected",
-			sentinel: command.ErrRejected,
-			other:    []error{command.ErrFailed, command.ErrTimedOut, command.ErrCanceled},
-		},
-		{
-			name:     "failed",
-			sentinel: command.ErrFailed,
-			other:    []error{command.ErrRejected, command.ErrTimedOut, command.ErrCanceled},
-		},
-		{
-			name:     "timed out",
-			sentinel: command.ErrTimedOut,
-			other:    []error{command.ErrRejected, command.ErrFailed, command.ErrCanceled},
-		},
-		{
-			name:     "canceled",
-			sentinel: command.ErrCanceled,
-			other:    []error{command.ErrRejected, command.ErrFailed, command.ErrTimedOut},
-		},
-	}
+	specs.Describe(t, "NewError classifies an error as exactly one outcome sentinel", func(s *specs.Spec) {
+		cases := []struct {
+			name     string
+			sentinel error
+			other    []error
+		}{
+			{
+				name:     "rejected",
+				sentinel: command.ErrRejected,
+				other:    []error{command.ErrFailed, command.ErrTimedOut, command.ErrCanceled},
+			},
+			{
+				name:     "failed",
+				sentinel: command.ErrFailed,
+				other:    []error{command.ErrRejected, command.ErrTimedOut, command.ErrCanceled},
+			},
+			{
+				name:     "timed out",
+				sentinel: command.ErrTimedOut,
+				other:    []error{command.ErrRejected, command.ErrFailed, command.ErrCanceled},
+			},
+			{
+				name:     "canceled",
+				sentinel: command.ErrCanceled,
+				other:    []error{command.ErrRejected, command.ErrFailed, command.ErrTimedOut},
+			},
+		}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := command.NewError(tc.sentinel, "boom", nil)
-			require.Error(t, err)
-			require.ErrorIs(t, err, tc.sentinel)
-			for _, o := range tc.other {
-				require.NotErrorIs(t, err, o)
-			}
-		})
-	}
+		for _, tc := range cases {
+			s.It(tc.name, func(ctx *specs.Context) {
+				err := command.NewError(tc.sentinel, "boom", nil)
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				ctx.Expect(err).To(specs.MatchError(tc.sentinel))
+				for _, o := range tc.other {
+					ctx.Expect(err).To(specs.Not(specs.MatchError(o)))
+				}
+			})
+		}
+	})
 }
 
 func TestErrorUnwrap(t *testing.T) {
-	cause := errors.New("underlying cause")
-	err := command.NewError(command.ErrFailed, "wrapped", cause)
+	specs.Describe(t, "Error.Unwrap exposes the cause", func(s *specs.Spec) {
+		s.It("matches both the sentinel and the cause and unwraps to the cause", func(ctx *specs.Context) {
+			cause := errors.New("underlying cause")
+			err := command.NewError(command.ErrFailed, "wrapped", cause)
 
-	require.ErrorIs(t, err, command.ErrFailed)
-	require.ErrorIs(t, err, cause)
-	require.Equal(t, cause, errors.Unwrap(err))
+			ctx.Expect(err).To(specs.MatchError(command.ErrFailed))
+			ctx.Expect(err).To(specs.MatchError(cause))
+			ctx.Expect(errors.Unwrap(err)).ToEqual(cause)
+		})
+	})
 }
 
 func TestErrorUnwrapNilCause(t *testing.T) {
-	err := command.NewError(command.ErrTimedOut, "no cause", nil)
+	specs.Describe(t, "Error.Unwrap without a cause", func(s *specs.Spec) {
+		s.It("matches the sentinel and unwraps to nil", func(ctx *specs.Context) {
+			err := command.NewError(command.ErrTimedOut, "no cause", nil)
 
-	require.ErrorIs(t, err, command.ErrTimedOut)
-	require.NoError(t, errors.Unwrap(err))
+			ctx.Expect(err).To(specs.MatchError(command.ErrTimedOut))
+			ctx.Expect(errors.Unwrap(err)).To(specs.BeNil())
+		})
+	})
 }
 
 func TestErrorMessage(t *testing.T) {
-	err := command.NewError(command.ErrRejected, "domain rejected the command", nil)
-	require.Equal(t, "domain rejected the command", err.Error())
+	specs.Describe(t, "Error.Error renders the message", func(s *specs.Spec) {
+		s.It("returns the message it was built with", func(ctx *specs.Context) {
+			err := command.NewError(command.ErrRejected, "domain rejected the command", nil)
+			ctx.Expect(err.Error()).ToEqual("domain rejected the command")
+		})
+	})
 }
 
 func TestErrorAs(t *testing.T) {
-	err := fmt.Errorf("context: %w", command.NewError(command.ErrCanceled, "canceled", nil))
+	specs.Describe(t, "a wrapped command Error is recoverable with errors.As", func(s *specs.Spec) {
+		s.It("yields the command Error that still matches its sentinel", func(ctx *specs.Context) {
+			err := fmt.Errorf("context: %w", command.NewError(command.ErrCanceled, "canceled", nil))
 
-	var cmdErr *command.Error
-	require.ErrorAs(t, err, &cmdErr)
-	require.ErrorIs(t, cmdErr, command.ErrCanceled)
+			var cmdErr *command.Error
+			ctx.Expect(err).To(specs.MatchErrorAs(&cmdErr))
+			ctx.Expect(cmdErr).To(specs.MatchError(command.ErrCanceled))
+		})
+	})
 }
 
 func TestValidationSentinelsAreDistinct(t *testing.T) {
-	sentinels := []error{
-		command.ErrInvalidMetadata,
-		command.ErrInvalidEnvelope,
-		command.ErrInvalidResult,
-		command.ErrInvalidPrincipal,
-		command.ErrReservedKey,
-		command.ErrSameOperationID,
-		command.ErrDeadlineExtension,
-	}
-
-	for i, a := range sentinels {
-		for j, b := range sentinels {
-			if i == j {
-				continue
+	specs.Describe(t, "the validation sentinels are distinct", func(s *specs.Spec) {
+		s.It("does not match any sentinel against another", func(ctx *specs.Context) {
+			sentinels := []error{
+				command.ErrInvalidMetadata,
+				command.ErrInvalidEnvelope,
+				command.ErrInvalidResult,
+				command.ErrInvalidPrincipal,
+				command.ErrReservedKey,
+				command.ErrSameOperationID,
+				command.ErrDeadlineExtension,
 			}
-			require.NotErrorIs(t, a, b)
-		}
-	}
+
+			for i, a := range sentinels {
+				for j, b := range sentinels {
+					if i == j {
+						continue
+					}
+					ctx.Expect(a).To(specs.Not(specs.MatchError(b)))
+				}
+			}
+		})
+	})
 }
