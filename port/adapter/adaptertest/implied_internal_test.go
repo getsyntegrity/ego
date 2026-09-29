@@ -23,7 +23,10 @@
 package adaptertest
 
 import (
+	"fmt"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/offsetstore"
 	"github.com/getsyntegrity/ego/persistence"
@@ -35,19 +38,21 @@ import (
 // port/adapter. This test, which may import more, pins it to the contract
 // packages' own constants so a renamed port cannot drift silently.
 func TestImpliesReadyMatchesTheStorePortConstants(t *testing.T) {
-	for _, p := range []adapter.Port{
-		persistence.PortEventsStore, persistence.PortStateStore, persistence.PortSnapshotStore, offsetstore.PortOffsetStore,
-	} {
-		if !impliesReady(p) {
-			t.Errorf("impliesReady(%q) = false, want true: every store port has Ping", p)
+	specs.Describe(t, "the ports that imply CapReady match the contract packages' store port constants", func(s *specs.Spec) {
+		for _, p := range []adapter.Port{
+			persistence.PortEventsStore, persistence.PortStateStore, persistence.PortSnapshotStore, offsetstore.PortOffsetStore,
+		} {
+			s.It(fmt.Sprintf("%s implies CapReady, since every store port has Ping", p), func(ctx *specs.Context) {
+				ctx.Expect(impliesReady(p)).To(specs.BeTrue())
+			})
 		}
-	}
-	if len(readyPorts) != 4 {
-		t.Errorf("readyPorts has %d entries, want the 4 store ports", len(readyPorts))
-	}
-	for _, p := range []adapter.Port{"publishing.EventPublisher", "publishing.StatePublisher", "tenancy.TenantResolver", "encryption.Encryptor"} {
-		if impliesReady(p) {
-			t.Errorf("impliesReady(%q) = true, want false", p)
+		s.It("lists exactly the 4 store ports", func(ctx *specs.Context) {
+			ctx.Expect(len(readyPorts)).ToEqual(4)
+		})
+		for _, p := range []adapter.Port{"publishing.EventPublisher", "publishing.StatePublisher", "tenancy.TenantResolver", "encryption.Encryptor"} {
+			s.It(fmt.Sprintf("%s does not imply CapReady", p), func(ctx *specs.Context) {
+				ctx.Expect(impliesReady(p)).To(specs.BeFalse())
+			})
 		}
-	}
+	})
 }
