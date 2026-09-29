@@ -108,7 +108,7 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 
 		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err)
-		assert.Zero(t, owner.invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
 	})
 
 	t.Run("Saga", func(t *testing.T) {

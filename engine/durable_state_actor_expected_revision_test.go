@@ -36,44 +36,11 @@ import (
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
-
-// -----------------------------------------------------------------------
-// Unit test for the DurableStateActor-specific D10 helper (EGO-WRITE-004
-// PR4, task 4.7). Mirrors TestShouldStayAliveAfterConflict in
-// event_sourced_actor_expected_revision_test.go: same decision logic
-// (provably in sync iff err is a *persistence.ConflictError whose
-// ActualRevision is known and equals the actor's current in-memory
-// version), inverted in effect (recover in place instead of shutting down).
-// -----------------------------------------------------------------------
-
-func TestProvablyInSyncAfterConflict(t *testing.T) {
-	t.Run("non-conflict error is never provably in sync", func(t *testing.T) {
-		entity := &DurableStateActor{currentVersion: 3}
-		assert.False(t, entity.provablyInSyncAfterConflict(errors.New("boom")))
-	})
-
-	t.Run("actual revision matches in-memory version: provably in sync", func(t *testing.T) {
-		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
-		assert.True(t, entity.provablyInSyncAfterConflict(conflictErr))
-	})
-
-	t.Run("actual revision diverges from in-memory version: not provably in sync", func(t *testing.T) {
-		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
-		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
-	})
-
-	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
-		entity := &DurableStateActor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
-		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
-	})
-}
 
 // -----------------------------------------------------------------------
 // revisionProbeDurableStateBehavior records every HandleCommand invocation's
@@ -368,7 +335,7 @@ func TestDurableStateNonAdjacentVersionIsNeverConcurrencyConflict(t *testing.T) 
 	require.NoError(t, engine.Start(ctx))
 
 	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, &badVersionDurableStateBehavior{id: entityID}))
+	require.NoError(t, engine.DurableStateEntity(ctx, enginetest.NewBadVersionDurableStateBehavior(entityID)))
 
 	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
 	require.NotEqual(t, command.OutcomeSuccess, result.Outcome())

@@ -924,3 +924,9 @@ func (s *SagaActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
 		},
 	})
 }
+
+// noTenantContext is the zero value of tenancy.TenantContext. Neither
+// tenancy.NewTenantContext nor tenancy.NewAdministrativeContext can ever
+// produce it (tenancy/tenant_context.go), so it safely marks "not yet
+// seeded" for an actor's tenant, distinct from any real resolved identity.
+var noTenantContext tenancy.TenantContext

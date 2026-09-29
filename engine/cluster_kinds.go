@@ -25,6 +25,7 @@ package engine
 import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
+	"github.com/getsyntegrity/ego/internal/engine/durablestate"
 	"github.com/getsyntegrity/ego/internal/engine/eventsource"
 )
 
@@ -76,6 +77,31 @@ func (a *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 
 // PostStop releases the actor's resources when it stops.
 func (a *EventSourcedActor) PostStop(ctx *goakt.Context) error {
+	return a.impl.PostStop(ctx)
+}
+
+// DurableStateActor is a durable state based actor.
+//
+// The implementation lives in internal/engine/durablestate.
+type DurableStateActor struct {
+	impl durablestate.Actor
+}
+
+var _ goakt.Actor = (*DurableStateActor)(nil)
+
+// PreStart loads extensions and dependencies, validates configuration, and
+// recovers the actor state from the durable state store.
+func (a *DurableStateActor) PreStart(ctx *goakt.Context) error {
+	return a.impl.PreStart(ctx)
+}
+
+// Receive handles the commands and state queries sent to the actor.
+func (a *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
+	a.impl.Receive(ctx)
+}
+
+// PostStop releases the actor's resources when it stops.
+func (a *DurableStateActor) PostStop(ctx *goakt.Context) error {
 	return a.impl.PostStop(ctx)
 }
 

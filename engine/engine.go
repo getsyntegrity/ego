@@ -1077,7 +1077,7 @@ func (engine *Engine) spawnDurableState(ctx context.Context, behavior behaviorpo
 	}
 	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
-	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newDurableStateActor(), sOptions...)
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), new(DurableStateActor), sOptions...)
 	if err != nil {
 		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}

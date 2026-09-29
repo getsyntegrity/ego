@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package durablestate
 
 import (
 	"context"
@@ -43,11 +43,12 @@ import (
 	"github.com/getsyntegrity/ego/internal/runner"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 	"github.com/getsyntegrity/ego/tenancy"
 )
 
-// DurableStateActor is a durable state based actor
-type DurableStateActor struct {
+// Actor is a durable state based actor
+type Actor struct {
 	behavior        behaviorport.DurableState
 	stateStore      persistence.StateStore
 	currentState    State
@@ -114,15 +115,15 @@ type DurableStateActor struct {
 }
 
 // implements the goakt.Actor interface
-var _ goakt.Actor = (*DurableStateActor)(nil)
+var _ goakt.Actor = (*Actor)(nil)
 
-// newDurableStateActor creates an instance of an actor provided the DurableStateBehavior
-func newDurableStateActor() *DurableStateActor {
-	return &DurableStateActor{}
+// New creates an instance of an actor provided the DurableStateBehavior
+func New() *Actor {
+	return &Actor{}
 }
 
 // PreStart pre-starts the actor
-func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
+func (entity *Actor) PreStart(ctx *goakt.Context) error {
 	stateStoreExt, err := extensions.Require[*extensions.DurableStateStore](ctx, extensions.DurableStateStoreExtensionID)
 	if err != nil {
 		return err
@@ -191,7 +192,7 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 }
 
 // Receive processes any message dropped into the actor mailbox.
-func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
+func (entity *Actor) Receive(ctx *goakt.ReceiveContext) {
 	switch message := ctx.Message().(type) {
 	case *goakt.PostStart:
 		entity.actorSystem = ctx.ActorSystem()
@@ -229,7 +230,7 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 // InitialState() at version 0) and keeps fail-closed in the strong
 // direction: no tenant-less record is ever written. Legacy mode is
 // unaffected — it keeps today's unconditional flush.
-func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
+func (entity *Actor) PostStop(ctx *goakt.Context) error {
 	entity.metrics.EntityStopped(ctx.Context())
 	chain := runner.
 		New(runner.WithFailFast()).
@@ -242,7 +243,7 @@ func (entity *DurableStateActor) PostStop(ctx *goakt.Context) error {
 
 // recoverFromStore reset the persistent actor to the latest state in case there is one
 // this is vital when the entity actor is restarting.
-func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
+func (entity *Actor) recoverFromStore(ctx context.Context) error {
 	durableState, err := entity.stateStore.GetLatestState(ctx, entity.scope, entity.persistenceID)
 	if err != nil {
 		return fmt.Errorf("failed to get the latest state: %w", err)
@@ -311,7 +312,7 @@ func (entity *DurableStateActor) recoverFromStore(ctx context.Context) error {
 }
 
 // processCommand processes the incoming command
-func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveContext, command Command) {
+func (entity *Actor) processCommand(receiveContext *goakt.ReceiveContext, command Command) {
 	ctx := receiveContext.Context()
 	startTime := time.Now()
 
@@ -420,7 +421,7 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	precondition := protocol.PreconditionFromRevision(revision, hasRevision)
 
 	if err := entity.commitState(ctx, newState, newVersion, time.Now(), candidateTenant, precondition); err != nil {
-		// D10 for DurableStateActor (no shutdown/restart path, unlike
+		// D10 for Actor (no shutdown/restart path, unlike
 		// EventSourcedActor): re-run recovery in place, best-effort, rather
 		// than tearing the actor down, whenever this actor cannot prove its
 		// in-memory currentVersion is still in sync with StorageRevision.
@@ -440,9 +441,9 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 }
 
 // recoverFromConflictIfNeeded implements D10's post-conflict handling for
-// DurableStateActor. EventSourcedActor's equivalent (shouldStayAliveAfterConflict)
+// Actor. EventSourcedActor's equivalent (shouldStayAliveAfterConflict)
 // shuts itself down whenever it is not provably in sync, letting the
-// supervisor restart it into recover(); DurableStateActor has no such
+// supervisor restart it into recover(); Actor has no such
 // shutdown/restart path, so it re-runs recoverFromStore in place instead,
 // best-effort, under the same "not provably in sync" condition.
 //
@@ -454,7 +455,7 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 // matching this file's other _ = call sites): the failed command has
 // already been replied to, and the next command's own recovery attempt (or
 // its own conflict) will retry the same corrective read.
-func (entity *DurableStateActor) recoverFromConflictIfNeeded(ctx context.Context, err error) {
+func (entity *Actor) recoverFromConflictIfNeeded(ctx context.Context, err error) {
 	if entity.provablyInSyncAfterConflict(err) {
 		return
 	}
@@ -466,7 +467,7 @@ func (entity *DurableStateActor) recoverFromConflictIfNeeded(ctx context.Context
 // reported ActualRevision is known and equal to entity.currentVersion — the
 // only case where entity.currentVersion is already known to match
 // StorageRevision without a corrective read.
-func (entity *DurableStateActor) provablyInSyncAfterConflict(err error) bool {
+func (entity *Actor) provablyInSyncAfterConflict(err error) bool {
 	var conflictErr *persistence.ConflictError
 	if !errors.As(err, &conflictErr) {
 		return false
@@ -481,7 +482,7 @@ func (entity *DurableStateActor) provablyInSyncAfterConflict(err error) bool {
 // and a command.Metadata is available on ctx (#60, M-3). See
 // EventSourcedActor.dispatchToBehavior for the full rationale — this
 // mirrors it for the durable-state path.
-func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
+func (entity *Actor) dispatchToBehavior(ctx context.Context, cmd Command, priorVersion uint64, priorState State) (State, uint64, error) {
 	envBehavior, ok := entity.behavior.(behaviorport.DurableStateEnvelope)
 	if !ok {
 		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
@@ -499,7 +500,7 @@ func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Com
 
 // currentStateAny returns the cached anypb.Any of currentState, computing it
 // only when the state has changed since the last call.
-func (entity *DurableStateActor) currentStateAny() *anypb.Any {
+func (entity *Actor) currentStateAny() *anypb.Any {
 	if entity.cachedStateAny == nil {
 		entity.cachedStateAny, _ = anypb.New(entity.currentState)
 	}
@@ -512,7 +513,7 @@ func (entity *DurableStateActor) currentStateAny() *anypb.Any {
 // directly, bypassing processCommand and its T4-A gate entirely, so without
 // its own check any resolved tenant could read another tenant's full
 // committed durable state.
-func (entity *DurableStateActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+func (entity *Actor) getStateAndReply(ctx *goakt.ReceiveContext) {
 	if entity.tenantAware {
 		tc, err := tenancy.Require(ctx.Context())
 		if err != nil {
@@ -530,7 +531,7 @@ func (entity *DurableStateActor) getStateAndReply(ctx *goakt.ReceiveContext) {
 }
 
 // sendStateReply sends a state reply message
-func (entity *DurableStateActor) sendStateReply(ctx *goakt.ReceiveContext) {
+func (entity *Actor) sendStateReply(ctx *goakt.ReceiveContext) {
 	ctx.Response(&egopb.CommandReply{
 		Reply: &egopb.CommandReply_StateReply{
 			StateReply: &egopb.StateReply{
@@ -544,7 +545,7 @@ func (entity *DurableStateActor) sendStateReply(ctx *goakt.ReceiveContext) {
 }
 
 // sendErrorReply sends an error as a reply message
-func (entity *DurableStateActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
+func (entity *Actor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
 	ctx.Response(&egopb.CommandReply{
 		Reply: &egopb.CommandReply_ErrorReply{
 			ErrorReply: &egopb.ErrorReply{
@@ -555,7 +556,7 @@ func (entity *DurableStateActor) sendErrorReply(ctx *goakt.ReceiveContext, err e
 }
 
 // checkAndSetPreconditions validates the newState and the newVersion
-func (entity *DurableStateActor) checkPreconditions(newState State, newVersion uint64) error {
+func (entity *Actor) checkPreconditions(newState State, newVersion uint64) error {
 	currentState := entity.currentState
 	currentStateType := currentState.ProtoReflect().Descriptor().FullName()
 	latestStateType := newState.ProtoReflect().Descriptor().FullName()
@@ -574,9 +575,9 @@ func (entity *DurableStateActor) checkPreconditions(newState State, newVersion u
 }
 
 // checks whether the durable state store is set or not
-func (entity *DurableStateActor) durableStateRequired() error {
+func (entity *Actor) durableStateRequired() error {
 	if entity.stateStore == nil {
-		return ErrDurableStateStoreRequired
+		return runtimeport.ErrDurableStateStoreRequired
 	}
 	return nil
 }
@@ -591,14 +592,14 @@ func (entity *DurableStateActor) durableStateRequired() error {
 //
 // tenantAware == true looks for the per-spawn extensions.EntityTenantScope
 // dependency Engine.DurableStateEntity injects and fails closed with
-// ErrEntityTenantScopeMissing when it is absent or carries an invalid
+// extensions.ErrEntityTenantScopeMissing when it is absent or carries an invalid
 // tenant id. On success it also pre-seeds entity.actorTenant with the
 // corresponding tenancy.TenantContext, BEFORE recoverFromStore() runs. This
 // turns recoverFromStore's tenant handling from a first-seed (direct
 // assignment) into a cross-check against the spawn-bound tenant (DS2/D6):
 // recovered tenant_metadata that disagrees with the tenant this actor was
 // actually spawned for now fails closed via tenancy.VerifyUnchanged.
-func (entity *DurableStateActor) resolveScope(deps []extension.Dependency) error {
+func (entity *Actor) resolveScope(deps []extension.Dependency) error {
 	if !entity.tenantAware {
 		entity.scope = persistence.Unscoped()
 		return nil
@@ -612,12 +613,12 @@ func (entity *DurableStateActor) resolveScope(deps []extension.Dependency) error
 
 		scope, err := persistence.NewTenantScope(tenancy.TenantID(dep.TenantID))
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+			return fmt.Errorf("%w: %w", extensions.ErrEntityTenantScopeMissing, err)
 		}
 
 		tenantContext, err := tenancy.NewTenantContext(scope.TenantID())
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+			return fmt.Errorf("%w: %w", extensions.ErrEntityTenantScopeMissing, err)
 		}
 
 		entity.scope = scope
@@ -625,7 +626,7 @@ func (entity *DurableStateActor) resolveScope(deps []extension.Dependency) error
 		return nil
 	}
 
-	return ErrEntityTenantScopeMissing
+	return extensions.ErrEntityTenantScopeMissing
 }
 
 // verifyTenantForPersist re-confirms, from ctx alone, that a valid tenant
@@ -635,7 +636,7 @@ func (entity *DurableStateActor) resolveScope(deps []extension.Dependency) error
 // by Engine.SendCommand and validated by the pre-handler gate: it never
 // invokes a TenantResolver and is never the sole enforcement point for
 // fail-closed behavior.
-func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) error {
+func (entity *Actor) verifyTenantForPersist(ctx context.Context) error {
 	if !entity.tenantAware {
 		return nil
 	}
@@ -669,7 +670,7 @@ func (entity *DurableStateActor) verifyTenantForPersist(ctx context.Context) err
 // Publish call runs, so a rejected write leaves currentState/currentVersion/
 // actorTenant/cachedStateAny exactly as they were (spec: "No partial commit
 // on conflict").
-func (entity *DurableStateActor) commitState(ctx context.Context, newState State, newVersion uint64, commandTime time.Time, candidateTenant tenancy.TenantContext, precondition persistence.WritePrecondition) error {
+func (entity *Actor) commitState(ctx context.Context, newState State, newVersion uint64, commandTime time.Time, candidateTenant tenancy.TenantContext, precondition persistence.WritePrecondition) error {
 	newStateAny, err := anypb.New(newState)
 	if err != nil {
 		return err
@@ -707,7 +708,7 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 // exclusion, design.md D4): there is no new candidate tenant to commit here,
 // only whatever state/version/tenant a prior successful command already
 // committed via commitState, or, in legacy mode, whatever is in memory.
-func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) error {
+func (entity *Actor) persistStateAndPublish(ctx context.Context) error {
 	durableState := &egopb.DurableState{
 		PersistenceId:  entity.persistenceID,
 		VersionNumber:  entity.currentVersion,

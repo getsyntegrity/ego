@@ -284,84 +284,6 @@ func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
 	require.NoError(t, engine.Stop(ctx))
 }
 
-// envelopeCapturingDurableStateBehavior is the DurableStateBehavior
-// counterpart of envelopeCapturingEventSourcedBehavior, proving the same
-// M-3 wiring for DurableStateActor.dispatchToBehavior.
-type envelopeCapturingDurableStateBehavior struct {
-	id string
-
-	mu               sync.Mutex
-	handleCommandHit int
-	handleEnvelope   int
-	lastEnvelope     command.Envelope
-}
-
-var (
-	_ DurableStateBehavior         = (*envelopeCapturingDurableStateBehavior)(nil)
-	_ DurableStateEnvelopeBehavior = (*envelopeCapturingDurableStateBehavior)(nil)
-)
-
-func newEnvelopeCapturingDurableStateBehavior(id string) *envelopeCapturingDurableStateBehavior {
-	return &envelopeCapturingDurableStateBehavior{id: id}
-}
-
-func (x *envelopeCapturingDurableStateBehavior) ID() string { return x.id }
-
-func (x *envelopeCapturingDurableStateBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-// nolint
-func (x *envelopeCapturingDurableStateBehavior) HandleCommand(_ context.Context, cmd Command, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
-	x.mu.Lock()
-	x.handleCommandHit++
-	x.mu.Unlock()
-	return x.apply(cmd, priorVersion)
-}
-
-func (x *envelopeCapturingDurableStateBehavior) HandleEnvelope(_ context.Context, env command.Envelope, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
-	x.mu.Lock()
-	x.handleEnvelope++
-	x.lastEnvelope = env
-	x.mu.Unlock()
-	return x.apply(env.Payload(), priorVersion)
-}
-
-func (x *envelopeCapturingDurableStateBehavior) apply(cmd Command, priorVersion uint64) (State, uint64, error) {
-	switch c := cmd.(type) {
-	case *testpb.CreateAccount:
-		return &testpb.Account{
-			AccountId:      x.id,
-			AccountBalance: c.GetAccountBalance(),
-		}, priorVersion + 1, nil
-	default:
-		return nil, 0, errors.New("unhandled command")
-	}
-}
-
-func (x *envelopeCapturingDurableStateBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *envelopeCapturingDurableStateBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-func (x *envelopeCapturingDurableStateBehavior) snapshot() (handleCommandHit, handleEnvelopeHit int, lastEnvelope command.Envelope) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.handleCommandHit, x.handleEnvelope, x.lastEnvelope
-}
-
 // TestEngineSendCommandDispatchesDurableStateHandleEnvelope is the
 // DurableStateActor counterpart of
 // TestEngineSendCommandDispatchesHandleEnvelope.
@@ -390,31 +312,12 @@ func TestEngineSendCommandDispatchesDurableStateHandleEnvelope(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 55, acct.GetAccountBalance())
 
-	handleCommandHit, handleEnvelopeHit, env := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit)
 	assert.Equal(t, 1, handleEnvelopeHit)
 	require.NotEmpty(t, env.Metadata().OperationID())
 
 	require.NoError(t, engine.Stop(ctx))
-}
-
-// TestDurableStateActorFallsBackToHandleCommandWithoutMetadata mirrors
-// TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata for
-// DurableStateActor.dispatchToBehavior.
-func TestDurableStateActorFallsBackToHandleCommandWithoutMetadata(t *testing.T) {
-	entity := &DurableStateActor{
-		behavior: newEnvelopeCapturingDurableStateBehavior("no-metadata"),
-	}
-
-	newState, newVersion, err := entity.dispatchToBehavior(context.Background(), &testpb.CreateAccount{AccountBalance: 9}, 0, new(testpb.Account))
-	require.NoError(t, err)
-	require.EqualValues(t, 1, newVersion)
-	require.NotNil(t, newState)
-
-	behavior := entity.behavior.(*envelopeCapturingDurableStateBehavior)
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
-	assert.Equal(t, 1, handleCommandHit)
-	assert.Zero(t, handleEnvelopeHit)
 }
 
 // TestSagaActorAttachCommandMetadata exercises SagaCommand's dual metadata
