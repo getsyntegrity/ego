@@ -23,118 +23,137 @@
 package persistence_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
-func TestScopeZeroValueIsInvalid(t *testing.T) {
-	var zero persistence.Scope
+// mustTenantScope builds a tenant scope for the tenant id, failing the case on error.
+func mustTenantScope(ctx *specs.Context, id string) (tenancy.TenantID, persistence.Scope) {
+	tenantID, err := tenancy.NewTenantID(id)
+	ctx.Expect(err).To(specs.BeNil())
 
-	assert.False(t, zero.Valid())
+	scope, err := persistence.NewTenantScope(tenantID)
+	ctx.Expect(err).To(specs.BeNil())
+
+	return tenantID, scope
+}
+
+func TestScopeZeroValueIsInvalid(t *testing.T) {
+	specs.Describe(t, "the zero Scope", func(s *specs.Spec) {
+		s.It("is invalid", func(ctx *specs.Context) {
+			var zero persistence.Scope
+
+			ctx.Expect(zero.Valid()).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestScopeUnscopedIsValid(t *testing.T) {
-	s := persistence.Unscoped()
+	specs.Describe(t, "Unscoped scope", func(s *specs.Spec) {
+		s.It("is valid, unscoped and carries no tenant id", func(ctx *specs.Context) {
+			sc := persistence.Unscoped()
 
-	assert.True(t, s.Valid())
-	assert.True(t, s.IsUnscoped())
-	assert.Equal(t, tenancy.TenantID(""), s.TenantID())
+			ctx.Expect(sc.Valid()).To(specs.BeTrue())
+			ctx.Expect(sc.IsUnscoped()).To(specs.BeTrue())
+			ctx.Expect(sc.TenantID()).ToEqual(tenancy.TenantID(""))
+		})
+	})
 }
 
 func TestScopeNewTenantScopeIsValid(t *testing.T) {
-	id, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "NewTenantScope with a valid tenant id", func(s *specs.Spec) {
+		s.It("is valid, not unscoped and keeps the tenant id", func(ctx *specs.Context) {
+			id, sc := mustTenantScope(ctx, "acme")
 
-	s, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
-
-	assert.True(t, s.Valid())
-	assert.False(t, s.IsUnscoped())
-	assert.Equal(t, id, s.TenantID())
+			ctx.Expect(sc.Valid()).To(specs.BeTrue())
+			ctx.Expect(sc.IsUnscoped()).To(specs.BeFalse())
+			ctx.Expect(sc.TenantID()).ToEqual(id)
+		})
+	})
 }
 
 func TestNewTenantScopeRejectsEmptyTenantID(t *testing.T) {
-	var empty tenancy.TenantID
+	specs.Describe(t, "NewTenantScope with an empty tenant id", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidScope", func(ctx *specs.Context) {
+			var empty tenancy.TenantID
 
-	_, err := persistence.NewTenantScope(empty)
+			_, err := persistence.NewTenantScope(empty)
 
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, persistence.ErrInvalidScope))
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+		})
+	})
 }
 
 func TestScopeUnscopedNotEqualToTenantScope(t *testing.T) {
-	id, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.Equal between unscoped and tenant scopes", func(s *specs.Spec) {
+		s.It("is false in both directions", func(ctx *specs.Context) {
+			_, tenantScope := mustTenantScope(ctx, "acme")
 
-	tenantScope, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
+			unscoped := persistence.Unscoped()
 
-	unscoped := persistence.Unscoped()
-
-	assert.False(t, unscoped.Equal(tenantScope))
-	assert.False(t, tenantScope.Equal(unscoped))
+			ctx.Expect(unscoped.Equal(tenantScope)).To(specs.BeFalse())
+			ctx.Expect(tenantScope.Equal(unscoped)).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestScopeTwoTenantScopesWithDifferentIDsAreNotEqual(t *testing.T) {
-	acme, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
-	other, err := tenancy.NewTenantID("other")
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.Equal between tenant scopes", func(s *specs.Spec) {
+		s.It("is false for different tenant ids", func(ctx *specs.Context) {
+			_, acmeScope := mustTenantScope(ctx, "acme")
+			_, otherScope := mustTenantScope(ctx, "other")
 
-	acmeScope, err := persistence.NewTenantScope(acme)
-	require.NoError(t, err)
-	otherScope, err := persistence.NewTenantScope(other)
-	require.NoError(t, err)
-
-	assert.False(t, acmeScope.Equal(otherScope))
+			ctx.Expect(acmeScope.Equal(otherScope)).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestScopeTwoTenantScopesWithSameIDAreEqual(t *testing.T) {
-	acme, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.Equal between tenant scopes of one tenant", func(s *specs.Spec) {
+		s.It("is true for the same tenant id", func(ctx *specs.Context) {
+			_, first := mustTenantScope(ctx, "acme")
+			_, second := mustTenantScope(ctx, "acme")
 
-	first, err := persistence.NewTenantScope(acme)
-	require.NoError(t, err)
-	second, err := persistence.NewTenantScope(acme)
-	require.NoError(t, err)
-
-	assert.True(t, first.Equal(second))
+			ctx.Expect(first.Equal(second)).To(specs.BeTrue())
+		})
+	})
 }
 
 func TestScopeIsUnscoped(t *testing.T) {
-	id, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
-	tenantScope, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.IsUnscoped", func(s *specs.Spec) {
+		s.It("is true for Unscoped and false for a tenant scope", func(ctx *specs.Context) {
+			_, tenantScope := mustTenantScope(ctx, "acme")
 
-	assert.True(t, persistence.Unscoped().IsUnscoped())
-	assert.False(t, tenantScope.IsUnscoped())
+			ctx.Expect(persistence.Unscoped().IsUnscoped()).To(specs.BeTrue())
+			ctx.Expect(tenantScope.IsUnscoped()).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestScopeTenantIDRoundTrips(t *testing.T) {
-	id, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.TenantID", func(s *specs.Spec) {
+		s.It("returns the tenant id of a tenant scope and empty for Unscoped", func(ctx *specs.Context) {
+			id, tenantScope := mustTenantScope(ctx, "acme")
 
-	tenantScope, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
-
-	assert.Equal(t, id, tenantScope.TenantID())
-	assert.Equal(t, tenancy.TenantID(""), persistence.Unscoped().TenantID())
+			ctx.Expect(tenantScope.TenantID()).ToEqual(id)
+			ctx.Expect(persistence.Unscoped().TenantID()).ToEqual(tenancy.TenantID(""))
+		})
+	})
 }
 
 func TestScopeStringDistinguishesKinds(t *testing.T) {
-	id, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
-	tenantScope, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
+	specs.Describe(t, "Scope.String", func(s *specs.Spec) {
+		s.It("renders unscoped and tenant scopes differently", func(ctx *specs.Context) {
+			_, tenantScope := mustTenantScope(ctx, "acme")
 
-	assert.Equal(t, "unscoped", persistence.Unscoped().String())
-	assert.Equal(t, "tenant:acme", tenantScope.String())
+			ctx.Expect(persistence.Unscoped().String()).ToEqual("unscoped")
+			ctx.Expect(tenantScope.String()).ToEqual("tenant:acme")
+		})
+	})
 }
 
 // A tenant whose id is literally the string "unscoped" MUST NOT equal
@@ -142,16 +161,16 @@ func TestScopeStringDistinguishesKinds(t *testing.T) {
 // tenant id that happens to collide with another scope's rendering must
 // never be able to forge that scope.
 func TestScopeTenantNamedUnscopedDoesNotEqualUnscoped(t *testing.T) {
-	id, err := tenancy.NewTenantID("unscoped")
-	require.NoError(t, err)
+	specs.Describe(t, "a tenant scope whose id is \"unscoped\"", func(s *specs.Spec) {
+		s.It("does not equal Unscoped", func(ctx *specs.Context) {
+			_, tenantScope := mustTenantScope(ctx, "unscoped")
 
-	tenantScope, err := persistence.NewTenantScope(id)
-	require.NoError(t, err)
+			unscoped := persistence.Unscoped()
 
-	unscoped := persistence.Unscoped()
-
-	assert.NotEqual(t, unscoped.String(), "")
-	assert.False(t, unscoped.Equal(tenantScope))
-	assert.False(t, tenantScope.Equal(unscoped))
-	assert.NotEqual(t, unscoped, tenantScope)
+			ctx.Expect(unscoped.String()).To(specs.NotEqual(""))
+			ctx.Expect(unscoped.Equal(tenantScope)).To(specs.BeFalse())
+			ctx.Expect(tenantScope.Equal(unscoped)).To(specs.BeFalse())
+			ctx.Expect(unscoped).To(specs.NotEqual(tenantScope))
+		})
+	})
 }
