@@ -123,6 +123,7 @@ func TestRequireExtension(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, pid)
 		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+		assert.ErrorContains(t, err, "was registered with unexpected type")
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -224,6 +225,7 @@ func TestOptionalExtension(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, pid)
 		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+		assert.ErrorContains(t, err, "was registered with unexpected type")
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
