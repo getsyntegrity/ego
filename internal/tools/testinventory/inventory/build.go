@@ -51,11 +51,21 @@ type ModuleScan struct {
 // Override reclassifies one test that static analysis cannot see through.
 type Override struct {
 	// Dir is the repository-relative directory of the package.
-	Dir         string `json:"dir"`
-	Test        string `json:"test"`
-	Lane        Lane   `json:"lane"`
-	Destination string `json:"destination,omitempty"`
-	Reason      string `json:"reason"`
+	Dir string `json:"dir"`
+	// Test or Tests (not both) name the tests of Dir the entry applies to. Tests lets
+	// several tests share one written reason.
+	Test        string   `json:"test,omitempty"`
+	Tests       []string `json:"tests,omitempty"`
+	Lane        Lane     `json:"lane"`
+	Destination string   `json:"destination,omitempty"`
+	Reason      string   `json:"reason"`
+}
+
+func (o Override) names() []string {
+	if o.Test != "" {
+		return append([]string{o.Test}, o.Tests...)
+	}
+	return o.Tests
 }
 
 // Overrides is the content of inventory-overrides.json.
@@ -111,29 +121,35 @@ func ApplyOverrides(entries []Entry, ov Overrides) ([]Entry, error) {
 	out := slices.Clone(entries)
 	seen := map[string]bool{}
 	for _, o := range ov.Overrides {
-		key := o.Dir + "::" + o.Test
-		switch {
-		case strings.TrimSpace(o.Reason) == "":
-			return nil, fmt.Errorf("override %s has no reason", key)
-		case !o.Lane.Valid():
-			return nil, fmt.Errorf("override %s has invalid lane %q", key, o.Lane)
-		case seen[key]:
-			return nil, fmt.Errorf("override %s is listed twice", key)
+		if (o.Test == "") == (len(o.Tests) == 0) {
+			return nil, fmt.Errorf("override in %s must set exactly one of test and tests", o.Dir)
 		}
-		seen[key] = true
-		idx := slices.IndexFunc(out, func(e Entry) bool { return path.Dir(e.File) == o.Dir && e.Name == o.Test })
-		if idx < 0 {
-			return nil, fmt.Errorf("override %s points at a test that does not exist", key)
+		if strings.TrimSpace(o.Reason) == "" {
+			return nil, fmt.Errorf("override in %s has no reason", o.Dir)
+		}
+		if !o.Lane.Valid() {
+			return nil, fmt.Errorf("override in %s has invalid lane %q", o.Dir, o.Lane)
 		}
 		dest := o.Destination
 		if dest == "" {
 			dest = DefaultDestination(o.Lane)
 		}
-		e := out[idx]
-		e.Classification = Classification{Lane: o.Lane, Destination: dest, Reason: "override"}
-		e.LeavesPR = o.Lane.LeavesPR()
-		e.Override = o.Reason
-		out[idx] = e
+		for _, name := range o.names() {
+			key := o.Dir + "::" + name
+			if seen[key] {
+				return nil, fmt.Errorf("override %s is listed twice", key)
+			}
+			seen[key] = true
+			idx := slices.IndexFunc(out, func(e Entry) bool { return path.Dir(e.File) == o.Dir && e.Name == name })
+			if idx < 0 {
+				return nil, fmt.Errorf("override %s points at a test that does not exist", key)
+			}
+			e := out[idx]
+			e.Classification = Classification{Lane: o.Lane, Destination: dest, Reason: "override"}
+			e.LeavesPR = o.Lane.LeavesPR()
+			e.Override = o.Reason
+			out[idx] = e
+		}
 	}
 	return out, nil
 }

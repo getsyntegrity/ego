@@ -131,3 +131,38 @@ func TestMergeRunAttachesResultsAndReportsUnmatched(t *testing.T) {
 		{Package: "example.com/fixture/sample", Name: "TestNotInSource"},
 	}, unmatched)
 }
+
+func TestApplyOverridesAcceptsSeveralTestsSharingOneReason(t *testing.T) {
+	entries := []Entry{entryFor("engine", "TestA"), entryFor("engine", "TestB"), entryFor("engine", "TestC")}
+	ov := Overrides{Overrides: []Override{{
+		Dir: "engine", Tests: []string{"TestA", "TestC"}, Lane: LaneComponent, Reason: "both start a real actor system through a wrapper of newTestEngine",
+	}}}
+	got, err := ApplyOverrides(entries, ov)
+	require.NoError(t, err)
+	assert.Equal(t, LaneComponent, got[0].Lane)
+	assert.Equal(t, LaneUnit, got[1].Lane)
+	assert.Equal(t, LaneComponent, got[2].Lane)
+	assert.Equal(t, got[0].Override, got[2].Override)
+}
+
+func TestApplyOverridesNeedsExactlyOneOfTestAndTests(t *testing.T) {
+	entries := []Entry{entryFor("engine", "TestA")}
+	both := Override{Dir: "engine", Test: "TestA", Tests: []string{"TestA"}, Lane: LaneUnit, Reason: "r"}
+	neither := Override{Dir: "engine", Lane: LaneUnit, Reason: "r"}
+	for name, o := range map[string]Override{"both": both, "neither": neither} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ApplyOverrides(entries, Overrides{Overrides: []Override{o}})
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestApplyOverridesRejectsATestListedInTwoEntries(t *testing.T) {
+	entries := []Entry{entryFor("engine", "TestA")}
+	ov := Overrides{Overrides: []Override{
+		{Dir: "engine", Tests: []string{"TestA"}, Lane: LaneUnit, Reason: "r"},
+		{Dir: "engine", Test: "TestA", Lane: LaneUnit, Reason: "r2"},
+	}}
+	_, err := ApplyOverrides(entries, ov)
+	assert.ErrorContains(t, err, "twice")
+}
