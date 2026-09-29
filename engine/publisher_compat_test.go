@@ -23,7 +23,6 @@
 package engine
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,12 +46,11 @@ func TestPublisherContractsAliasPortPublishing(t *testing.T) {
 		statePub publishing.StatePublisher = (*recordingStatePublisher)(nil)
 	)
 
-	var legacyEvent EventPublisher = eventPub
-	var legacyState StatePublisher = statePub
-	assert.Equal(t, eventPub, legacyEvent)
-	assert.Equal(t, statePub, legacyState)
+	var (
+		_ EventPublisher = eventPub //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+		_ StatePublisher = statePub //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+	)
 
 	assert.Same(t, publishing.ErrPublisherNotStarted, ErrPublisherNotStarted)
-	assert.True(t, errors.Is(publishing.ErrPublisherNotStarted, ErrPublisherNotStarted))
-	assert.True(t, errors.Is(ErrPublisherNotStarted, publishing.ErrPublisherNotStarted))
+	assert.ErrorIs(t, publishing.ErrPublisherNotStarted, ErrPublisherNotStarted)
 }

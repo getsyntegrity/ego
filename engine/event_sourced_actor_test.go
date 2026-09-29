@@ -105,9 +105,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
 		require.NoError(t, err)
@@ -214,9 +212,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, time.Second)
 		require.NoError(t, err)
@@ -377,9 +373,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, time.Second)
 		require.NoError(t, err)
@@ -512,9 +506,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
 		require.NoError(t, err)
@@ -981,9 +973,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
 		require.NoError(t, err)
@@ -1068,9 +1058,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
 		require.NoError(t, err)
@@ -1155,9 +1143,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		pause.For(time.Second)
 
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
+		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
 		// send the command to the actor
 		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
 		require.NoError(t, err)

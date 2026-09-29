@@ -179,7 +179,7 @@ type adoptionAccountBehavior struct {
 	id string
 }
 
-var _ engine.EventSourcedBehavior = (*adoptionAccountBehavior)(nil)
+var _ engine.EventSourcedBehavior = (*adoptionAccountBehavior)(nil) //nolint:staticcheck // exercises the deprecated API on purpose (#124)
 
 func (x *adoptionAccountBehavior) ID() string { return x.id }
 
@@ -478,7 +478,7 @@ func TestTenantAdopterEndToEndRecoveryThroughRealActor(t *testing.T) {
 	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
 
 	behavior := &adoptionAccountBehavior{id: entityID}
-	require.NoError(t, engine.Entity(ctx, behavior))
+	require.NoError(t, engine.Entity(ctx, behavior)) //nolint:staticcheck // exercises the deprecated API on purpose (#124)
 
 	// The recovered state must reflect the migrated event (balance 100)
 	// BEFORE any new command is applied: crediting 50 on top of it must
@@ -1491,7 +1491,7 @@ func (r *racingEventsStore) fire(ctx context.Context) error {
 		return nil
 	}
 	r.fired = true
-	return r.EventsStore.WriteEvents(ctx, r.source, []*egopb.Event{r.late}, persistence.Unconditional())
+	return r.WriteEvents(ctx, r.source, []*egopb.Event{r.late}, persistence.Unconditional())
 }
 
 func (r *racingEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
@@ -1570,7 +1570,7 @@ type racingSnapshotStore struct {
 func (r *racingSnapshotStore) DeleteSnapshots(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
 	if !r.fired && scope.Equal(r.source) {
 		r.fired = true
-		if err := r.SnapshotStore.WriteSnapshot(ctx, r.source, r.late); err != nil {
+		if err := r.WriteSnapshot(ctx, r.source, r.late); err != nil {
 			return err
 		}
 	}
@@ -1665,7 +1665,7 @@ func (r *replacingSnapshotStore) GetLatestSnapshot(ctx context.Context, scope pe
 	if err == nil && scope.Equal(r.target) && snapshot != nil {
 		r.targetReads++
 		if r.targetReads == 1 {
-			if writeErr := r.SnapshotStore.WriteSnapshot(ctx, r.source, r.replacement); writeErr != nil {
+			if writeErr := r.WriteSnapshot(ctx, r.source, r.replacement); writeErr != nil {
 				return nil, writeErr
 			}
 		}
@@ -1715,7 +1715,7 @@ func (r *replacingEventsStore) ReplayEvents(ctx context.Context, scope persisten
 	events, err := r.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
 	if err == nil && !r.fired && scope.Equal(r.target) && len(events) > 0 {
 		r.fired = true
-		if writeErr := r.EventsStore.WriteEvents(ctx, r.source, []*egopb.Event{r.replacement}, persistence.Unconditional()); writeErr != nil {
+		if writeErr := r.WriteEvents(ctx, r.source, []*egopb.Event{r.replacement}, persistence.Unconditional()); writeErr != nil {
 			return nil, writeErr
 		}
 	}
@@ -1867,7 +1867,7 @@ func (w *fencedSnapshotWriter) GetLatestSnapshot(ctx context.Context, scope pers
 			return
 		}
 		defer release()
-		_ = w.SnapshotStore.WriteSnapshot(context.Background(), w.target, w.payload)
+		_ = w.WriteSnapshot(context.Background(), w.target, w.payload)
 	}
 	if w.fence.isHeld(w.target, persistenceID) {
 		go write()
@@ -1926,7 +1926,7 @@ func (r *raceTargetStateStore) GetLatestState(ctx context.Context, scope persist
 	state, err := r.StateStore.GetLatestState(ctx, scope, persistenceID)
 	if err == nil && state == nil && !r.fired && scope.Equal(r.target) {
 		r.fired = true
-		if writeErr := r.StateStore.WriteState(ctx, r.target, r.payload, persistence.ExpectGenesis()); writeErr != nil {
+		if writeErr := r.WriteState(ctx, r.target, r.payload, persistence.ExpectGenesis()); writeErr != nil {
 			return nil, writeErr
 		}
 	}
@@ -1986,7 +1986,7 @@ func (w *fencedSourceWriter) ReplayEvents(ctx context.Context, scope persistence
 			return
 		}
 		defer release()
-		_ = w.EventsStore.WriteEvents(context.Background(), w.source, []*egopb.Event{w.late}, persistence.Unconditional())
+		_ = w.WriteEvents(context.Background(), w.source, []*egopb.Event{w.late}, persistence.Unconditional())
 	}
 	if w.fence.isHeld(w.source, persistenceID) {
 		go write()
@@ -2232,7 +2232,7 @@ func TestScopedMigratorSnapshotRecoversThroughTenantAwareActor(t *testing.T) {
 	require.NoError(t, engine.Start(ctx))
 	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
 
-	require.NoError(t, engine.Entity(ctx, &adoptionAccountBehavior{id: entityID}),
+	require.NoError(t, engine.Entity(ctx, &adoptionAccountBehavior{id: entityID}), //nolint:staticcheck // exercises the deprecated API on purpose (#124)
 		"a tenant-aware actor must recover from the migrated snapshot")
 	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
 	require.NoError(t, err)
@@ -2294,7 +2294,7 @@ func (r *recreatingEventsStore) DeleteEvents(ctx context.Context, scope persiste
 		return err
 	}
 	if scope.Equal(r.source) {
-		return r.EventsStore.WriteEvents(ctx, scope, []*egopb.Event{r.recreate}, persistence.Unconditional())
+		return r.WriteEvents(ctx, scope, []*egopb.Event{r.recreate}, persistence.Unconditional())
 	}
 	return nil
 }
@@ -2311,7 +2311,7 @@ func (r *recreatingSnapshotStore) DeleteSnapshots(ctx context.Context, scope per
 		return err
 	}
 	if scope.Equal(r.source) {
-		return r.SnapshotStore.WriteSnapshot(ctx, scope, r.recreate)
+		return r.WriteSnapshot(ctx, scope, r.recreate)
 	}
 	return nil
 }

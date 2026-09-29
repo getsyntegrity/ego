@@ -88,3 +88,4 @@ Pending for the user (GitHub settings): create `develop`; protect `main`/`develo
 run `.github/scripts/labels.sh`; enable "Allow GitHub Actions to create pull requests"; optional
 `ORG_CHECKOUT_TOKEN`, `SLACK_BOT_TOKEN`, `vars.SLACK_CHANNEL`.
 Known gap: the pipeline only tags the root module; the nested publisher modules get no `publisher/*/vX.Y.Z` tags.
+Follow-up: CI lint job flagged 26 pre-existing issues once tests are linted; fixed in the commit "style: satisfy golangci-lint on test files and intentional checks".

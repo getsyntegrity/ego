@@ -1551,7 +1551,7 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 		goakt.WithDependencies(deps...),
 		goakt.WithSupervisor(newSupervisor(RestartDirective)))
 	if err != nil {
-		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err {
+		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err { //nolint:errorlint // identity check: detects whether resolveExistingSpawn replaced err
 			return resolved
 		}
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)
