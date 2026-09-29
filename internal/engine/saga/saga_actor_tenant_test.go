@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -78,25 +79,32 @@ type sagaTenantMarkerKey struct{}
 
 // TestSagaActorEventContext covers tasks.md 1.1-1.3.
 func TestSagaActorEventContext(t *testing.T) {
-	t.Run("legacy mode passthrough returns (parent, nil)", func(t *testing.T) {
-		// 1.3
-		s := &Actor{tenantAware: false}
-		parent := context.WithValue(context.Background(), sagaTenantMarkerKey{}, "marker")
-		event := newAnyEvent(t, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, nil)
+	specs.Describe(t, "Actor.eventContext rebuilds the tenant context an event was written under", func(s *specs.Spec) {
+		s.It("legacy mode passthrough returns (parent, nil)", func(ctx *specs.Context) {
+			// 1.3
+			actor := &Actor{tenantAware: false}
+			parent := context.WithValue(context.Background(), sagaTenantMarkerKey{}, "marker")
+			event := newAnyEvent(ctx.T, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, nil)
 
-		got, err := s.eventContext(parent, event)
-		require.NoError(t, err)
-		assert.Equal(t, parent, got, "legacy mode must return parent unchanged")
-	})
+			// legacy mode must return parent unchanged
+			got, err := actor.eventContext(parent, event)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(parent)
+		})
 
-	t.Run("reconstructs tenant and administrative scope from valid metadata", func(t *testing.T) {
 		// 1.1 (table test)
 		tenantTC, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("tenancy.NewTenantContext: %v", err)
+		}
 		admin, err := tenancy.NewAdministrative("ops-bot", "crypto-shred")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("tenancy.NewAdministrative: %v", err)
+		}
 		adminTC, err := tenancy.NewAdministrativeContext(admin)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("tenancy.NewAdministrativeContext: %v", err)
+		}
 
 		cases := []struct {
 			name string
@@ -106,39 +114,42 @@ func TestSagaActorEventContext(t *testing.T) {
 			{"administrative scope", adminTC},
 		}
 
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				s := &Actor{tenantAware: true}
-				event := newAnyEvent(t, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, tenantMetadata(t, tc.tc))
+		s.Describe("reconstructs tenant and administrative scope from valid metadata", func(s *specs.Spec) {
+			for _, tc := range cases {
+				s.It(tc.name, func(ctx *specs.Context) {
+					actor := &Actor{tenantAware: true}
+					event := newAnyEvent(ctx.T, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, tenantMetadata(ctx.T, tc.tc))
 
-				ctx, err := s.eventContext(context.Background(), event)
-				require.NoError(t, err)
+					evCtx, err := actor.eventContext(context.Background(), event)
+					ctx.Expect(err).To(specs.BeNil())
 
-				got, ok := tenancy.From(ctx)
-				require.True(t, ok, "eventContext must attach the reconstructed TenantContext")
-				assert.Equal(t, tc.tc, got)
-			})
-		}
-	})
-
-	t.Run("absent or malformed tenant metadata returns wrapped ErrInvalid, parent unchanged", func(t *testing.T) {
-		// 1.2
-		s := &Actor{tenantAware: true}
-
-		t.Run("absent metadata", func(t *testing.T) {
-			event := newAnyEvent(t, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, nil)
-			ctx, err := s.eventContext(context.Background(), event)
-			require.Error(t, err)
-			assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-			assert.Nil(t, ctx)
+					// eventContext must attach the reconstructed TenantContext
+					got, ok := tenancy.From(evCtx)
+					ctx.Expect(ok).To(specs.BeTrue())
+					ctx.Expect(got).ToEqual(tc.tc)
+				})
+			}
 		})
 
-		t.Run("malformed metadata", func(t *testing.T) {
-			event := newAnyEvent(t, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, map[string]string{"ego.tenant.scope": "not-a-real-scope"})
-			ctx, err := s.eventContext(context.Background(), event)
-			require.Error(t, err)
-			assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-			assert.Nil(t, ctx)
+		s.Describe("absent or malformed tenant metadata returns wrapped ErrInvalid, parent unchanged", func(s *specs.Spec) {
+			// 1.2
+			actor := &Actor{tenantAware: true}
+
+			s.It("absent metadata", func(ctx *specs.Context) {
+				event := newAnyEvent(ctx.T, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, nil)
+				evCtx, err := actor.eventContext(context.Background(), event)
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+				ctx.Expect(evCtx == nil).To(specs.BeTrue())
+			})
+
+			s.It("malformed metadata", func(ctx *specs.Context) {
+				event := newAnyEvent(ctx.T, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, map[string]string{"ego.tenant.scope": "not-a-real-scope"})
+				evCtx, err := actor.eventContext(context.Background(), event)
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+				ctx.Expect(evCtx == nil).To(specs.BeTrue())
+			})
 		})
 	})
 }
@@ -177,134 +188,149 @@ func newBoundSagaActor(t *testing.T, behavior behaviorport.Saga) *Actor {
 }
 
 func TestSagaActorBindOnFirstEvent(t *testing.T) {
-	t.Run("binds to the first relevant tenant event it acts on", func(t *testing.T) {
-		// 2.1. The behavior returns a non-noop sagaAction (an event to persist for
-		// its own state) to prove the event is one this saga acts on, not just
-		// one it happened to observe (SG4 correction, see the "does not bind on
-		// an unrelated event" test below).
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+	specs.Describe(t, "Actor.handleStreamEvent binds the saga to the tenant of the first event it acts on", func(s *specs.Spec) {
+		s.It("binds to the first relevant tenant event it acts on", func(ctx *specs.Context) {
+			// 2.1. The behavior returns a non-noop sagaAction (an event to persist for
+			// its own state) to prove the event is one this saga acts on, not just
+			// one it happened to observe (SG4 correction, see the "does not bind on
+			// an unrelated event" test below).
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-		var handleEventCalls int
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: "saga-" + uuid.NewString(),
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalls++
-				return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
-			},
-		}
-		s := newBoundSagaActor(t, behavior)
+			var handleEventCalls int
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: "saga-" + uuid.NewString(),
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					handleEventCalls++
+					return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
+				},
+			}
+			actor := newBoundSagaActor(ctx.T, behavior)
 
-		event := newAnyEvent(t, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		s.handleStreamEvent(event)
+			event := newAnyEvent(ctx.T, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(ctx.T, tenantA))
+			actor.handleStreamEvent(event)
 
-		assert.Equal(t, 1, handleEventCalls, "HandleEvent must run for a validly tenant-scoped event")
-		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must be seeded from the first relevant event")
-	})
+			// HandleEvent must run for a validly tenant-scoped event
+			ctx.Expect(handleEventCalls).ToEqual(1)
+			// boundTenant must be seeded from the first relevant event
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
+		})
 
-	t.Run("does not bind on an unrelated event, binds once the saga's own event arrives", func(t *testing.T) {
-		// Codex P1 (PR #78, saga_actor.go handleStreamEvent): every saga
-		// subscribes to the shared protocol.EventsTopic, so the first event observed may
-		// belong to a different tenant and be irrelevant to this saga. Binding
-		// must not commit to that tenant before HandleEvent's own relevance
-		// filter has a chance to reject it.
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		tenantB, err := tenancy.NewTenantContext("globex")
-		require.NoError(t, err)
+		s.It("does not bind on an unrelated event, binds once the saga's own event arrives", func(ctx *specs.Context) {
+			// Codex P1 (PR #78, saga_actor.go handleStreamEvent): every saga
+			// subscribes to the shared protocol.EventsTopic, so the first event observed may
+			// belong to a different tenant and be irrelevant to this saga. Binding
+			// must not commit to that tenant before HandleEvent's own relevance
+			// filter has a chance to reject it.
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantB, err := tenancy.NewTenantContext("globex")
+			ctx.Expect(err).To(specs.BeNil())
 
-		var handleEventCalls int
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: "saga-" + uuid.NewString(),
-			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
-				handleEventCalls++
-				created, ok := event.(*testpb.AccountCreated)
-				if !ok || created.GetAccountId() != "watched-entity" {
-					return &sagaAction{}, nil
-				}
-				return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
-			},
-		}
-		s := newBoundSagaActor(t, behavior)
+			var handleEventCalls int
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: "saga-" + uuid.NewString(),
+				HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+					handleEventCalls++
+					created, ok := event.(*testpb.AccountCreated)
+					if !ok || created.GetAccountId() != "watched-entity" {
+						return &sagaAction{}, nil
+					}
+					return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
+				},
+			}
+			actor := newBoundSagaActor(ctx.T, behavior)
 
-		unrelated := newAnyEvent(t, "entity-noise", 1, &testpb.AccountCreated{AccountId: "entity-noise"}, tenantMetadata(t, tenantB))
-		s.handleStreamEvent(unrelated)
+			unrelated := newAnyEvent(ctx.T, "entity-noise", 1, &testpb.AccountCreated{AccountId: "entity-noise"}, tenantMetadata(ctx.T, tenantB))
+			actor.handleStreamEvent(unrelated)
 
-		assert.Equal(t, 1, handleEventCalls, "HandleEvent must still see the event to decide relevance")
-		assert.Equal(t, noTenantContext, s.boundTenant, "an event the behavior ignores must never seed boundTenant")
+			// HandleEvent must still see the event to decide relevance
+			ctx.Expect(handleEventCalls).ToEqual(1)
+			// an event the behavior ignores must never seed boundTenant
+			ctx.Expect(actor.boundTenant).ToEqual(noTenantContext)
 
-		watched := newAnyEvent(t, "watched-entity", 1, &testpb.AccountCreated{AccountId: "watched-entity"}, tenantMetadata(t, tenantA))
-		s.handleStreamEvent(watched)
+			watched := newAnyEvent(ctx.T, "watched-entity", 1, &testpb.AccountCreated{AccountId: "watched-entity"}, tenantMetadata(ctx.T, tenantA))
+			actor.handleStreamEvent(watched)
 
-		assert.Equal(t, 2, handleEventCalls)
-		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must bind to the saga's own tenant, not an earlier unrelated tenant's noise event")
-	})
+			ctx.Expect(handleEventCalls).ToEqual(2)
+			// boundTenant must bind to the saga's own tenant, not an earlier unrelated tenant's noise event
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
+		})
 
-	t.Run("a second event from a different tenant is rejected once bound", func(t *testing.T) {
-		// 2.2
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		tenantB, err := tenancy.NewTenantContext("globex")
-		require.NoError(t, err)
+		s.It("a second event from a different tenant is rejected once bound", func(ctx *specs.Context) {
+			// 2.2
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantB, err := tenancy.NewTenantContext("globex")
+			ctx.Expect(err).To(specs.BeNil())
 
-		var handleEventCalls int
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: "saga-" + uuid.NewString(),
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalls++
-				return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
-			},
-		}
-		s := newBoundSagaActor(t, behavior)
+			var handleEventCalls int
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: "saga-" + uuid.NewString(),
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					handleEventCalls++
+					return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
+				},
+			}
+			actor := newBoundSagaActor(ctx.T, behavior)
 
-		firstEvent := newAnyEvent(t, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		s.handleStreamEvent(firstEvent)
-		require.Equal(t, 1, handleEventCalls)
-		require.Equal(t, tenantA, s.boundTenant)
+			firstEvent := newAnyEvent(ctx.T, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(ctx.T, tenantA))
+			actor.handleStreamEvent(firstEvent)
+			ctx.Expect(handleEventCalls).ToEqual(1)
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
 
-		boundLatest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
-		require.NoError(t, err)
-		require.NotNil(t, boundLatest, "the first, relevant event must have persisted a saga event")
+			boundLatest, err := actor.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), actor.sagaID)
+			ctx.Expect(err).To(specs.BeNil())
+			// the first, relevant event must have persisted a saga event
+			ctx.Expect(boundLatest == nil).To(specs.BeFalse())
 
-		secondEvent := newAnyEvent(t, "entity-2", 1, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantB))
-		s.handleStreamEvent(secondEvent)
+			secondEvent := newAnyEvent(ctx.T, "entity-2", 1, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(ctx.T, tenantB))
+			actor.handleStreamEvent(secondEvent)
 
-		assert.Equal(t, 1, handleEventCalls, "HandleEvent must not run for a foreign-tenant event once bound")
-		assert.Equal(t, tenantA, s.boundTenant, "boundTenant must remain unchanged after a rejected foreign event")
-		assert.Equal(t, runtimeport.SagaRunning, s.status, "status must be untouched by a rejected event")
+			// HandleEvent must not run for a foreign-tenant event once bound
+			ctx.Expect(handleEventCalls).ToEqual(1)
+			// boundTenant must remain unchanged after a rejected foreign event
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
+			// status must be untouched by a rejected event
+			ctx.Expect(actor.status).ToEqual(runtimeport.SagaRunning)
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
-		require.NoError(t, err)
-		assert.Equal(t, boundLatest.GetSequenceNumber(), latest.GetSequenceNumber(), "no additional saga event may be persisted for a rejected foreign-tenant event")
-	})
+			latest, err := actor.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), actor.sagaID)
+			ctx.Expect(err).To(specs.BeNil())
+			// no additional saga event may be persisted for a rejected foreign-tenant event
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(boundLatest.GetSequenceNumber())
+		})
 
-	t.Run("tenant-less or malformed event at the reset site is rejected, saga still consumes the next valid event", func(t *testing.T) {
-		// 2.3
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+		s.It("tenant-less or malformed event at the reset site is rejected, saga still consumes the next valid event", func(ctx *specs.Context) {
+			// 2.3
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-		var handleEventCalls int
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: "saga-" + uuid.NewString(),
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalls++
-				return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
-			},
-		}
-		s := newBoundSagaActor(t, behavior)
+			var handleEventCalls int
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: "saga-" + uuid.NewString(),
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					handleEventCalls++
+					return &sagaAction{Events: []Event{&testpb.AccountCreated{AccountId: "saga-record"}}}, nil
+				},
+			}
+			actor := newBoundSagaActor(ctx.T, behavior)
 
-		tenantlessEvent := newAnyEvent(t, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
-		s.handleStreamEvent(tenantlessEvent)
+			tenantlessEvent := newAnyEvent(ctx.T, "entity-1", 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
+			actor.handleStreamEvent(tenantlessEvent)
 
-		assert.Zero(t, handleEventCalls, "HandleEvent must never run for a tenant-less event in tenant-aware mode")
-		assert.Equal(t, noTenantContext, s.boundTenant, "a rejected event must not seed boundTenant")
-		assert.Equal(t, runtimeport.SagaRunning, s.status)
+			// HandleEvent must never run for a tenant-less event in tenant-aware mode
+			ctx.Expect(handleEventCalls).ToEqual(0)
+			// a rejected event must not seed boundTenant
+			ctx.Expect(actor.boundTenant).ToEqual(noTenantContext)
+			ctx.Expect(actor.status).ToEqual(runtimeport.SagaRunning)
 
-		validEvent := newAnyEvent(t, "entity-2", 1, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantA))
-		s.handleStreamEvent(validEvent)
+			validEvent := newAnyEvent(ctx.T, "entity-2", 1, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(ctx.T, tenantA))
+			actor.handleStreamEvent(validEvent)
 
-		assert.Equal(t, 1, handleEventCalls, "the saga must still be able to consume a later, validly-scoped event")
-		assert.Equal(t, tenantA, s.boundTenant)
+			// the saga must still be able to consume a later, validly-scoped event
+			ctx.Expect(handleEventCalls).ToEqual(1)
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
+		})
 	})
 }
 
@@ -403,37 +429,39 @@ func (a *ctxCapturingActor) observedTenant() (tenancy.TenantContext, bool) {
 
 func TestSagaActorPersistAndApplyEventsWritesTenantMetadata(t *testing.T) {
 	// 3.1
-	t.Run("tenant-aware mode writes tenant_metadata", func(t *testing.T) {
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+	specs.Describe(t, "Actor.persistAndApplyEvents writes tenant metadata only in tenant-aware mode", func(s *specs.Spec) {
+		s.It("tenant-aware mode writes tenant_metadata", func(ctx *specs.Context) {
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: "saga-" + uuid.NewString()}
-		s := newBoundSagaActor(t, behavior)
+			behavior := &enginetest.CallbackSagaBehavior{SagaID: "saga-" + uuid.NewString()}
+			actor := newBoundSagaActor(ctx.T, behavior)
 
-		ctx, err := tenancy.Attach(context.Background(), tenantA)
-		require.NoError(t, err)
+			tenantCtx, err := tenancy.Attach(context.Background(), tenantA)
+			ctx.Expect(err).To(specs.BeNil())
 
-		err = s.persistAndApplyEvents(ctx, []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
-		require.NoError(t, err)
+			err = actor.persistAndApplyEvents(tenantCtx, []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
+			ctx.Expect(err).To(specs.BeNil())
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.Equal(t, tenantMetadata(t, tenantA), latest.GetTenantMetadata())
-	})
+			latest, err := actor.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), actor.sagaID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest == nil).To(specs.BeFalse())
+			ctx.Expect(latest.GetTenantMetadata()).ToEqual(tenantMetadata(ctx.T, tenantA))
+		})
 
-	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: "saga-" + uuid.NewString()}
-		s := newBoundSagaActor(t, behavior)
-		s.tenantAware = false
+		s.It("legacy mode writes no tenant metadata", func(ctx *specs.Context) {
+			behavior := &enginetest.CallbackSagaBehavior{SagaID: "saga-" + uuid.NewString()}
+			actor := newBoundSagaActor(ctx.T, behavior)
+			actor.tenantAware = false
 
-		err := s.persistAndApplyEvents(context.Background(), []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
-		require.NoError(t, err)
+			err := actor.persistAndApplyEvents(context.Background(), []Event{&testpb.AccountCreated{AccountId: "entity-1"}})
+			ctx.Expect(err).To(specs.BeNil())
 
-		latest, err := s.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), s.sagaID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.Empty(t, latest.GetTenantMetadata())
+			latest, err := actor.eventsStore.GetLatestEvent(context.Background(), persistence.Unscoped(), actor.sagaID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest == nil).To(specs.BeFalse())
+			ctx.Expect(len(latest.GetTenantMetadata())).ToEqual(0)
+		})
 	})
 }
 
@@ -483,88 +511,92 @@ func TestSagaActorSendCommandThreadsTenantContext(t *testing.T) {
 // --- Phase 4: replay validation against first-replayed-event boundTenant (SG5) --
 
 func TestSagaActorRecoverReplayTenantValidation(t *testing.T) {
-	t.Run("establishes boundTenant from the first successfully-decoded replayed event", func(t *testing.T) {
-		// 4.1
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+	specs.Describe(t, "Actor.recover validates the tenant of every replayed event", func(s *specs.Spec) {
+		s.It("establishes boundTenant from the first successfully-decoded replayed event", func(ctx *specs.Context) {
+			// 4.1
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(context.Background()))
-		t.Cleanup(func() { _ = store.Disconnect(context.Background()) })
+			store := testkit.NewEventsStore()
+			ctx.Expect(store.Connect(context.Background())).To(specs.BeNil())
+			ctx.T.Cleanup(func() { _ = store.Disconnect(context.Background()) })
 
-		sagaID := "saga-" + uuid.NewString()
-		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
+			sagaID := "saga-" + uuid.NewString()
+			event := newAnyEvent(ctx.T, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(ctx.T, tenantA))
+			ctx.Expect(store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional())).To(specs.BeNil())
 
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
-		s := &Actor{
-			behavior:    behavior,
-			eventsStore: store,
-			sagaID:      sagaID,
-			tenantAware: true,
-			scope:       persistence.Unscoped(),
-			logger:      enginetest.DiscardLogger,
-		}
+			behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
+			actor := &Actor{
+				behavior:    behavior,
+				eventsStore: store,
+				sagaID:      sagaID,
+				tenantAware: true,
+				scope:       persistence.Unscoped(),
+				logger:      enginetest.DiscardLogger,
+			}
 
-		require.NoError(t, s.recover(context.Background()))
-		assert.Equal(t, tenantA, s.boundTenant)
-		assert.EqualValues(t, 1, s.eventsCounter)
-	})
+			ctx.Expect(actor.recover(context.Background())).To(specs.BeNil())
+			ctx.Expect(actor.boundTenant).ToEqual(tenantA)
+			specs.ExpectT(ctx, actor.eventsCounter).ToEqual(1)
+		})
 
-	t.Run("a later replayed event from a different tenant fails recovery closed", func(t *testing.T) {
-		// 4.2
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		tenantB, err := tenancy.NewTenantContext("globex")
-		require.NoError(t, err)
+		s.It("a later replayed event from a different tenant fails recovery closed", func(ctx *specs.Context) {
+			// 4.2
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantB, err := tenancy.NewTenantContext("globex")
+			ctx.Expect(err).To(specs.BeNil())
 
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(context.Background()))
-		t.Cleanup(func() { _ = store.Disconnect(context.Background()) })
+			store := testkit.NewEventsStore()
+			ctx.Expect(store.Connect(context.Background())).To(specs.BeNil())
+			ctx.T.Cleanup(func() { _ = store.Disconnect(context.Background()) })
 
-		sagaID := "saga-" + uuid.NewString()
-		firstEvent := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(t, tenantA))
-		secondEvent := newAnyEvent(t, sagaID, 2, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(t, tenantB))
-		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{firstEvent, secondEvent}, persistence.Unconditional()))
+			sagaID := "saga-" + uuid.NewString()
+			firstEvent := newAnyEvent(ctx.T, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, tenantMetadata(ctx.T, tenantA))
+			secondEvent := newAnyEvent(ctx.T, sagaID, 2, &testpb.AccountCreated{AccountId: "entity-2"}, tenantMetadata(ctx.T, tenantB))
+			ctx.Expect(store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{firstEvent, secondEvent}, persistence.Unconditional())).To(specs.BeNil())
 
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
-		s := &Actor{
-			behavior:    behavior,
-			eventsStore: store,
-			sagaID:      sagaID,
-			tenantAware: true,
-			scope:       persistence.Unscoped(),
-			logger:      enginetest.DiscardLogger,
-		}
+			behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
+			actor := &Actor{
+				behavior:    behavior,
+				eventsStore: store,
+				sagaID:      sagaID,
+				tenantAware: true,
+				scope:       persistence.Unscoped(),
+				logger:      enginetest.DiscardLogger,
+			}
 
-		err = s.recover(context.Background())
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrDenied), "a later event disagreeing with the first must fail recovery with ErrDenied")
-	})
+			err = actor.recover(context.Background())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			// a later event disagreeing with the first must fail recovery with ErrDenied
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+		})
 
-	t.Run("a replayed event with absent tenant metadata fails PreStart with ErrInvalid", func(t *testing.T) {
-		// 4.3
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(context.Background()))
-		t.Cleanup(func() { _ = store.Disconnect(context.Background()) })
+		s.It("a replayed event with absent tenant metadata fails PreStart with ErrInvalid", func(ctx *specs.Context) {
+			// 4.3
+			store := testkit.NewEventsStore()
+			ctx.Expect(store.Connect(context.Background())).To(specs.BeNil())
+			ctx.T.Cleanup(func() { _ = store.Disconnect(context.Background()) })
 
-		sagaID := "saga-" + uuid.NewString()
-		event := newAnyEvent(t, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
-		require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
+			sagaID := "saga-" + uuid.NewString()
+			event := newAnyEvent(ctx.T, sagaID, 1, &testpb.AccountCreated{AccountId: "entity-1"}, nil)
+			ctx.Expect(store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional())).To(specs.BeNil())
 
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
-		s := &Actor{
-			behavior:    behavior,
-			eventsStore: store,
-			sagaID:      sagaID,
-			tenantAware: true,
-			scope:       persistence.Unscoped(),
-			logger:      enginetest.DiscardLogger,
-		}
+			behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
+			actor := &Actor{
+				behavior:    behavior,
+				eventsStore: store,
+				sagaID:      sagaID,
+				tenantAware: true,
+				scope:       persistence.Unscoped(),
+				logger:      enginetest.DiscardLogger,
+			}
 
-		err := s.recover(context.Background())
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid), "absent tenant metadata on a replayed event must fail closed with ErrInvalid, no backfill")
+			err := actor.recover(context.Background())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			// absent tenant metadata on a replayed event must fail closed with ErrInvalid, no backfill
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 	})
 }
 
@@ -760,50 +792,56 @@ func TestSagaActorDurableTenantBinding(t *testing.T) {
 // tenant's saga state even though the instance is bound to exactly one
 // tenant for its lifetime (SG4).
 func TestSagaActorCheckStateReadTenant(t *testing.T) {
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+	specs.Describe(t, "Actor.checkStateReadTenant gates state reads by the bound tenant", func(s *specs.Spec) {
+		var tenantA, tenantB tenancy.TenantContext
+		s.BeforeEach(func(ctx *specs.Context) {
+			var err error
+			tenantA, err = tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantB, err = tenancy.NewTenantContext("globex")
+			ctx.Expect(err).To(specs.BeNil())
+		})
 
-	t.Run("legacy mode is always a no-op", func(t *testing.T) {
-		s := &Actor{tenantAware: false}
-		assert.NoError(t, s.checkStateReadTenant(context.Background()))
-	})
+		s.It("legacy mode is always a no-op", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: false}
+			ctx.Expect(actor.checkStateReadTenant(context.Background())).To(specs.BeNil())
+		})
 
-	t.Run("unbound tenant-aware saga: any resolved tenant may read (no owner yet)", func(t *testing.T) {
-		s := &Actor{tenantAware: true}
-		ctx, err := tenancy.Attach(context.Background(), tenantA)
-		require.NoError(t, err)
-		assert.NoError(t, s.checkStateReadTenant(ctx))
-	})
+		s.It("unbound tenant-aware saga: any resolved tenant may read (no owner yet)", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: true}
+			tenantCtx, err := tenancy.Attach(context.Background(), tenantA)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(actor.checkStateReadTenant(tenantCtx)).To(specs.BeNil())
+		})
 
-	t.Run("unbound tenant-aware saga: missing tenant context is rejected", func(t *testing.T) {
-		s := &Actor{tenantAware: true}
-		err := s.checkStateReadTenant(context.Background())
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
-	})
+		s.It("unbound tenant-aware saga: missing tenant context is rejected", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: true}
+			err := actor.checkStateReadTenant(context.Background())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 
-	t.Run("bound saga: the matching tenant succeeds", func(t *testing.T) {
-		s := &Actor{tenantAware: true, boundTenant: tenantA}
-		ctx, err := tenancy.Attach(context.Background(), tenantA)
-		require.NoError(t, err)
-		assert.NoError(t, s.checkStateReadTenant(ctx))
-	})
+		s.It("bound saga: the matching tenant succeeds", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: true, boundTenant: tenantA}
+			tenantCtx, err := tenancy.Attach(context.Background(), tenantA)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(actor.checkStateReadTenant(tenantCtx)).To(specs.BeNil())
+		})
 
-	t.Run("bound saga: a foreign tenant is rejected", func(t *testing.T) {
-		s := &Actor{tenantAware: true, boundTenant: tenantA}
-		ctx, err := tenancy.Attach(context.Background(), tenantB)
-		require.NoError(t, err)
-		err = s.checkStateReadTenant(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrDenied))
-	})
+		s.It("bound saga: a foreign tenant is rejected", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: true, boundTenant: tenantA}
+			tenantCtx, err := tenancy.Attach(context.Background(), tenantB)
+			ctx.Expect(err).To(specs.BeNil())
+			err = actor.checkStateReadTenant(tenantCtx)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+		})
 
-	t.Run("bound saga: missing tenant context is rejected", func(t *testing.T) {
-		s := &Actor{tenantAware: true, boundTenant: tenantA}
-		err := s.checkStateReadTenant(context.Background())
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
+		s.It("bound saga: missing tenant context is rejected", func(ctx *specs.Context) {
+			actor := &Actor{tenantAware: true, boundTenant: tenantA}
+			err := actor.checkStateReadTenant(context.Background())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 	})
 }

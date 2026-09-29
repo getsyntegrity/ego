@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -52,21 +53,23 @@ import (
 )
 
 func TestSagaStatus_String(t *testing.T) {
-	tests := []struct {
-		status   runtimeport.SagaStatus
-		expected string
-	}{
-		{runtimeport.SagaRunning, "running"},
-		{runtimeport.SagaCompleted, "completed"},
-		{runtimeport.SagaCompensating, "compensating"},
-		{runtimeport.SagaFailed, "failed"},
-		{runtimeport.SagaStatus(99), "unknown"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.expected, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.status.String())
-		})
-	}
+	specs.Describe(t, "SagaStatus.String names each lifecycle status", func(s *specs.Spec) {
+		tests := []struct {
+			status   runtimeport.SagaStatus
+			expected string
+		}{
+			{runtimeport.SagaRunning, "running"},
+			{runtimeport.SagaCompleted, "completed"},
+			{runtimeport.SagaCompensating, "compensating"},
+			{runtimeport.SagaFailed, "failed"},
+			{runtimeport.SagaStatus(99), "unknown"},
+		}
+		for _, tc := range tests {
+			s.It(tc.expected, func(ctx *specs.Context) {
+				ctx.Expect(tc.status.String()).ToEqual(tc.expected)
+			})
+		}
+	})
 }
 
 func TestSagaActor(t *testing.T) {
