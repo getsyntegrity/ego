@@ -60,6 +60,9 @@ Assertions:
 - A failed expectation stops its case, like testify's `require`: the rest of that `It` does not run, and the
   other cases still do. Migrating testify's `assert` (which keeps going) therefore reports only the first
   failure of a case; that is expected, not a lost check.
+- Expectations take no custom message. When an old loop identified the failing input in its testify
+  message (`"must parse: %s"`), make each input its own `It`, named by that input, so a failure still says
+  which one broke. The case count goes up; say so in the PR.
 
 Setup and teardown: `s.BeforeEach` / `s.AfterEach` per case. Nested `AfterEach` hooks run innermost scope
 first, last registered first within a scope. `ctx.T` is the case's `*testing.T`, so `ctx.T.TempDir()`,
