@@ -26,8 +26,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -91,145 +90,177 @@ func (a *addSecondsAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.Any, error
 }
 
 func TestChainNoAdapters(t *testing.T) {
-	event, err := anypb.New(timestamppb.Now())
-	require.NoError(t, err)
+	specs.Describe(t, "Chain with no adapters returns the event unchanged", func(s *specs.Spec) {
+		s.It("returns the same event for a nil slice and an empty slice", func(ctx *specs.Context) {
+			event, err := anypb.New(timestamppb.Now())
+			ctx.Expect(err).To(specs.BeNil())
 
-	// nil slice
-	result, err := Chain(nil, event, 1)
-	require.NoError(t, err)
-	assert.Same(t, event, result)
+			// nil slice
+			result, err := Chain(nil, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(result == event).To(specs.BeTrue())
 
-	// empty slice
-	result, err = Chain([]EventAdapter{}, event, 1)
-	require.NoError(t, err)
-	assert.Same(t, event, result)
+			// empty slice
+			result, err = Chain([]EventAdapter{}, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(result == event).To(specs.BeTrue())
+		})
+	})
 }
 
 func TestChainSingleAdapterTransforms(t *testing.T) {
-	ts := &timestamppb.Timestamp{Seconds: 1000, Nanos: 0}
-	event, err := anypb.New(ts)
-	require.NoError(t, err)
+	specs.Describe(t, "Chain applies a single adapter to the event", func(s *specs.Spec) {
+		s.It("transforms a Timestamp into a Duration", func(ctx *specs.Context) {
+			ts := &timestamppb.Timestamp{Seconds: 1000, Nanos: 0}
+			event, err := anypb.New(ts)
+			ctx.Expect(err).To(specs.BeNil())
 
-	adapters := []EventAdapter{&timestampToDurationAdapter{}}
-	result, err := Chain(adapters, event, 1)
-	require.NoError(t, err)
+			adapters := []EventAdapter{&timestampToDurationAdapter{}}
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
 
-	// The result should be a Duration (different type URL from the input Timestamp)
-	var d durationpb.Duration
-	require.NoError(t, result.UnmarshalTo(&d))
-	// timestampToDurationAdapter produces a zero duration
-	assert.Equal(t, int64(0), d.GetSeconds())
+			// The result should be a Duration (different type URL from the input Timestamp)
+			var d durationpb.Duration
+			ctx.Expect(result.UnmarshalTo(&d)).To(specs.BeNil())
+			// timestampToDurationAdapter produces a zero duration
+			ctx.Expect(d.GetSeconds()).ToEqual(int64(0))
+		})
+	})
 }
 
 func TestChainMultipleAdaptersAppliedInOrder(t *testing.T) {
-	// Start with a Duration of 10 seconds
-	event, err := anypb.New(durationpb.New(10_000_000_000)) // 10s
-	require.NoError(t, err)
+	specs.Describe(t, "Chain applies several adapters in order", func(s *specs.Spec) {
+		s.It("accumulates the seconds added by each adapter", func(ctx *specs.Context) {
+			// Start with a Duration of 10 seconds
+			event, err := anypb.New(durationpb.New(10_000_000_000)) // 10s
+			ctx.Expect(err).To(specs.BeNil())
 
-	adapters := []EventAdapter{
-		&addSecondsAdapter{extra: 5},
-		&addSecondsAdapter{extra: 20},
-	}
+			adapters := []EventAdapter{
+				&addSecondsAdapter{extra: 5},
+				&addSecondsAdapter{extra: 20},
+			}
 
-	result, err := Chain(adapters, event, 1)
-	require.NoError(t, err)
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
 
-	var d durationpb.Duration
-	require.NoError(t, result.UnmarshalTo(&d))
-	// 10 + 5 + 20 = 35 seconds
-	assert.Equal(t, int64(35), d.GetSeconds())
+			var d durationpb.Duration
+			ctx.Expect(result.UnmarshalTo(&d)).To(specs.BeNil())
+			// 10 + 5 + 20 = 35 seconds
+			ctx.Expect(d.GetSeconds()).ToEqual(int64(35))
+		})
+	})
 }
 
 func TestChainAdapterReturnsError(t *testing.T) {
-	event, err := anypb.New(timestamppb.Now())
-	require.NoError(t, err)
+	specs.Describe(t, "Chain propagates an adapter error", func(s *specs.Spec) {
+		s.It("returns the adapter error and a nil result", func(ctx *specs.Context) {
+			event, err := anypb.New(timestamppb.Now())
+			ctx.Expect(err).To(specs.BeNil())
 
-	expectedErr := errors.New("adapter failure")
-	adapters := []EventAdapter{
-		&noopAdapter{},
-		&errorAdapter{err: expectedErr},
-		&addSecondsAdapter{extra: 100}, // should never run
-	}
+			expectedErr := errors.New("adapter failure")
+			adapters := []EventAdapter{
+				&noopAdapter{},
+				&errorAdapter{err: expectedErr},
+				&addSecondsAdapter{extra: 100}, // should never run
+			}
 
-	result, err := Chain(adapters, event, 1)
-	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
-	assert.Nil(t, result)
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(expectedErr))
+			ctx.Expect(result).To(specs.BeNil())
+		})
+	})
 }
 
 func TestChainErrorStopsEarly(t *testing.T) {
-	event, err := anypb.New(durationpb.New(10_000_000_000))
-	require.NoError(t, err)
+	specs.Describe(t, "Chain stops at the first failing adapter", func(s *specs.Spec) {
+		s.It("returns the mid-chain error and a nil result", func(ctx *specs.Context) {
+			event, err := anypb.New(durationpb.New(10_000_000_000))
+			ctx.Expect(err).To(specs.BeNil())
 
-	expectedErr := errors.New("mid-chain error")
-	adapters := []EventAdapter{
-		&addSecondsAdapter{extra: 5},
-		&errorAdapter{err: expectedErr},
-		&addSecondsAdapter{extra: 100}, // should never run
-	}
+			expectedErr := errors.New("mid-chain error")
+			adapters := []EventAdapter{
+				&addSecondsAdapter{extra: 5},
+				&errorAdapter{err: expectedErr},
+				&addSecondsAdapter{extra: 100}, // should never run
+			}
 
-	result, err := Chain(adapters, event, 1)
-	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
-	assert.Nil(t, result)
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(expectedErr))
+			ctx.Expect(result).To(specs.BeNil())
+		})
+	})
 }
 
 func TestChainNoopAdapter(t *testing.T) {
-	original := timestamppb.Now()
-	event, err := anypb.New(original)
-	require.NoError(t, err)
+	specs.Describe(t, "Chain with a noop adapter leaves the event untouched", func(s *specs.Spec) {
+		s.It("keeps the same pointer and content", func(ctx *specs.Context) {
+			original := timestamppb.Now()
+			event, err := anypb.New(original)
+			ctx.Expect(err).To(specs.BeNil())
 
-	adapters := []EventAdapter{&noopAdapter{}}
-	result, err := Chain(adapters, event, 1)
-	require.NoError(t, err)
-	// The pointer should be unchanged since noop returns the same event
-	assert.Same(t, event, result)
+			adapters := []EventAdapter{&noopAdapter{}}
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
+			// The pointer should be unchanged since noop returns the same event
+			ctx.Expect(result == event).To(specs.BeTrue())
 
-	// Content should still unmarshal to the same timestamp
-	var ts timestamppb.Timestamp
-	require.NoError(t, result.UnmarshalTo(&ts))
-	assert.True(t, proto.Equal(original, &ts))
+			// Content should still unmarshal to the same timestamp
+			var ts timestamppb.Timestamp
+			ctx.Expect(result.UnmarshalTo(&ts)).To(specs.BeNil())
+			ctx.Expect(proto.Equal(original, &ts)).To(specs.BeTrue())
+		})
+	})
 }
 
 func TestChainAdapterUsesRevision(t *testing.T) {
-	event, err := anypb.New(timestamppb.Now())
-	require.NoError(t, err)
+	specs.Describe(t, "Chain passes the revision to each adapter", func(s *specs.Spec) {
+		s.It("transforms only at or above the adapter's minimum revision", func(ctx *specs.Context) {
+			event, err := anypb.New(timestamppb.Now())
+			ctx.Expect(err).To(specs.BeNil())
 
-	adapters := []EventAdapter{&revisionGatedAdapter{minRevision: 10}}
+			adapters := []EventAdapter{&revisionGatedAdapter{minRevision: 10}}
 
-	// revision below threshold: event passes through unchanged
-	result, err := Chain(adapters, event, 5)
-	require.NoError(t, err)
-	assert.Same(t, event, result)
+			// revision below threshold: event passes through unchanged
+			result, err := Chain(adapters, event, 5)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(result == event).To(specs.BeTrue())
 
-	// revision at threshold: event is transformed to a Duration
-	result, err = Chain(adapters, event, 10)
-	require.NoError(t, err)
-	var d durationpb.Duration
-	require.NoError(t, result.UnmarshalTo(&d))
-	assert.Equal(t, int64(42), d.GetSeconds())
+			// revision at threshold: event is transformed to a Duration
+			result, err = Chain(adapters, event, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			var d durationpb.Duration
+			ctx.Expect(result.UnmarshalTo(&d)).To(specs.BeNil())
+			ctx.Expect(d.GetSeconds()).ToEqual(int64(42))
 
-	// revision above threshold: event is also transformed
-	result, err = Chain(adapters, event, 100)
-	require.NoError(t, err)
-	require.NoError(t, result.UnmarshalTo(&d))
-	assert.Equal(t, int64(42), d.GetSeconds())
+			// revision above threshold: event is also transformed
+			result, err = Chain(adapters, event, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(result.UnmarshalTo(&d)).To(specs.BeNil())
+			ctx.Expect(d.GetSeconds()).ToEqual(int64(42))
+		})
+	})
 }
 
 func TestChainMixedNoopAndTransform(t *testing.T) {
-	event, err := anypb.New(durationpb.New(1_000_000_000)) // 1s
-	require.NoError(t, err)
+	specs.Describe(t, "Chain mixes noop and transforming adapters", func(s *specs.Spec) {
+		s.It("applies only the transforming adapter's effect", func(ctx *specs.Context) {
+			event, err := anypb.New(durationpb.New(1_000_000_000)) // 1s
+			ctx.Expect(err).To(specs.BeNil())
 
-	adapters := []EventAdapter{
-		&noopAdapter{},
-		&addSecondsAdapter{extra: 7},
-		&noopAdapter{},
-	}
+			adapters := []EventAdapter{
+				&noopAdapter{},
+				&addSecondsAdapter{extra: 7},
+				&noopAdapter{},
+			}
 
-	result, err := Chain(adapters, event, 1)
-	require.NoError(t, err)
+			result, err := Chain(adapters, event, 1)
+			ctx.Expect(err).To(specs.BeNil())
 
-	var d durationpb.Duration
-	require.NoError(t, result.UnmarshalTo(&d))
-	assert.Equal(t, int64(8), d.GetSeconds())
+			var d durationpb.Duration
+			ctx.Expect(result.UnmarshalTo(&d)).To(specs.BeNil())
+			ctx.Expect(d.GetSeconds()).ToEqual(int64(8))
+		})
+	})
 }
