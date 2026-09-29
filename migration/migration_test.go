@@ -30,10 +30,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -48,7 +47,7 @@ import (
 // buildLegacyEventBytes constructs raw protobuf bytes for an Event that includes
 // the old resulting_state at field 5. Since the current generated Event no longer
 // has that field, we manually append the field 5 bytes to a normally-serialized Event.
-func buildLegacyEventBytes(t *testing.T, persistenceID string, seqNr uint64, event *anypb.Any, state *anypb.Any, timestamp int64, shard uint64) []byte {
+func buildLegacyEventBytes(t testing.TB, persistenceID string, seqNr uint64, event *anypb.Any, state *anypb.Any, timestamp int64, shard uint64) []byte {
 	t.Helper()
 
 	// Serialize the base event (without resulting_state)
@@ -61,7 +60,9 @@ func buildLegacyEventBytes(t *testing.T, persistenceID string, seqNr uint64, eve
 		Shard:          shard,
 	}
 	baseBytes, err := proto.Marshal(baseEvent)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("marshal base event for %q: %v", persistenceID, err)
+	}
 
 	if state == nil {
 		return baseBytes
@@ -70,7 +71,9 @@ func buildLegacyEventBytes(t *testing.T, persistenceID string, seqNr uint64, eve
 	// Serialize the state as field 5 (length-delimited, wire type 2)
 	// Tag = (5 << 3) | 2 = 42
 	stateBytes, err := proto.Marshal(state)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("marshal legacy state for %q: %v", persistenceID, err)
+	}
 
 	// Build the field 5 tag + length + value
 	tag := encodeVarint(42) // field 5, wire type 2
@@ -101,307 +104,325 @@ func encodeVarint(v uint64) []byte {
 // writeLegacyEvent writes an event with legacy resulting_state into the events store.
 // It serializes the event with field 5 appended, then deserializes it back using the
 // current Event proto (which puts field 5 into unknown fields), and writes it.
-func writeLegacyEvent(t *testing.T, store *testkit.EventStore, persistenceID string, seqNr uint64, eventPayload *anypb.Any, state *anypb.Any, ts int64, shard uint64) {
+func writeLegacyEvent(t testing.TB, store *testkit.EventStore, persistenceID string, seqNr uint64, eventPayload *anypb.Any, state *anypb.Any, ts int64, shard uint64) {
 	t.Helper()
 	raw := buildLegacyEventBytes(t, persistenceID, seqNr, eventPayload, state, ts, shard)
 
 	// Deserialize using the current Event proto — field 5 goes into unknown fields
 	evt := new(egopb.Event)
-	require.NoError(t, proto.Unmarshal(raw, evt))
+	if err := proto.Unmarshal(raw, evt); err != nil {
+		t.Fatalf("unmarshal legacy event %q/%d: %v", persistenceID, seqNr, err)
+	}
 
-	require.NoError(t, store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{evt}, persistence.Unconditional()))
+	if err := store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{evt}, persistence.Unconditional()); err != nil {
+		t.Fatalf("write legacy event %q/%d: %v", persistenceID, seqNr, err)
+	}
+}
+
+// connectedStores returns a connected events store and snapshot store.
+func connectedStores(t testing.TB, bg context.Context) (*testkit.EventStore, *testkit.SnapshotStore) {
+	t.Helper()
+	eventStore := testkit.NewEventsStore()
+	if err := eventStore.Connect(bg); err != nil {
+		t.Fatalf("connect events store: %v", err)
+	}
+	snapshotStore := testkit.NewSnapshotStore()
+	if err := snapshotStore.Connect(bg); err != nil {
+		t.Fatalf("connect snapshot store: %v", err)
+	}
+	return eventStore, snapshotStore
+}
+
+// mustAny wraps a message in an Any and fails the test if that is impossible.
+func mustAny(t testing.TB, m proto.Message) *anypb.Any {
+	t.Helper()
+	a, err := anypb.New(m)
+	if err != nil {
+		t.Fatalf("wrap %T in Any: %v", m, err)
+	}
+	return a
+}
+
+// panicValue runs fn and returns what it panicked with, or nil when it did not panic.
+func panicValue(fn func()) (recovered any) {
+	defer func() { recovered = recover() }()
+	fn()
+	return nil
 }
 
 func TestMigratorRun(t *testing.T) {
-	t.Run("migrates legacy events with resulting_state to snapshots", func(t *testing.T) {
-		ctx := context.Background()
+	specs.Describe(t, "Migrator.Run turns legacy resulting_state events into snapshots", func(s *specs.Spec) {
+		s.It("migrates legacy events with resulting_state to snapshots", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			// Create a fake state to embed as resulting_state
+			ts := timestamppb.Now()
+			stateAny := mustAny(ctx.T, ts)
+			eventAny := mustAny(ctx.T, timestamppb.Now())
 
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+			// Write 3 legacy events for entity "entity-1"
+			for i := uint64(1); i <= 3; i++ {
+				writeLegacyEvent(ctx.T, eventStore, "entity-1", i, eventAny, stateAny, int64(i*100), 0)
+			}
 
-		// Create a fake state to embed as resulting_state
-		ts := timestamppb.Now()
-		stateAny, err := anypb.New(ts)
-		require.NoError(t, err)
+			// Run migration
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithPageSize(10),
+				WithLogger(engine.DiscardLogger),
+			)
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		eventAny, err := anypb.New(timestamppb.Now())
-		require.NoError(t, err)
+			// Verify snapshot was written for entity-1 at sequence 3 (the latest)
+			snapshot, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "entity-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshot).To(specs.Not(specs.BeNil()))
+			ctx.Expect(snapshot.GetPersistenceId()).ToEqual("entity-1")
+			ctx.Expect(snapshot.GetSequenceNumber()).ToEqual(uint64(3))
+			ctx.Expect(snapshot.GetState()).To(specs.Not(specs.BeNil()))
 
-		// Write 3 legacy events for entity "entity-1"
-		for i := uint64(1); i <= 3; i++ {
-			writeLegacyEvent(t, eventStore, "entity-1", i, eventAny, stateAny, int64(i*100), 0)
-		}
+			// Verify the state content
+			var recovered timestamppb.Timestamp
+			ctx.Expect(snapshot.GetState().UnmarshalTo(&recovered)).To(specs.BeNil())
+			ctx.Expect(proto.Equal(ts, &recovered)).To(specs.BeTrue())
 
-		// Run migration
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithPageSize(10),
-			WithLogger(engine.DiscardLogger),
-		)
-		require.NoError(t, migrator.Run(ctx))
+			ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-		// Verify snapshot was written for entity-1 at sequence 3 (the latest)
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-1")
-		require.NoError(t, err)
-		require.NotNil(t, snapshot)
-		assert.Equal(t, "entity-1", snapshot.GetPersistenceId())
-		assert.EqualValues(t, 3, snapshot.GetSequenceNumber())
-		assert.NotNil(t, snapshot.GetState())
+		s.It("skips entities with no resulting_state", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		// Verify the state content
-		var recovered timestamppb.Timestamp
-		require.NoError(t, snapshot.GetState().UnmarshalTo(&recovered))
-		assert.True(t, proto.Equal(ts, &recovered))
+			eventAny := mustAny(ctx.T, timestamppb.Now())
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-	})
+			// Write events without resulting_state (new-format events)
+			for i := uint64(1); i <= 3; i++ {
+				writeLegacyEvent(ctx.T, eventStore, "entity-new", i, eventAny, nil, int64(i*100), 0)
+			}
 
-	t.Run("skips entities with no resulting_state", func(t *testing.T) {
-		ctx := context.Background()
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithPageSize(10),
+				WithLogger(engine.DiscardLogger),
+			)
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			// No snapshot should exist
+			snapshot, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "entity-new")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshot).To(specs.BeNil())
 
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+			ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-		eventAny, err := anypb.New(timestamppb.Now())
-		require.NoError(t, err)
+		s.It("handles multiple entities", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		// Write events without resulting_state (new-format events)
-		for i := uint64(1); i <= 3; i++ {
-			writeLegacyEvent(t, eventStore, "entity-new", i, eventAny, nil, int64(i*100), 0)
-		}
+			state1, _ := anypb.New(&timestamppb.Timestamp{Seconds: 111})
+			state2, _ := anypb.New(&timestamppb.Timestamp{Seconds: 222})
+			eventAny, _ := anypb.New(timestamppb.Now())
 
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithPageSize(10),
-			WithLogger(engine.DiscardLogger),
-		)
-		require.NoError(t, migrator.Run(ctx))
+			writeLegacyEvent(ctx.T, eventStore, "e1", 1, eventAny, state1, 100, 0)
+			writeLegacyEvent(ctx.T, eventStore, "e1", 2, eventAny, state1, 200, 0)
+			writeLegacyEvent(ctx.T, eventStore, "e2", 1, eventAny, state2, 100, 1)
 
-		// No snapshot should exist
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "entity-new")
-		require.NoError(t, err)
-		assert.Nil(t, snapshot)
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithPageSize(2),
+				WithLogger(engine.DiscardLogger),
+			)
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-	})
+			snap1, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "e1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snap1).To(specs.Not(specs.BeNil()))
+			ctx.Expect(snap1.GetSequenceNumber()).ToEqual(uint64(2))
 
-	t.Run("handles multiple entities", func(t *testing.T) {
-		ctx := context.Background()
+			snap2, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "e2")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snap2).To(specs.Not(specs.BeNil()))
+			ctx.Expect(snap2.GetSequenceNumber()).ToEqual(uint64(1))
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+		s.It("is idempotent", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		state1, _ := anypb.New(&timestamppb.Timestamp{Seconds: 111})
-		state2, _ := anypb.New(&timestamppb.Timestamp{Seconds: 222})
-		eventAny, _ := anypb.New(timestamppb.Now())
+			stateAny, _ := anypb.New(&timestamppb.Timestamp{Seconds: 999})
+			eventAny, _ := anypb.New(timestamppb.Now())
 
-		writeLegacyEvent(t, eventStore, "e1", 1, eventAny, state1, 100, 0)
-		writeLegacyEvent(t, eventStore, "e1", 2, eventAny, state1, 200, 0)
-		writeLegacyEvent(t, eventStore, "e2", 1, eventAny, state2, 100, 1)
+			writeLegacyEvent(ctx.T, eventStore, "idem-1", 1, eventAny, stateAny, 100, 0)
 
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithPageSize(2),
-			WithLogger(engine.DiscardLogger),
-		)
-		require.NoError(t, migrator.Run(ctx))
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithPageSize(10),
+				WithLogger(engine.DiscardLogger),
+			)
 
-		snap1, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "e1")
-		require.NoError(t, err)
-		require.NotNil(t, snap1)
-		assert.EqualValues(t, 2, snap1.GetSequenceNumber())
+			// Run twice
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		snap2, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "e2")
-		require.NoError(t, err)
-		require.NotNil(t, snap2)
-		assert.EqualValues(t, 1, snap2.GetSequenceNumber())
+			snapshot, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "idem-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshot).To(specs.Not(specs.BeNil()))
+			ctx.Expect(snapshot.GetSequenceNumber()).ToEqual(uint64(1))
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-	})
+			ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-	t.Run("is idempotent", func(t *testing.T) {
-		ctx := context.Background()
+		s.It("returns error when events store is unreachable", func(ctx *specs.Context) {
+			bg := context.Background()
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			eventStore := testkit.NewEventsStore()
+			// deliberately don't connect
 
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+			snapshotStore := testkit.NewSnapshotStore()
+			if err := snapshotStore.Connect(bg); err != nil {
+				ctx.T.Fatalf("connect snapshot store: %v", err)
+			}
 
-		stateAny, _ := anypb.New(&timestamppb.Timestamp{Seconds: 999})
-		eventAny, _ := anypb.New(timestamppb.Now())
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithLogger(engine.DiscardLogger),
+			)
+			// Ping will auto-connect the testkit store, so this will actually succeed.
+			// That's fine — testkit stores auto-connect on Ping.
+			err := migrator.Run(bg)
+			ctx.Expect(err).To(specs.BeNil())
 
-		writeLegacyEvent(t, eventStore, "idem-1", 1, eventAny, stateAny, 100, 0)
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithPageSize(10),
-			WithLogger(engine.DiscardLogger),
-		)
+		s.It("with empty events store", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		// Run twice
-		require.NoError(t, migrator.Run(ctx))
-		require.NoError(t, migrator.Run(ctx))
+			migrator := mustNew(ctx.T, eventStore, snapshotStore,
+				WithLogger(engine.DiscardLogger),
+			)
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "idem-1")
-		require.NoError(t, err)
-		require.NotNil(t, snapshot)
-		assert.EqualValues(t, 1, snapshot.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-	})
-
-	t.Run("returns error when events store is unreachable", func(t *testing.T) {
-		ctx := context.Background()
-
-		eventStore := testkit.NewEventsStore()
-		// deliberately don't connect
-
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithLogger(engine.DiscardLogger),
-		)
-		// Ping will auto-connect the testkit store, so this will actually succeed.
-		// That's fine — testkit stores auto-connect on Ping.
-		err := migrator.Run(ctx)
-		require.NoError(t, err)
-
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-	})
-
-	t.Run("with empty events store", func(t *testing.T) {
-		ctx := context.Background()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		migrator := mustNew(t, eventStore, snapshotStore,
-			WithLogger(engine.DiscardLogger),
-		)
-		require.NoError(t, migrator.Run(ctx))
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
+			ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
+		})
 	})
 }
 
 func TestExtractLegacyResultingState(t *testing.T) {
-	t.Run("returns nil for nil event", func(t *testing.T) {
-		assert.Nil(t, extractLegacyResultingState(nil))
-	})
+	specs.Describe(t, "extractLegacyResultingState recovers the field 5 state of a legacy event", func(s *specs.Spec) {
+		s.It("returns nil for nil event", func(ctx *specs.Context) {
+			ctx.Expect(extractLegacyResultingState(nil)).To(specs.BeNil())
+		})
 
-	t.Run("returns nil for event without unknown fields", func(t *testing.T) {
-		evt := &egopb.Event{
-			PersistenceId:  "test",
-			SequenceNumber: 1,
-		}
-		assert.Nil(t, extractLegacyResultingState(evt))
-	})
+		s.It("returns nil for event without unknown fields", func(ctx *specs.Context) {
+			evt := &egopb.Event{
+				PersistenceId:  "test",
+				SequenceNumber: 1,
+			}
+			ctx.Expect(extractLegacyResultingState(evt)).To(specs.BeNil())
+		})
 
-	t.Run("extracts state from legacy event", func(t *testing.T) {
-		state, _ := anypb.New(&timestamppb.Timestamp{Seconds: 42})
-		eventAny, _ := anypb.New(timestamppb.Now())
+		s.It("extracts state from legacy event", func(ctx *specs.Context) {
+			state, _ := anypb.New(&timestamppb.Timestamp{Seconds: 42})
+			eventAny, _ := anypb.New(timestamppb.Now())
 
-		raw := buildLegacyEventBytes(t, "test", 1, eventAny, state, 100, 0)
+			raw := buildLegacyEventBytes(ctx.T, "test", 1, eventAny, state, 100, 0)
 
-		evt := new(egopb.Event)
-		require.NoError(t, proto.Unmarshal(raw, evt))
+			evt := new(egopb.Event)
+			ctx.Expect(proto.Unmarshal(raw, evt)).To(specs.BeNil())
 
-		extracted := extractLegacyResultingState(evt)
-		require.NotNil(t, extracted)
-		assert.NotEmpty(t, extracted.GetTypeUrl())
+			extracted := extractLegacyResultingState(evt)
+			ctx.Expect(extracted).To(specs.Not(specs.BeNil()))
+			ctx.Expect(extracted.GetTypeUrl()).To(specs.Not(specs.Equal("")))
 
-		var ts timestamppb.Timestamp
-		require.NoError(t, extracted.UnmarshalTo(&ts))
-		assert.EqualValues(t, 42, ts.GetSeconds())
-	})
+			var ts timestamppb.Timestamp
+			ctx.Expect(extracted.UnmarshalTo(&ts)).To(specs.BeNil())
+			ctx.Expect(ts.GetSeconds()).ToEqual(int64(42))
+		})
 
-	t.Run("returns nil for event without field 5", func(t *testing.T) {
-		eventAny, _ := anypb.New(timestamppb.Now())
-		raw := buildLegacyEventBytes(t, "test", 1, eventAny, nil, 100, 0)
+		s.It("returns nil for event without field 5", func(ctx *specs.Context) {
+			eventAny, _ := anypb.New(timestamppb.Now())
+			raw := buildLegacyEventBytes(ctx.T, "test", 1, eventAny, nil, 100, 0)
 
-		evt := new(egopb.Event)
-		require.NoError(t, proto.Unmarshal(raw, evt))
+			evt := new(egopb.Event)
+			ctx.Expect(proto.Unmarshal(raw, evt)).To(specs.BeNil())
 
-		assert.Nil(t, extractLegacyResultingState(evt))
+			ctx.Expect(extractLegacyResultingState(evt)).To(specs.BeNil())
+		})
 	})
 }
 
 func TestConsumeVarint(t *testing.T) {
-	t.Run("single byte", func(t *testing.T) {
-		v, n := consumeVarint([]byte{0x05})
-		assert.Equal(t, uint64(5), v)
-		assert.Equal(t, 1, n)
-	})
+	specs.Describe(t, "consumeVarint decodes a protobuf varint and reports how many bytes it used", func(s *specs.Spec) {
+		s.It("single byte", func(ctx *specs.Context) {
+			v, n := consumeVarint([]byte{0x05})
+			ctx.Expect(v).ToEqual(uint64(5))
+			ctx.Expect(n).ToEqual(1)
+		})
 
-	t.Run("multi byte", func(t *testing.T) {
-		v, n := consumeVarint([]byte{0xAC, 0x02})
-		assert.Equal(t, uint64(300), v)
-		assert.Equal(t, 2, n)
-	})
+		s.It("multi byte", func(ctx *specs.Context) {
+			v, n := consumeVarint([]byte{0xAC, 0x02})
+			ctx.Expect(v).ToEqual(uint64(300))
+			ctx.Expect(n).ToEqual(2)
+		})
 
-	t.Run("empty input", func(t *testing.T) {
-		_, n := consumeVarint([]byte{})
-		assert.Equal(t, -1, n)
+		s.It("empty input", func(ctx *specs.Context) {
+			_, n := consumeVarint([]byte{})
+			ctx.Expect(n).ToEqual(-1)
+		})
 	})
 }
 
 func TestConsumeTag(t *testing.T) {
-	t.Run("field 5 wire type 2", func(t *testing.T) {
-		// Tag for field 5, wire type 2 = (5 << 3) | 2 = 42
-		fieldNum, wireType, n := consumeTag([]byte{42})
-		assert.Equal(t, uint32(5), fieldNum)
-		assert.Equal(t, 2, wireType)
-		assert.Equal(t, 1, n)
-	})
+	specs.Describe(t, "consumeTag splits a protobuf tag into field number and wire type", func(s *specs.Spec) {
+		s.It("field 5 wire type 2", func(ctx *specs.Context) {
+			// Tag for field 5, wire type 2 = (5 << 3) | 2 = 42
+			fieldNum, wireType, n := consumeTag([]byte{42})
+			ctx.Expect(fieldNum).ToEqual(uint32(5))
+			ctx.Expect(wireType).ToEqual(2)
+			ctx.Expect(n).ToEqual(1)
+		})
 
-	t.Run("empty input", func(t *testing.T) {
-		_, _, n := consumeTag([]byte{})
-		assert.Equal(t, -1, n)
+		s.It("empty input", func(ctx *specs.Context) {
+			_, _, n := consumeTag([]byte{})
+			ctx.Expect(n).ToEqual(-1)
+		})
 	})
 }
 
 func TestMigratorOptions(t *testing.T) {
-	t.Run("WithPageSize", func(t *testing.T) {
-		m := mustNew(t, nil, nil, WithPageSize(100))
-		assert.EqualValues(t, 100, m.pageSize)
-	})
+	specs.Describe(t, "Migrator options configure the page size and the logger", func(s *specs.Spec) {
+		s.It("WithPageSize", func(ctx *specs.Context) {
+			m := mustNew(ctx.T, nil, nil, WithPageSize(100))
+			ctx.Expect(m.pageSize).ToEqual(uint64(100))
+		})
 
-	t.Run("WithLogger", func(t *testing.T) {
-		logger := engine.DiscardLogger
-		m := mustNew(t, nil, nil, WithLogger(logger))
-		assert.Equal(t, logger, m.logger)
-	})
+		s.It("WithLogger", func(ctx *specs.Context) {
+			logger := engine.DiscardLogger
+			m := mustNew(ctx.T, nil, nil, WithLogger(logger))
+			ctx.Expect(m.logger).ToEqual(logger)
+		})
 
-	t.Run("defaults", func(t *testing.T) {
-		m := mustNew(t, nil, nil)
-		assert.EqualValues(t, 500, m.pageSize)
-		assert.NotNil(t, m.logger)
-	})
+		s.It("defaults", func(ctx *specs.Context) {
+			m := mustNew(ctx.T, nil, nil)
+			ctx.Expect(m.pageSize).ToEqual(uint64(500))
+			ctx.Expect(m.logger).To(specs.Not(specs.BeNil()))
+		})
 
-	t.Run("WithLogger(nil) falls back to the default logger", func(t *testing.T) {
-		m := mustNew(t, nil, nil, WithLogger(nil))
-		assert.Same(t, engine.DefaultLogger(), m.logger)
-	})
+		s.It("WithLogger(nil) falls back to the default logger", func(ctx *specs.Context) {
+			m := mustNew(ctx.T, nil, nil, WithLogger(nil))
+			ctx.Expect(m.logger == engine.DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("WithLogger with a typed-nil logger falls back to the default logger", func(t *testing.T) {
-		var typedNil *kitlogtest.MockLogger
-		m := mustNew(t, nil, nil, WithLogger(typedNil))
-		assert.Same(t, engine.DefaultLogger(), m.logger)
+		s.It("WithLogger with a typed-nil logger falls back to the default logger", func(ctx *specs.Context) {
+			var typedNil *kitlogtest.MockLogger
+			m := mustNew(ctx.T, nil, nil, WithLogger(typedNil))
+			ctx.Expect(m.logger == engine.DefaultLogger()).To(specs.BeTrue())
+		})
 	})
 }
 
@@ -413,31 +434,26 @@ func TestMigratorRunWithNilLogger(t *testing.T) {
 		{"untyped nil", nil},
 		{"typed nil", (*kitlogtest.MockLogger)(nil)},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+	specs.Describe(t, "Migrator.Run does not panic when the logger is nil", func(s *specs.Spec) {
+		for _, tt := range tests {
+			s.It(tt.name, func(ctx *specs.Context) {
+				bg := context.Background()
+				eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-			eventStore := testkit.NewEventsStore()
-			require.NoError(t, eventStore.Connect(ctx))
+				stateAny := mustAny(ctx.T, &timestamppb.Timestamp{Seconds: 7})
+				eventAny := mustAny(ctx.T, timestamppb.Now())
+				writeLegacyEvent(ctx.T, eventStore, "nil-logger-1", 1, eventAny, stateAny, 1, 0)
 
-			snapshotStore := testkit.NewSnapshotStore()
-			require.NoError(t, snapshotStore.Connect(ctx))
+				migrator := mustNew(ctx.T, eventStore, snapshotStore, WithLogger(tt.logger))
+				var runErr error
+				ctx.Expect(panicValue(func() { runErr = migrator.Run(bg) })).To(specs.BeNil())
+				ctx.Expect(runErr).To(specs.BeNil())
 
-			stateAny, err := anypb.New(&timestamppb.Timestamp{Seconds: 7})
-			require.NoError(t, err)
-			eventAny, err := anypb.New(timestamppb.Now())
-			require.NoError(t, err)
-			writeLegacyEvent(t, eventStore, "nil-logger-1", 1, eventAny, stateAny, 1, 0)
-
-			migrator := mustNew(t, eventStore, snapshotStore, WithLogger(tt.logger))
-			require.NotPanics(t, func() {
-				require.NoError(t, migrator.Run(ctx))
+				ctx.Expect(eventStore.Disconnect(bg)).To(specs.BeNil())
+				ctx.Expect(snapshotStore.Disconnect(bg)).To(specs.BeNil())
 			})
-
-			require.NoError(t, eventStore.Disconnect(ctx))
-			require.NoError(t, snapshotStore.Disconnect(ctx))
-		})
-	}
+		}
+	})
 }
 
 // messagesAt returns the messages a MockLogger captured at the given level,
@@ -454,48 +470,45 @@ func messagesAt(logger *kitlogtest.MockLogger, level slog.Level) []string {
 }
 
 func TestMigratorUsesKitLogger(t *testing.T) {
-	t.Run("defaults to engine.DefaultLogger()", func(t *testing.T) {
-		m := mustNew(t, nil, nil)
-		assert.Same(t, engine.DefaultLogger(), m.logger)
-	})
+	specs.Describe(t, "Migrator logs through the kit-logger Logger it was given", func(s *specs.Spec) {
+		s.It("defaults to engine.DefaultLogger()", func(ctx *specs.Context) {
+			m := mustNew(ctx.T, nil, nil)
+			ctx.Expect(m.logger == engine.DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("WithLogger injects a custom kit-logger Logger", func(t *testing.T) {
-		logger := kitlogtest.NewMockLogger()
-		m := mustNew(t, nil, nil, WithLogger(logger))
-		assert.Same(t, logger, m.logger)
-	})
+		s.It("WithLogger injects a custom kit-logger Logger", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			m := mustNew(ctx.T, nil, nil, WithLogger(logger))
+			ctx.Expect(m.logger == kitlog.Logger(logger)).To(specs.BeTrue())
+		})
 
-	t.Run("the injected logger receives the migration messages", func(t *testing.T) {
-		ctx := context.Background()
+		s.It("the injected logger receives the migration messages", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			stateAny := mustAny(ctx.T, timestamppb.Now())
+			eventAny := mustAny(ctx.T, timestamppb.Now())
 
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+			writeLegacyEvent(ctx.T, eventStore, "entity-1", 1, eventAny, stateAny, 100, 0)
 
-		stateAny, err := anypb.New(timestamppb.Now())
-		require.NoError(t, err)
-		eventAny, err := anypb.New(timestamppb.Now())
-		require.NoError(t, err)
+			logger := kitlogtest.NewMockLogger()
+			migrator := mustNew(ctx.T, eventStore, snapshotStore, WithLogger(logger))
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-		writeLegacyEvent(t, eventStore, "entity-1", 1, eventAny, stateAny, 100, 0)
-
-		logger := kitlogtest.NewMockLogger()
-		migrator := mustNew(t, eventStore, snapshotStore, WithLogger(logger))
-		require.NoError(t, migrator.Run(ctx))
-
-		assert.Contains(t, messagesAt(logger, slog.LevelInfo), "migration: completed successfully")
-		assert.Contains(t, messagesAt(logger, slog.LevelDebug), "migration: snapshot written")
+			ctx.Expect(messagesAt(logger, slog.LevelInfo)).To(specs.Contain("migration: completed successfully"))
+			ctx.Expect(messagesAt(logger, slog.LevelDebug)).To(specs.Contain("migration: snapshot written"))
+		})
 	})
 }
 
 // mustNew builds a Migrator and fails the test if New rejects the
 // configuration.
-func mustNew(t *testing.T, eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) *Migrator {
+func mustNew(t testing.TB, eventsStore persistence.EventsStore, snapshotStore persistence.SnapshotStore, opts ...Option) *Migrator {
 	t.Helper()
 	m, err := New(eventsStore, snapshotStore, opts...)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("New must accept the configuration: %v", err)
+	}
 	return m
 }
 
@@ -570,108 +583,131 @@ func (s *spySnapshotStore) DeleteSnapshots(ctx context.Context, scope persistenc
 
 // writeScopedLegacyEvent is writeLegacyEvent for an explicit scope; in a
 // tenant scope the event carries that tenant's metadata.
-func writeScopedLegacyEvent(t *testing.T, store persistence.EventsStore, scope persistence.Scope, persistenceID string, seqNr uint64, state *anypb.Any) {
+func writeScopedLegacyEvent(t testing.TB, store persistence.EventsStore, scope persistence.Scope, persistenceID string, seqNr uint64, state *anypb.Any) {
 	t.Helper()
-	eventAny, err := anypb.New(timestamppb.Now())
-	require.NoError(t, err)
+	eventAny := mustAny(t, timestamppb.Now())
 	evt := new(egopb.Event)
-	require.NoError(t, proto.Unmarshal(buildLegacyEventBytes(t, persistenceID, seqNr, eventAny, state, int64(seqNr*100), 0), evt))
+	if err := proto.Unmarshal(buildLegacyEventBytes(t, persistenceID, seqNr, eventAny, state, int64(seqNr*100), 0), evt); err != nil {
+		t.Fatalf("unmarshal legacy event %q/%d: %v", persistenceID, seqNr, err)
+	}
 	if !scope.IsUnscoped() {
 		// Events in a tenant scope carry that tenant's metadata, as the
 		// tenant-bound actor (or TenantAdopter) stamps them.
 		tenant, err := tenancy.NewTenantContext(scope.TenantID())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("tenant context for %s: %v", scope, err)
+		}
 		evt.TenantMetadata = tenancy.MarshalMetadata(tenant)
 	}
-	require.NoError(t, store.WriteEvents(context.Background(), scope, []*egopb.Event{evt}, persistence.Unconditional()))
+	if err := store.WriteEvents(context.Background(), scope, []*egopb.Event{evt}, persistence.Unconditional()); err != nil {
+		t.Fatalf("write scoped legacy event %q/%d in %s: %v", persistenceID, seqNr, scope, err)
+	}
 }
 
 func TestNewRejectsAnInvalidScope(t *testing.T) {
-	eventStore := testkit.NewEventsStore()
-	snapshotStore := testkit.NewSnapshotStore()
+	specs.Describe(t, "New rejects a zero-value Scope when the Migrator is built", func(s *specs.Spec) {
+		s.It("returns ErrInvalidScope and no Migrator", func(ctx *specs.Context) {
+			eventStore := testkit.NewEventsStore()
+			snapshotStore := testkit.NewSnapshotStore()
 
-	m, err := New(eventStore, snapshotStore, WithScope(persistence.Scope{}))
-	require.ErrorIs(t, err, persistence.ErrInvalidScope, "the zero-value Scope must be rejected when the Migrator is built")
-	assert.Nil(t, m, "no Migrator may be returned for an invalid configuration")
+			m, err := New(eventStore, snapshotStore, WithScope(persistence.Scope{}))
+			// the zero-value Scope must be rejected when the Migrator is built
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			// no Migrator may be returned for an invalid configuration
+			ctx.Expect(m).To(specs.BeNil())
+		})
+	})
 }
 
 func TestMigratorScope(t *testing.T) {
-	ctx := context.Background()
+	bg := context.Background()
 	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("scope for acme: %v", err)
+	}
 	globex, err := persistence.NewTenantScope("globex")
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("scope for globex: %v", err)
+	}
 
-	stateFor := func(t *testing.T, seconds int64) *anypb.Any {
+	stateFor := func(t testing.TB, seconds int64) *anypb.Any {
 		t.Helper()
-		state, err := anypb.New(&timestamppb.Timestamp{Seconds: seconds})
-		require.NoError(t, err)
-		return state
+		return mustAny(t, &timestamppb.Timestamp{Seconds: seconds})
 	}
 
 	// The same persistence id holds different legacy data in three scopes.
-	seed := func(t *testing.T) (*testkit.EventStore, *testkit.SnapshotStore) {
+	seed := func(t testing.TB) (*testkit.EventStore, *testkit.SnapshotStore) {
 		t.Helper()
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
+		eventStore, snapshotStore := connectedStores(t, bg)
 		writeScopedLegacyEvent(t, eventStore, persistence.Unscoped(), "order-1", 1, stateFor(t, 1))
 		writeScopedLegacyEvent(t, eventStore, acme, "order-1", 1, stateFor(t, 2))
 		writeScopedLegacyEvent(t, eventStore, globex, "order-1", 1, stateFor(t, 3))
 		return eventStore, snapshotStore
 	}
-	snapshotSeconds := func(t *testing.T, store *testkit.SnapshotStore, scope persistence.Scope) (int64, bool) {
+	snapshotSeconds := func(t testing.TB, store *testkit.SnapshotStore, scope persistence.Scope) (int64, bool) {
 		t.Helper()
-		snapshot, err := store.GetLatestSnapshot(ctx, scope, "order-1")
-		require.NoError(t, err)
+		snapshot, err := store.GetLatestSnapshot(bg, scope, "order-1")
+		if err != nil {
+			t.Fatalf("latest snapshot in %s: %v", scope, err)
+		}
 		if snapshot == nil {
 			return 0, false
 		}
 		var state timestamppb.Timestamp
-		require.NoError(t, snapshot.GetState().UnmarshalTo(&state))
+		if err := snapshot.GetState().UnmarshalTo(&state); err != nil {
+			t.Fatalf("unmarshal snapshot state in %s: %v", scope, err)
+		}
 		return state.GetSeconds(), true
 	}
-	requireEveryCallIn := func(t *testing.T, spy *scopeSpy, scope persistence.Scope) {
-		t.Helper()
+	expectEveryCallIn := func(ctx *specs.Context, spy *scopeSpy, scope persistence.Scope) {
 		calls := spy.all()
-		require.NotEmpty(t, calls)
+		ctx.Expect(len(calls) > 0).To(specs.BeTrue())
 		for _, call := range []string{"PersistenceIDs@" + scope.String(), "ReplayEvents@" + scope.String(), "WriteSnapshot@" + scope.String()} {
-			assert.Contains(t, calls, call)
+			ctx.Expect(calls).To(specs.Contain(call))
 		}
+		// store calls that do not use the Migrator's scope
+		var strays []string
 		for _, call := range calls {
-			assert.True(t, strings.HasSuffix(call, "@"+scope.String()), "store call %q must use the Migrator's scope %s", call, scope)
+			if !strings.HasSuffix(call, "@"+scope.String()) {
+				strays = append(strays, call)
+			}
 		}
+		ctx.Expect(strays).To(specs.BeNil())
 	}
 
-	t.Run("without WithScope it migrates only the unscoped records, exactly as before", func(t *testing.T) {
-		eventStore, snapshotStore := seed(t)
-		spy := &scopeSpy{}
-		require.NoError(t, mustNew(t, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}).Run(ctx))
+	specs.Describe(t, "Migrator addresses every store call to its configured scope", func(s *specs.Spec) {
+		s.It("without WithScope it migrates only the unscoped records, exactly as before", func(ctx *specs.Context) {
+			eventStore, snapshotStore := seed(ctx.T)
+			spy := &scopeSpy{}
+			ctx.Expect(mustNew(ctx.T, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}).Run(bg)).To(specs.BeNil())
 
-		requireEveryCallIn(t, spy, persistence.Unscoped())
-		seconds, ok := snapshotSeconds(t, snapshotStore, persistence.Unscoped())
-		require.True(t, ok)
-		assert.EqualValues(t, 1, seconds)
-		_, ok = snapshotSeconds(t, snapshotStore, acme)
-		assert.False(t, ok)
-		_, ok = snapshotSeconds(t, snapshotStore, globex)
-		assert.False(t, ok)
-	})
+			expectEveryCallIn(ctx, spy, persistence.Unscoped())
+			seconds, ok := snapshotSeconds(ctx.T, snapshotStore, persistence.Unscoped())
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(seconds).ToEqual(int64(1))
+			_, ok = snapshotSeconds(ctx.T, snapshotStore, acme)
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, ok = snapshotSeconds(ctx.T, snapshotStore, globex)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
 
-	t.Run("WithScope migrates that tenant's records and nothing in another scope", func(t *testing.T) {
-		eventStore, snapshotStore := seed(t)
-		spy := &scopeSpy{}
-		require.NoError(t, mustNew(t, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}, WithScope(acme)).Run(ctx))
+		s.It("WithScope migrates that tenant's records and nothing in another scope", func(ctx *specs.Context) {
+			eventStore, snapshotStore := seed(ctx.T)
+			spy := &scopeSpy{}
+			ctx.Expect(mustNew(ctx.T, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}, WithScope(acme)).Run(bg)).To(specs.BeNil())
 
-		requireEveryCallIn(t, spy, acme)
-		seconds, ok := snapshotSeconds(t, snapshotStore, acme)
-		require.True(t, ok, "the tenant's legacy state must become its snapshot")
-		assert.EqualValues(t, 2, seconds, "the snapshot must come from the tenant's own events, not a homonym")
-		_, ok = snapshotSeconds(t, snapshotStore, persistence.Unscoped())
-		assert.False(t, ok, "the unscoped homonym must not be touched")
-		_, ok = snapshotSeconds(t, snapshotStore, globex)
-		assert.False(t, ok, "another tenant's homonym must not be touched")
+			expectEveryCallIn(ctx, spy, acme)
+			// the tenant's legacy state must become its snapshot, from its own events and not a homonym
+			seconds, ok := snapshotSeconds(ctx.T, snapshotStore, acme)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(seconds).ToEqual(int64(2))
+			// the unscoped homonym must not be touched
+			_, ok = snapshotSeconds(ctx.T, snapshotStore, persistence.Unscoped())
+			ctx.Expect(ok).To(specs.BeFalse())
+			// another tenant's homonym must not be touched
+			_, ok = snapshotSeconds(ctx.T, snapshotStore, globex)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
 	})
 }
 
@@ -679,24 +715,24 @@ func TestMigratorScope(t *testing.T) {
 // builds its snapshot from the LATEST legacy state even when that event's
 // sequence number is above math.MaxInt, instead of a stale earlier one.
 func TestMigratorReplaysSequencesBeyondTheLimitValue(t *testing.T) {
-	ctx := context.Background()
-	eventStore := testkit.NewEventsStore()
-	require.NoError(t, eventStore.Connect(ctx))
-	snapshotStore := testkit.NewSnapshotStore()
-	require.NoError(t, snapshotStore.Connect(ctx))
+	specs.Describe(t, "Migrator builds the snapshot from the latest legacy state, even above math.MaxInt", func(s *specs.Spec) {
+		s.It("uses the event above math.MaxInt instead of a stale earlier one", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStore, snapshotStore := connectedStores(ctx.T, bg)
 
-	stale, err := anypb.New(&timestamppb.Timestamp{Seconds: 1})
-	require.NoError(t, err)
-	latest, err := anypb.New(&timestamppb.Timestamp{Seconds: 2})
-	require.NoError(t, err)
-	high := uint64(math.MaxInt) + 1
-	writeScopedLegacyEvent(t, eventStore, persistence.Unscoped(), "order-1", 1, stale)
-	writeScopedLegacyEvent(t, eventStore, persistence.Unscoped(), "order-1", high, latest)
+			stale := mustAny(ctx.T, &timestamppb.Timestamp{Seconds: 1})
+			latest := mustAny(ctx.T, &timestamppb.Timestamp{Seconds: 2})
+			high := uint64(math.MaxInt) + 1
+			writeScopedLegacyEvent(ctx.T, eventStore, persistence.Unscoped(), "order-1", 1, stale)
+			writeScopedLegacyEvent(ctx.T, eventStore, persistence.Unscoped(), "order-1", high, latest)
 
-	require.NoError(t, mustNew(t, eventStore, snapshotStore).Run(ctx))
+			ctx.Expect(mustNew(ctx.T, eventStore, snapshotStore).Run(bg)).To(specs.BeNil())
 
-	snapshot, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), "order-1")
-	require.NoError(t, err)
-	require.NotNil(t, snapshot)
-	assert.Equal(t, high, snapshot.GetSequenceNumber(), "the snapshot must come from the event above math.MaxInt")
+			snapshot, err := snapshotStore.GetLatestSnapshot(bg, persistence.Unscoped(), "order-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshot).To(specs.Not(specs.BeNil()))
+			// the snapshot must come from the event above math.MaxInt
+			ctx.Expect(snapshot.GetSequenceNumber()).ToEqual(high)
+		})
+	})
 }
