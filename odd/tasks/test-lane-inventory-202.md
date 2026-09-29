@@ -115,7 +115,7 @@ Working notes (writer, strict TDD, runner `go test`, no `-race`):
   took about 4 minutes (root 3m52s). Result: 923 tests, 904 pass, 19 skip (all `example/cluster` Postgres, cause
   `EGO_EXAMPLE_POSTGRES_DSN not set`), 0 fail, 1089 subtests. Reconciliation: `go test -list '.*'` per module gives
   root 875 + example/cluster 30 + kafka 3 + nats 3 + pulsar 3 + websocket 8 + compat 1 + benchmark 0 = 923, equal to the
-  inventory (the count includes the 48 tests of the tool itself, so it is 875 minus those on plain `develop`).
+  inventory (the count includes the 50 tests of the tool itself, so plain `develop` has 825 in the root module).
   The run also reported one `Fuzz` seed test (`persistence.FuzzParseConflictErrorRoundTrip`), listed as unmatched
   because the inventory covers `Test` functions only.
 - T5: `go run ./internal/tools/testinventory -check` on the committed state prints `inventory is fresh` (0.2 s, no
