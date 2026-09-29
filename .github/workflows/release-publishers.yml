@@ -4,8 +4,11 @@ name: release-publishers
 # release.yml's prepare-publisher-bump job (#159, F4 PR-C). It is never
 # triggered automatically: a human merges the publisher-bump PR that job
 # printed the compare link and pull-request-creation command for, then
-# dispatches this workflow with that merge commit's SHA and the ego
-# version it bumps to. Only then are publisher tags created and their
+# dispatches this workflow with the SHA of a commit on main that contains
+# the bump of the four publishers, requires the ego version it bumps to,
+# and has a green build.yml run for that same SHA (usually the bump PR's
+# merge commit, or a later main commit that still meets all three), plus
+# that ego version. Only then are publisher tags created and their
 # GitHub releases published. See docs/ci.md for the full two-stage flow.
 # This workflow itself never opens a pull request and never pushes to
 # main.
@@ -102,7 +105,7 @@ jobs:
             exit 1
           fi
           if ! git merge-base --is-ancestor "${SHA}" origin/main; then
-            echo "::error::Commit ${SHA} is not an ancestor of origin/main. It must be the merge commit of the publisher-bump PR after it landed on main."
+            echo "::error::Commit ${SHA} is not an ancestor of origin/main. It must be a commit on main that contains the bump of the four publishers, requires ego_version, and has a green build.yml run for that same SHA."
             exit 1
           fi
           echo "Confirmed commit ${SHA} is on origin/main"
