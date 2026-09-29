@@ -26,281 +26,305 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
+const (
+	// waitTimeout bounds every wait on the asynchronous fan-out of Publish and
+	// Broadcast.
+	waitTimeout = 10 * time.Second
+	// waitInterval is how often a waited-on condition is polled.
+	waitInterval = time.Millisecond
+)
+
+// waitUntil polls cond every interval until it holds and fails the test with
+// what when timeout passes first. It never waits without a bound.
+func waitUntil(t testing.TB, timeout, interval time.Duration, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %s", timeout, what)
+		}
+		time.Sleep(interval)
+	}
+}
+
+// awaitQueued waits until sub has n messages queued. Publish and Broadcast
+// signal each subscriber from its own goroutine, so delivery is observable
+// only through the subscriber's queue.
+func awaitQueued(t testing.TB, sub Subscriber, n int) {
+	t.Helper()
+	queued := sub.(*subscriber).messages
+	waitUntil(t, waitTimeout, waitInterval, func() bool { return queued.Length() >= uint64(n) },
+		"the published messages to reach the subscriber")
+}
+
+// drain returns every message the subscriber's iterator yields.
+func drain(sub Subscriber) []*Message {
+	var got []*Message
+	for msg := range sub.Iterator() {
+		got = append(got, msg)
+	}
+	return got
+}
+
 func TestStream(t *testing.T) {
-	t.Run("Message accessors", func(t *testing.T) {
-		msg := NewMessage("topic", "payload")
-		require.Equal(t, "topic", msg.Topic())
-		require.Equal(t, "payload", msg.Payload())
-	})
+	specs.Describe(t, "the events stream delivers published messages to its active subscribers", func(s *specs.Spec) {
+		s.It("Message accessors", func(ctx *specs.Context) {
+			msg := NewMessage("topic", "payload")
+			ctx.Expect(msg.Topic()).ToEqual("topic")
+			ctx.Expect(msg.Payload()).ToEqual("payload")
+		})
 
-	t.Run("With Subscriber lifecycle", func(t *testing.T) {
-		sub := newSubscriber()
-		require.NotEmpty(t, sub.ID())
-		require.True(t, sub.Active())
+		s.It("With Subscriber lifecycle", func(ctx *specs.Context) {
+			sub := newSubscriber()
+			ctx.Expect(sub.ID()).To(specs.Not(specs.Equal("")))
+			ctx.Expect(sub.Active()).To(specs.BeTrue())
 
-		// empty iterator should close immediately
-		for range sub.Iterator() {
-			require.Fail(t, "iterator should be empty on new subscriber")
-		}
+			// empty iterator should close immediately
+			ctx.Expect(len(drain(sub))).ToEqual(0)
 
-		sub.subscribe("a")
-		sub.subscribe("b")
-		topics := sub.Topics()
-		require.Len(t, topics, 2)
+			sub.subscribe("a")
+			sub.subscribe("b")
+			ctx.Expect(len(sub.Topics())).ToEqual(2)
 
-		sub.signal(NewMessage("a", "one"))
-		sub.signal(NewMessage("b", "two"))
+			sub.signal(NewMessage("a", "one"))
+			sub.signal(NewMessage("b", "two"))
 
-		var seen []*Message
-		for msg := range sub.Iterator() {
-			seen = append(seen, msg)
-		}
-		require.Len(t, seen, 2)
+			ctx.Expect(len(drain(sub))).ToEqual(2)
 
-		sub.unsubscribe("a")
-		topics = sub.Topics()
-		require.Len(t, topics, 1)
+			sub.unsubscribe("a")
+			ctx.Expect(len(sub.Topics())).ToEqual(1)
 
-		sub.Shutdown()
-		require.False(t, sub.Active())
+			sub.Shutdown()
+			ctx.Expect(sub.Active()).To(specs.BeFalse())
 
-		// signals after shutdown should be ignored
-		sub.signal(NewMessage("b", "three"))
-		for range sub.Iterator() {
-			require.Fail(t, "iterator should be empty after shutdown")
-		}
+			// signals after shutdown should be ignored
+			sub.signal(NewMessage("b", "three"))
+			ctx.Expect(len(drain(sub))).ToEqual(0)
 
-		// enqueue nil while active to cover nil dequeue branch before shutdown
-		activeSub := newSubscriber()
-		activeSub.messages.Enqueue(nil)
-		for range activeSub.Iterator() {
-			require.Fail(t, "iterator should break on nil dequeue while active")
-		}
+			// enqueue nil while active to cover nil dequeue branch before shutdown
+			activeSub := newSubscriber()
+			activeSub.messages.Enqueue(nil)
+			ctx.Expect(len(drain(activeSub))).ToEqual(0)
 
-		// cover nil dequeue path: manually drop a nil into the queue
-		sub.messages.Enqueue(nil)
-		for msg := range sub.Iterator() {
-			require.Nil(t, msg)
-		}
-	})
+			// cover nil dequeue path: manually drop a nil into the queue
+			sub.messages.Enqueue(nil)
+			for _, msg := range drain(sub) {
+				ctx.Expect(msg == nil).To(specs.BeTrue())
+			}
+		})
 
-	t.Run("With Ready signaling", func(t *testing.T) {
-		sub := newSubscriber()
+		s.It("With Ready signaling", func(ctx *specs.Context) {
+			sub := newSubscriber()
 
-		// no message yet: Ready must not fire
-		select {
-		case <-sub.Ready():
-			require.Fail(t, "Ready fired without any message")
-		default:
-		}
+			// no message yet: Ready must not fire
+			firedEarly := false
+			select {
+			case <-sub.Ready():
+				firedEarly = true
+			default:
+			}
+			ctx.Expect(firedEarly).To(specs.BeFalse())
 
-		// a signal wakes a consumer blocked on Ready
-		sub.signal(NewMessage("a", "one"))
-		select {
-		case <-sub.Ready():
-		case <-time.After(time.Second):
-			require.Fail(t, "Ready did not fire after signal")
-		}
+			// a signal wakes a consumer blocked on Ready
+			sub.signal(NewMessage("a", "one"))
+			woke := false
+			select {
+			case <-sub.Ready():
+				woke = true
+			case <-time.After(time.Second):
+			}
+			ctx.Expect(woke).To(specs.BeTrue())
 
-		// coalescing: many signals while no one is draining keep at most one
-		// pending wake-up, and a single drain still sees every message
-		sub.signal(NewMessage("a", "two"))
-		sub.signal(NewMessage("a", "three"))
-		<-sub.Ready()
-		var seen []*Message
-		for msg := range sub.Iterator() {
-			seen = append(seen, msg)
-		}
-		require.Len(t, seen, 3)
-		select {
-		case <-sub.Ready():
-			require.Fail(t, "Ready should have at most one pending wake-up")
-		default:
-		}
-
-		// Shutdown wakes a consumer blocked on Ready
-		done := make(chan struct{})
-		go func() {
+			// coalescing: many signals while no one is draining keep at most one
+			// pending wake-up, and a single drain still sees every message
+			sub.signal(NewMessage("a", "two"))
+			sub.signal(NewMessage("a", "three"))
 			<-sub.Ready()
-			close(done)
-		}()
-		sub.Shutdown()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			require.Fail(t, "Ready did not fire on shutdown")
-		}
-		require.False(t, sub.Active())
-	})
+			ctx.Expect(len(drain(sub))).ToEqual(3)
+			extraWakeUp := false
+			select {
+			case <-sub.Ready():
+				extraWakeUp = true
+			default:
+			}
+			ctx.Expect(extraWakeUp).To(specs.BeFalse())
 
-	t.Run("With Subscription", func(t *testing.T) {
-		broker := New()
+			// Shutdown wakes a consumer blocked on Ready
+			done := make(chan struct{})
+			go func() {
+				<-sub.Ready()
+				close(done)
+			}()
+			sub.Shutdown()
+			shutdownWoke := false
+			select {
+			case <-done:
+				shutdownWoke = true
+			case <-time.After(time.Second):
+			}
+			ctx.Expect(shutdownWoke).To(specs.BeTrue())
+			ctx.Expect(sub.Active()).To(specs.BeFalse())
+		})
 
-		// add consumer
-		cons := broker.AddSubscriber()
-		require.NotNil(t, cons)
-		broker.Subscribe(cons, "t1")
-		broker.Subscribe(cons, "t2")
+		s.It("With Subscription", func(ctx *specs.Context) {
+			broker := New()
 
-		require.EqualValues(t, 1, broker.SubscribersCount("t1"))
-		require.EqualValues(t, 1, broker.SubscribersCount("t2"))
+			// add consumer
+			cons := broker.AddSubscriber()
+			ctx.Expect(cons == nil).To(specs.BeFalse())
+			broker.Subscribe(cons, "t1")
+			broker.Subscribe(cons, "t2")
 
-		// remove the consumer
-		broker.RemoveSubscriber(cons)
-		assert.Zero(t, broker.SubscribersCount("t1"))
-		assert.Zero(t, broker.SubscribersCount("t2"))
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(1)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(1)
 
-		broker.Subscribe(cons, "t3")
-		assert.Zero(t, broker.SubscribersCount("t3"))
+			// remove the consumer
+			broker.RemoveSubscriber(cons)
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(0)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(0)
 
-		broker.Close()
-	})
-	t.Run("With Unsubscription", func(t *testing.T) {
-		broker := New()
+			broker.Subscribe(cons, "t3")
+			ctx.Expect(broker.SubscribersCount("t3")).ToEqual(0)
 
-		// add consumer
-		cons := broker.AddSubscriber()
-		require.NotNil(t, cons)
-		broker.Subscribe(cons, "t1")
-		broker.Subscribe(cons, "t2")
+			broker.Close()
+		})
 
-		sub2 := broker.AddSubscriber()
-		require.NotNil(t, sub2)
-		broker.Subscribe(sub2, "t1")
+		s.It("With Unsubscription", func(ctx *specs.Context) {
+			broker := New()
 
-		require.EqualValues(t, 2, broker.SubscribersCount("t1"))
-		require.EqualValues(t, 1, broker.SubscribersCount("t2"))
+			// add consumer
+			cons := broker.AddSubscriber()
+			ctx.Expect(cons == nil).To(specs.BeFalse())
+			broker.Subscribe(cons, "t1")
+			broker.Subscribe(cons, "t2")
 
-		sub2.Shutdown()
+			sub2 := broker.AddSubscriber()
+			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			broker.Subscribe(sub2, "t1")
 
-		// Unsubscribe the consumer
-		broker.Unsubscribe(cons, "t1")
-		broker.Unsubscribe(sub2, "t1")
-		require.Zero(t, broker.SubscribersCount("t1"))
-		require.EqualValues(t, 1, broker.SubscribersCount("t2"))
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(1)
 
-		broker.Subscribe(cons, "t3")
-		require.EqualValues(t, 1, broker.SubscribersCount("t3"))
+			sub2.Shutdown()
 
-		// remove the consumer
-		broker.RemoveSubscriber(cons)
-		broker.Subscribe(cons, "t4")
-		assert.Zero(t, broker.SubscribersCount("t4"))
+			// Unsubscribe the consumer
+			broker.Unsubscribe(cons, "t1")
+			broker.Unsubscribe(sub2, "t1")
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(0)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(1)
 
-		broker.Close()
-	})
+			broker.Subscribe(cons, "t3")
+			ctx.Expect(broker.SubscribersCount("t3")).ToEqual(1)
 
-	t.Run("Publish skips inactive subscribers and topics with no subscribers", func(t *testing.T) {
-		broker := New()
+			// remove the consumer
+			broker.RemoveSubscriber(cons)
+			broker.Subscribe(cons, "t4")
+			ctx.Expect(broker.SubscribersCount("t4")).ToEqual(0)
 
-		// publish without subscribers should be a no-op
-		broker.Publish("unused", "ignored")
+			broker.Close()
+		})
 
-		active := broker.AddSubscriber()
-		inactive := broker.AddSubscriber()
-		broker.Subscribe(active, "t1")
-		broker.Subscribe(inactive, "t1")
-		inactive.Shutdown()
+		s.It("Publish skips inactive subscribers and topics with no subscribers", func(ctx *specs.Context) {
+			broker := New()
 
-		broker.Publish("t1", "hi")
-		time.Sleep(50 * time.Millisecond)
+			// publish without subscribers should be a no-op
+			broker.Publish("unused", "ignored")
 
-		var activeMsgs []*Message
-		for msg := range active.Iterator() {
-			activeMsgs = append(activeMsgs, msg)
-		}
-		assert.Len(t, activeMsgs, 1)
+			active := broker.AddSubscriber()
+			inactive := broker.AddSubscriber()
+			broker.Subscribe(active, "t1")
+			broker.Subscribe(inactive, "t1")
+			inactive.Shutdown()
 
-		for range inactive.Iterator() {
-			require.Fail(t, "inactive subscriber should receive no messages")
-		}
+			broker.Publish("t1", "hi")
+			// The inactive subscriber is filtered synchronously inside Publish, so
+			// once the active one has its message nothing else can still arrive.
+			awaitQueued(ctx.T, active, 1)
 
-		broker.Close()
-	})
+			ctx.Expect(len(drain(active))).ToEqual(1)
+			ctx.Expect(len(drain(inactive))).ToEqual(0)
 
-	t.Run("Close shuts down all subscribers", func(t *testing.T) {
-		broker := New()
-		sub1 := broker.AddSubscriber()
-		sub2 := broker.AddSubscriber()
-		broker.Subscribe(sub1, "t1")
-		broker.Subscribe(sub2, "t1")
+			broker.Close()
+		})
 
-		broker.Close()
+		s.It("Close shuts down all subscribers", func(ctx *specs.Context) {
+			broker := New()
+			sub1 := broker.AddSubscriber()
+			sub2 := broker.AddSubscriber()
+			broker.Subscribe(sub1, "t1")
+			broker.Subscribe(sub2, "t1")
 
-		require.False(t, sub1.Active())
-		require.False(t, sub2.Active())
-	})
+			broker.Close()
 
-	t.Run("With Publication", func(t *testing.T) {
-		broker := New()
+			ctx.Expect(sub1.Active()).To(specs.BeFalse())
+			ctx.Expect(sub2.Active()).To(specs.BeFalse())
+		})
 
-		// add consumer
-		cons := broker.AddSubscriber()
-		require.NotNil(t, cons)
-		broker.Subscribe(cons, "t1")
-		broker.Subscribe(cons, "t2")
+		s.It("With Publication", func(ctx *specs.Context) {
+			broker := New()
 
-		sub2 := broker.AddSubscriber()
-		require.NotNil(t, sub2)
-		broker.Subscribe(sub2, "t1")
+			// add consumer
+			cons := broker.AddSubscriber()
+			ctx.Expect(cons == nil).To(specs.BeFalse())
+			broker.Subscribe(cons, "t1")
+			broker.Subscribe(cons, "t2")
 
-		require.EqualValues(t, 2, broker.SubscribersCount("t1"))
-		require.EqualValues(t, 1, broker.SubscribersCount("t2"))
+			sub2 := broker.AddSubscriber()
+			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			broker.Subscribe(sub2, "t1")
 
-		sub2.Shutdown()
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(1)
 
-		broker.Publish("t1", "hi")
-		broker.Publish("t2", "hello")
+			sub2.Shutdown()
 
-		time.Sleep(time.Second)
+			broker.Publish("t1", "hi")
+			broker.Publish("t2", "hello")
 
-		var messages []*Message
-		for message := range cons.Iterator() {
-			require.NotNil(t, message)
-			require.NotNil(t, message.Topic())
-			require.NotNil(t, message.Payload())
-			messages = append(messages, message)
-		}
+			awaitQueued(ctx.T, cons, 2)
 
-		assert.Len(t, messages, 2)
-		assert.Len(t, cons.Topics(), 2)
+			messages := drain(cons)
+			for _, message := range messages {
+				ctx.Expect(message == nil).To(specs.BeFalse())
+				ctx.Expect(message.Topic()).To(specs.Not(specs.Equal("")))
+				ctx.Expect(message.Payload() == nil).To(specs.BeFalse())
+			}
 
-		broker.Close()
-	})
-	t.Run("With Broadcast", func(t *testing.T) {
-		broker := New()
+			ctx.Expect(len(messages)).ToEqual(2)
+			ctx.Expect(len(cons.Topics())).ToEqual(2)
 
-		// add consumer
-		cons := broker.AddSubscriber()
-		require.NotNil(t, cons)
-		broker.Subscribe(cons, "t1")
-		broker.Subscribe(cons, "t2")
+			broker.Close()
+		})
 
-		sub2 := broker.AddSubscriber()
-		require.NotNil(t, sub2)
-		broker.Subscribe(sub2, "t1")
+		s.It("With Broadcast", func(ctx *specs.Context) {
+			broker := New()
 
-		require.EqualValues(t, 2, broker.SubscribersCount("t1"))
-		require.EqualValues(t, 1, broker.SubscribersCount("t2"))
+			// add consumer
+			cons := broker.AddSubscriber()
+			ctx.Expect(cons == nil).To(specs.BeFalse())
+			broker.Subscribe(cons, "t1")
+			broker.Subscribe(cons, "t2")
 
-		sub2.Shutdown()
+			sub2 := broker.AddSubscriber()
+			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			broker.Subscribe(sub2, "t1")
 
-		broker.Broadcast("hi", []string{"t1", "t2"})
+			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
+			ctx.Expect(broker.SubscribersCount("t2")).ToEqual(1)
 
-		time.Sleep(time.Second)
+			sub2.Shutdown()
 
-		var messages []*Message
-		for message := range cons.Iterator() {
-			messages = append(messages, message)
-		}
+			broker.Broadcast("hi", []string{"t1", "t2"})
 
-		assert.Len(t, messages, 2)
-		assert.Len(t, cons.Topics(), 2)
+			awaitQueued(ctx.T, cons, 2)
 
-		broker.Close()
+			ctx.Expect(len(drain(cons))).ToEqual(2)
+			ctx.Expect(len(cons.Topics())).ToEqual(2)
+
+			broker.Close()
+		})
 	})
 }
