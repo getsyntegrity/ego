@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
+
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
 	"github.com/getsyntegrity/ego/port/publishing"
@@ -38,19 +40,23 @@ import (
 // package's non-test imports), pins that the real sentinel, wrapped the
 // way adopters wrap it, makes every check skip.
 func TestCapture_RealAdaptertestErrUnreachableSkips(t *testing.T) {
-	target := EventsTarget{
-		New: func(*testing.T) (publishing.EventPublisher, error) {
-			return nil, fmt.Errorf("no broker at localhost:9092: %w", adaptertest.ErrUnreachable)
-		},
-		Received: func(context.Context, *testing.T, *egopb.Event) error { return nil },
-	}
-	results := captureEvents(t, target)
-	if len(results) != 3 {
-		t.Fatalf("got %d results, want 3", len(results))
-	}
-	for _, r := range results {
-		if r.Outcome != Skipped {
-			t.Errorf("%s: outcome %s (%q), want skipped", r.Check, r.Outcome, r.Detail)
-		}
-	}
+	specs.Describe(t, "The capture skips every check for the real adaptertest.ErrUnreachable", func(s *specs.Spec) {
+		s.It("skips all three checks when New wraps the real sentinel", func(ctx *specs.Context) {
+			target := EventsTarget{
+				New: func(*testing.T) (publishing.EventPublisher, error) {
+					return nil, fmt.Errorf("no broker at localhost:9092: %w", adaptertest.ErrUnreachable)
+				},
+				Received: func(context.Context, *testing.T, *egopb.Event) error { return nil },
+			}
+			results := captureEvents(ctx.T, target)
+			ctx.Expect(len(results)).ToEqual(3)
+			var offenders []string
+			for _, r := range results {
+				if r.Outcome != Skipped {
+					offenders = append(offenders, fmt.Sprintf("%s: outcome %s (%q), want skipped", r.Check, r.Outcome, r.Detail))
+				}
+			}
+			ctx.Expect(offenders).To(specs.BeNil())
+		})
+	})
 }

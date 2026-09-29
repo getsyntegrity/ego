@@ -33,6 +33,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
+
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/port/publishing"
 )
@@ -151,7 +153,7 @@ func stateTarget(build func() *fakeState) StateTarget {
 	}
 }
 
-func byCheck(t *testing.T, results []Result) map[string]Result {
+func byCheck(t testing.TB, results []Result) map[string]Result {
 	t.Helper()
 	out := map[string]Result{}
 	for _, r := range results {
@@ -161,73 +163,97 @@ func byCheck(t *testing.T, results []Result) map[string]Result {
 	return out
 }
 
-func requireOutcome(t *testing.T, got map[string]Result, check string, want Outcome, detail string) {
+func requireOutcome(t testing.TB, got map[string]Result, check string, want Outcome, detail string) {
 	t.Helper()
 	r, ok := got[check]
 	if !ok {
 		t.Fatalf("no result for %s", check)
 	}
 	if r.Outcome != want {
-		t.Errorf("%s: outcome %s, want %s (detail %q)", check, r.Outcome, want, r.Detail)
+		t.Fatalf("%s: outcome %s, want %s (detail %q)", check, r.Outcome, want, r.Detail)
 	}
 	if detail != "" && !strings.Contains(r.Detail, detail) {
-		t.Errorf("%s: detail %q does not mention %q", check, r.Detail, detail)
+		t.Fatalf("%s: detail %q does not mention %q", check, r.Detail, detail)
 	}
 }
 
-func requireOnlyFailure(t *testing.T, got map[string]Result, check, detail string) {
+func requireOnlyFailure(t testing.TB, got map[string]Result, check, detail string) {
 	t.Helper()
 	requireOutcome(t, got, check, Failed, detail)
 	for name, r := range got {
 		if name != check && r.Outcome == Failed {
-			t.Errorf("%s also failed (%q); only %s should", name, r.Detail, check)
+			t.Fatalf("%s also failed (%q); only %s should", name, r.Detail, check)
 		}
 	}
 }
 
 func TestRunEvents_CorrectPublisherPasses(t *testing.T) {
-	RunEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{} }))
-	got := byCheck(t, captureEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{} })))
-	for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
-		requireOutcome(t, got, check, Passed, "")
-	}
+	specs.Describe(t, "RunEvents and the capture accept a correct events publisher", func(s *specs.Spec) {
+		s.It("passes PT-1, PT-2 and PT-3", func(ctx *specs.Context) {
+			RunEvents(ctx.T, eventsTarget(func() *fakeEvents { return &fakeEvents{} }))
+			got := byCheck(ctx.T, captureEvents(ctx.T, eventsTarget(func() *fakeEvents { return &fakeEvents{} })))
+			for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
+				requireOutcome(ctx.T, got, check, Passed, "")
+			}
+		})
+	})
 }
 
 func TestRunState_CorrectPublisherPasses(t *testing.T) {
-	RunState(t, stateTarget(func() *fakeState { return &fakeState{} }))
-	got := byCheck(t, captureState(t, stateTarget(func() *fakeState { return &fakeState{} })))
-	for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
-		requireOutcome(t, got, check, Passed, "")
-	}
+	specs.Describe(t, "RunState and the capture accept a correct state publisher", func(s *specs.Spec) {
+		s.It("passes PT-1, PT-2 and PT-3", func(ctx *specs.Context) {
+			RunState(ctx.T, stateTarget(func() *fakeState { return &fakeState{} }))
+			got := byCheck(ctx.T, captureState(ctx.T, stateTarget(func() *fakeState { return &fakeState{} })))
+			for _, check := range []string{"PT-1", "PT-2", "PT-3"} {
+				requireOutcome(ctx.T, got, check, Passed, "")
+			}
+		})
+	})
 }
 
 // Task 2 self-check: a publisher that keeps publishing after Close fails
 // PT-1, and only PT-1.
 func TestCapture_PublishingAfterCloseFailsPT1(t *testing.T) {
-	got := byCheck(t, captureEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{keepPublishing: true} })))
-	requireOnlyFailure(t, got, "PT-1", "ErrPublisherNotStarted")
+	specs.Describe(t, "The capture reports a publisher that publishes after Close as failing PT-1 only", func(s *specs.Spec) {
+		s.It("fails only PT-1 for an events publisher and for a state publisher", func(ctx *specs.Context) {
+			got := byCheck(ctx.T, captureEvents(ctx.T, eventsTarget(func() *fakeEvents { return &fakeEvents{keepPublishing: true} })))
+			requireOnlyFailure(ctx.T, got, "PT-1", "ErrPublisherNotStarted")
 
-	gotState := byCheck(t, captureState(t, stateTarget(func() *fakeState {
-		return &fakeState{fakeEvents: fakeEvents{keepPublishing: true}}
-	})))
-	requireOnlyFailure(t, gotState, "PT-1", "ErrPublisherNotStarted")
+			gotState := byCheck(ctx.T, captureState(ctx.T, stateTarget(func() *fakeState {
+				return &fakeState{fakeEvents: fakeEvents{keepPublishing: true}}
+			})))
+			requireOnlyFailure(ctx.T, gotState, "PT-1", "ErrPublisherNotStarted")
+		})
+	})
 }
 
 func TestCapture_UnstableIDFailsPT2(t *testing.T) {
-	got := byCheck(t, captureEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{changingID: true} })))
-	requireOnlyFailure(t, got, "PT-2", "stable")
+	specs.Describe(t, "The capture reports a publisher with an unstable ID as failing PT-2 only", func(s *specs.Spec) {
+		s.It("fails only PT-2", func(ctx *specs.Context) {
+			got := byCheck(ctx.T, captureEvents(ctx.T, eventsTarget(func() *fakeEvents { return &fakeEvents{changingID: true} })))
+			requireOnlyFailure(ctx.T, got, "PT-2", "stable")
+		})
+	})
 }
 
 func TestCapture_LostEventFailsPT3(t *testing.T) {
-	got := byCheck(t, captureEvents(t, eventsTarget(func() *fakeEvents { return &fakeEvents{drop: true} })))
-	requireOnlyFailure(t, got, "PT-3", "never arrived")
+	specs.Describe(t, "The capture reports a publisher that loses events as failing PT-3 only", func(s *specs.Spec) {
+		s.It("fails only PT-3", func(ctx *specs.Context) {
+			got := byCheck(ctx.T, captureEvents(ctx.T, eventsTarget(func() *fakeEvents { return &fakeEvents{drop: true} })))
+			requireOnlyFailure(ctx.T, got, "PT-3", "never arrived")
+		})
+	})
 }
 
 func TestCapture_NoObserverIsNotExercised(t *testing.T) {
-	target := eventsTarget(func() *fakeEvents { return &fakeEvents{} })
-	target.Received = nil
-	got := byCheck(t, captureEvents(t, target))
-	requireOutcome(t, got, "PT-3", NotExercised, "no hook")
+	specs.Describe(t, "The capture reports PT-3 as not exercised when the target has no observer", func(s *specs.Spec) {
+		s.It("marks PT-3 not exercised", func(ctx *specs.Context) {
+			target := eventsTarget(func() *fakeEvents { return &fakeEvents{} })
+			target.Received = nil
+			got := byCheck(ctx.T, captureEvents(ctx.T, target))
+			requireOutcome(ctx.T, got, "PT-3", NotExercised, "no hook")
+		})
+	})
 }
 
 // unreachable mirrors adaptertest.ErrUnreachable, which this package
@@ -239,29 +265,44 @@ func (unreachable) Error() string     { return "adapter backend unreachable" }
 func (unreachable) Unreachable() bool { return true }
 
 func TestCapture_OnlyUnreachableSkips(t *testing.T) {
-	// Every target sets Received, so PT-3 is exercised too.
-	observed := func(context.Context, *testing.T, *egopb.Event) error { return nil }
-	skip := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) {
-		return nil, fmt.Errorf("no broker: %w", unreachable{})
-	}}
-	for _, r := range byCheck(t, captureEvents(t, skip)) {
-		if r.Outcome != Skipped {
-			t.Errorf("%s: outcome %s, want skipped", r.Check, r.Outcome)
-		}
-	}
+	specs.Describe(t, "The capture skips only for an unreachable backend", func(s *specs.Spec) {
+		// Every target sets Received, so PT-3 is exercised too.
+		observed := func(context.Context, *testing.T, *egopb.Event) error { return nil }
 
-	fail := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return nil, errors.New("bad config") }}
-	for _, r := range byCheck(t, captureEvents(t, fail)) {
-		if r.Outcome != Failed {
-			t.Errorf("%s: outcome %s, want failed", r.Check, r.Outcome)
-		}
-	}
+		s.It("skips every check when New reports an unreachable backend", func(ctx *specs.Context) {
+			skip := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) {
+				return nil, fmt.Errorf("no broker: %w", unreachable{})
+			}}
+			var offenders []string
+			for _, r := range byCheck(ctx.T, captureEvents(ctx.T, skip)) {
+				if r.Outcome != Skipped {
+					offenders = append(offenders, fmt.Sprintf("%s: outcome %s, want skipped", r.Check, r.Outcome))
+				}
+			}
+			ctx.Expect(offenders).To(specs.BeNil())
+		})
 
-	var typedNil *fakeEvents
-	nilValue := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return typedNil, nil }}
-	for _, r := range byCheck(t, captureEvents(t, nilValue)) {
-		if r.Outcome != Failed || !strings.Contains(r.Detail, "nil") {
-			t.Errorf("%s: outcome %s (%q), want failed naming nil", r.Check, r.Outcome, r.Detail)
-		}
-	}
+		s.It("fails every check when New fails for another reason", func(ctx *specs.Context) {
+			fail := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return nil, errors.New("bad config") }}
+			var offenders []string
+			for _, r := range byCheck(ctx.T, captureEvents(ctx.T, fail)) {
+				if r.Outcome != Failed {
+					offenders = append(offenders, fmt.Sprintf("%s: outcome %s, want failed", r.Check, r.Outcome))
+				}
+			}
+			ctx.Expect(offenders).To(specs.BeNil())
+		})
+
+		s.It("fails every check, naming nil, when New returns a typed nil publisher", func(ctx *specs.Context) {
+			var typedNil *fakeEvents
+			nilValue := EventsTarget{Received: observed, New: func(*testing.T) (publishing.EventPublisher, error) { return typedNil, nil }}
+			var offenders []string
+			for _, r := range byCheck(ctx.T, captureEvents(ctx.T, nilValue)) {
+				if r.Outcome != Failed || !strings.Contains(r.Detail, "nil") {
+					offenders = append(offenders, fmt.Sprintf("%s: outcome %s (%q), want failed naming nil", r.Check, r.Outcome, r.Detail))
+				}
+			}
+			ctx.Expect(offenders).To(specs.BeNil())
+		})
+	})
 }
