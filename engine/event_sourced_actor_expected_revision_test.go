@@ -50,10 +50,8 @@ import (
 // prove the same logic wired correctly into the real command.Result path.
 // -----------------------------------------------------------------------
 
-// The unnamed root Describe adds no subtest segment (go-specs v0.3.1), so the cases keep their
-// TestPreconditionFromRevisionMapsPerD4/<case> names and `go test -run` can select each one.
 func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
-	specs.Describe(t, "", func(s *specs.Spec) {
+	specs.Describe(t, "preconditionFromRevision maps an expected revision to a write precondition", func(s *specs.Spec) {
 		s.It("absent is unconditional", func(ctx *specs.Context) {
 			ctx.Expect(preconditionFromRevision(0, false)).ToEqual(persistence.Unconditional())
 		})
