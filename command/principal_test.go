@@ -25,45 +25,51 @@ package command_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/command"
 )
 
 func TestNewPrincipal(t *testing.T) {
-	t.Run("id required", func(t *testing.T) {
-		_, err := command.NewPrincipal("")
-		require.Error(t, err)
-	})
+	specs.Describe(t, "NewPrincipal builds an opaque identity reference", func(s *specs.Spec) {
+		s.It("id required", func(ctx *specs.Context) {
+			_, err := command.NewPrincipal("")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+		})
 
-	t.Run("id only, kind absent", func(t *testing.T) {
-		p, err := command.NewPrincipal("user-42")
-		require.NoError(t, err)
-		require.Equal(t, "user-42", p.ID())
+		s.It("id only, kind absent", func(ctx *specs.Context) {
+			p, err := command.NewPrincipal("user-42")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.ID()).ToEqual("user-42")
 
-		kind, ok := p.Kind()
-		require.False(t, ok)
-		require.Empty(t, kind)
-	})
+			kind, ok := p.Kind()
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(kind).ToEqual("")
+		})
 
-	t.Run("id and kind", func(t *testing.T) {
-		p, err := command.NewPrincipal("user-42", command.WithPrincipalKind("service-account"))
-		require.NoError(t, err)
-		require.Equal(t, "user-42", p.ID())
+		s.It("id and kind", func(ctx *specs.Context) {
+			p, err := command.NewPrincipal("user-42", command.WithPrincipalKind("service-account"))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.ID()).ToEqual("user-42")
 
-		kind, ok := p.Kind()
-		require.True(t, ok)
-		require.Equal(t, "service-account", kind)
+			kind, ok := p.Kind()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(kind).ToEqual("service-account")
+		})
 	})
 }
 
 func TestPrincipalIsAbstract(t *testing.T) {
-	// Principal carries only an opaque identity reference (AC5): its
-	// declared surface is ID/Kind only, no credential, token, role, scope
-	// or protocol-specific field. This is asserted structurally by the
-	// fact that NewPrincipal takes only an id and options, never a token
-	// or credential parameter.
-	p, err := command.NewPrincipal("user-42")
-	require.NoError(t, err)
-	require.Equal(t, "user-42", p.ID())
+	specs.Describe(t, "Principal carries only an opaque identity reference", func(s *specs.Spec) {
+		s.It("is built from an id alone", func(ctx *specs.Context) {
+			// Principal carries only an opaque identity reference (AC5): its
+			// declared surface is ID/Kind only, no credential, token, role, scope
+			// or protocol-specific field. This is asserted structurally by the
+			// fact that NewPrincipal takes only an id and options, never a token
+			// or credential parameter.
+			p, err := command.NewPrincipal("user-42")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.ID()).ToEqual("user-42")
+		})
+	})
 }
