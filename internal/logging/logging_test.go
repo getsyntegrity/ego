@@ -27,6 +27,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 	"github.com/stretchr/testify/assert"
@@ -34,29 +35,35 @@ import (
 )
 
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
-	assert.Same(t, kitlog.L(), DefaultLogger())
+	specs.Describe(t, "DefaultLogger resolves the kit-logger global on every call", func(s *specs.Spec) {
+		s.It("returns the current global logger, looked up per call and never cached", func(ctx *specs.Context) {
+			ctx.Expect(kitlog.L() == DefaultLogger()).To(specs.BeTrue())
 
-	previous := kitlog.L()
-	t.Cleanup(func() { kitlog.SetGlobal(previous) })
+			previous := kitlog.L()
+			ctx.T.Cleanup(func() { kitlog.SetGlobal(previous) })
 
-	custom := kitlogtest.NewMockLogger()
-	kitlog.SetGlobal(custom)
-	assert.Same(t, custom, DefaultLogger(), "the lookup happens per call, never cached")
+			custom := kitlogtest.NewMockLogger()
+			kitlog.SetGlobal(custom)
+			ctx.Expect(DefaultLogger() == kitlog.Logger(custom)).To(specs.BeTrue())
+		})
+	})
 }
 
 func TestResolveLogger(t *testing.T) {
-	t.Run("nil falls back to the default", func(t *testing.T) {
-		assert.Same(t, DefaultLogger(), ResolveLogger(nil))
-	})
+	specs.Describe(t, "ResolveLogger falls back to the default for an unusable logger", func(s *specs.Spec) {
+		s.It("nil falls back to the default", func(ctx *specs.Context) {
+			ctx.Expect(ResolveLogger(nil) == DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("typed nil falls back to the default", func(t *testing.T) {
-		var typedNil *kitlogtest.MockLogger
-		assert.Same(t, DefaultLogger(), ResolveLogger(typedNil))
-	})
+		s.It("typed nil falls back to the default", func(ctx *specs.Context) {
+			var typedNil *kitlogtest.MockLogger
+			ctx.Expect(ResolveLogger(typedNil) == DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("a usable logger is returned as-is", func(t *testing.T) {
-		logger := kitlogtest.NewMockLogger()
-		assert.Same(t, logger, ResolveLogger(logger))
+		s.It("a usable logger is returned as-is", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			ctx.Expect(ResolveLogger(logger) == kitlog.Logger(logger)).To(specs.BeTrue())
+		})
 	})
 }
 
