@@ -58,7 +58,7 @@ Go behavior; RED/GREEN does not apply. Ordinary functional checks below replace 
 - [x] T1 Remove the current pipeline: workflows, `scripts/ci/`, `internal/cmd/*`, old `.md`
       issue templates, `renovate.json`, and dangling references (Makefile, docs). Route: delegated.
 - [x] T2 Import the zip pipeline with the adaptations above. Route: delegated.
-- [ ] T3 Update `docs/ci.md`, `docs/main-branch-policy.md`, `contributing.md`, `readme.md` to the
+- [x] T3 Update `docs/ci.md`, `docs/main-branch-policy.md`, `contributing.md`, `readme.md` to the
       develop/main model and new checks. Route: delegated.
 
 Route evidence: 2+ non-trivial files per task -> writer trigger; one bounded writer runs T1-T3.
@@ -80,4 +80,11 @@ notify takes `channel` (from `vars.SLACK_CHANNEL`) and skips without token or ch
 (changelog, sync_develop, go-sdk-update) got explicit `permissions` because the token can fall back to
 `github.token`; root `SECURITY.md` (a GoAkt copy) removed in favor of `.github/SECURITY.md`; new `modules`
 matrix job in ci.yml is part of `ci-ok`. `.go-version` 1.27.1 kept (release exists).
-T3 pending.
+T3 done. `docs/ci.md` (1820 lines about the old pipeline) rewritten as a short guide; `docs/main-branch-policy.md`,
+`contributing.md` and the `readme.md` badge/pre-release line updated. Dangling-reference `rg` over the repo
+(excluding odd/, openspec/, CHANGELOG.md) returns nothing.
+
+Pending for the user (GitHub settings): create `develop`; protect `main`/`develop` with `ci-ok` + `pr-meta`;
+run `.github/scripts/labels.sh`; enable "Allow GitHub Actions to create pull requests"; optional
+`ORG_CHECKOUT_TOKEN`, `SLACK_BOT_TOKEN`, `vars.SLACK_CHANNEL`.
+Known gap: the pipeline only tags the root module; the nested publisher modules get no `publisher/*/vX.Y.Z` tags.

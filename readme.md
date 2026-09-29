@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/getsyntegrity/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/build.yml?branch=main" alt="Build status"></a>
+  <a href="https://github.com/getsyntegrity/ego/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/ci.yml?branch=develop" alt="Build status"></a>
   <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/ego" alt="Go version"></a>
   <a href="https://human-oss.dev"><img src="https://human-oss.dev/badge.svg" alt="Open Source AI Manifesto"></a>
 </p>
@@ -67,7 +67,7 @@ For production use, provide durable implementations of the stores your applicati
 
 ## Installation
 
-eGo is **pre-release**. No version has been published yet, so there is nothing to install with `go get` today. The module path is `github.com/getsyntegrity/ego` (no `/vN` suffix, so its versions will be `v0.x` or `v1.x`); the four publishers live at `github.com/getsyntegrity/ego/publisher/<name>`. The version `v0.0.0` that appears in the nested modules' `go.mod` files is only the development placeholder resolved through a local `replace`: it is not a tag and it is not installable.
+eGo is **pre-release**. No version has been published yet, so there is nothing to install with `go get` today; the first merge from `develop` to `main` publishes `v0.1.0` automatically (see [`docs/ci.md`](./docs/ci.md)). The module path is `github.com/getsyntegrity/ego` (no `/vN` suffix, so its versions will be `v0.x` or `v1.x`); the four publishers live at `github.com/getsyntegrity/ego/publisher/<name>`. The version `v0.0.0` that appears in the nested modules' `go.mod` files is only the development placeholder resolved through a local `replace`: it is not a tag and it is not installable.
 
 To try it now, work from a checkout of this repository (`git clone https://github.com/getsyntegrity/ego`), or wait for the first tag and then run `go get github.com/getsyntegrity/ego@<version>`.
 
