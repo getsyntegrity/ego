@@ -31,7 +31,7 @@ import (
 )
 
 func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
-	specs.Describe(t, "PreconditionFromRevision", func(s *specs.Spec) {
+	specs.Describe(t, "", func(s *specs.Spec) {
 		s.It("absent is unconditional", func(ctx *specs.Context) {
 			ctx.Expect(PreconditionFromRevision(0, false)).ToEqual(persistence.Unconditional())
 		})
