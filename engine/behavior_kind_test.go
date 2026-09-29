@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
@@ -59,24 +60,28 @@ var (
 //	kinds := []EntityKind{new(AccountEventSourcedBehavior)}
 //	WithBehaviorKinds(kinds...) // cannot use kinds (variable of type []EntityKind) as []BehaviorKind value
 func TestBehaviorKindAssignability(t *testing.T) {
-	account := new(AccountEventSourcedBehavior)
+	specs.Describe(t, "a behavior kind moves between EntityKind, extension.Dependency and BehaviorKind keeping its dynamic value", func(s *specs.Spec) {
+		s.It("keeps the same pointer in both directions and in the registration list", func(ctx *specs.Context) {
+			account := new(AccountEventSourcedBehavior)
 
-	var entityKind EntityKind = account
-	var behaviorKind BehaviorKind = entityKind
-	var dependency extension.Dependency = behaviorKind
-	var back EntityKind = behaviorKind
+			var entityKind EntityKind = account
+			var behaviorKind BehaviorKind = entityKind
+			var dependency extension.Dependency = behaviorKind
+			var back EntityKind = behaviorKind
 
-	assert.Same(t, account, behaviorKind)
-	assert.Same(t, account, dependency)
-	assert.Same(t, account, back)
+			ctx.Expect(behaviorKind == account).To(specs.BeTrue())
+			ctx.Expect(dependency == account).To(specs.BeTrue())
+			ctx.Expect(back == account).To(specs.BeTrue())
 
-	entityKinds := []EntityKind{account, new(AccountDurableStateBehavior)}
-	behaviorKinds := make([]BehaviorKind, 0, len(entityKinds))
-	for _, kind := range entityKinds {
-		behaviorKinds = append(behaviorKinds, kind)
-	}
-	cfg := NewConfig(testkit.NewEventsStore(), WithBehaviorKinds(behaviorKinds...))
-	assert.Equal(t, behaviorKinds, cfg.behaviorKinds)
+			entityKinds := []EntityKind{account, new(AccountDurableStateBehavior)}
+			behaviorKinds := make([]BehaviorKind, 0, len(entityKinds))
+			for _, kind := range entityKinds {
+				behaviorKinds = append(behaviorKinds, kind)
+			}
+			cfg := NewConfig(testkit.NewEventsStore(), WithBehaviorKinds(behaviorKinds...))
+			ctx.Expect(cfg.behaviorKinds).ToEqual(behaviorKinds)
+		})
+	})
 }
 
 // TestWithEntityKindsAndWithBehaviorKindsShareRegistration checks that both
@@ -118,10 +123,14 @@ func kindOptions() map[string]func(BehaviorKind) Option {
 // pointer in cluster mode; a registered kind must be a pointer type, and a
 // typed nil is allowed.
 func TestErrBehaviorNotPointerMessage(t *testing.T) {
-	msg := ErrBehaviorNotPointer.Error()
-	assert.Contains(t, msg, "a behavior must be non-nil to be spawned")
-	assert.Contains(t, msg, "and a pointer to be spawned in cluster mode")
-	assert.Contains(t, msg, "a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	specs.Describe(t, "ErrBehaviorNotPointer states the conditions on a spawned behavior and a registered kind", func(s *specs.Spec) {
+		s.It("names the three conditions in its message", func(ctx *specs.Context) {
+			msg := ErrBehaviorNotPointer.Error()
+			ctx.Expect(msg).To(specs.Contain("a behavior must be non-nil to be spawned"))
+			ctx.Expect(msg).To(specs.Contain("and a pointer to be spawned in cluster mode"))
+			ctx.Expect(msg).To(specs.Contain("a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)"))
+		})
+	})
 }
 
 // unregistrableKinds are kinds GoAkt's type registry cannot name, each with

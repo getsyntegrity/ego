@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -197,14 +198,25 @@ func TestEngineRespawnInLegacyModeIsUnchanged(t *testing.T) {
 // binding is ErrSpawnTenantMismatch, and an actor holding no binding is
 // ErrSpawnTenantUnverified, which asserts no conflict.
 func TestClassifyTenantBinding(t *testing.T) {
-	requested := extensions.NewEntityTenantScope("acme")
+	specs.Describe(t, "classifyTenantBinding maps the owning actor's TenantBindingReply to the spawn outcome", func(s *specs.Spec) {
+		s.It("treats a match as success, a different binding as a mismatch and no binding as unverified", func(ctx *specs.Context) {
+			requested := extensions.NewEntityTenantScope("acme")
 
-	require.NoError(t, classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true, Matches: true}))
-	requireSpawnTenantMismatch(t, classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true}))
+			ctx.Expect(classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true, Matches: true})).To(specs.BeNil())
 
-	err := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{})
-	require.ErrorIs(t, err, ErrSpawnTenantUnverified)
-	assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
+			mismatch := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{TenantAware: true})
+			ctx.Expect(mismatch).To(specs.Not(specs.BeNil()))
+			ctx.Expect(mismatch).To(specs.MatchError(ErrSpawnTenantMismatch))
+			ctx.Expect(mismatch).To(specs.MatchError(tenancy.ErrDenied))
+			// the tenancy mismatch must be recoverable via errors.As
+			var tenancyErr *tenancy.Error
+			ctx.Expect(mismatch).To(specs.MatchErrorAs(&tenancyErr))
+
+			err := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{})
+			ctx.Expect(err).To(specs.MatchError(ErrSpawnTenantUnverified))
+			ctx.Expect(err).To(specs.Not(specs.MatchError(ErrSpawnTenantMismatch)))
+		})
+	})
 }
 
 // TestDispatchRejectsTenantBindingQuery pins that the control message can
