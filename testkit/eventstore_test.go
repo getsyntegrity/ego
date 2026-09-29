@@ -24,12 +24,10 @@ package testkit
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -39,10 +37,12 @@ import (
 
 // newAccountEvent builds a single-event batch for persistenceID at
 // sequenceNumber, for use as the payload of a conditional WriteEvents call.
-func newAccountEvent(t *testing.T, persistenceID string, sequenceNumber uint64) []*egopb.Event {
+func newAccountEvent(t testing.TB, persistenceID string, sequenceNumber uint64) []*egopb.Event {
 	t.Helper()
 	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("build event payload for %q: %v", persistenceID, err)
+	}
 	return []*egopb.Event{
 		{PersistenceId: persistenceID, SequenceNumber: sequenceNumber, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
@@ -53,106 +53,132 @@ func newAccountEvent(t *testing.T, persistenceID string, sequenceNumber uint64) 
 // ---------------------------------------------------------------------------
 
 func TestEventStore_WriteEvents_InvalidPreconditionIsRejected(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with an invalid precondition", func(s *specs.Spec) {
+		s.It("is rejected and persists nothing", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	var zero persistence.WritePrecondition
-	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "invalid-precondition", 1), zero)
+			var zero persistence.WritePrecondition
+			err := store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "invalid-precondition", 1), zero)
 
-	require.ErrorIs(t, err, persistence.ErrInvalidPrecondition)
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidPrecondition))
 
-	latest, getErr := store.GetLatestEvent(ctx, persistence.Unscoped(), "invalid-precondition")
-	require.NoError(t, getErr)
-	assert.Nil(t, latest, "a rejected precondition must not persist anything")
+			latest, getErr := store.GetLatestEvent(bg, persistence.Unscoped(), "invalid-precondition")
+			ctx.Expect(getErr).To(specs.BeNil())
+			// a rejected precondition must not persist anything
+			ctx.Expect(latest).To(specs.BeNil())
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_UnconditionalIsLegacyBehavior(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with an unconditional precondition", func(s *specs.Spec) {
+		s.It("keeps the legacy behavior of appending every event", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "legacy", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "legacy", 2), persistence.Unconditional()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "legacy", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "legacy", 2), persistence.Unconditional())).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "legacy", 1, 2, 10)
-	require.NoError(t, err)
-	assert.Len(t, replayed, 2)
+			replayed, err := store.ReplayEvents(bg, persistence.Unscoped(), "legacy", 1, 2, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(len(replayed)).ToEqual(2)
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_ExactRevisionSucceedsWhenCurrent(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with an exact revision precondition", func(s *specs.Spec) {
+		s.It("succeeds when the revision is the current one", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "exact-ok", 1), persistence.ExpectGenesis()))
-	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "exact-ok", 2), persistence.ExpectRevision(1))
-	require.NoError(t, err)
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "exact-ok", 1), persistence.ExpectGenesis())).To(specs.BeNil())
+			err := store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "exact-ok", 2), persistence.ExpectRevision(1))
+			ctx.Expect(err).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "exact-ok")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 2, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "exact-ok")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(2))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_StaleRevisionIsConflict(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a stale revision precondition", func(s *specs.Spec) {
+		s.It("reports a conflict and leaves the persisted log untouched", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "stale", 1), persistence.ExpectGenesis()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "stale", 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "stale", 2), persistence.ExpectRevision(99))
+			err := store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "stale", 2), persistence.ExpectRevision(99))
 
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(err, &conflict))
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
-	assert.Equal(t, "stale", conflict.PersistenceID())
-	assert.Equal(t, persistence.ExpectRevision(99), conflict.Expected())
+			var conflict *persistence.ConflictError
+			ctx.Expect(err).To(specs.MatchErrorAs(&conflict))
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrConcurrencyConflict))
+			ctx.Expect(conflict.PersistenceID()).ToEqual("stale")
+			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectRevision(99))
 
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(actual).ToEqual(uint64(1))
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "stale")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber(), "a rejected conditional write must not modify the persisted log")
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "stale")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			// a rejected conditional write must not modify the persisted log
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_GenesisSucceedsOnEmpty(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a genesis precondition", func(s *specs.Spec) {
+		s.It("succeeds when the entity has no events yet", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-ok", 1), persistence.ExpectGenesis())
-	require.NoError(t, err)
+			err := store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "genesis-ok", 1), persistence.ExpectGenesis())
+			ctx.Expect(err).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "genesis-ok")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "genesis-ok")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_GenesisConflictsOnExisting(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a genesis precondition on an existing entity", func(s *specs.Spec) {
+		s.It("reports a conflict and keeps the existing event", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-taken", 1), persistence.ExpectGenesis()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "genesis-taken", 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	err := store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "genesis-taken", 2), persistence.ExpectGenesis())
+			err := store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "genesis-taken", 2), persistence.ExpectGenesis())
 
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(err, &conflict))
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
+			var conflict *persistence.ConflictError
+			ctx.Expect(err).To(specs.MatchErrorAs(&conflict))
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(actual).ToEqual(uint64(1))
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "genesis-taken")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "genesis-taken")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -168,86 +194,112 @@ func TestEventStore_WriteEvents_GenesisConflictsOnExisting(t *testing.T) {
 // ShardOffsets, and DeleteEvents.
 
 func TestEventStore_WriteEvents_DuplicateSequenceNumberOverwritesNotAccumulates(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a duplicate sequence number", func(s *specs.Spec) {
+		s.It("overwrites the earlier event instead of accumulating", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn", 1), persistence.Unconditional()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn", 1), persistence.Unconditional())).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn", 1, 10, 100)
-	require.NoError(t, err)
-	assert.Len(t, replayed, 1, "rewriting SequenceNumber 1 must not produce two visible events")
+			replayed, err := store.ReplayEvents(bg, persistence.Unscoped(), "dup-sn", 1, 10, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			// rewriting SequenceNumber 1 must not produce two visible events
+			ctx.Expect(len(replayed)).ToEqual(1)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "dup-sn")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "dup-sn")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_DuplicateSequenceNumberWithinConditionalWriteOverwrites(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a duplicate sequence number under a conditional write", func(s *specs.Spec) {
+		s.It("overwrites the earlier event instead of accumulating", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectGenesis()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-conditional", 1), persistence.ExpectRevision(1)))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-conditional", 1), persistence.ExpectGenesis())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-conditional", 1), persistence.ExpectRevision(1))).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn-conditional", 1, 10, 100)
-	require.NoError(t, err)
-	assert.Len(t, replayed, 1, "a conditional rewrite of SequenceNumber 1 must not produce two visible events")
+			replayed, err := store.ReplayEvents(bg, persistence.Unscoped(), "dup-sn-conditional", 1, 10, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			// a conditional rewrite of SequenceNumber 1 must not produce two visible events
+			ctx.Expect(len(replayed)).ToEqual(1)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "dup-sn-conditional")
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "dup-sn-conditional")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_DuplicateSequenceNumberDoesNotDuplicateShardEventsOrOffsets(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a duplicate sequence number and the shard views", func(s *specs.Spec) {
+		s.It("does not duplicate shard events or skew shard offsets", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-shard", 1), persistence.Unconditional()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-shard", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-shard", 1), persistence.Unconditional())).To(specs.BeNil())
 
-	shardEvents, _, err := store.GetShardEvents(ctx, 1, 0, 100)
-	require.NoError(t, err)
-	assert.Len(t, shardEvents, 1, "rewriting SequenceNumber 1 must not duplicate its shard's events")
+			shardEvents, _, err := store.GetShardEvents(bg, 1, 0, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			// rewriting SequenceNumber 1 must not duplicate its shard's events
+			ctx.Expect(len(shardEvents)).ToEqual(1)
 
-	offsets, err := store.ShardOffsets(ctx)
-	require.NoError(t, err)
-	require.Contains(t, offsets, uint64(1))
-	assert.Equal(t, shardEvents[0].GetTimestamp(), offsets[1], "the duplicate rewrite must not skew the shard's offset beyond its single surviving event")
+			offsets, err := store.ShardOffsets(bg)
+			ctx.Expect(err).To(specs.BeNil())
+			_, hasShard := offsets[1]
+			ctx.Expect(hasShard).To(specs.BeTrue())
+			// the duplicate rewrite must not skew the shard's offset beyond its single surviving event
+			ctx.Expect(offsets[1]).ToEqual(shardEvents[0].GetTimestamp())
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_DuplicateSequenceNumberThenDeleteEventsLeavesNoResidual(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.DeleteEvents after a duplicate sequence number write", func(s *specs.Spec) {
+		s.It("leaves no residual duplicate", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), newAccountEvent(t, "dup-sn-delete", 2), persistence.Unconditional()))
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-delete", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-delete", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), newAccountEvent(ctx.T, "dup-sn-delete", 2), persistence.Unconditional())).To(specs.BeNil())
 
-	require.NoError(t, store.DeleteEvents(ctx, persistence.Unscoped(), "dup-sn-delete", 1))
+			ctx.Expect(store.DeleteEvents(bg, persistence.Unscoped(), "dup-sn-delete", 1)).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "dup-sn-delete", 1, 10, 100)
-	require.NoError(t, err)
-	require.Len(t, replayed, 1, "deleting up to SequenceNumber 1 must leave exactly the surviving event, not a residual duplicate")
-	assert.EqualValues(t, 2, replayed[0].GetSequenceNumber())
+			replayed, err := store.ReplayEvents(bg, persistence.Unscoped(), "dup-sn-delete", 1, 10, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			// deleting up to SequenceNumber 1 must leave exactly the surviving event, not a residual duplicate
+			ctx.Expect(len(replayed)).ToEqual(1)
+			ctx.Expect(replayed[0].GetSequenceNumber()).ToEqual(uint64(2))
+		})
+	})
 }
 
 func TestEventStore_WriteEvents_ConditionalBatchMustShareOnePersistenceID(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.WriteEvents with a conditional batch", func(s *specs.Spec) {
+		s.It("must share one persistence id", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	mixed := append(newAccountEvent(t, "batch-a", 1), newAccountEvent(t, "batch-b", 1)...)
+			mixed := append(newAccountEvent(ctx.T, "batch-a", 1), newAccountEvent(ctx.T, "batch-b", 1)...)
 
-	err := store.WriteEvents(ctx, persistence.Unscoped(), mixed, persistence.ExpectGenesis())
-	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
+			err := store.WriteEvents(bg, persistence.Unscoped(), mixed, persistence.ExpectGenesis())
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrPreconditionScope))
 
-	err = store.WriteEvents(ctx, persistence.Unscoped(), nil, persistence.ExpectGenesis())
-	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
+			err = store.WriteEvents(bg, persistence.Unscoped(), nil, persistence.ExpectGenesis())
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrPreconditionScope))
+		})
+	})
 }
