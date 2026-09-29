@@ -2,7 +2,10 @@
 # The Go version comes from .go-version (see go-setup). Nothing here pins it by hand.
 #
 # Tests in the docker/buildx style:
-#   plan        -> are tests needed? + splits the packages into TEST_SHARDS using real timings
+#   plan        -> are tests needed? + splits the packages into shards using real timings
+#                  (.github/scripts/test-matrix.sh): regular packages go whole into TEST_SHARDS
+#                  shards; a package slower than SPLIT_THRESHOLD is split by test into several
+#                  shards, so one slow package cannot dominate the wall time
 #   test (N)    -> each shard on its own runner, in parallel
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
@@ -30,7 +33,9 @@ permissions:
 
 env:
   COVERAGE_MIN: "0"       # minimum total coverage %. 0 = report only. Raise it once there is a baseline.
-  TEST_SHARDS: "3"        # parallel runners for the tests. 1 = no shards.
+  TEST_SHARDS: "2"        # parallel runners for the regular (not split) packages. 1 = no shards.
+  SPLIT_THRESHOLD: "90"   # seconds. A package slower than this (by real timings) is split by test.
+  SPLIT_TARGET: "90"      # seconds. Aimed duration of each shard of a split package.
   TESTFLAGS: "-timeout=20m"
   GOTESTSUM_VERSION: "v1.13.0"
 
@@ -83,7 +88,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       go: ${{ steps.changes.outputs.go || 'true' }}
-      matrix: ${{ steps.matrix.outputs.matrix || '{"include":[{"id":0,"packages":"./..."}]}' }}
+      matrix: ${{ steps.matrix.outputs.matrix || '{"include":[{"id":0,"packages":"./...","run":""}]}' }}
     steps:
       - uses: actions/checkout@v7
       # PRs that only touch docs/CHANGELOG/templates do not run tests (the automatic
@@ -115,13 +120,13 @@ jobs:
           go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
           mkdir -p .test-timings
           echo "Timings available: $(ls .test-timings | wc -l) file(s)"
-          matrix=$(go list ./... | gotestsum tool ci-matrix --partitions "$TEST_SHARDS" --timing-files '.test-timings/*.json')
+          matrix=$(.github/scripts/test-matrix.sh)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           {
             echo "### Test shards"
-            echo "| Shard | Estimated | Packages |"
-            echo "|---|---|---|"
-            jq -r '.include[] | "| \(.id) | \(.estimatedRuntime) | \(.packages | split(" ") | length) |"' <<<"$matrix"
+            echo "| Shard | Estimated | Packages | Tests |"
+            echo "|---|---|---|---|"
+            jq -r '.include[] | "| \(.id) | \(.estimatedRuntime) | \(.packages | split(" ") | length) | \(if .run == "" then "all" else "\(.run | split("|") | length) (split)" end) |"' <<<"$matrix"
           } >> "$GITHUB_STEP_SUMMARY"
 
   test:
@@ -141,12 +146,15 @@ jobs:
         env:
           PACKAGES: ${{ matrix.packages }}
           ID: ${{ matrix.id }}
+          RUN: ${{ matrix.run }}   # regex of top-level tests when the package is split; empty = all
         run: |
           mkdir -p reports
+          args=()
+          [ -z "$RUN" ] || args+=(-run "$RUN")
           # shellcheck disable=SC2086  # PACKAGES is a space-separated list
           gotestsum --format github-actions \
             --jsonfile "reports/test-$ID.json" --junitfile "reports/junit-$ID.xml" \
-            -- $TESTFLAGS -covermode=atomic -coverprofile="reports/coverage-$ID.out" $PACKAGES
+            -- $TESTFLAGS "${args[@]}" -covermode=atomic -coverprofile="reports/coverage-$ID.out" $PACKAGES
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
@@ -172,6 +180,8 @@ jobs:
         run: |
           go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
           ls reports/coverage-*.out >/dev/null 2>&1 || { echo "::error::No shard produced coverage"; exit 1; }
+          # A split package has one profile per shard with the same blocks: `go tool cover`
+          # sums the counts of duplicated blocks, so plain concatenation is enough.
           { echo "mode: atomic"; tail -q -n +2 reports/coverage-*.out; } > coverage.out
           go tool cover -html=coverage.out -o coverage.html
           total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
@@ -203,7 +213,8 @@ jobs:
       # Timings to split the shards better on the next run.
       # Saved from develop (visible to every PR) and from each PR (for its re-runs).
       - name: Save timings
-        run: mkdir -p .test-timings && cp reports/test-*.json .test-timings/
+        # Only this run's files: test-matrix.sh sums the package times across files.
+        run: rm -rf .test-timings && mkdir -p .test-timings && cp reports/test-*.json .test-timings/
       - uses: actions/cache/save@v6
         with:
           path: .test-timings
