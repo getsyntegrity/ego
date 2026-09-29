@@ -229,9 +229,9 @@ func TestSpawnDependency(t *testing.T) {
 			kind     string
 		}{
 			{"nil", nil, "<nil>"},
-			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*engine.AccountEventSourcedBehavior"},
+			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*enginetest.AccountEventSourcedBehavior"},
 			{"typed-nil domain-only event-sourced", (*domainOnlyEventSourced)(nil), "*engine.domainOnlyEventSourced"},
-			{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*engine.AccountDurableStateBehavior"},
+			{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*enginetest.AccountDurableStateBehavior"},
 			{"typed-nil domain-only durable state", (*domainOnlyDurableState)(nil), "*engine.domainOnlyDurableState"},
 			{"typed-nil serializable saga", (*testSagaBehavior)(nil), "*engine.testSagaBehavior"},
 			{"typed-nil domain-only saga", (*domainOnlySaga)(nil), "*engine.domainOnlySaga"},
@@ -336,18 +336,18 @@ func TestBehaviorPlacementError(t *testing.T) {
 
 func TestBehaviorFrom(t *testing.T) {
 	pointer := NewAccountEventSourcedBehavior("acct-1")
-	got, ok := behaviorFrom[behaviorport.EventSourced](pointer)
+	got, ok := extensions.BehaviorFrom[behaviorport.EventSourced](pointer)
 	require.True(t, ok)
 	assert.Same(t, pointer, got.(*AccountEventSourcedBehavior))
 
 	domainOnly := &domainOnlyDurableState{id: "ds-1"}
-	gotDS, ok := behaviorFrom[behaviorport.DurableState](extensions.NewLocalBehavior(domainOnly))
+	gotDS, ok := extensions.BehaviorFrom[behaviorport.DurableState](extensions.NewLocalBehavior(domainOnly))
 	require.True(t, ok)
 	assert.Same(t, domainOnly, gotDS.(*domainOnlyDurableState))
 
-	_, ok = behaviorFrom[behaviorport.EventSourced](extensions.NewLocalBehavior(domainOnly))
+	_, ok = extensions.BehaviorFrom[behaviorport.EventSourced](extensions.NewLocalBehavior(domainOnly))
 	assert.False(t, ok, "a wrapped behavior of another family must not match")
-	_, ok = behaviorFrom[behaviorport.Saga](extensions.NewEntityConfig(1))
+	_, ok = extensions.BehaviorFrom[behaviorport.Saga](extensions.NewEntityConfig(1))
 	assert.False(t, ok)
 }
 

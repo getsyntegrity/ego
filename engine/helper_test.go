@@ -25,21 +25,16 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/emptypb"
 
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine
@@ -85,349 +80,6 @@ func (m *mockClusterProvider) Deregister() error                { return nil }
 func (m *mockClusterProvider) DiscoverPeers() ([]string, error) { return m.peers, nil }
 func (m *mockClusterProvider) Close() error                     { return nil }
 
-// AccountEventSourcedBehavior implements EventSourcedBehavior
-type AccountEventSourcedBehavior struct {
-	id string
-}
-
-// enforces compilation error
-var _ EventSourcedBehavior = (*AccountEventSourcedBehavior)(nil)
-
-func NewAccountEventSourcedBehavior(id string) *AccountEventSourcedBehavior {
-	return &AccountEventSourcedBehavior{id: id}
-}
-func (x *AccountEventSourcedBehavior) ID() string {
-	return x.id
-}
-
-func (x *AccountEventSourcedBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (x *AccountEventSourcedBehavior) HandleCommand(_ context.Context, command Command, _ State) (events []Event, err error) {
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return []Event{
-			&testpb.AccountCreated{
-				AccountId:      x.id,
-				AccountBalance: cmd.GetAccountBalance(),
-			},
-		}, nil
-
-	case *testpb.CreditAccount:
-		if cmd.GetAccountId() == x.id {
-			return []Event{
-				&testpb.AccountCredited{
-					AccountId:      cmd.GetAccountId(),
-					AccountBalance: cmd.GetBalance(),
-				},
-			}, nil
-		}
-
-		return nil, errors.New("command sent to the wrong entity")
-
-	case *testpb.TestNoEvent:
-		return nil, nil
-
-	case *emptypb.Empty:
-		return []Event{new(emptypb.Empty)}, nil
-
-	default:
-		return nil, errors.New("unhandled command")
-	}
-}
-
-func (x *AccountEventSourcedBehavior) HandleEvent(_ context.Context, event Event, priorState State) (state State, err error) {
-	switch evt := event.(type) {
-	case *testpb.AccountCreated:
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: evt.GetAccountBalance(),
-		}, nil
-
-	case *testpb.AccountCredited:
-		account := priorState.(*testpb.Account)
-		bal := account.GetAccountBalance() + evt.GetAccountBalance()
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: bal,
-		}, nil
-
-	default:
-		return nil, errors.New("unhandled event")
-	}
-}
-
-func (x *AccountEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
-	serializable := struct {
-		ID string `json:"id"`
-	}{
-		ID: x.id,
-	}
-	return json.Marshal(serializable)
-}
-
-func (x *AccountEventSourcedBehavior) UnmarshalBinary(data []byte) error {
-	serializable := struct {
-		ID string `json:"id"`
-	}{}
-
-	if err := json.Unmarshal(data, &serializable); err != nil {
-		return err
-	}
-
-	x.id = serializable.ID
-	return nil
-}
-
-type AccountDurableStateBehavior struct {
-	id string
-}
-
-// enforces compilation error
-var _ DurableStateBehavior = (*AccountDurableStateBehavior)(nil)
-
-func NewAccountDurableStateBehavior(id string) *AccountDurableStateBehavior {
-	return &AccountDurableStateBehavior{id: id}
-}
-
-func (x *AccountDurableStateBehavior) ID() string {
-	return x.id
-}
-
-func (x *AccountDurableStateBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-// nolint
-func (x *AccountDurableStateBehavior) HandleCommand(ctx context.Context, command Command, priorVersion uint64, priorState State) (newState State, newVersion uint64, err error) {
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return &testpb.Account{
-			AccountId:      x.id,
-			AccountBalance: cmd.GetAccountBalance(),
-		}, priorVersion + 1, nil
-
-	case *testpb.CreditAccount:
-		if cmd.GetAccountId() == x.id {
-			account := priorState.(*testpb.Account)
-			bal := account.GetAccountBalance() + cmd.GetBalance()
-
-			return &testpb.Account{
-				AccountId:      cmd.GetAccountId(),
-				AccountBalance: bal,
-			}, priorVersion + 1, nil
-		}
-
-		return nil, 0, errors.New("command sent to the wrong entity")
-
-	default:
-		return nil, 0, errors.New("unhandled command")
-	}
-}
-
-func (x *AccountDurableStateBehavior) MarshalBinary() (data []byte, err error) {
-	serializable := struct {
-		ID string `json:"id"`
-	}{
-		ID: x.id,
-	}
-	return json.Marshal(serializable)
-}
-
-func (x *AccountDurableStateBehavior) UnmarshalBinary(data []byte) error {
-	serializable := struct {
-		ID string `json:"id"`
-	}{}
-
-	if err := json.Unmarshal(data, &serializable); err != nil {
-		return err
-	}
-
-	x.id = serializable.ID
-	return nil
-}
-
-// tenancyProbeEventSourcedBehavior is a minimal EventSourcedBehavior that
-// records, from inside a real HandleCommand invocation, how many times it
-// was called and the ctx it was called with. Tests use it to prove (rather
-// than infer) that a TenantContext resolved and attached at the trust
-// boundary reaches domain code unchanged via tenancy.From, and that the
-// pre-handler gate prevents HandleCommand from ever running when no
-// TenantContext is attached.
-type tenancyProbeEventSourcedBehavior struct {
-	id string
-
-	mu          sync.Mutex
-	invocations int
-	lastCtx     context.Context
-}
-
-var _ EventSourcedBehavior = (*tenancyProbeEventSourcedBehavior)(nil)
-
-func newTenancyProbeEventSourcedBehavior(id string) *tenancyProbeEventSourcedBehavior {
-	return &tenancyProbeEventSourcedBehavior{id: id}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) ID() string {
-	return x.id
-}
-
-func (x *tenancyProbeEventSourcedBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (x *tenancyProbeEventSourcedBehavior) HandleCommand(ctx context.Context, command Command, _ State) (events []Event, err error) {
-	x.mu.Lock()
-	x.invocations++
-	x.lastCtx = ctx
-	x.mu.Unlock()
-
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return []Event{
-			&testpb.AccountCreated{
-				AccountId:      x.id,
-				AccountBalance: cmd.GetAccountBalance(),
-			},
-		}, nil
-	case *testpb.TestNoEvent:
-		// A genuinely idempotent no-op: no error, zero events. Used by the
-		// Blocker 3 cross-tenant batch-leak regression test, which needs a
-		// command that would otherwise reach processAndBatch's
-		// len(events)==0 reply path without ever erroring out first.
-		return nil, nil
-	default:
-		return nil, errors.New("unhandled command")
-	}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) HandleEvent(_ context.Context, event Event, _ State) (state State, err error) {
-	switch evt := event.(type) {
-	case *testpb.AccountCreated:
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: evt.GetAccountBalance(),
-		}, nil
-	default:
-		return nil, errors.New("unhandled event")
-	}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *tenancyProbeEventSourcedBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-// invocationCount reports how many times HandleCommand has run so far.
-func (x *tenancyProbeEventSourcedBehavior) invocationCount() int {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.invocations
-}
-
-// observedTenant returns the tenancy.TenantContext bound to the ctx of the
-// most recent HandleCommand invocation, if any.
-func (x *tenancyProbeEventSourcedBehavior) observedTenant() (tenancy.TenantContext, bool) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if x.lastCtx == nil {
-		return tenancy.TenantContext{}, false
-	}
-	return tenancy.From(x.lastCtx)
-}
-
-// tenancyProbeDurableStateBehavior is the DurableStateBehavior counterpart of
-// tenancyProbeEventSourcedBehavior, used for the same purpose against
-// DurableStateActor's processCommand gate.
-type tenancyProbeDurableStateBehavior struct {
-	id string
-
-	mu          sync.Mutex
-	invocations int
-	lastCtx     context.Context
-}
-
-var _ DurableStateBehavior = (*tenancyProbeDurableStateBehavior)(nil)
-
-func newTenancyProbeDurableStateBehavior(id string) *tenancyProbeDurableStateBehavior {
-	return &tenancyProbeDurableStateBehavior{id: id}
-}
-
-func (x *tenancyProbeDurableStateBehavior) ID() string {
-	return x.id
-}
-
-func (x *tenancyProbeDurableStateBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-// nolint
-func (x *tenancyProbeDurableStateBehavior) HandleCommand(ctx context.Context, command Command, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
-	x.mu.Lock()
-	x.invocations++
-	x.lastCtx = ctx
-	x.mu.Unlock()
-
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return &testpb.Account{
-			AccountId:      x.id,
-			AccountBalance: cmd.GetAccountBalance(),
-		}, priorVersion + 1, nil
-	default:
-		return nil, 0, errors.New("unhandled command")
-	}
-}
-
-func (x *tenancyProbeDurableStateBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *tenancyProbeDurableStateBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-// invocationCount reports how many times HandleCommand has run so far.
-func (x *tenancyProbeDurableStateBehavior) invocationCount() int {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.invocations
-}
-
-// observedTenant returns the tenancy.TenantContext bound to the ctx of the
-// most recent HandleCommand invocation, if any.
-func (x *tenancyProbeDurableStateBehavior) observedTenant() (tenancy.TenantContext, bool) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if x.lastCtx == nil {
-		return tenancy.TenantContext{}, false
-	}
-	return tenancy.From(x.lastCtx)
-}
-
-// testSagaBehavior implements SagaBehavior for testing
 type testSagaBehavior struct {
 	sagaID   string
 	entityID string
@@ -487,82 +139,32 @@ func (s *testSagaBehavior) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// callbackSagaBehavior is a configurable SagaBehavior for testing
-// that delegates each method to a user-supplied function field.
-type callbackSagaBehavior struct {
-	id           string
-	initialState func() State
-	handleEvent  func(ctx context.Context, event Event, state State) (*SagaAction, error)
-	handleResult func(ctx context.Context, entityID string, result State, sagaState State) (*SagaAction, error)
-	handleError  func(ctx context.Context, entityID string, err error, sagaState State) (*SagaAction, error)
-	applyEvent   func(ctx context.Context, event Event, state State) (State, error)
-	compensate   func(ctx context.Context, state State) ([]SagaCommand, error)
-}
-
-var _ SagaBehavior = (*callbackSagaBehavior)(nil)
-
-func (c *callbackSagaBehavior) ID() string { return c.id }
-
-func (c *callbackSagaBehavior) InitialState() State {
-	if c.initialState != nil {
-		return c.initialState()
-	}
-	return new(samplepb.Account)
-}
-
-func (c *callbackSagaBehavior) HandleEvent(ctx context.Context, event Event, state State) (*SagaAction, error) {
-	if c.handleEvent != nil {
-		return c.handleEvent(ctx, event, state)
-	}
-	return &SagaAction{}, nil
-}
-
-func (c *callbackSagaBehavior) HandleResult(ctx context.Context, entityID string, result State, sagaState State) (*SagaAction, error) {
-	if c.handleResult != nil {
-		return c.handleResult(ctx, entityID, result, sagaState)
-	}
-	return &SagaAction{Complete: true}, nil
-}
-
-func (c *callbackSagaBehavior) HandleError(ctx context.Context, entityID string, err error, sagaState State) (*SagaAction, error) {
-	if c.handleError != nil {
-		return c.handleError(ctx, entityID, err, sagaState)
-	}
-	return &SagaAction{Compensate: true}, nil
-}
-
-func (c *callbackSagaBehavior) ApplyEvent(ctx context.Context, event Event, state State) (State, error) {
-	if c.applyEvent != nil {
-		return c.applyEvent(ctx, event, state)
-	}
-	return state, nil
-}
-
-func (c *callbackSagaBehavior) Compensate(ctx context.Context, state State) ([]SagaCommand, error) {
-	if c.compensate != nil {
-		return c.compensate(ctx, state)
-	}
-	return nil, nil
-}
-
-func (c *callbackSagaBehavior) MarshalBinary() ([]byte, error) {
-	return json.Marshal(c.id)
-}
-
-func (c *callbackSagaBehavior) UnmarshalBinary(data []byte) error {
-	return json.Unmarshal(data, &c.id)
-}
-
-// simpleReplyActor is a test actor that responds to any message with a fixed reply.
-type simpleReplyActor struct {
-	reply proto.Message
-}
-
-var _ goakt.Actor = (*simpleReplyActor)(nil)
-
-func (a *simpleReplyActor) PreStart(_ *goakt.Context) error   { return nil }
-func (a *simpleReplyActor) PostStop(_ *goakt.Context) error   { return nil }
-func (a *simpleReplyActor) Receive(ctx *goakt.ReceiveContext) { ctx.Response(a.reply) }
-
 // ensure time is used
 var _ = time.Second
+
+// The event sourced fixtures live in enginetest so that the actor packages
+// share one definition with these tests.
+type (
+	AccountEventSourcedBehavior      = enginetest.AccountEventSourcedBehavior
+	tenancyProbeEventSourcedBehavior = enginetest.TenancyProbeEventSourcedBehavior
+)
+
+var (
+	NewAccountEventSourcedBehavior      = enginetest.NewAccountEventSourcedBehavior
+	newTenancyProbeEventSourcedBehavior = enginetest.NewTenancyProbeEventSourcedBehavior
+)
+
+type FailingHandleEventBehavior = enginetest.FailingHandleEventBehavior
+
+var (
+	newEnvelopeCapturingEventSourcedBehavior = enginetest.NewEnvelopeCapturingEventSourcedBehavior
+)
+
+type AccountDurableStateBehavior = enginetest.AccountDurableStateBehavior
+
+var (
+	NewAccountDurableStateBehavior      = enginetest.NewAccountDurableStateBehavior
+	newTenancyProbeDurableStateBehavior = enginetest.NewTenancyProbeDurableStateBehavior
+)
+
+var newEnvelopeCapturingDurableStateBehavior = enginetest.NewEnvelopeCapturingDurableStateBehavior

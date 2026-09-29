@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
@@ -215,7 +216,7 @@ func TestWithEventStream_UsesTheGivenStream(t *testing.T) {
 	require.NoError(t, engine.Start(ctx))
 	subscriber, err := engine.Subscribe()
 	require.NoError(t, err)
-	assert.Equal(t, 1, stream.SubscribersCount(eventsTopic), "Subscribe must register on the given stream")
+	assert.Equal(t, 1, stream.SubscribersCount(protocol.EventsTopic), "Subscribe must register on the given stream")
 	subscriber.Shutdown()
 
 	require.NoError(t, engine.Stop(ctx))
