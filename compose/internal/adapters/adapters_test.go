@@ -25,9 +25,10 @@ package adapters_test
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/compose/internal/adapters"
 	"github.com/getsyntegrity/ego/port/adapter"
@@ -88,20 +89,19 @@ func (b *both) Describe() adapter.Descriptor {
 // Each value is started, then probed, before the next one, in order;
 // values without Start or Ping are skipped for that call.
 func TestStartAndProbe_StartsThenPingsEachInOrder(t *testing.T) {
-	rec := &recorder{}
-	owned := []adapters.Owned{
-		{Kind: "events publisher", ID: "a", Value: &both{name: "a", rec: rec}},
-		{Kind: "events publisher", ID: "b", Value: plain{}},
-		{Kind: "events publisher", ID: "c", Value: &starter{name: "c", rec: rec}},
-		{Kind: "state publisher", ID: "d", Value: &pinger{name: "d", rec: rec}},
-	}
-	if err := adapters.StartAndProbe(context.Background(), owned); err != nil {
-		t.Fatalf("StartAndProbe = %v, want nil", err)
-	}
-	want := []string{"start a", "ping a", "start c", "ping d"}
-	if !slices.Equal(rec.calls, want) {
-		t.Fatalf("calls = %v, want %v", rec.calls, want)
-	}
+	specs.Describe(t, "StartAndProbe starts and then probes each value in order, skipping absent methods", func(s *specs.Spec) {
+		s.It("calls Start then Ping on each value that has them", func(ctx *specs.Context) {
+			rec := &recorder{}
+			owned := []adapters.Owned{
+				{Kind: "events publisher", ID: "a", Value: &both{name: "a", rec: rec}},
+				{Kind: "events publisher", ID: "b", Value: plain{}},
+				{Kind: "events publisher", ID: "c", Value: &starter{name: "c", rec: rec}},
+				{Kind: "state publisher", ID: "d", Value: &pinger{name: "d", rec: rec}},
+			}
+			ctx.Expect(adapters.StartAndProbe(context.Background(), owned)).To(specs.BeNil())
+			ctx.Expect(rec.calls).ToEqual([]string{"start a", "ping a", "start c", "ping d"})
+		})
+	})
 }
 
 // The first failure stops the loop: later values are neither started nor
@@ -110,83 +110,82 @@ func TestStartAndProbe_StartsThenPingsEachInOrder(t *testing.T) {
 // caller's job.
 func TestStartAndProbe_StopsAtFirstFailure(t *testing.T) {
 	boom := errors.New("dial refused")
+	// second builds the failing value around the case's own recorder, so a
+	// case shares no state with another.
 	cases := []struct {
 		name     string
-		second   any
+		second   func(rec *recorder) any
 		wantErr  []string
 		wantCall []string
 	}{
 		{
 			name:     "start fails, undeclared",
-			second:   &starter{name: "b", err: boom},
+			second:   func(rec *recorder) any { return &starter{name: "b", rec: rec, err: boom} },
 			wantErr:  []string{"start", `events publisher "b"`},
 			wantCall: []string{"start a", "ping a", "start b"},
 		},
 		{
 			name:     "ping fails, undeclared",
-			second:   &pinger{name: "b", err: boom},
+			second:   func(rec *recorder) any { return &pinger{name: "b", rec: rec, err: boom} },
 			wantErr:  []string{"ping", `events publisher "b"`},
 			wantCall: []string{"start a", "ping a", "ping b"},
 		},
 		{
 			name:     "start fails, declared",
-			second:   &both{name: "b", startErr: boom},
+			second:   func(rec *recorder) any { return &both{name: "b", rec: rec, startErr: boom} },
 			wantErr:  []string{"start", `events publisher "b"`, `"fake-broker"`},
 			wantCall: []string{"start a", "ping a", "start b"},
 		},
 		{
 			name:     "ping fails after start, declared",
-			second:   &both{name: "b", pingErr: boom},
+			second:   func(rec *recorder) any { return &both{name: "b", rec: rec, pingErr: boom} },
 			wantErr:  []string{"ping", `events publisher "b"`, `"fake-broker"`},
 			wantCall: []string{"start a", "ping a", "start b", "ping b"},
 		},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rec := &recorder{}
-			switch v := c.second.(type) {
-			case *starter:
-				v.rec = rec
-			case *pinger:
-				v.rec = rec
-			case *both:
-				v.rec = rec
-			}
-			owned := []adapters.Owned{
-				{Kind: "events publisher", ID: "a", Value: &both{name: "a", rec: rec}},
-				{Kind: "events publisher", ID: "b", Value: c.second},
-				{Kind: "events publisher", ID: "c", Value: &both{name: "c", rec: rec}},
-			}
-			err := adapters.StartAndProbe(context.Background(), owned)
-			if !errors.Is(err, boom) {
-				t.Fatalf("StartAndProbe = %v, want it to wrap %v", err, boom)
-			}
-			for _, s := range c.wantErr {
-				if !strings.Contains(err.Error(), s) {
-					t.Errorf("error %q does not mention %q", err, s)
+	specs.Describe(t, "StartAndProbe stops at the first failure and names the failing value", func(s *specs.Spec) {
+		for _, c := range cases {
+			s.It(c.name, func(ctx *specs.Context) {
+				rec := &recorder{}
+				owned := []adapters.Owned{
+					{Kind: "events publisher", ID: "a", Value: &both{name: "a", rec: rec}},
+					{Kind: "events publisher", ID: "b", Value: c.second(rec)},
+					{Kind: "events publisher", ID: "c", Value: &both{name: "c", rec: rec}},
 				}
-			}
-			if strings.Contains(err.Error(), `"c"`) {
-				t.Errorf("error %q names a value after the failing one", err)
-			}
-			if !slices.Equal(rec.calls, c.wantCall) {
-				t.Fatalf("calls = %v, want %v", rec.calls, c.wantCall)
-			}
-		})
-	}
+				err := adapters.StartAndProbe(context.Background(), owned)
+				ctx.Expect(err).To(specs.MatchError(boom))
+
+				// The old loop named the missing string in its message; an
+				// expectation carries none, so collect the offenders instead.
+				var missing []string
+				for _, want := range c.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						missing = append(missing, want)
+					}
+				}
+				ctx.Expect(missing).To(specs.BeNil())
+				ctx.Expect(err.Error()).To(specs.Not(specs.Contain(`"c"`)))
+				ctx.Expect(rec.calls).ToEqual(c.wantCall)
+			})
+		}
+	})
 }
 
 // A typed-nil value implements nothing (adapter.StarterOf and PingerOf
 // report it absent), so it is skipped instead of panicking.
 func TestStartAndProbe_SkipsTypedNil(t *testing.T) {
-	owned := []adapters.Owned{{Kind: "events publisher", ID: "nil", Value: (*both)(nil)}}
-	if err := adapters.StartAndProbe(context.Background(), owned); err != nil {
-		t.Fatalf("StartAndProbe = %v, want nil", err)
-	}
+	specs.Describe(t, "StartAndProbe skips a typed-nil value instead of panicking", func(s *specs.Spec) {
+		s.It("reports no error", func(ctx *specs.Context) {
+			owned := []adapters.Owned{{Kind: "events publisher", ID: "nil", Value: (*both)(nil)}}
+			ctx.Expect(adapters.StartAndProbe(context.Background(), owned)).To(specs.BeNil())
+		})
+	})
 }
 
 func TestStartAndProbe_Empty(t *testing.T) {
-	if err := adapters.StartAndProbe(context.Background(), nil); err != nil {
-		t.Fatalf("StartAndProbe(nil) = %v, want nil", err)
-	}
+	specs.Describe(t, "StartAndProbe accepts an empty list", func(s *specs.Spec) {
+		s.It("reports no error for nil", func(ctx *specs.Context) {
+			ctx.Expect(adapters.StartAndProbe(context.Background(), nil)).To(specs.BeNil())
+		})
+	})
 }
