@@ -117,6 +117,13 @@ type SagaActor struct {
 
 var _ goakt.Actor = (*SagaActor)(nil)
 
+// newSagaActor returns a SagaActor for a local spawn, built with saga.New so
+// its stop channel exists before PreStart, as it did before the saga actor
+// moved to internal/engine/saga.
+func newSagaActor() *SagaActor {
+	return &SagaActor{impl: *saga.New()}
+}
+
 // PreStart loads extensions and dependencies, validates configuration, and
 // recovers the saga state from the events store.
 func (a *SagaActor) PreStart(ctx *goakt.Context) error {

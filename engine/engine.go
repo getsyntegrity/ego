@@ -1539,7 +1539,7 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 
 	sagaCfg := extensions.NewSagaConfig(timeout)
 	_ = actorSystem.Inject(sagaCfg)
-	actor := new(SagaActor)
+	actor := newSagaActor()
 
 	deps := []extension.Dependency{behaviorDep, sagaCfg}
 	if tenantScope != nil {

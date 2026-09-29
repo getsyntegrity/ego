@@ -141,12 +141,6 @@ func New() *Actor {
 
 // PreStart initializes the saga actor: loads stores, recovers state, subscribes to events.
 func (s *Actor) PreStart(ctx *goakt.Context) error {
-	// The engine's SagaActor wrapper spawns the zero value, so the channel is
-	// created here when New did not.
-	if s.stopCh == nil {
-		s.stopCh = make(chan struct{}, 1)
-	}
-
 	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
