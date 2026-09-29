@@ -259,5 +259,5 @@ jobs:
             echo "gh pr create --base main --head ${BRANCH} --title \"chore(publishers): update ego dependency to ${EGO_VERSION}\" --body \"${PR_BODY}\""
             echo '```'
             echo
-            echo "After this PR is merged to main, dispatch \`.github/workflows/release-publishers.yml\` (workflow_dispatch) with the merge commit SHA and ego version \`${EGO_VERSION}\` to tag and release the publishers."
+            echo "After this PR is merged to main, dispatch \`.github/workflows/release-publishers.yml\` (workflow_dispatch) with the SHA of a commit on main that contains this bump, requires ego \`${EGO_VERSION}\` and has a green build.yml run for that same SHA (usually the merge commit), and ego version \`${EGO_VERSION}\`, to tag and release the publishers."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1348,8 +1348,13 @@ always selects the full suite anyway.
   **Stage 3 — the dispatched `release-publishers.yml` continuation.**
   Once the bump PR is merged, someone with repository access manually
   dispatches `.github/workflows/release-publishers.yml`
-  (`workflow_dispatch`) with four inputs: `sha` (the merge commit on
-  `main`), `ego_version` (the root tag the publishers must require, e.g.
+  (`workflow_dispatch`) with four inputs: `sha` (a commit on `main` that
+  contains the bump of the four publishers, requires the root at
+  `ego_version`, and has a green `build.yml` run for that same SHA — usually
+  the bump PR's merge commit, but a later commit of `main` that still meets
+  all three conditions is equally valid: the first release tagged the
+  publishers at `b0b00de`, a descendant of the bump merge `7263968`, because
+  `main` was red at `7263968` until #179 fixed it), `ego_version` (the root tag the publishers must require, e.g.
   `v4.0.0`), `bump` (`patch`/`minor`/`major`, default `minor`: an
   untagged publisher starts from `v0.0.0`, so the first release is
   `v0.1.0`, never `v0.0.1`; pass `patch` explicitly for a later fix
