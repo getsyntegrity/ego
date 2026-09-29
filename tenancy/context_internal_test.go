@@ -32,31 +32,37 @@ package tenancy
 
 import (
 	"context"
-	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestRequire_RejectsInvalidTenantContextEvenIfSomehowBound(t *testing.T) {
-	// Bypasses Attach entirely: simulates a bound-but-invalid TenantContext
-	// reaching Require despite Attach's own rejection, e.g. a future
-	// refactor that binds via context.WithValue directly.
-	var zero TenantContext
-	ctx := context.WithValue(context.Background(), tenantContextKey, zero)
+	specs.Describe(t, "Require rejects an invalid TenantContext on its own", func(s *specs.Spec) {
+		s.It("fails with ErrInvalid for a zero value bound without Attach", func(ctx *specs.Context) {
+			// Bypasses Attach entirely: simulates a bound-but-invalid TenantContext
+			// reaching Require despite Attach's own rejection, e.g. a future
+			// refactor that binds via context.WithValue directly.
+			var zero TenantContext
+			bound := context.WithValue(context.Background(), tenantContextKey, zero)
 
-	_, err := Require(ctx)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrInvalid))
+			_, err := Require(bound)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(ErrInvalid))
+		})
+	})
 }
 
 func TestRequire_AcceptsValidTenantContextBoundDirectly(t *testing.T) {
-	tc, err := NewTenantContext("acme-corp")
-	require.NoError(t, err)
-	ctx := context.WithValue(context.Background(), tenantContextKey, tc)
+	specs.Describe(t, "Require accepts a valid TenantContext bound without Attach", func(s *specs.Spec) {
+		s.It("returns the bound context", func(ctx *specs.Context) {
+			tc, err := NewTenantContext("acme-corp")
+			ctx.Expect(err).To(specs.BeNil())
+			bound := context.WithValue(context.Background(), tenantContextKey, tc)
 
-	got, err := Require(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, tc, got)
+			got, err := Require(bound)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(tc)
+		})
+	})
 }
