@@ -62,7 +62,9 @@ Assertions:
   failure of a case; that is expected, not a lost check.
 - Expectations take no custom message. When an old loop identified the failing input in its testify
   message (`"must parse: %s"`), make each input its own `It`, named by that input, so a failure still says
-  which one broke. The case count goes up; say so in the PR.
+  which one broke. The case count goes up; say so in the PR. When the inputs cannot become cases (a
+  thousand random values), collect the offending ones and expect the collection to be empty
+  (`ctx.Expect(duplicates).To(specs.BeNil())`), so the failure prints them.
 
 Setup and teardown: `s.BeforeEach` / `s.AfterEach` per case. Nested `AfterEach` hooks run innermost scope
 first, last registered first within a scope. `ctx.T` is the case's `*testing.T`, so `ctx.T.TempDir()`,
