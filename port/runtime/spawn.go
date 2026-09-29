@@ -26,7 +26,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine

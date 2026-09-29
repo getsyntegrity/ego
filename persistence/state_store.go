@@ -25,7 +25,7 @@ package persistence
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/egopb"
 )
 
 // StateStore defines the API to interact with the durable state store

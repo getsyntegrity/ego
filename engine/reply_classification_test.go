@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 func TestClassifierRegistrySentinelsDoNotPrefixEachOther(t *testing.T) {

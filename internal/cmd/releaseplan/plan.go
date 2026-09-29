@@ -33,11 +33,15 @@ import (
 // tag releaseplan computed for it, and the released module paths it
 // requires (already ordered before it).
 type PlanModule struct {
-	Dir        string   `json:"dir"`
-	Path       string   `json:"path"`
-	CurrentTag string   `json:"currentTag,omitempty"`
-	NextTag    string   `json:"nextTag"`
-	Requires   []string `json:"requires"`
+	Dir        string `json:"dir"`
+	Path       string `json:"path"`
+	CurrentTag string `json:"currentTag,omitempty"`
+	NextTag    string `json:"nextTag"`
+	// IgnoredTags are existing tags under this module's prefix whose major
+	// is not legal for its path (they belong to another major or module
+	// path); they were not used to compute NextTag.
+	IgnoredTags []string `json:"ignoredTags,omitempty"`
+	Requires    []string `json:"requires"`
 }
 
 // Plan is the whole release plan: every released module, in release
@@ -77,17 +81,18 @@ func buildPlan(g *Graph, releaseDirs []string, tags []string, bumpKind string) (
 			}
 		}
 
-		currentTag, next, err := nextTag(dir, mod.Path, tags, bumpKind)
+		currentTag, next, ignored, err := nextTagDetailed(dir, mod.Path, tags, bumpKind)
 		if err != nil {
 			return Plan{}, err
 		}
 
 		modules = append(modules, PlanModule{
-			Dir:        dir,
-			Path:       mod.Path,
-			CurrentTag: currentTag,
-			NextTag:    tagPrefix(dir) + next.String(),
-			Requires:   requires,
+			Dir:         dir,
+			Path:        mod.Path,
+			CurrentTag:  currentTag,
+			NextTag:     tagPrefix(dir) + next.String(),
+			IgnoredTags: ignored,
+			Requires:    requires,
 		})
 	}
 
@@ -148,6 +153,12 @@ func renderSummary(plan Plan) string {
 			requires = strings.Join(m.Requires, ", ")
 		}
 		fmt.Fprintf(&b, "| %d | `%s` | `%s` | `%s` | `%s` | %s |\n", i+1, m.Dir, m.Path, current, m.NextTag, requires)
+	}
+	for _, m := range plan.Modules {
+		if len(m.IgnoredTags) > 0 {
+			fmt.Fprintf(&b, "\nIgnored for `%s`: `%s` (belongs to another major or module path, not legal for `%s`).\n",
+				m.Dir, strings.Join(m.IgnoredTags, "`, `"), m.Path)
+		}
 	}
 	return b.String()
 }

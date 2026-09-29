@@ -35,8 +35,8 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // newLoggerAdapter wraps a kit-logger Logger for GoAkt the same way

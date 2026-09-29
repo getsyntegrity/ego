@@ -41,12 +41,12 @@ import (
 // this list. An allowlist, rather than a denylist of GoAkt, also catches a
 // dependency nobody thought to forbid.
 var allowedDependencies = []string{
-	"github.com/getsyntegrity/ego/v4/command",
-	"github.com/getsyntegrity/ego/v4/tenancy",
-	"github.com/getsyntegrity/ego/v4/eventstream",
-	"github.com/getsyntegrity/ego/v4/port/behavior",
-	"github.com/getsyntegrity/ego/v4/internal/queue",
-	"github.com/getsyntegrity/ego/v4/internal/syncmap",
+	"github.com/getsyntegrity/ego/command",
+	"github.com/getsyntegrity/ego/tenancy",
+	"github.com/getsyntegrity/ego/eventstream",
+	"github.com/getsyntegrity/ego/port/behavior",
+	"github.com/getsyntegrity/ego/internal/queue",
+	"github.com/getsyntegrity/ego/internal/syncmap",
 	"github.com/google/uuid",
 	"go.uber.org/atomic",
 	"google.golang.org/protobuf/",
@@ -80,9 +80,9 @@ func TestRuntimeDependsOnlyOnContracts(t *testing.T) {
 // enginePackage is the engine package, the GoAkt adapter; goaktPrefix covers every
 // GoAkt package.
 const (
-	enginePackage = "github.com/getsyntegrity/ego/v4/engine"
+	enginePackage = "github.com/getsyntegrity/ego/engine"
 	goaktPrefix   = "github.com/tochemey/goakt/"
-	externalTests = "github.com/getsyntegrity/ego/v4/port/runtime_test"
+	externalTests = "github.com/getsyntegrity/ego/port/runtime_test"
 )
 
 // TestRuntimeTestClosureExcludesGoAktAndRoot walks the test build of

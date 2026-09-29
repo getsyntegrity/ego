@@ -38,11 +38,11 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/engine"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/tenancy"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // buildLegacyEventBytes constructs raw protobuf bytes for an Event that includes

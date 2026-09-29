@@ -58,6 +58,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	tagsFlag := fs.String("tags", "", "path to a file of existing tags, one per line; may be empty (required)")
 	bumpFlag := fs.String("bump", "patch", "version bump to apply: patch, minor or major")
 	outDirFlag := fs.String("out-dir", "", "directory to write plan.json and summary.md into (required)")
+	retiredFlag := fs.String("retired", "", "path to the list of retired tag names (scripts/ci/retired-tags.txt): planning refuses any retired tag, and refuses when one exists in -tags; optional")
 
 	// Publisher-tag-release continuation flags (issue #159 F4, task T3):
 	// none of these change default behavior when unset, and each reuses
@@ -68,12 +69,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	continuationCheckRequiredVersionFlag := fs.String("continuation-check-required-version", "", "continuation mode: for every directory in -release except the root ('.'), confirm its go.mod \"require\" line for the root module is exactly this version; reuses -repo-root and -release")
 	continuationPlanPublishersFlag := fs.Bool("continuation-plan-publishers", false, "continuation mode: compute next tags only for the directories in -release, which must exclude the root ('.') — it is tagged separately before this runs; reuses -repo-root, -release, -tags, -bump and -out-dir, writing plan.json/summary.md exactly like the default full release plan")
 	continuationCheckTagConflictsFlag := fs.String("continuation-check-tag-conflicts", "", "continuation mode: path to a combined local+origin tag list (e.g. output of \"git tag -l\" plus \"git ls-remote --tags origin\"); fails, naming every conflict, if any tag -continuation-plan-publishers computed already exists there. Requires -continuation-plan-publishers")
+	continuationCheckNotRetiredFlag := fs.String("continuation-check-not-retired", "", "continuation mode: refuse when this tag is in the -retired list (required with this flag), then exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *continuationCheckSHAFlag != "" || *continuationCheckVersionFlag != "" || *continuationCheckRequiredVersionFlag != "" ||
-		*continuationPlanPublishersFlag || *continuationCheckTagConflictsFlag != "" {
+		*continuationPlanPublishersFlag || *continuationCheckTagConflictsFlag != "" || *continuationCheckNotRetiredFlag != "" {
 		return runContinuation(continuationParams{
 			repoRoot:          *repoRootFlag,
 			release:           *releaseFlag,
@@ -85,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			checkRequiredVer:  *continuationCheckRequiredVersionFlag,
 			planPublishers:    *continuationPlanPublishersFlag,
 			checkTagConflicts: *continuationCheckTagConflictsFlag,
+			retired:           *retiredFlag,
+			checkNotRetired:   *continuationCheckNotRetiredFlag,
 		}, stdout, stderr)
 	}
 
@@ -119,6 +123,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	plan, err := buildPlan(graph, releaseDirs, tags, *bumpFlag)
 	if err != nil {
+		return err
+	}
+	if err := guardRetired(*retiredFlag, tags, plan.Modules); err != nil {
 		return err
 	}
 

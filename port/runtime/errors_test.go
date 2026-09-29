@@ -29,7 +29,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/port/runtime"
 )
 
 func TestErrUnsupportedWrapsStandardError(t *testing.T) {

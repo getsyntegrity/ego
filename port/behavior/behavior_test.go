@@ -30,8 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/port/behavior"
 )
 
 // The types below implement only ID() and the domain methods: no

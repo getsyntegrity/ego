@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/encryption"
+	"github.com/getsyntegrity/ego/encryption"
 )
 
 // testKeyStore is an in-memory key store for testing

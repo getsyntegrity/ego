@@ -40,7 +40,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/compose"
+	"github.com/getsyntegrity/ego/compose"
 )
 
 // DefaultShutdownTimeout bounds rollback and Stop when Config.ShutdownTimeout

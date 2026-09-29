@@ -35,9 +35,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/offsetstore"
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // eventsStoreSchemaDDL is the CREATE TABLE statement for events_store, kept

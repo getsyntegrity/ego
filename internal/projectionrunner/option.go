@@ -27,11 +27,11 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
-	"github.com/getsyntegrity/ego/v4/encryption"
-	"github.com/getsyntegrity/ego/v4/eventadapter"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
-	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/ego/eventadapter"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/instrumentation"
+	"github.com/getsyntegrity/ego/projection"
 )
 
 // Option is the interface that applies a configuration option.

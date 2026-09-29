@@ -36,10 +36,10 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/internal/logging"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/logging"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 // TenantAdopter and Migrator replay "everything" with two separate bounds,

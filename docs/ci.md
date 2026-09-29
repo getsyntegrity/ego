@@ -176,7 +176,7 @@ graph and computes:
   those, so one extra pass over the direct test-import edges is enough.
 
 This is why, for example, changing `internal/pause/pause.go` selects both
-`internal/pause` and the engine package `github.com/getsyntegrity/ego/v4/engine`: no
+`internal/pause` and the engine package `github.com/getsyntegrity/ego/engine`: no
 non-test file in `engine` imports `internal/pause` — only
 its `_test.go` files do — so `internal/pause` never appears in
 `R` via the build graph, but `engine` is still correctly pulled in
@@ -276,12 +276,12 @@ Each rule applies to one layer and checks the direct import edges of every packa
 A failure names the importer, the forbidden import and the rule, for example:
 
 ```text
-github.com/getsyntegrity/ego/v4/tenancy imports github.com/tochemey/goakt/v4/actor: rule contract-allowlist (design.md §3): ...
+github.com/getsyntegrity/ego/tenancy imports github.com/tochemey/goakt/v4/actor: rule contract-allowlist (design.md §3): ...
 ```
 
 The fix is almost always to depend on a contract package instead of the runtime. Do not add a baseline entry to silence a new violation.
 
-A module-cycle failure names the requiring module as the importer and the required module as the import, and its reason spells out the cycle, for example `requires github.com/getsyntegrity/ego/v4/contracts, which requires it back: github.com/getsyntegrity/ego/v4 -> github.com/getsyntegrity/ego/v4/contracts -> github.com/getsyntegrity/ego/v4`. The go toolchain accepts module cycles, and `ciselect` does not check for them (a cycle there would only widen a selection), so archcheck is where one fails the build. Likewise, Go does not stop a module from importing another in-repository module's `internal/` package, because every module here shares the root module's path prefix; `no-cross-module-internal` does.
+A module-cycle failure names the requiring module as the importer and the required module as the import, and its reason spells out the cycle, for example `requires github.com/getsyntegrity/ego/contracts, which requires it back: github.com/getsyntegrity/ego -> github.com/getsyntegrity/ego/contracts -> github.com/getsyntegrity/ego`. The go toolchain accepts module cycles, and `ciselect` does not check for them (a cycle there would only widen a selection), so archcheck is where one fails the build. Likewise, Go does not stop a module from importing another in-repository module's `internal/` package, because every module here shares the root module's path prefix; `no-cross-module-internal` does.
 
 The summary line counts modules too. On the S1 branch: `archcheck: 8 modules checked, 44 packages checked, 182 edges checked, 1 baselined, 0 violation(s), 0 stale entries` (before S1: `37 packages checked, 157 edges checked, 1 baselined`; the generalized `no-cross-module-internal` now also inspects root-module packages, and `test/compat` adds one package).
 
@@ -343,8 +343,8 @@ tar "Cannot open: File exists" on every run.
 
 > **Package rename.** The measurements in this section and in "The honest limit of package
 > selection" were taken when the runtime was the root package
-> `github.com/getsyntegrity/ego/v4`. That package now lives at
-> `github.com/getsyntegrity/ego/v4/engine` and the module root holds no Go files
+> `github.com/getsyntegrity/ego`. That package now lives at
+> `github.com/getsyntegrity/ego/engine` and the module root holds no Go files
 > (`archcheck`, rule `root-no-go-files`); read "the root package" below as
 > `engine`. The numbers themselves are historical and were not re-measured.
 
@@ -618,9 +618,9 @@ that does not depend on GitHub Actions, so a later portable pipeline
 {
   "global": false,
   "reasons": ["affected by 1 changed package(s)"],
-  "root": {"mode": "affected", "selected": ["github.com/getsyntegrity/ego/v4/engine", "…"]},
+  "root": {"mode": "affected", "selected": ["github.com/getsyntegrity/ego/engine", "…"]},
   "modules": [
-    {"dir": ".", "path": "github.com/getsyntegrity/ego/v4", "selected": true,
+    {"dir": ".", "path": "github.com/getsyntegrity/ego", "selected": true,
      "reason": "affected by 1 changed package(s)", "chain": ["."]},
     {"dir": "publisher/kafka", "path": "github.com/getsyntegrity/ego/publisher/kafka",
      "selected": true, "reason": "publisher/kafka ← .", "chain": ["publisher/kafka", "."]}
@@ -1114,7 +1114,7 @@ all by parsing every `.go` file in it — including `_test.go` files — with
 `go/parser` in imports-only mode (`discoverModuleImports`,
 `internal/cmd/ciselect/main.go`). That parser never evaluates build
 constraints, so it still sees `compat_test.go`'s `import
-"github.com/getsyntegrity/ego/v4/engine"` exactly as before the build tag was added.
+"github.com/getsyntegrity/ego/engine"` exactly as before the build tag was added.
 Consequently:
 
 - A change confined to `publisher/kafka/compat_test.go` alone still selects
@@ -1125,7 +1125,7 @@ Consequently:
   mode `full`, whose `Selected` set is every included root package; every
   nested module that imports any of them, which today means every nested
   module, is selected too (reason: "imports affected root package
-  `github.com/getsyntegrity/ego/v4`"). Observed with `ciselect -changed
+  `github.com/getsyntegrity/ego`"). Observed with `ciselect -changed
   <publisher.go>`: mode `full`, `modules.json` =
   `["benchmark","example/cluster","publisher/kafka","publisher/nats","publisher/pulsar","publisher/websocket"]`.
 
@@ -1193,7 +1193,7 @@ checks each of them, separately:
 
 - **Does the monorepo build together, right now?** `verify-module.sh`
   above answers this on every PR and on every push to `main`, using the
-  module's checked-in `replace github.com/getsyntegrity/ego/v4 => ../../`
+  module's checked-in `replace github.com/getsyntegrity/ego => ../../`
   (or `../` for `benchmark`) directive. This is "integrated verification"
   in `openspec/changes/ego-arch-001/design.md` §8.
 - **Does a real consumer, with no local `replace`, resolve the published
@@ -1208,12 +1208,12 @@ checks each of them, separately:
   talks to the public proxy. `scripts/ci/verify-published.sh
   <module-dir> <ego-version>` answers it:
   it copies the module into a scratch directory, runs
-  `go mod edit -dropreplace=github.com/getsyntegrity/ego/v4
-  -require=github.com/getsyntegrity/ego/v4@<version>` in one edit (dropping
+  `go mod edit -dropreplace=github.com/getsyntegrity/ego
+  -require=github.com/getsyntegrity/ego@<version>` in one edit (dropping
   the replace and pointing at the target version together, so the module
   graph is never resolved against the old, unpublished requirement before
   the edit takes effect), then `go mod tidy && go build ./...`. If
-  `go list -m github.com/getsyntegrity/ego/v4@<version>` cannot even resolve
+  `go list -m github.com/getsyntegrity/ego@<version>` cannot even resolve
   the version, it fails fast with one `::error::` line instead of a
   confusing `go.sum`/build error. `release.yml` runs it for each
   publisher, right after that publisher's own `go get`/`go mod tidy` and
@@ -1257,7 +1257,7 @@ the script fails with a clear message naming the mismatch.) It then:
    uncommitted changes are never part of what it checks.
 2. Creates release tags **only in that temporary clone**: the root tag
    (the version every publisher already requires), each publisher's
-   `<dir>/<VERIFY_CONSUMER_PUBLISHER_VERSION>` (default `v0.1.0`), and one
+   `<dir>/<VERIFY_CONSUMER_PUBLISHER_VERSION>` (default `v0.2.0`, a synthetic version that is never a retired name), and one
    negative tag, `<first publisher dir>/v2.0.0`, which must be *rejected*
    — a `v2+` tag on a module path with no `/v2` suffix is invalid under
    Go's own major-version rule, and the script fails if it somehow
@@ -1284,7 +1284,7 @@ the script fails with a clear message naming the mismatch.) It then:
 **Usage.** `scripts/ci/verify-consumer.sh` — no arguments, run from
 anywhere inside the repository. `VERIFY_CONSUMER_PUBLISHER_VERSION`
 overrides the publisher tag version it creates in the temporary clone
-(default `v0.1.0`); the root tag is never configurable, since it is
+(default `v0.2.0`); the root tag is never configurable, since it is
 always the version the released publishers themselves require. Locally,
 it needs `jq` on `PATH` and reuses the caller's ordinary `GOCACHE`; when
 the caller already has a populated module download cache, its
@@ -1307,7 +1307,11 @@ always selects the full suite anyway.
 
 ### Version policy
 
-- The root module is released first, as a semantic-version tag `v4.x.y`.
+- The root module is released first, as a semantic-version tag `vX.Y.Z`
+  with X in {0, 1} (the root path `github.com/getsyntegrity/ego` has no
+  `/vN` suffix, so it carries v0 and v1 only; see "Root module path and
+  versions" below). Which version comes first is decided by the
+  maintainers; nothing in this repository promises one.
 - Each publisher module is released only against a root version that
   already exists on the module proxy — never against an unpublished
   version, and never verified only through the local `replace`. Getting a
@@ -1321,7 +1325,7 @@ always selects the full suite anyway.
   and `release-ego` (see "Release gate" below). It discovers which
   directories under `publisher/` to release from `publisher/*/go.mod`
   (never a hand-written list), then for each one runs
-  `go get github.com/getsyntegrity/ego/v4@<tag>`, `go mod tidy` and
+  `go get github.com/getsyntegrity/ego@<tag>`, `go mod tidy` and
   `scripts/ci/verify-published.sh`, exactly as before this change. What
   changed is what happens to the result: instead of committing and
   pushing straight to `main`, the job creates a branch
@@ -1332,8 +1336,8 @@ always selects the full suite anyway.
   hand, for example:
 
   ```bash
-  gh pr create --base main --head release/publishers-v4.5.0 \
-    --title "chore(publishers): update ego dependency to v4.5.0" \
+  gh pr create --base main --head release/publishers-<tag> \
+    --title "chore(publishers): update ego dependency to <tag>" \
     --body "..."
   ```
 
@@ -1352,13 +1356,12 @@ always selects the full suite anyway.
   contains the bump of the four publishers, requires the root at
   `ego_version`, and has a green `build.yml` run for that same SHA — usually
   the bump PR's merge commit, but a later commit of `main` that still meets
-  all three conditions is equally valid: the first release tagged the
-  publishers at `b0b00de`, a descendant of the bump merge `7263968`, because
-  `main` was red at `7263968` until #179 fixed it), `ego_version` (the root tag the publishers must require, e.g.
-  `v4.0.0`), `bump` (`patch`/`minor`/`major`, default `minor`: an
-  untagged publisher starts from `v0.0.0`, so the first release is
-  `v0.1.0`, never `v0.0.1`; pass `patch` explicitly for a later fix
-  release), and
+  all three conditions is equally valid), `ego_version` (the root tag the
+  publishers must require), `bump` (`patch`/`minor`/`major`, default
+  `minor`: an untagged suffix-less publisher starts from `v0.0.0`, so
+  `minor` plans `v0.1.0`, never `v0.0.1`; note that `v0.1.0` of every
+  publisher is a retired name, see "Retired tag names" below, so the first
+  real release needs a bump or version the maintainers choose), and
   `dry_run` (boolean, default `true`). The workflow validates every
   precondition before doing anything: `sha` and `ego_version` are
   well-formed, `sha` is genuinely reachable from `origin/main`,
@@ -1394,6 +1397,90 @@ that same package's decision logic — extended with the continuation
 checks named above (SHA/version format, required-version, publishers-only
 tag computation, tag-conflict detection) — for the real tag computation
 in stage 3, instead of duplicating that logic in shell.
+
+### Root module path and versions
+
+The root module used to be `github.com/getsyntegrity/ego/v4`. Its path is
+now `github.com/getsyntegrity/ego`, with no `/vN` suffix, so Go allows only
+`v0` and `v1` tags for it: root tags are `vX.Y.Z` with X in {0, 1}, and
+publisher tags are `publisher/<name>/vX.Y.Z` (publisher paths did not
+change: `github.com/getsyntegrity/ego/publisher/<name>`). The root is
+tagged first, then the publishers.
+
+**No version is published.** The version `v0.0.0` in the nested modules'
+`go.mod` files (`require github.com/getsyntegrity/ego v0.0.0`, next to the
+local `replace ... => ../../`) is only the development placeholder that
+integrated verification resolves locally. It is not a tag, it does not
+exist on any proxy, and nothing can install it. Which version is the first
+release is decided later by the maintainers.
+
+**Why `releaseplan` ignores tags of an illegal major.** The root's tag
+prefix is `v`, so a tag such as `v4.0.0` would match it, but a suffix-less
+path cannot have a v4 version. Instead of refusing the whole plan,
+`internal/cmd/releaseplan` ignores any tag whose major is not legal for the
+module's current path and lists it in the plan (`ignoredTags` in
+`plan.json`) and in the summary as "belongs to another major or module
+path". Legal means exactly `N` for a `/vN` suffix, and `0` or `1`
+otherwise. With no tags at all the root starts from a `v0.0.0` baseline:
+`-bump patch` plans `v0.0.1`, `-bump minor` plans `v0.1.0` and `-bump
+major` plans `v1.0.0`. The dry run applies one `-bump` to every module.
+
+**Import rewrite.** Code that imported `github.com/getsyntegrity/ego/v4`
+imports `github.com/getsyntegrity/ego` instead, and `go.mod` requires the
+new path once a version exists.
+
+### Retired tag names
+
+Five tag names were published and then withdrawn (their GitHub releases and
+tags were deleted): `v4.0.0`, `publisher/kafka/v0.1.0`,
+`publisher/nats/v0.1.0`, `publisher/pulsar/v0.1.0` and
+`publisher/websocket/v0.1.0`. **They must never be reused.** The Go module
+proxy and the checksum database keep the old content forever; a different
+commit tagged with the same name would be a checksum mismatch for every
+consumer that already saw the old one, and `go` would refuse it.
+
+The names are committed in `scripts/ci/retired-tags.txt` (one per line,
+`#` comments allowed) and enforced in four places:
+
+- `internal/cmd/releaseplan -retired scripts/ci/retired-tags.txt` refuses to
+  plan any tag in the list and refuses when one of them exists in `-tags`
+  (a withdrawn name pushed again). A missing list file is an error, never an
+  empty list. The `build.yml` release plan dry run passes it.
+- `-continuation-check-not-retired <tag>` (with `-retired`) checks one tag
+  and exits. `release-publishers.yml` runs it on `ego_version`, and passes
+  `-retired` to both publisher plan computations (the plan and the re-check
+  before tagging), so the continuation refuses before creating anything.
+- `release.yml`'s `gate` job runs the same check on the pushed tag first, so
+  a retired root tag stops the workflow before the release is created.
+- `scripts/ci/verify-consumer.sh` refuses to use a retired name for its
+  synthetic scratch-clone tags.
+
+A consequence worth knowing: `-bump minor` on an untagged publisher plans
+`publisher/<name>/v0.1.0`, which is retired, so the plan is refused. The
+first real publisher release needs another bump or version, chosen by the
+maintainers.
+
+### Which CI steps could look an Ego module up outside GitHub
+
+The rule: no PR or `main` workflow may ask `proxy.golang.org`,
+`sum.golang.org` or `pkg.go.dev` about an Ego module path, because a lookup
+of a path that does not exist yet is cached as "not found" and can poison a
+later real lookup (this is the same effect behind #189). Audit:
+
+| Step or file | Runs on | Verdict |
+|---|---|---|
+| `verify-module.sh` (`go mod download`, `tidy -diff`, `build`, `vet`, `test`) for nested modules | PR, `main` | Local: Ego is resolved through the checked-in `replace ... => ../../`, which Go never looks up on a proxy. Checked with the environment set to `GOPRIVATE`/`GONOSUMDB` for Ego. |
+| `go mod download` and the root `-mod=vendor` steps | PR, `main` | Root is the main module; third-party modules only. |
+| `govulncheck` (root and nested) | PR, `main` | Reads the vulnerability database (`vuln.go.dev`), not the proxy, sumdb or pkg.go.dev. Not one of the restricted services; noted for completeness because it works from module paths. |
+| `internal/cmd/{releaseplan,ciselect,archcheck}` (`go list`, `go mod edit -json`) | PR, `main` | Local: no network for Ego paths. |
+| `verify-consumer.sh` (`consumer` job) | full-mode PR, `main` | Local: a bare clone with synthetic tags plus `GOPRIVATE`, so Ego paths never reach the proxy or sumdb. Only third-party modules use the proxy. |
+| Release plan dry run (`build.yml`) | `main` | Local: `git tag -l` and `releaseplan`. |
+| `renovate.json` (Renovate) | Renovate bot | Could look up nested `require github.com/getsyntegrity/ego`. Now ignored (`ignoreDeps` and a disabled `packageRules` entry for `github.com/getsyntegrity/ego` and `github.com/getsyntegrity/ego/**`). |
+| README badges | Renderers | The pkg.go.dev badge was removed; the remaining badges query GitHub or unrelated services. |
+| `modwait` step in `release.yml` | Root tag push only | Intentionally public (proxy and sumdb): it verifies a real release. Never runs on PRs; its tests use fixtures and a fake `go`. |
+| `go get` and `verify-published.sh` in `release.yml` | Root tag push only | Intentionally public, after the tag exists. Never on PRs. |
+| `release-publishers.yml` | Manual dispatch | `releaseplan` and the GitHub API only. |
+| `stale.yml` | Schedule | No Go commands. |
 
 ### Toolchain requirements
 
@@ -1635,3 +1722,99 @@ human opens and merges the ordinary, normally-reviewed pull request it
 prints the command for, and an explicitly dispatched
 `release-publishers.yml` run does the actual publisher tagging once that
 PR has landed on `main`.
+
+### Waiting for the module on the proxy and the checksum database (`modwait`, #189)
+
+`prepare-publisher-bump` bumps each publisher's `go.mod` with `go get
+github.com/getsyntegrity/ego@<tag>`, so the root module must already
+be resolvable the way any consumer resolves it before that step runs. The
+wait step "Wait for ego module on the proxy and the checksum database"
+now runs `internal/cmd/modwait` for that:
+
+```sh
+go run ./internal/cmd/modwait \
+  -module github.com/getsyntegrity/ego -version "${EGO_VERSION}" \
+  -timeout 20m -interval 30s
+```
+
+**Why `go list -m` was not enough.** The old step looped `go list -m
+github.com/getsyntegrity/ego@<tag>` (30 tries, 30 s apart). That only
+proves `proxy.golang.org` serves the version. `go get` also verifies the
+module against `sum.golang.org`, which can lag behind the proxy. In the
+first release, `release.yml` run
+[36474920456](https://github.com/getsyntegrity/ego/actions/runs/36474920456),
+attempt 1 (job 109106620419), the wait passed at 19:51:23Z and `go get`
+failed 15 seconds later (the module still had its old `/v4` path then):
+
+```text
+reading https://sum.golang.org/lookup/github.com/getsyntegrity/ego/v4@v4.0.0: 404 Not Found
+	server response: not found: github.com/getsyntegrity/ego/v4@v4.0.0: invalid version: unknown revision v4.0.0
+```
+
+Attempt 2 (20:07Z) passed with no code change. That points at checksum
+database propagation, though the cause was not proven.
+
+**What one attempt checks.** `modwait` runs `go mod download -json
+<module>@<version>` in a fresh temporary directory with a fresh temporary
+`GOMODCACHE`, and removes both afterwards. The fresh cache matters: a
+cached copy would skip the checksum lookup, and that lookup is exactly what
+`go get` does next. The environment is the job's own, so `GOPROXY` and
+`GOSUMDB` are whatever the runner has (Go's defaults). `modwait` never sets
+`GOSUMDB`, and it removes `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`,
+`GOINSECURE`, `GONOPROXY` and `GOFLAGS` from the probe, forces `GOWORK=off`
+and `GOENV=off` (so a `go env -w` file cannot reintroduce them), and adds
+no `replace`. It also refuses to start when the inherited environment has
+`GOSUMDB=off`, `GOPROXY=off` or `-insecure` in `GOFLAGS`. An attempt passes
+only when `go` exits 0 and the JSON `Error` field is empty.
+
+**Classification.** The pure function `Classify`
+(`internal/cmd/modwait/classify.go`) reads the attempt's output. The HTTP
+status wins over any text, in this order:
+
+| Output | Class | Action |
+|---|---|---|
+| `checksum mismatch`, `SECURITY ERROR` | permanent | fail at once |
+| HTTP 410 Gone | permanent | fail at once |
+| HTTP 404, 408, 429, 5xx (proxy or sumdb) | transient | retry until the deadline |
+| dial, i/o timeout, connection reset or refused, TLS handshake timeout, no such host, unexpected EOF | transient | retry |
+| `module declares its path as`, `but was required as`, `malformed ...`, major-suffix mismatch, any `invalid version` other than `unknown revision` | permanent | fail at once |
+| `unknown revision` with no HTTP status | transient | retry |
+| anything else | unclassified | retry, reported as `unclassified` |
+
+Two calls worth arguing with. First, the real failure above contains
+`invalid version: unknown revision` inside a sumdb 404; reading only the
+text would call it permanent and fail a release over a propagation delay,
+so the status is checked first. Second, `unknown revision` with no status
+is transient because the proxy or the VCS may not have the tag yet; the
+proxy's own 404 falls through to a direct VCS lookup, so a version that
+does not exist yet often shows up as exactly this message. The price of
+being wrong is one full wait, never a false success. Unclassified output is
+retried for the same reason: an unknown message is more likely a new
+phrasing of a transient condition, and the deadline bounds the cost.
+
+**The limit.** `-timeout` defaults to 20 minutes and `-interval` to 30
+seconds; both are printed in the first log line. Each sleep is clamped to
+the time left, so an interval larger than the timeout cannot overrun it,
+and the last attempt runs exactly at the deadline. `-timeout 0` makes a
+single attempt and never sleeps, which is the right mode for a manual check.
+One attempt is also capped at 3 minutes so a hung connection cannot stall
+the job.
+
+**How to resume without duplicate tags.** On timeout, `modwait` emits one
+`::error::` line naming `<module>@<version>`, the last classification and
+its last output line, and exits non-zero. A permanent failure emits its own
+`::error::` line with the cause and does not retry. To resume after a
+timeout: the root tag already exists, so do not delete or re-push it. Wait
+a few minutes, then use "Re-run failed jobs" on the same `release.yml` run.
+At this point the `release/publishers-<tag>` branch has not been pushed
+(the next step creates it), so re-running `prepare-publisher-bump` repeats
+nothing irreversible. A permanent failure needs the cause fixed first (a
+bad tag or a wrong module path), not a re-run.
+
+**Testing it.** `go test -count=1 ./internal/cmd/modwait/...` covers every
+case with fixtures, a scripted prober, a fake clock and a fake `go`
+binary; nothing touches the network. Do not run the real probe against a
+version that does not exist yet, and do not run it against any Ego path
+before a real release: the checksum database caches negative answers, so
+an early probe can make a later real lookup fail. The post-publish
+consumer check is a separate concern (#190).

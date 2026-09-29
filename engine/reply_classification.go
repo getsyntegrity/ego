@@ -25,8 +25,8 @@ package engine
 import (
 	"strings"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // resultBuilder builds the command.Result for an egopb.ErrorReply message

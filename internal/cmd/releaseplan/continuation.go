@@ -205,6 +205,8 @@ type continuationParams struct {
 	checkRequiredVer  string
 	planPublishers    bool
 	checkTagConflicts string
+	retired           string
+	checkNotRetired   string
 }
 
 // runContinuation dispatches every "-continuation-*" flag main.go's run
@@ -229,85 +231,128 @@ func runContinuation(p continuationParams, stdout, _ io.Writer) error {
 		fmt.Fprintf(stdout, "version %s: valid\n", p.checkVersion)
 	}
 
-	if p.checkRequiredVer != "" {
-		if p.release == "" {
-			return errors.New("-continuation-check-required-version requires -release")
-		}
-		repoRoot, err := filepath.Abs(p.repoRoot)
-		if err != nil {
-			return fmt.Errorf("resolving -repo-root: %w", err)
-		}
-		graph, err := discoverGraph(repoRoot)
-		if err != nil {
-			return fmt.Errorf("discovering modules: %w", err)
-		}
-		root, ok := graph.ByDir(".")
-		if !ok {
-			return fmt.Errorf("no root module discovered at %s", repoRoot)
-		}
-		dirs, err := readReleaseList(p.release)
-		if err != nil {
-			return fmt.Errorf("reading -release: %w", err)
-		}
-		if err := checkRequiredRootVersion(repoRoot, root.Path, p.checkRequiredVer, dirs); err != nil {
+	if p.checkNotRetired != "" {
+		if err := runCheckNotRetired(p, stdout); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "required-root-version check: every module in %s requires %s at %s\n", p.release, root.Path, p.checkRequiredVer)
+	}
+
+	if p.checkRequiredVer != "" {
+		if err := runCheckRequiredVersion(p, stdout); err != nil {
+			return err
+		}
 	}
 
 	if p.planPublishers {
-		if p.release == "" {
-			return errors.New("-continuation-plan-publishers requires -release")
-		}
-		if p.tags == "" {
-			return errors.New("-continuation-plan-publishers requires -tags")
-		}
-		if p.outDir == "" {
-			return errors.New("-continuation-plan-publishers requires -out-dir")
-		}
-		repoRoot, err := filepath.Abs(p.repoRoot)
-		if err != nil {
-			return fmt.Errorf("resolving -repo-root: %w", err)
-		}
-		graph, err := discoverGraph(repoRoot)
-		if err != nil {
-			return fmt.Errorf("discovering modules: %w", err)
-		}
-		dirs, err := readReleaseList(p.release)
-		if err != nil {
-			return fmt.Errorf("reading -release: %w", err)
-		}
-		tags, err := readLines(p.tags)
-		if err != nil {
-			return fmt.Errorf("reading -tags: %w", err)
-		}
-		modules, err := planPublisherTags(graph, dirs, tags, p.bump)
-		if err != nil {
-			return err
-		}
-
-		if p.checkTagConflicts != "" {
-			existing, err := readLines(p.checkTagConflicts)
-			if err != nil {
-				return fmt.Errorf("reading -continuation-check-tag-conflicts: %w", err)
-			}
-			if err := checkTagConflicts(modules, existing); err != nil {
-				return err
-			}
-		}
-
-		plan := Plan{Bump: p.bump, Modules: modules}
-		summary := renderSummary(plan)
-		if err := writeOutputs(p.outDir, plan, summary); err != nil {
-			return fmt.Errorf("writing outputs: %w", err)
-		}
-		fmt.Fprint(stdout, summary)
-		return nil
+		return runPlanPublishers(p, stdout)
 	}
 
 	if p.checkTagConflicts != "" {
 		return errors.New("-continuation-check-tag-conflicts requires -continuation-plan-publishers")
 	}
 
+	return nil
+}
+
+// runCheckNotRetired refuses p.checkNotRetired when it is a retired tag
+// name (see retired.go). It needs -retired: a guard that is not given its
+// list must not pass silently.
+func runCheckNotRetired(p continuationParams, stdout io.Writer) error {
+	if p.retired == "" {
+		return errors.New("-continuation-check-not-retired requires -retired")
+	}
+	retired, err := readRetiredTags(p.retired)
+	if err != nil {
+		return fmt.Errorf("reading -retired: %w", err)
+	}
+	if err := checkNotRetired(retired, p.checkNotRetired); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "tag %s: not retired\n", p.checkNotRetired)
+	return nil
+}
+
+// runCheckRequiredVersion confirms every released module except the root
+// requires the root module at exactly p.checkRequiredVer.
+func runCheckRequiredVersion(p continuationParams, stdout io.Writer) error {
+	if p.release == "" {
+		return errors.New("-continuation-check-required-version requires -release")
+	}
+	repoRoot, err := filepath.Abs(p.repoRoot)
+	if err != nil {
+		return fmt.Errorf("resolving -repo-root: %w", err)
+	}
+	graph, err := discoverGraph(repoRoot)
+	if err != nil {
+		return fmt.Errorf("discovering modules: %w", err)
+	}
+	root, ok := graph.ByDir(".")
+	if !ok {
+		return fmt.Errorf("no root module discovered at %s", repoRoot)
+	}
+	dirs, err := readReleaseList(p.release)
+	if err != nil {
+		return fmt.Errorf("reading -release: %w", err)
+	}
+	if err := checkRequiredRootVersion(repoRoot, root.Path, p.checkRequiredVer, dirs); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "required-root-version check: every module in %s requires %s at %s\n", p.release, root.Path, p.checkRequiredVer)
+	return nil
+}
+
+// runPlanPublishers computes the publishers-only plan, applies the
+// retired-names guard and the optional tag-conflict check, and writes
+// plan.json and summary.md.
+func runPlanPublishers(p continuationParams, stdout io.Writer) error {
+	if p.release == "" {
+		return errors.New("-continuation-plan-publishers requires -release")
+	}
+	if p.tags == "" {
+		return errors.New("-continuation-plan-publishers requires -tags")
+	}
+	if p.outDir == "" {
+		return errors.New("-continuation-plan-publishers requires -out-dir")
+	}
+	repoRoot, err := filepath.Abs(p.repoRoot)
+	if err != nil {
+		return fmt.Errorf("resolving -repo-root: %w", err)
+	}
+	graph, err := discoverGraph(repoRoot)
+	if err != nil {
+		return fmt.Errorf("discovering modules: %w", err)
+	}
+	dirs, err := readReleaseList(p.release)
+	if err != nil {
+		return fmt.Errorf("reading -release: %w", err)
+	}
+	tags, err := readLines(p.tags)
+	if err != nil {
+		return fmt.Errorf("reading -tags: %w", err)
+	}
+	modules, err := planPublisherTags(graph, dirs, tags, p.bump)
+	if err != nil {
+		return err
+	}
+	if err := guardRetired(p.retired, tags, modules); err != nil {
+		return err
+	}
+
+	if p.checkTagConflicts != "" {
+		existing, err := readLines(p.checkTagConflicts)
+		if err != nil {
+			return fmt.Errorf("reading -continuation-check-tag-conflicts: %w", err)
+		}
+		if err := checkTagConflicts(modules, existing); err != nil {
+			return err
+		}
+	}
+
+	plan := Plan{Bump: p.bump, Modules: modules}
+	summary := renderSummary(plan)
+	if err := writeOutputs(p.outDir, plan, summary); err != nil {
+		return fmt.Errorf("writing outputs: %w", err)
+	}
+	fmt.Fprint(stdout, summary)
 	return nil
 }

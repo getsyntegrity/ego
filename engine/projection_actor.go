@@ -31,10 +31,10 @@ import (
 	gerrors "github.com/tochemey/goakt/v4/errors"
 	"github.com/tochemey/goakt/v4/supervisor"
 
-	"github.com/getsyntegrity/ego/v4/internal/extensions"
-	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
-	"github.com/getsyntegrity/ego/v4/internal/instrumentation"
-	"github.com/getsyntegrity/ego/v4/internal/projectionrunner"
+	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
+	"github.com/getsyntegrity/ego/internal/instrumentation"
+	"github.com/getsyntegrity/ego/internal/projectionrunner"
 )
 
 // runnerFailed is the internal message the projection actor sends itself when

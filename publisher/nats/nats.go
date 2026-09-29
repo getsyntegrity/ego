@@ -30,8 +30,8 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // EventsPublisher defines a NATS publisher.

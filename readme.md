@@ -6,10 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/getsyntegrity/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/build.yml?branch=main" alt="Build status"></a>
-  <a href="https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine"><img src="https://pkg.go.dev/badge/github.com/getsyntegrity/ego/v4/engine.svg" alt="Go reference"></a>
   <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/ego" alt="Go version"></a>
-  <a href="https://github.com/getsyntegrity/ego/releases/latest"><img src="https://img.shields.io/github/v/release/getsyntegrity/ego?label=release" alt="Latest release"></a>
-  <a href="https://github.com/getsyntegrity/ego/tags"><img src="https://img.shields.io/github/v/tag/getsyntegrity/ego?label=tag" alt="Pre-release"></a>
   <a href="https://human-oss.dev"><img src="https://human-oss.dev/badge.svg" alt="Open Source AI Manifesto"></a>
 </p>
 
@@ -70,11 +67,11 @@ For production use, provide durable implementations of the stores your applicati
 
 ## Installation
 
-```bash
-go get github.com/getsyntegrity/ego/v4
-```
+eGo is **pre-release**. No version has been published yet, so there is nothing to install with `go get` today. The module path is `github.com/getsyntegrity/ego` (no `/vN` suffix, so its versions will be `v0.x` or `v1.x`); the four publishers live at `github.com/getsyntegrity/ego/publisher/<name>`. The version `v0.0.0` that appears in the nested modules' `go.mod` files is only the development placeholder resolved through a local `replace`: it is not a tag and it is not installable.
 
-The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/v4/engine` (package `engine`). Earlier snippets that imported `github.com/getsyntegrity/ego/v4` and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md) for the migration map.
+To try it now, work from a checkout of this repository (`git clone https://github.com/getsyntegrity/ego`), or wait for the first tag and then run `go get github.com/getsyntegrity/ego@<version>`.
+
+The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/engine` (package `engine`). Earlier snippets that imported the module root and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md).
 
 ## Quick start
 
@@ -90,9 +87,9 @@ import (
 
     accountpb "example.com/myapp/gen/account/v1"
     goakt "github.com/tochemey/goakt/v4/actor"
-    "github.com/getsyntegrity/ego/v4/engine"
-    "github.com/getsyntegrity/ego/v4/projection"
-    "github.com/getsyntegrity/ego/v4/testkit"
+    "github.com/getsyntegrity/ego/engine"
+    "github.com/getsyntegrity/ego/projection"
+    "github.com/getsyntegrity/ego/testkit"
 )
 
 func main() {
@@ -249,7 +246,7 @@ Entity-specific options are passed when an entity is spawned:
 
 Event-sourced entities additionally support `WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, and `WithBatchFlushWindow`.
 
-API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine).
+API details and defaults are documented in the Go doc comments of the `engine` package (`go doc ./engine`).
 
 ## Snapshots and retention
 

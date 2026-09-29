@@ -33,12 +33,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/offsetstore"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/persistence/conformance"
-	"github.com/getsyntegrity/ego/v4/port/adapter"
-	"github.com/getsyntegrity/ego/v4/port/adapter/adaptertest"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/persistence/conformance"
+	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
 )
 
 // ---------------------------------------------------------------------------

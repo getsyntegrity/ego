@@ -26,9 +26,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/port/behavior"
 )
 
 // The interfaces below are the application side of the runtime SPI. Each

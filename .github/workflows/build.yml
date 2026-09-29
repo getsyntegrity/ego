@@ -79,6 +79,7 @@ jobs:
             -release scripts/ci/release-modules.txt \
             -tags "$RUNNER_TEMP/release-plan-tags.txt" \
             -bump patch \
+            -retired scripts/ci/retired-tags.txt \
             -out-dir "$RUNNER_TEMP/releaseplan"
           cat "$RUNNER_TEMP/releaseplan/summary.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the release plan

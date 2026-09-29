@@ -31,12 +31,12 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/getsyntegrity/ego/v4/encryption"
-	"github.com/getsyntegrity/ego/v4/eventadapter"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/offsetstore"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/projection"
+	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/ego/eventadapter"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/projection"
 )
 
 const (

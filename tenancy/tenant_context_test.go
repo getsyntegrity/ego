@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 func TestNewTenantContext_RejectsEmptyTenantID(t *testing.T) {

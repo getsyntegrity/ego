@@ -33,14 +33,14 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/internal/extensions"
-	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
+	"github.com/getsyntegrity/ego/persistence"
+	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 // sagaTimeoutMsg is an internal message sent when the saga timeout expires.

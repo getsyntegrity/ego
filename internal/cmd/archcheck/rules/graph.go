@@ -40,7 +40,7 @@ type ModuleKind int
 
 const (
 	// RootModule is the module rooted at the repository root
-	// (github.com/getsyntegrity/ego/v4).
+	// (github.com/getsyntegrity/ego).
 	RootModule ModuleKind = iota
 	// NestedModule is any module with its own go.mod under the repository
 	// (publisher/*, benchmark, example/cluster, test/compat).
@@ -67,7 +67,7 @@ func (k ModuleKind) String() string {
 // this package never sees a _test.go-only edge.
 type Package struct {
 	// ImportPath is the package's full import path, e.g.
-	// "github.com/getsyntegrity/ego/v4/tenancy" or
+	// "github.com/getsyntegrity/ego/tenancy" or
 	// "github.com/getsyntegrity/ego/publisher/kafka".
 	ImportPath string
 	// Name is the package's own name as declared by its package clause,

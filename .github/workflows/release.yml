@@ -29,6 +29,18 @@ jobs:
         with:
           go-version: "1.27.0"
 
+      - name: Refuse a retired tag name
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # A retired name was published and then withdrawn; the Go proxy and
+          # checksum database keep the old content, so it must never be
+          # reused (scripts/ci/retired-tags.txt, docs/ci.md).
+          go run ./internal/cmd/releaseplan \
+            -retired scripts/ci/retired-tags.txt \
+            -continuation-check-not-retired "$TAG_NAME"
+
       - name: Resolve the tagged commit and its main membership
         id: resolve
         shell: bash
@@ -138,22 +150,15 @@ jobs:
         id: ego-version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for ego module to be available on proxy
+      - name: Wait for ego module on the proxy and the checksum database
         env:
           EGO_VERSION: ${{ steps.ego-version.outputs.version }}
         run: |
-          MODULE="github.com/getsyntegrity/ego/v4@${EGO_VERSION}"
-          echo "Waiting for ${MODULE} on Go proxy..."
-          for i in $(seq 1 30); do
-            if go list -m "${MODULE}" 2>/dev/null; then
-              echo "Module available on proxy."
-              exit 0
-            fi
-            echo "Attempt $i/30: not yet available, waiting 30s..."
-            sleep 30
-          done
-          echo "::error::Timed out waiting for module on Go proxy"
-          exit 1
+          go run ./internal/cmd/modwait \
+            -module github.com/getsyntegrity/ego \
+            -version "${EGO_VERSION}" \
+            -timeout 20m \
+            -interval 30s
 
       - name: Create publisher bump branch from origin/main
         id: create-branch
@@ -188,7 +193,7 @@ jobs:
 
             # Update go.mod
             cd "publisher/${PUB}"
-            go get "github.com/getsyntegrity/ego/v4@${EGO_VERSION}"
+            go get "github.com/getsyntegrity/ego@${EGO_VERSION}"
             go mod tidy
             cd ../..
 

@@ -34,9 +34,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/port/adapter"
-	"github.com/getsyntegrity/ego/v4/port/adapter/adaptertest"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
 )
 
 const (

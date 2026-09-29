@@ -27,9 +27,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/port/adapter/adaptertest"
-	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
+	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // This package recognizes adaptertest.ErrUnreachable by its method

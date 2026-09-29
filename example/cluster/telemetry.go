@@ -37,7 +37,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
-	"github.com/getsyntegrity/ego/v4/engine"
+	"github.com/getsyntegrity/ego/engine"
 )
 
 // setupTelemetry initializes OpenTelemetry with OTLP gRPC exporters for

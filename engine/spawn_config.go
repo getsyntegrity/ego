@@ -25,8 +25,8 @@ package engine
 import (
 	"time"
 
-	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine

@@ -35,10 +35,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/persistence"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // envelopeCapturingEventSourcedBehavior implements both EventSourcedBehavior

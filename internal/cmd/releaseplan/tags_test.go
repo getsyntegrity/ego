@@ -23,6 +23,8 @@
 package main
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -199,6 +201,91 @@ func TestParseSemver(t *testing.T) {
 		_, ok := parseSemver(c.in)
 		if ok != c.ok {
 			t.Errorf("parseSemver(%q) ok = %v, want %v", c.in, ok, c.ok)
+		}
+	}
+}
+
+// A module path without a /vN suffix carries v0 and v1 only. Tags of any
+// other major under the same prefix belong to another module path (for the
+// ego root: v4.0.0 was published under the old .../ego/v4 path) and must be
+// ignored and reported, never the reason the whole plan is refused.
+func TestLatestLegalTag_IgnoresMajorsIllegalForThePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		dir, path   string
+		tags        []string
+		wantTag     string
+		wantIgnored []string
+	}{
+		{"suffix-less root ignores v4", ".", "example.com/ego", []string{"v4.0.0"}, "", []string{"v4.0.0"}},
+		{"suffix-less root keeps v1 next to a stray v4", ".", "example.com/ego", []string{"v4.0.0", "v1.2.0", "v1.10.0"}, "v1.10.0", []string{"v4.0.0"}},
+		{"suffix-less root keeps v0", ".", "example.com/ego", []string{"v0.3.0", "v2.0.0", "v3.1.1"}, "v0.3.0", []string{"v2.0.0", "v3.1.1"}},
+		{"suffixed root ignores other majors", ".", "example.com/ego/v4", []string{"v3.0.0", "v4.1.0", "v5.0.0"}, "v4.1.0", []string{"v3.0.0", "v5.0.0"}},
+		{"suffixed root ignores v1 too", ".", "example.com/ego/v4", []string{"v1.0.0"}, "", []string{"v1.0.0"}},
+		{"nested module ignores v2", "publisher/kafka", "example.com/ego/publisher/kafka", []string{"publisher/kafka/v2.0.0", "publisher/kafka/v0.1.0"}, "publisher/kafka/v0.1.0", []string{"publisher/kafka/v2.0.0"}},
+		{"other modules' tags are not reported", ".", "example.com/ego", []string{"publisher/kafka/v0.1.0", "v1.0.0"}, "v1.0.0", nil},
+		{"unparseable tags are not reported", ".", "example.com/ego", []string{"vnext", "v1.0.0"}, "v1.0.0", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, tag, found, ignored := latestLegalTag(tt.dir, tt.path, tt.tags)
+			if tag != tt.wantTag || found != (tt.wantTag != "") {
+				t.Errorf("tag = %q found=%v, want %q", tag, found, tt.wantTag)
+			}
+			if !reflect.DeepEqual(ignored, tt.wantIgnored) {
+				t.Errorf("ignored = %v, want %v", ignored, tt.wantIgnored)
+			}
+		})
+	}
+}
+
+func TestNextTagDetailed_StrayOldMajorDoesNotRefuseThePlan(t *testing.T) {
+	tags := []string{"v4.0.0"}
+	for kind, want := range map[string]string{"patch": "0.0.1", "minor": "0.1.0", "major": "1.0.0"} {
+		cur, next, ignored, err := nextTagDetailed(".", "example.com/ego", tags, kind)
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if cur != "" || next.String() != want {
+			t.Errorf("%s: current=%q next=%s, want none and %s", kind, cur, next.String(), want)
+		}
+		if !reflect.DeepEqual(ignored, []string{"v4.0.0"}) {
+			t.Errorf("%s: ignored = %v", kind, ignored)
+		}
+	}
+
+	// the wrapper keeps its old shape and no longer refuses either
+	if _, next, err := nextTag(".", "example.com/ego", tags, "major"); err != nil || next.String() != "1.0.0" {
+		t.Errorf("nextTag = %s, %v, want 1.0.0", next.String(), err)
+	}
+}
+
+func TestBuildPlan_ReportsIgnoredTags(t *testing.T) {
+	g, err := discoverGraph("testdata/tagscheme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// tagscheme's root path is example.com/repo/v4: v3.0.0 is illegal for it.
+	plan, err := buildPlan(g, []string{".", "pub"}, []string{"v3.0.0", "v4.2.0"}, "patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m PlanModule
+	for _, pm := range plan.Modules {
+		if pm.Dir == "." {
+			m = pm
+		}
+	}
+	if m.CurrentTag != "v4.2.0" || m.NextTag != "v4.2.1" {
+		t.Errorf("current=%q next=%q", m.CurrentTag, m.NextTag)
+	}
+	if !reflect.DeepEqual(m.IgnoredTags, []string{"v3.0.0"}) {
+		t.Errorf("IgnoredTags = %v", m.IgnoredTags)
+	}
+	summary := renderSummary(plan)
+	for _, want := range []string{"Ignored", "v3.0.0", "another major"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary lacks %q:\n%s", want, summary)
 		}
 	}
 }

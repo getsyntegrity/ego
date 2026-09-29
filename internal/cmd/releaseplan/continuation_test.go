@@ -384,9 +384,9 @@ func TestRun_ContinuationCheckTagConflicts_RequiresPlanPublishers(t *testing.T) 
 
 // TestRun_ContinuationCheckRequiredVersion_RealRepository is the manual
 // dry run against this repository's actual state the T3 verification
-// requires: today the real publishers all require the root at v4.4.3
+// requires: today the real publishers all require the root at the development placeholder v0.0.0
 // (their go.mod "require" line), so wanting a plausible next version like
-// v4.5.0 must fail with a clear message naming every mismatched
+// v0.1.0 must fail with a clear message naming every mismatched
 // publisher. It mirrors TestRun_RealRepository's own repo-root discovery
 // and is skipped the same way if the repository root cannot be found.
 func TestRun_ContinuationCheckRequiredVersion_RealRepository(t *testing.T) {
@@ -400,10 +400,21 @@ func TestRun_ContinuationCheckRequiredVersion_RealRepository(t *testing.T) {
 	err := run([]string{
 		"-repo-root", repoRoot,
 		"-release", releaseFile,
-		"-continuation-check-required-version", "v4.5.0",
+		"-continuation-check-required-version", "v0.1.0",
 	}, &stdout, &stderr)
 	if err == nil {
-		t.Fatal("expected the real publishers (require v4.4.3 today) to fail a v4.5.0 required-version check")
+		t.Fatal("expected the real publishers (require v0.0.0 today) to fail a v0.1.0 required-version check")
 	}
 	t.Logf("real-repository dry run failure (expected):\n%s", err.Error())
+
+	// and the version they do require passes
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"-repo-root", repoRoot,
+		"-release", releaseFile,
+		"-continuation-check-required-version", "v0.0.0",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("the real publishers require v0.0.0, the check must pass: %v", err)
+	}
 }

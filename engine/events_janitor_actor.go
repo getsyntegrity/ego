@@ -26,9 +26,9 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4/internal/extensions"
-	"github.com/getsyntegrity/ego/v4/internal/goaktlog"
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // applyRetentionRequest is sent from the [snapshotsWriterActor] to the

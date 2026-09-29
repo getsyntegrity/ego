@@ -27,7 +27,7 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
-	"github.com/getsyntegrity/ego/v4/internal/logging"
+	"github.com/getsyntegrity/ego/internal/logging"
 )
 
 // eGo logs through kit-logger (github.com/pablogore/kit-logger). Every

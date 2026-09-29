@@ -28,7 +28,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 func TestCarrierFromContext_NoneAttached(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/port/adapter"
+	"github.com/getsyntegrity/ego/port/adapter"
 )
 
 // These tests use only the standard library: port/adapter joins the

@@ -37,14 +37,14 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
-	"github.com/getsyntegrity/ego/v4/internal/extensions"
-	mocks "github.com/getsyntegrity/ego/v4/mocks/persistence"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/eventstream"
+	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/extensions"
+	mocks "github.com/getsyntegrity/ego/mocks/persistence"
+	"github.com/getsyntegrity/ego/persistence"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 func TestSagaStatus_String(t *testing.T) {

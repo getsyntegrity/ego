@@ -3,7 +3,7 @@ module github.com/getsyntegrity/ego/publisher/nats
 go 1.26.0
 
 require (
-	github.com/getsyntegrity/ego/v4 v4.0.0
+	github.com/getsyntegrity/ego v0.0.0
 	github.com/nats-io/nats.go v1.53.1
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/multierr v1.11.0 // indirect
@@ -40,4 +40,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego/v4 => ../../
+replace github.com/getsyntegrity/ego => ../../

@@ -37,15 +37,15 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/internal/extensions"
-	"github.com/getsyntegrity/ego/v4/internal/pause"
-	mocks "github.com/getsyntegrity/ego/v4/mocks/persistence"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/tenancy"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/pause"
+	mocks "github.com/getsyntegrity/ego/mocks/persistence"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/tenancy"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // flakyFirstCommandDurableStateBehavior fails the very first HandleCommand
