@@ -177,6 +177,18 @@ func TestRun_RealRepository(t *testing.T) {
 			t.Fatalf("root (index %d) is not before the publishers (last index %d): %v", rootIdx, lastPublisherIdx, doc.Modules)
 		}
 	})
+}
+
+// TestRun_RealRepository_TagScheme runs the plan against this repository
+// for the tag-scheme cases: the stray v4.0.0 tag and the first release from
+// no tags. It is a separate test from TestRun_RealRepository only to keep
+// each function's cyclomatic complexity under the linter's limit.
+func TestRun_RealRepository_TagScheme(t *testing.T) {
+	repoRoot := filepath.Join("..", "..", "..")
+	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
+		t.Skipf("repository root not found at %s: %v", repoRoot, err)
+	}
+	releaseFile := filepath.Join(repoRoot, "scripts", "ci", "release-modules.txt")
 
 	t.Run("the stray v4.0.0 tag is ignored, not a refusal", func(t *testing.T) {
 		// v4.0.0 was published under the old github.com/getsyntegrity/ego/v4
