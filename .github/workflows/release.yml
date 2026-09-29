@@ -138,22 +138,15 @@ jobs:
         id: ego-version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for ego module to be available on proxy
+      - name: Wait for ego module on the proxy and the checksum database
         env:
           EGO_VERSION: ${{ steps.ego-version.outputs.version }}
         run: |
-          MODULE="github.com/getsyntegrity/ego/v4@${EGO_VERSION}"
-          echo "Waiting for ${MODULE} on Go proxy..."
-          for i in $(seq 1 30); do
-            if go list -m "${MODULE}" 2>/dev/null; then
-              echo "Module available on proxy."
-              exit 0
-            fi
-            echo "Attempt $i/30: not yet available, waiting 30s..."
-            sleep 30
-          done
-          echo "::error::Timed out waiting for module on Go proxy"
-          exit 1
+          go run ./internal/cmd/modwait \
+            -module github.com/getsyntegrity/ego/v4 \
+            -version "${EGO_VERSION}" \
+            -timeout 20m \
+            -interval 30s
 
       - name: Create publisher bump branch from origin/main
         id: create-branch

@@ -34,7 +34,7 @@ Output is classified by a pure function (`Classify`) into transient (retry until
 
 - [x] T1 Pure classifier `Classify` plus tests, including the verbatim run 36474920456 fixture. Check: RED (does not compile), then GREEN. Commit `0b49e80`.
 - [x] T2 Bounded wait loop (injected prober, clock, sleeper; flags, `-timeout 0`, sleep clamp, `::error::` messages) and the real prober (`go mod download -json` with a scrubbed environment and temp dirs cleaned; tests inspect env and args). Check: table tests without network, fake `go` binary for the exec plumbing. Tasks T2 and the former "real prober" task share one commit because `package main` needs `main()` and the real prober to build; splitting would leave a non-building commit.
-- [ ] T3 Wire `release.yml`; actionlint, YAML parse, `bash -n`, no `${{` in run bodies, diff limited to the wait step.
+- [x] T3 Wire `release.yml`; actionlint, YAML parse, `bash -n`, no `${{` in run bodies, diff limited to the wait step.
 - [ ] T4 `docs/ci.md` section, live read-only probes, final verification, SHAs in this document.
 
 ## Acceptance criteria
