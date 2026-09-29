@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Full 40-character commit SHA of the merged publisher-bump PR on main"
+        description: "Full 40-character SHA of a commit on main that contains the bump of the four publishers, requires the given ego_version, and has a green build.yml run for that same SHA"
         required: true
         type: string
       ego_version:
