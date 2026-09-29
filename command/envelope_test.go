@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -35,118 +35,146 @@ import (
 )
 
 func TestNewEnvelope(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "NewEnvelope wraps a payload with its metadata", func(s *specs.Spec) {
+		s.It("exposes the payload and the metadata it was built with", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	payload := timestamppb.New(time.Unix(100, 0))
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
+			payload := timestamppb.New(time.Unix(100, 0))
+			env, err := command.NewEnvelope(payload, md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.True(t, proto.Equal(payload, env.Payload()))
-	require.Equal(t, md, env.Metadata())
+			ctx.Expect(proto.Equal(payload, env.Payload())).To(specs.BeTrue())
+			ctx.Expect(env.Metadata()).ToEqual(md)
+		})
+	})
 }
 
 func TestNewEnvelopeRejectsNilPayload(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "NewEnvelope rejects a nil payload", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidEnvelope", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, err = command.NewEnvelope(nil, md)
-	require.ErrorIs(t, err, command.ErrInvalidEnvelope)
+			_, err = command.NewEnvelope(nil, md)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidEnvelope))
+		})
+	})
 }
 
 func TestPayloadAsTypedExtraction(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "PayloadAs extracts the payload as a concrete type", func(s *specs.Spec) {
+		s.It("returns the payload for its own type and reports a different type as absent", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	payload := timestamppb.New(time.Unix(100, 0))
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
+			payload := timestamppb.New(time.Unix(100, 0))
+			env, err := command.NewEnvelope(payload, md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	got, ok := command.PayloadAs[*timestamppb.Timestamp](env)
-	require.True(t, ok)
-	require.Equal(t, int64(100), got.GetSeconds())
+			got, ok := command.PayloadAs[*timestamppb.Timestamp](env)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(got.GetSeconds()).ToEqual(int64(100))
 
-	_, ok = command.PayloadAs[*emptypb.Empty](env)
-	require.False(t, ok)
+			_, ok = command.PayloadAs[*emptypb.Empty](env)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
-	parentOp := mustOperationID(t, "op-1")
-	parentMD, err := command.NewMetadata(parentOp)
-	require.NoError(t, err)
+	specs.Describe(t, "Envelope.Derive delegates to Metadata.Derive", func(s *specs.Spec) {
+		s.It("carries the new payload, the inherited correlation and the parent as causation", func(ctx *specs.Context) {
+			parentOp := mustOperationID(ctx.T, "op-1")
+			parentMD, err := command.NewMetadata(parentOp)
+			ctx.Expect(err).To(specs.BeNil())
 
-	parentPayload := timestamppb.New(time.Unix(200, 0))
-	parentEnv, err := command.NewEnvelope(parentPayload, parentMD)
-	require.NoError(t, err)
+			parentPayload := timestamppb.New(time.Unix(200, 0))
+			parentEnv, err := command.NewEnvelope(parentPayload, parentMD)
+			ctx.Expect(err).To(specs.BeNil())
 
-	childOp := mustOperationID(t, "op-2")
-	childPayload := timestamppb.New(time.Unix(300, 0))
-	childEnv, err := parentEnv.Derive(childPayload, childOp)
-	require.NoError(t, err)
+			childOp := mustOperationID(ctx.T, "op-2")
+			childPayload := timestamppb.New(time.Unix(300, 0))
+			childEnv, err := parentEnv.Derive(childPayload, childOp)
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.True(t, proto.Equal(childPayload, childEnv.Payload()))
-	require.Equal(t, parentMD.CorrelationID(), childEnv.Metadata().CorrelationID())
-	require.Equal(t, childOp, childEnv.Metadata().OperationID())
+			ctx.Expect(proto.Equal(childPayload, childEnv.Payload())).To(specs.BeTrue())
+			ctx.Expect(childEnv.Metadata().CorrelationID()).ToEqual(parentMD.CorrelationID())
+			ctx.Expect(childEnv.Metadata().OperationID()).ToEqual(childOp)
 
-	causation, ok := childEnv.Metadata().CausationID()
-	require.True(t, ok)
-	require.Equal(t, command.CausationID(parentOp), causation)
+			causation, ok := childEnv.Metadata().CausationID()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(causation).ToEqual(command.CausationID(parentOp))
+		})
+	})
 }
 
 func TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "an absent expected revision survives an envelope carrier round trip", func(s *specs.Spec) {
+		s.It("writes no key and rebuilds an envelope with no expected revision", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	payload := timestamppb.New(time.Unix(100, 0))
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
+			payload := timestamppb.New(time.Unix(100, 0))
+			env, err := command.NewEnvelope(payload, md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(env.Metadata())
-	require.NotContains(t, carrier, "ego.cmd.expected_revision")
+			carrier := command.MarshalMetadata(env.Metadata())
+			ctx.Expect(carrierHas(carrier, "ego.cmd.expected_revision")).To(specs.BeFalse())
 
-	roundTripped, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			roundTripped, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	rebuilt, err := command.NewEnvelope(payload, roundTripped)
-	require.NoError(t, err)
+			rebuilt, err := command.NewEnvelope(payload, roundTripped)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, ok := rebuilt.Metadata().ExpectedRevision()
-	require.False(t, ok)
+			_, ok := rebuilt.Metadata().ExpectedRevision()
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	specs.Describe(t, "an envelope without an expected revision marshals exactly as before the field existed", func(s *specs.Spec) {
+		s.It("writes only the three required carrier keys", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	md, err := command.NewMetadata(op, command.WithTimestamp(ts))
-	require.NoError(t, err)
+			md, err := command.NewMetadata(op, command.WithTimestamp(ts))
+			ctx.Expect(err).To(specs.BeNil())
 
-	payload := timestamppb.New(time.Unix(100, 0))
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
+			payload := timestamppb.New(time.Unix(100, 0))
+			env, err := command.NewEnvelope(payload, md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(env.Metadata())
-	require.Equal(t, command.Carrier{
-		"ego.cmd.operation_id":   string(op),
-		"ego.cmd.correlation_id": string(command.CorrelationID(op)),
-		"ego.cmd.timestamp":      ts.Format(time.RFC3339Nano),
-	}, carrier)
+			carrier := command.MarshalMetadata(env.Metadata())
+			ctx.Expect(carrier).ToEqual(command.Carrier{
+				"ego.cmd.operation_id":   string(op),
+				"ego.cmd.correlation_id": string(command.CorrelationID(op)),
+				"ego.cmd.timestamp":      ts.Format(time.RFC3339Nano),
+			})
+		})
+	})
 }
 
 func TestEnvelopeDeriveRejectsNilPayload(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "Envelope.Derive rejects a nil payload", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidEnvelope", func(ctx *specs.Context) {
+			op := mustOperationID(ctx.T, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	payload := timestamppb.New(time.Unix(200, 0))
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
+			payload := timestamppb.New(time.Unix(200, 0))
+			env, err := command.NewEnvelope(payload, md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	childOp := mustOperationID(t, "op-2")
-	_, err = env.Derive(nil, childOp)
-	require.ErrorIs(t, err, command.ErrInvalidEnvelope)
+			childOp := mustOperationID(ctx.T, "op-2")
+			_, err = env.Derive(nil, childOp)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidEnvelope))
+		})
+	})
 }
