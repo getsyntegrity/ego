@@ -84,7 +84,7 @@ Delivery: single PR with one work-unit commit per slice (explicit user request).
 - [x] T1 `internal/engine/protocol` and the `internal/extensions` helpers; `engine` rewired.
 - [x] T2 `internal/engine/eventsource` with the cluster-kind wrapper and a wire-name pin.
 - [x] T3 `internal/engine/durablestate` and `internal/engine/saga` (one commit each).
-- [ ] T4 `internal/engine/projection` (supervision key pinned) and `engine.go` split by responsibility.
+- [x] T4 `internal/engine/projection` (supervision key pinned) and `engine.go` split by responsibility.
 - [ ] T5 archcheck rule for `internal/engine/...`, architecture docs, full verification, PR.
 
 ## Acceptance criteria
@@ -108,6 +108,13 @@ T2 (work unit 2): the event sourced actor and its three children moved to `inter
 
 T3 (work units 3 and 4, one commit each): `durablestate.Actor` and `saga.Actor` moved out of `engine`; `DurableStateActor` and `SagaActor` are wrappers in `engine/cluster_kinds.go`, and the wire-name pin still passes. The saga package also owns `StatusToProto`/`StatusFromProto` and the no-op action check. `saga.Actor.PreStart` now creates its stop channel when `New` did not, because the wrapper spawns the zero value. More shared fixtures went to `internal/engine/enginetest` (durable account and tenancy probe, bad version, envelope capturing durable, callback saga, simple reply actor, `MustAny`); `noTenantContext` is gone from `engine`. Checks per commit and at the end: `go build ./...`, `go vet ./engine/... ./internal/...`, archcheck (64 packages, 0 violations), `go test -count=1 ./internal/... ./engine/...`, `gofmt -l`, `golangci-lint run ./engine/... ./internal/...` (0 issues).
 
+T4 (work units 5 and 6, one commit each): `projection.Actor` moved to `internal/engine/projection`; `ProjectionActor`, `projectionRunnerError`, `newProjectionSupervisor` and `NewProjectionActor` stay in `engine`, and `ProjectionActor.PreStart` binds the escalation hook (`Actor.SetEscalation`) before delegating, so the runner cause is wrapped once in `projectionRunnerError` as on the base. The supervision and escalation tests stayed in `engine`; `TestProjectionSupervisorContract` still pins the `engine.projectionRunnerError` key. Then `engine/engine.go` was split into `engine.go`, `errors.go`, `entities.go`, `spawn_tenancy.go`, `commands.go`, `sagas.go`, `projections.go`, `streams.go` and `spawn_options.go` as a pure move: a script that hashes every top-level declaration of package `engine` (source bytes including doc comment) gave identical output before and after (148 declarations), and `go doc -all ./engine` is byte-identical. Checks: `go build ./...`, `go vet ./engine/... ./internal/...`, archcheck (65 packages, 0 violations), `go test -count=1 ./...`, `gofmt -l`, `golangci-lint run ./engine/... ./internal/...` (0 issues), nested modules build and vet.
+
+## Pending risks
+
+- The three persistence child actors (events writer, snapshots writer, events janitor) now report the GoAkt lifecycle metric kind label `eventsource.<name>` instead of `engine.<name>`. It only shows if a user enables GoAkt's optional metrics; eGo does not.
+- A saga actor built by reflection (cluster relocation) has a nil `stopCh`, so `PostStop` runs `close(nil)` and panics. This exists on the base commit and is preserved on purpose (`newSagaActor` in `engine/cluster_kinds.go` builds local sagas through `saga.New` as before). Fix it separately.
+
 ## Next step
 
-T4.
+T5.
