@@ -2335,37 +2335,34 @@ func TestScopedMigratorSnapshotRecoversThroughTenantAwareActor(t *testing.T) {
 // one stamped for another tenant: the source event must carry exactly the
 // selected scope's tenant.
 func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
-	ctx := context.Background()
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	globex, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+	specs.Describe(t, "a scoped migrator run never writes a snapshot without proven tenant metadata for its scope", func(s *specs.Spec) {
+		bg := context.Background()
+		acme := tenantScope(t, "acme")
+		globex := tenantContextOf(t, "globex")
 
-	for _, tc := range []struct {
-		name     string
-		metadata map[string]string
-		wantErr  error
-	}{
-		{name: "missing tenant metadata", metadata: nil, wantErr: tenancy.ErrInvalid},
-		{name: "another tenant's metadata", metadata: tenancy.MarshalMetadata(globex), wantErr: tenancy.ErrDenied},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			eventsStore := testkit.NewEventsStore()
-			require.NoError(t, eventsStore.Connect(ctx))
-			snapshotStore := testkit.NewSnapshotStore()
-			require.NoError(t, snapshotStore.Connect(ctx))
-			const id = "unprovable"
-			require.NoError(t, eventsStore.WriteEvents(ctx, acme, []*egopb.Event{scopedLegacyAccountEvent(t, id, 100, tc.metadata)}, persistence.Unconditional()))
+		for _, tc := range []struct {
+			name     string
+			metadata map[string]string
+			wantErr  error
+		}{
+			{name: "missing tenant metadata", metadata: nil, wantErr: tenancy.ErrInvalid},
+			{name: "another tenant's metadata", metadata: tenancy.MarshalMetadata(globex), wantErr: tenancy.ErrDenied},
+		} {
+			s.It(tc.name, func(ctx *specs.Context) {
+				eventsStore := connectedEventsStore(ctx.T)
+				snapshotStore := connectedSnapshotStore(ctx.T)
+				const id = "unprovable"
+				seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx.T, id, 100, tc.metadata))
 
-			migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
-			require.NoError(t, err)
-			require.ErrorIs(t, migrator.Run(ctx), tc.wantErr)
+				migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(migrator.Run(bg)).To(specs.MatchError(tc.wantErr))
 
-			snapshot, err := snapshotStore.GetLatestSnapshot(ctx, acme, id)
-			require.NoError(t, err)
-			assert.Nil(t, snapshot, "no snapshot may be written without proven tenant metadata")
-		})
-	}
+				// No snapshot may be written without proven tenant metadata.
+				ctx.Expect(latestSnapshot(ctx.T, snapshotStore, acme, id)).To(specs.BeNil())
+			})
+		}
+	})
 }
 
 // recreatingEventsStore writes a deleted source event straight back right
@@ -2409,51 +2406,48 @@ func (r *recreatingSnapshotStore) DeleteSnapshots(ctx context.Context, scope per
 // record found in the source after the delete — even at the verified
 // sequence, not only a newer one — is a failure, never source_deleted.
 func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
+	specs.Describe(t, "a record found in the source after the delete is a failure, never source_deleted", func(s *specs.Spec) {
+		source := persistence.Unscoped()
 
-	t.Run("events recreated at the same sequence", func(t *testing.T) {
-		base := testkit.NewEventsStore()
-		require.NoError(t, base.Connect(ctx))
-		const id = "recreated-event"
-		require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
-			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
-		}, persistence.Unconditional()))
+		s.It("events recreated at the same sequence", func(ctx *specs.Context) {
+			base := connectedEventsStore(ctx.T)
+			const id = "recreated-event"
+			seedEvents(ctx.T, base, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200))
 
-		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithEventsStore(&recreatingEventsStore{EventsStore: base, source: source, recreate: newLegacyEvent(t, id, 2, 200)}),
-			WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
-		require.NoError(t, err)
-		report, err := adopter.Run(ctx)
-		require.NoError(t, err)
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(&recreatingEventsStore{EventsStore: base, source: source, recreate: newLegacyEvent(ctx.T, id, 2, 200)}),
+				WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
 
-		assert.Zero(t, report.SourceDeleted, "a source that still holds a record must never be reported as deleted")
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
-		require.Len(t, report.Aggregates, 1)
-		assert.NotEqual(t, StatusSourceDeleted, report.Aggregates[0].Events.Status)
-	})
+			// A source that still holds a record is never reported as deleted.
+			ctx.Expect(report.SourceDeleted).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
+			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates[0].Events.Status).To(specs.NotEqual(StatusSourceDeleted))
+		})
 
-	t.Run("snapshot recreated at the same sequence", func(t *testing.T) {
-		base := testkit.NewSnapshotStore()
-		require.NoError(t, base.Connect(ctx))
-		const id = "recreated-snapshot"
-		require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 3, 300)))
+		s.It("snapshot recreated at the same sequence", func(ctx *specs.Context) {
+			base := connectedSnapshotStore(ctx.T)
+			const id = "recreated-snapshot"
+			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 3, 300))
 
-		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithSnapshotStore(&recreatingSnapshotStore{SnapshotStore: base, source: source, recreate: newLegacySnapshot(t, id, 3, 300)}),
-			WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
-		require.NoError(t, err)
-		report, err := adopter.Run(ctx)
-		require.NoError(t, err)
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithSnapshotStore(&recreatingSnapshotStore{SnapshotStore: base, source: source, recreate: newLegacySnapshot(ctx.T, id, 3, 300)}),
+				WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
 
-		assert.Zero(t, report.SourceDeleted, "a source that still holds a snapshot must never be reported as deleted")
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], errSourceChangedDuringAdoption)
-		require.Len(t, report.Aggregates, 1)
-		assert.NotEqual(t, StatusSourceDeleted, report.Aggregates[0].Snapshot.Status)
+			// A source that still holds a snapshot is never reported as deleted.
+			ctx.Expect(report.SourceDeleted).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
+			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates[0].Snapshot.Status).To(specs.NotEqual(StatusSourceDeleted))
+		})
 	})
 }
 
@@ -2465,23 +2459,32 @@ type untouchableSnapshotStore struct{ persistence.SnapshotStore }
 type untouchableStateStore struct{ persistence.StateStore }
 
 func TestNewTenantAdopterRejectsAnInvalidSourceScope(t *testing.T) {
-	adopter, err := NewTenantAdopter(fixedAssignment(nil),
-		WithEventsStore(untouchableEventsStore{}),
-		WithSnapshotStore(untouchableSnapshotStore{}),
-		WithStateStore(untouchableStateStore{}),
-		WithPersistenceIDs("order-1"),
-		WithSourceScope(persistence.Scope{}),
-		WithWriteEnabled(), WithAdoptionFence(newTestFence()))
-	require.ErrorIs(t, err, persistence.ErrInvalidScope, "the zero-value source scope must be rejected when the adopter is built")
-	assert.Nil(t, adopter, "no adopter may be returned for an invalid configuration")
+	specs.Describe(t, "NewTenantAdopter rejects the zero-value source scope when the adopter is built", func(s *specs.Spec) {
+		s.It("returns ErrInvalidScope and no adopter, without touching any store", func(ctx *specs.Context) {
+			adopter, err := NewTenantAdopter(fixedAssignment(nil),
+				WithEventsStore(untouchableEventsStore{}),
+				WithSnapshotStore(untouchableSnapshotStore{}),
+				WithStateStore(untouchableStateStore{}),
+				WithPersistenceIDs("order-1"),
+				WithSourceScope(persistence.Scope{}),
+				WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			// No adopter may be returned for an invalid configuration.
+			ctx.Expect(adopter).To(specs.BeNil())
+		})
+	})
 }
 
 // TestMaxReplayLimitFitsInAnInt pins that the "read everything" replay limit
 // never overflows when a store converts it to int, as
 // testkit.EventStore.ReplayEvents does, on any architecture.
 func TestMaxReplayLimitFitsInAnInt(t *testing.T) {
-	assert.Equal(t, uint64(math.MaxInt), maxReplayLimit)
-	assert.GreaterOrEqual(t, int(maxReplayLimit), 0)
+	specs.Describe(t, "the read-everything replay limit never overflows when a store converts it to int", func(s *specs.Spec) {
+		s.It("equals math.MaxInt and converts to a non-negative int", func(ctx *specs.Context) {
+			ctx.Expect(maxReplayLimit).ToEqual(uint64(math.MaxInt))
+			ctx.Expect(int(maxReplayLimit) >= 0).To(specs.BeTrue())
+		})
+	})
 }
 
 // TestTenantAdopterReplaysSequencesBeyondTheLimitValue pins that the replay
@@ -2490,30 +2493,28 @@ func TestMaxReplayLimitFitsInAnInt(t *testing.T) {
 // still be read, copied, and verified — never silently left behind while the
 // run reports a verified migration.
 func TestTenantAdopterReplaysSequencesBeyondTheLimitValue(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "the replay range covers every sequence number, including one above math.MaxInt", func(s *specs.Spec) {
+		s.It("reads, copies and verifies an event above math.MaxInt", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx.T)
 
-	const id = "high-sequence"
-	high := uint64(math.MaxInt) + 1
-	source := persistence.Unscoped()
-	require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{
-		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, high, 200),
-	}, persistence.Unconditional()))
+			const id = "high-sequence"
+			high := uint64(math.MaxInt) + 1
+			source := persistence.Unscoped()
+			seedEvents(ctx.T, store, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, high, 200))
 
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, report.Verified)
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(report.Verified).ToEqual(1)
 
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	adopted, err := store.ReplayEvents(ctx, target, id, 1, math.MaxUint64, 10)
-	require.NoError(t, err)
-	require.Len(t, adopted, 2, "the event above math.MaxInt must be adopted too")
-	assert.Equal(t, high, adopted[1].GetSequenceNumber())
+			target := tenantScope(ctx.T, "acme")
+			// The event above math.MaxInt must be adopted too.
+			adopted := replayEvents(ctx.T, store, target, id, 1, math.MaxUint64, 10)
+			ctx.Expect(len(adopted)).ToEqual(2)
+			ctx.Expect(adopted[1].GetSequenceNumber()).ToEqual(high)
+		})
+	})
 }
 
 // hidingEventsStore drops one sequence number from target reads, the way a
@@ -2544,89 +2545,84 @@ func (h *hidingEventsStore) ReplayEvents(ctx context.Context, scope persistence.
 // chain proves the adopted run is complete even when the sequence numbers
 // are legitimately sparse, and any missing or tampered link fails closed.
 func TestTenantAdopterChainedEventReceipts(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	acme, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "a re-run proves an events adoption through its chained receipts and fails closed on any broken link", func(s *specs.Spec) {
+		source := persistence.Unscoped()
+		target := tenantScope(t, "acme")
+		acme := tenantContextOf(t, "acme")
 
-	adoptSparse := func(t *testing.T, id string) *testkit.EventStore {
-		t.Helper()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{
-			newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 5, 500), newLegacyEvent(t, id, 9, 900),
-		}, persistence.Unconditional()))
-		first := rerun(t, store, id)
-		require.Equal(t, 1, first.SourceDeleted, "the sparse stream must be adopted and its source deleted")
-		return store
-	}
+		adoptSparse := func(t testing.TB, id string) *testkit.EventStore {
+			t.Helper()
+			store := connectedEventsStore(t)
+			seedEvents(t, store, source, newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 5, 500), newLegacyEvent(t, id, 9, 900))
+			// The sparse stream must be adopted and its source deleted.
+			if first := rerun(t, store, id); first.SourceDeleted != 1 {
+				t.Fatalf("adopt sparse %q: source deleted = %d, want 1", id, first.SourceDeleted)
+			}
+			return store
+		}
 
-	t.Run("a sparse stream re-run after source deletion is already present", func(t *testing.T) {
-		store := adoptSparse(t, "sparse")
-		report := rerun(t, store, "sparse")
-		assert.Equal(t, 1, report.AlreadyPresent)
-		assert.Zero(t, report.Failed)
-	})
+		s.It("a sparse stream re-run after source deletion is already present", func(ctx *specs.Context) {
+			store := adoptSparse(ctx.T, "sparse")
+			report := rerun(ctx.T, store, "sparse")
+			ctx.Expect(report.AlreadyPresent).ToEqual(1)
+			ctx.Expect(report.Failed).ToEqual(0)
+		})
 
-	t.Run("live events after the adopted chain are not mistaken for part of it", func(t *testing.T) {
-		store := adoptSparse(t, "sparse-live")
-		live := newLegacyEvent(t, "sparse-live", 12, 1200)
-		live.TenantMetadata = tenancy.MarshalMetadata(acme)
-		require.NoError(t, store.WriteEvents(ctx, target, []*egopb.Event{live}, persistence.Unconditional()))
+		s.It("live events after the adopted chain are not mistaken for part of it", func(ctx *specs.Context) {
+			store := adoptSparse(ctx.T, "sparse-live")
+			live := newLegacyEvent(ctx.T, "sparse-live", 12, 1200)
+			live.TenantMetadata = tenancy.MarshalMetadata(acme)
+			seedEvents(ctx.T, store, target, live)
 
-		report := rerun(t, store, "sparse-live")
-		assert.Equal(t, 1, report.AlreadyPresent)
-		assert.Zero(t, report.Failed)
-	})
+			report := rerun(ctx.T, store, "sparse-live")
+			ctx.Expect(report.AlreadyPresent).ToEqual(1)
+			ctx.Expect(report.Failed).ToEqual(0)
+		})
 
-	t.Run("a missing first adopted event fails", func(t *testing.T) {
-		store := adoptSparse(t, "sparse-first")
-		report := rerun(t, &hidingEventsStore{EventsStore: store, target: target, hide: 1}, "sparse-first")
-		assert.Zero(t, report.AlreadyPresent)
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
-	})
+		s.It("a missing first adopted event fails", func(ctx *specs.Context) {
+			store := adoptSparse(ctx.T, "sparse-first")
+			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 1}, "sparse-first")
+			ctx.Expect(report.AlreadyPresent).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
+		})
 
-	t.Run("a missing middle adopted event fails", func(t *testing.T) {
-		store := adoptSparse(t, "sparse-middle")
-		report := rerun(t, &hidingEventsStore{EventsStore: store, target: target, hide: 5}, "sparse-middle")
-		assert.Zero(t, report.AlreadyPresent)
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], errTargetNotEquivalent)
-	})
+		s.It("a missing middle adopted event fails", func(ctx *specs.Context) {
+			store := adoptSparse(ctx.T, "sparse-middle")
+			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 5}, "sparse-middle")
+			ctx.Expect(report.AlreadyPresent).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
+		})
 
-	t.Run("a receipt whose recorded predecessor was altered fails", func(t *testing.T) {
-		store := adoptSparse(t, "sparse-tampered")
-		adopted, err := store.ReplayEvents(ctx, target, "sparse-tampered", 1, math.MaxUint64, 10)
-		require.NoError(t, err)
-		require.Len(t, adopted, 3)
-		tampered, ok := proto.Clone(adopted[2]).(*egopb.Event)
-		require.True(t, ok)
-		receipt := tampered.GetTenantMetadata()[adoptionReceiptKey]
-		parts := strings.SplitN(receipt, ":", 3)
-		require.Len(t, parts, 3, "an event receipt records its predecessor: v1:<previous>:<digest>")
-		tampered.TenantMetadata[adoptionReceiptKey] = parts[0] + ":1:" + parts[2]
-		require.NoError(t, store.WriteEvents(ctx, target, []*egopb.Event{tampered}, persistence.Unconditional()))
+		s.It("a receipt whose recorded predecessor was altered fails", func(ctx *specs.Context) {
+			store := adoptSparse(ctx.T, "sparse-tampered")
+			adopted := replayEvents(ctx.T, store, target, "sparse-tampered", 1, math.MaxUint64, 10)
+			ctx.Expect(len(adopted)).ToEqual(3)
+			tampered, ok := proto.Clone(adopted[2]).(*egopb.Event)
+			ctx.Expect(ok).To(specs.BeTrue())
+			receipt := tampered.GetTenantMetadata()[adoptionReceiptKey]
+			parts := strings.SplitN(receipt, ":", 3)
+			// An event receipt records its predecessor: v1:<previous>:<digest>.
+			ctx.Expect(len(parts)).ToEqual(3)
+			tampered.TenantMetadata[adoptionReceiptKey] = parts[0] + ":1:" + parts[2]
+			seedEvents(ctx.T, store, target, tampered)
 
-		report := rerun(t, store, "sparse-tampered")
-		assert.Zero(t, report.AlreadyPresent)
-		assert.Equal(t, 1, report.Failed)
+			report := rerun(ctx.T, store, "sparse-tampered")
+			ctx.Expect(report.AlreadyPresent).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+		})
 	})
 }
 
 // rerun runs a write-enabled, source-deleting adoption of id to "acme".
-func rerun(t *testing.T, store persistence.EventsStore, id string) *AdoptionReport {
+func rerun(t testing.TB, store persistence.EventsStore, id string) *AdoptionReport {
 	t.Helper()
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+	adopter := newAdopter(t, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 		WithEventsStore(store), WithPersistenceIDs(id), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
-	require.NoError(t, err)
-	report, err := adopter.Run(context.Background())
-	require.NoError(t, err)
-	return report
+	return mustAdopt(t, adopter)
 }
 
 // TestTenantAdopterCountsSideEffectsOfAFailedAggregate pins that the report
@@ -2634,38 +2630,40 @@ func rerun(t *testing.T, store persistence.EventsStore, id string) *AdoptionRepo
 // copied and their source deleted, and a LATER record kind then fails, the
 // aggregate counts as Failed and still toward Copied and SourceDeleted.
 func TestTenantAdopterCountsSideEffectsOfAFailedAggregate(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "the report never hides an irreversible side effect of an aggregate that later failed", func(s *specs.Spec) {
+		s.It("counts a failed aggregate still toward Copied and SourceDeleted", func(ctx *specs.Context) {
+			source := persistence.Unscoped()
+			target := tenantScope(ctx.T, "acme")
 
-	eventsStore := testkit.NewEventsStore()
-	require.NoError(t, eventsStore.Connect(ctx))
-	snapshotStore := testkit.NewSnapshotStore()
-	require.NoError(t, snapshotStore.Connect(ctx))
-	const id = "partial-side-effects"
-	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, 100)}, persistence.Unconditional()))
-	require.NoError(t, snapshotStore.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 1, 100)))
+			eventsStore := connectedEventsStore(ctx.T)
+			snapshotStore := connectedSnapshotStore(ctx.T)
+			const id = "partial-side-effects"
+			seedEvents(ctx.T, eventsStore, source, newLegacyEvent(ctx.T, id, 1, 100))
+			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 1, 100))
 
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithEventsStore(eventsStore),
-		WithSnapshotStore(&corruptingSnapshotStore{SnapshotStore: snapshotStore, corruptScope: target, mangle: func(s *egopb.Snapshot) { s.State = nil }}),
-		WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(eventsStore),
+				WithSnapshotStore(&corruptingSnapshotStore{SnapshotStore: snapshotStore, corruptScope: target, mangle: func(s *egopb.Snapshot) { s.State = nil }}),
+				WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
 
-	assert.Equal(t, 1, report.Failed, "the snapshot verification failed")
-	assert.Equal(t, 1, report.Copied, "the events were written to the target before the snapshot failed")
-	assert.Equal(t, 1, report.SourceDeleted, "the events' source was irreversibly deleted before the snapshot failed")
-	assert.Zero(t, report.Verified, "the aggregate as a whole did not verify")
-	require.Len(t, report.Aggregates, 1)
-	assert.Equal(t, StatusSourceDeleted, report.Aggregates[0].Events.Status)
-	assert.Equal(t, StatusFailed, report.Aggregates[0].Snapshot.Status)
+			// The snapshot verification failed.
+			ctx.Expect(report.Failed).ToEqual(1)
+			// The events were written to the target before the snapshot failed.
+			ctx.Expect(report.Copied).ToEqual(1)
+			// The events' source was irreversibly deleted before the snapshot failed.
+			ctx.Expect(report.SourceDeleted).ToEqual(1)
+			// The aggregate as a whole did not verify.
+			ctx.Expect(report.Verified).ToEqual(0)
+			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates[0].Events.Status).ToEqual(StatusSourceDeleted)
+			ctx.Expect(report.Aggregates[0].Snapshot.Status).ToEqual(StatusFailed)
 
-	remaining, err := eventsStore.ReplayEvents(ctx, source, id, 1, math.MaxUint64, 10)
-	require.NoError(t, err)
-	assert.Empty(t, remaining, "precondition: the side effect the report must show really happened")
+			// Precondition: the side effect the report must show really happened.
+			ctx.Expect(len(replayEvents(ctx.T, eventsStore, source, id, 1, math.MaxUint64, 10))).ToEqual(0)
+		})
+	})
 }
 
 // reorderingEventsStore returns source replays after the first one in
@@ -2696,23 +2694,24 @@ func (r *reorderingEventsStore) ReplayEvents(ctx context.Context, scope persiste
 // re-read compares the source by sequence number, not by position: the
 // same verified events returned in another order are unchanged.
 func TestTenantAdopterPreDeleteCheckIgnoresReplayOrder(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	base := testkit.NewEventsStore()
-	require.NoError(t, base.Connect(ctx))
-	const id = "reordered"
-	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
-		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200), newLegacyEvent(t, id, 3, 300),
-	}, persistence.Unconditional()))
+	specs.Describe(t, "the pre-delete re-read compares the source by sequence number, not by position", func(s *specs.Spec) {
+		s.It("treats the same events in another order as unchanged", func(ctx *specs.Context) {
+			source := persistence.Unscoped()
+			base := connectedEventsStore(ctx.T)
+			const id = "reordered"
+			seedEvents(ctx.T, base, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200), newLegacyEvent(ctx.T, id, 3, 300))
 
-	store := &reorderingEventsStore{EventsStore: base, source: source}
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
+			store := &reorderingEventsStore{EventsStore: base, source: source}
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.GreaterOrEqual(t, store.sourceReplays, 2, "precondition: the pre-delete re-read saw the reordered replay")
-	assert.Zero(t, report.Failed, "a reordered replay of the same events is not a source change")
-	assert.Equal(t, 1, report.SourceDeleted)
+			// Precondition: the pre-delete re-read saw the reordered replay.
+			ctx.Expect(store.sourceReplays >= 2).To(specs.BeTrue())
+			// A reordered replay of the same events is not a source change.
+			ctx.Expect(report.Failed).ToEqual(0)
+			ctx.Expect(report.SourceDeleted).ToEqual(1)
+		})
+	})
 }
