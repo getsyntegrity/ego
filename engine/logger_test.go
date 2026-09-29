@@ -28,6 +28,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 	"github.com/stretchr/testify/assert"
@@ -75,52 +76,67 @@ func newSinkLogger(level kitlog.Level) (kitlog.Logger, *recordSink) {
 }
 
 func TestResolveLogger(t *testing.T) {
-	t.Run("nil falls back to the default", func(t *testing.T) {
-		assert.Same(t, DefaultLogger(), ResolveLogger(nil))
-	})
+	specs.Describe(t, "ResolveLogger returns a usable logger", func(s *specs.Spec) {
+		s.It("nil falls back to the default", func(ctx *specs.Context) {
+			ctx.Expect(ResolveLogger(nil) == DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("typed nil falls back to the default", func(t *testing.T) {
-		var typedNil *kitlogtest.MockLogger
-		assert.Same(t, DefaultLogger(), ResolveLogger(typedNil))
-	})
+		s.It("typed nil falls back to the default", func(ctx *specs.Context) {
+			var typedNil *kitlogtest.MockLogger
+			ctx.Expect(ResolveLogger(typedNil) == DefaultLogger()).To(specs.BeTrue())
+		})
 
-	t.Run("a usable logger is returned as-is", func(t *testing.T) {
-		logger := kitlogtest.NewMockLogger()
-		assert.Same(t, logger, ResolveLogger(logger))
+		s.It("a usable logger is returned as-is", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			ctx.Expect(ResolveLogger(logger) == kitlog.Logger(logger)).To(specs.BeTrue())
+		})
 	})
 }
 
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
-	assert.Same(t, kitlog.L(), DefaultLogger())
+	specs.Describe(t, "DefaultLogger is the kit-logger global", func(s *specs.Spec) {
+		s.It("follows the global, including one installed before configuring eGo", func(ctx *specs.Context) {
+			ctx.Expect(kitlog.L() == DefaultLogger()).To(specs.BeTrue())
 
-	// An application that installs its own global before configuring eGo
-	// gets the engine's records through it without passing WithLogger.
-	previous := kitlog.L()
-	t.Cleanup(func() { kitlog.SetGlobal(previous) })
+			// An application that installs its own global before configuring eGo
+			// gets the engine's records through it without passing WithLogger.
+			previous := kitlog.L()
+			ctx.T.Cleanup(func() { kitlog.SetGlobal(previous) })
 
-	custom := kitlogtest.NewMockLogger()
-	kitlog.SetGlobal(custom)
-	assert.Same(t, custom, DefaultLogger())
-	assert.Same(t, custom, NewConfig(nil).logger)
+			custom := kitlogtest.NewMockLogger()
+			kitlog.SetGlobal(custom)
+			ctx.Expect(DefaultLogger() == kitlog.Logger(custom)).To(specs.BeTrue())
+			ctx.Expect(NewConfig(nil).logger == kitlog.Logger(custom)).To(specs.BeTrue())
+		})
+	})
 }
 
 func TestDiscardLoggerDisablesEveryLevel(t *testing.T) {
-	adapter := newLoggerAdapter(DiscardLogger)
+	specs.Describe(t, "DiscardLogger disables every level", func(s *specs.Spec) {
+		s.It("reports no level and drops every record without panicking", func(ctx *specs.Context) {
+			adapter := newLoggerAdapter(DiscardLogger)
 
-	assert.Equal(t, log.InvalidLevel, adapter.LogLevel())
-	for _, level := range []log.Level{
-		log.DebugLevel, log.InfoLevel, log.WarningLevel,
-		log.ErrorLevel, log.FatalLevel, log.PanicLevel,
-	} {
-		assert.False(t, adapter.Enabled(level), "level %v must be disabled", level)
-	}
+			ctx.Expect(adapter.LogLevel()).ToEqual(log.InvalidLevel)
+			var enabled []log.Level
+			for _, level := range []log.Level{
+				log.DebugLevel, log.InfoLevel, log.WarningLevel,
+				log.ErrorLevel, log.FatalLevel, log.PanicLevel,
+			} {
+				if adapter.Enabled(level) {
+					enabled = append(enabled, level)
+				}
+			}
+			ctx.Expect(enabled).To(specs.BeNil())
 
-	// Emitting through a discarding logger must be a no-op, never a panic.
-	require.NotPanics(t, func() {
-		adapter.Info("dropped")
-		adapter.Errorf("dropped %d", 1)
-		adapter.With("k", "v").Warn("dropped")
-		DiscardLogger.Error("dropped", "k", "v")
+			// Emitting through a discarding logger must be a no-op, never a panic.
+			panicked := optRecovered(func() {
+				adapter.Info("dropped")
+				adapter.Errorf("dropped %d", 1)
+				adapter.With("k", "v").Warn("dropped")
+				DiscardLogger.Error("dropped", "k", "v")
+			})
+			ctx.Expect(panicked).To(specs.BeNil())
+		})
 	})
 }
 
