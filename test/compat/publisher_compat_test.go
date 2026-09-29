@@ -26,12 +26,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/ego/port/publishing"
 	"github.com/getsyntegrity/ego/publisher/kafka"
 	"github.com/getsyntegrity/ego/publisher/nats"
 	"github.com/getsyntegrity/ego/publisher/pulsar"
 	"github.com/getsyntegrity/ego/publisher/websocket"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // The publishers still satisfy the compatibility aliases in package engine (ADR
