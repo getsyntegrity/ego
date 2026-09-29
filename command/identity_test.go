@@ -102,14 +102,18 @@ func TestGenerateOperationID(t *testing.T) {
 func TestGenerateOperationIDUniqueness(t *testing.T) {
 	specs.Describe(t, "GenerateOperationID does not repeat an id", func(s *specs.Spec) {
 		s.It("generates 1000 unique ids", func(ctx *specs.Context) {
+			// Duplicates are collected rather than asserted one by one, so a failure lists the repeated ids.
 			seen := make(map[command.OperationID]struct{})
+			var duplicates []command.OperationID
 			for i := 0; i < 1000; i++ {
 				op, err := command.GenerateOperationID()
 				ctx.Expect(err).To(specs.BeNil())
-				_, exists := seen[op]
-				ctx.Expect(exists).To(specs.BeFalse())
+				if _, exists := seen[op]; exists {
+					duplicates = append(duplicates, op)
+				}
 				seen[op] = struct{}{}
 			}
+			ctx.Expect(duplicates).To(specs.BeNil())
 		})
 	})
 }
