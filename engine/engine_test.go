@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -694,63 +695,72 @@ func TestEngineActorSystemAccessor(t *testing.T) {
 // ErrEngineNotStarted when the engine's actor system reference has been
 // detached (mid-Stop or never started).
 func TestEngineHotPathGuards(t *testing.T) {
-	// Build a synthetic engine that has Started()==true but no actor system
-	// reference. Reproduces the race between Stop's atomic detach and a
-	// concurrent hot-path caller.
-	synth := func(t *testing.T) *Engine {
-		t.Helper()
-		e := &Engine{
-			eventsStore:   testkit.NewEventsStore(),
-			logger:        DiscardLogger,
-			eventsStreams: syncmap.New[string, *eventsStream](),
-			statesStreams: syncmap.New[string, *statesStream](),
+	specs.Describe(t, "every hot-path method returns ErrEngineNotStarted when the actor system reference is detached", func(s *specs.Spec) {
+		// Build a synthetic engine that has Started()==true but no actor system
+		// reference. Reproduces the race between Stop's atomic detach and a
+		// concurrent hot-path caller.
+		synth := func() *Engine {
+			e := &Engine{
+				eventsStore:   testkit.NewEventsStore(),
+				logger:        DiscardLogger,
+				eventsStreams: syncmap.New[string, *eventsStream](),
+				statesStreams: syncmap.New[string, *statesStream](),
+			}
+			e.started.Store(true)
+			return e
 		}
-		e.started.Store(true)
-		return e
-	}
 
-	ctx := context.Background()
+		bg := context.Background()
 
-	t.Run("StartProjection", func(t *testing.T) {
-		err := synth(t).StartProjection(ctx, "projection-"+uuid.NewString())
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-	})
-	t.Run("StopProjection", func(t *testing.T) {
-		err := synth(t).StopProjection(ctx, "projection-"+uuid.NewString())
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-	})
-	t.Run("IsProjectionRunning", func(t *testing.T) {
-		running, err := synth(t).IsProjectionRunning(ctx, "projection-"+uuid.NewString())
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-		require.False(t, running)
-	})
-	t.Run("Entity", func(t *testing.T) {
-		err := synth(t).Entity(ctx, NewEventSourcedEntity(uuid.NewString()))
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-	})
-	t.Run("EntityExists", func(t *testing.T) {
-		exists, err := synth(t).EntityExists(ctx, uuid.NewString())
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-		require.False(t, exists)
-	})
-	t.Run("DurableStateEntity", func(t *testing.T) {
-		err := synth(t).DurableStateEntity(ctx, NewAccountDurableStateBehavior(uuid.NewString()))
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-	})
-	t.Run("SendCommand", func(t *testing.T) {
-		state, rev, err := synth(t).SendCommand(ctx, uuid.NewString(), &testpb.CreateAccount{}, time.Second)
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-		require.Nil(t, state)
-		require.Zero(t, rev)
-	})
-	t.Run("Saga", func(t *testing.T) {
-		err := synth(t).Saga(ctx, &testSagaBehavior{sagaID: "saga-" + uuid.NewString()}, time.Second)
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-	})
-	t.Run("SagaStatus", func(t *testing.T) {
-		info, err := synth(t).SagaStatus(ctx, "saga-"+uuid.NewString(), time.Second)
-		require.ErrorIs(t, err, ErrEngineNotStarted)
-		require.Nil(t, info)
+		s.It("StartProjection", func(ctx *specs.Context) {
+			err := synth().StartProjection(bg, "projection-"+uuid.NewString())
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+		})
+
+		s.It("StopProjection", func(ctx *specs.Context) {
+			err := synth().StopProjection(bg, "projection-"+uuid.NewString())
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+		})
+
+		s.It("IsProjectionRunning", func(ctx *specs.Context) {
+			running, err := synth().IsProjectionRunning(bg, "projection-"+uuid.NewString())
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(running).To(specs.BeFalse())
+		})
+
+		s.It("Entity", func(ctx *specs.Context) {
+			err := synth().Entity(bg, NewEventSourcedEntity(uuid.NewString()))
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+		})
+
+		s.It("EntityExists", func(ctx *specs.Context) {
+			exists, err := synth().EntityExists(bg, uuid.NewString())
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(exists).To(specs.BeFalse())
+		})
+
+		s.It("DurableStateEntity", func(ctx *specs.Context) {
+			err := synth().DurableStateEntity(bg, NewAccountDurableStateBehavior(uuid.NewString()))
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+		})
+
+		s.It("SendCommand", func(ctx *specs.Context) {
+			state, rev, err := synth().SendCommand(bg, uuid.NewString(), &testpb.CreateAccount{}, time.Second)
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(state == nil).To(specs.BeTrue())
+			specs.ExpectT(ctx, rev).ToEqual(0)
+		})
+
+		s.It("Saga", func(ctx *specs.Context) {
+			err := synth().Saga(bg, &testSagaBehavior{sagaID: "saga-" + uuid.NewString()}, time.Second)
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+		})
+
+		s.It("SagaStatus", func(ctx *specs.Context) {
+			info, err := synth().SagaStatus(bg, "saga-"+uuid.NewString(), time.Second)
+			ctx.Expect(err).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(info == nil).To(specs.BeTrue())
+		})
 	})
 }
 
@@ -1124,101 +1134,111 @@ func newTestCluster(t *testing.T, nodeOpts ...[]Option) *testCluster {
 
 // TestParseCommandReply pins the reply-decoding contract.
 func TestParseCommandReply(t *testing.T) {
-	t.Run("error reply", func(t *testing.T) {
-		reply := &egopb.CommandReply{
-			Reply: &egopb.CommandReply_ErrorReply{
-				ErrorReply: &egopb.ErrorReply{Message: "something failed"},
-			},
-		}
-		_, _, err := protocol.ParseCommandReply(reply)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "something failed")
-	})
-
-	t.Run("no reply", func(t *testing.T) {
-		_, _, err := protocol.ParseCommandReply(&egopb.CommandReply{})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no state received")
-	})
-
-	t.Run("state reply", func(t *testing.T) {
-		state, _ := anypb.New(&samplepb.Account{AccountId: "acc-1", AccountBalance: 100})
-		reply := &egopb.CommandReply{
-			Reply: &egopb.CommandReply_StateReply{
-				StateReply: &egopb.StateReply{
-					PersistenceId:  "entity-1",
-					State:          state,
-					SequenceNumber: 5,
+	specs.Describe(t, "protocol.ParseCommandReply decodes a command reply", func(s *specs.Spec) {
+		s.It("error reply", func(ctx *specs.Context) {
+			reply := &egopb.CommandReply{
+				Reply: &egopb.CommandReply_ErrorReply{
+					ErrorReply: &egopb.ErrorReply{Message: "something failed"},
 				},
-			},
-		}
-		result, seq, err := protocol.ParseCommandReply(reply)
-		require.NoError(t, err)
-		assert.EqualValues(t, 5, seq)
-		assert.NotNil(t, result)
-	})
+			}
+			_, _, err := protocol.ParseCommandReply(reply)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("something failed"))
+		})
 
-	t.Run("unmarshal failure", func(t *testing.T) {
-		reply := &egopb.CommandReply{
-			Reply: &egopb.CommandReply_StateReply{
-				StateReply: &egopb.StateReply{
-					State:          &anypb.Any{TypeUrl: "type.googleapis.com/invalid.Type", Value: []byte("garbage")},
-					SequenceNumber: 1,
+		s.It("no reply", func(ctx *specs.Context) {
+			_, _, err := protocol.ParseCommandReply(&egopb.CommandReply{})
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("no state received"))
+		})
+
+		s.It("state reply", func(ctx *specs.Context) {
+			state, _ := anypb.New(&samplepb.Account{AccountId: "acc-1", AccountBalance: 100})
+			reply := &egopb.CommandReply{
+				Reply: &egopb.CommandReply_StateReply{
+					StateReply: &egopb.StateReply{
+						PersistenceId:  "entity-1",
+						State:          state,
+						SequenceNumber: 5,
+					},
 				},
-			},
-		}
-		_, _, err := protocol.ParseCommandReply(reply)
-		require.Error(t, err)
+			}
+			result, seq, err := protocol.ParseCommandReply(reply)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, seq).ToEqual(5)
+			ctx.Expect(result != nil).To(specs.BeTrue())
+		})
+
+		s.It("unmarshal failure", func(ctx *specs.Context) {
+			reply := &egopb.CommandReply{
+				Reply: &egopb.CommandReply_StateReply{
+					StateReply: &egopb.StateReply{
+						State:          &anypb.Any{TypeUrl: "type.googleapis.com/invalid.Type", Value: []byte("garbage")},
+						SequenceNumber: 1,
+					},
+				},
+			}
+			_, _, err := protocol.ParseCommandReply(reply)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+		})
 	})
 }
 
 // TestBuildSpawnOptionsFromConfig pins the SpawnOption translation that the
 // entity/durable-state/saga paths share.
 func TestBuildSpawnOptionsFromConfig(t *testing.T) {
-	t.Run("with batch threshold", func(t *testing.T) {
-		opts := buildSpawnOptionsFromConfig(&spawnConfig{
-			batchThreshold:      5,
-			supervisorDirective: RestartDirective,
-			entitiesPlacement:   RoundRobin,
+	specs.Describe(t, "buildSpawnOptionsFromConfig translates a spawn config into GoAkt spawn options", func(s *specs.Spec) {
+		s.It("with batch threshold", func(ctx *specs.Context) {
+			opts := buildSpawnOptionsFromConfig(&spawnConfig{
+				batchThreshold:      5,
+				supervisorDirective: RestartDirective,
+				entitiesPlacement:   RoundRobin,
+			})
+			ctx.Expect(len(opts) > 0).To(specs.BeTrue())
 		})
-		require.NotEmpty(t, opts)
-	})
-	t.Run("with passivation", func(t *testing.T) {
-		opts := buildSpawnOptionsFromConfig(&spawnConfig{
-			passivateAfter:      time.Minute,
-			supervisorDirective: RestartDirective,
-			entitiesPlacement:   RoundRobin,
+		s.It("with passivation", func(ctx *specs.Context) {
+			opts := buildSpawnOptionsFromConfig(&spawnConfig{
+				passivateAfter:      time.Minute,
+				supervisorDirective: RestartDirective,
+				entitiesPlacement:   RoundRobin,
+			})
+			ctx.Expect(len(opts) > 0).To(specs.BeTrue())
 		})
-		require.NotEmpty(t, opts)
-	})
-	t.Run("relocation enabled", func(t *testing.T) {
-		opts := buildSpawnOptionsFromConfig(&spawnConfig{
-			toRelocate:          true,
-			supervisorDirective: RestartDirective,
-			entitiesPlacement:   RoundRobin,
+		s.It("relocation enabled", func(ctx *specs.Context) {
+			opts := buildSpawnOptionsFromConfig(&spawnConfig{
+				toRelocate:          true,
+				supervisorDirective: RestartDirective,
+				entitiesPlacement:   RoundRobin,
+			})
+			ctx.Expect(len(opts) > 0).To(specs.BeTrue())
 		})
-		require.NotEmpty(t, opts)
 	})
 }
 
 // TestToSpawnPlacement maps eGo placement strategies to their goakt
 // equivalents.
 func TestToSpawnPlacement(t *testing.T) {
-	assert.Equal(t, goakt.LeastLoad, toSpawnPlacement(LeastLoad))
-	assert.Equal(t, goakt.Random, toSpawnPlacement(Random))
-	assert.Equal(t, goakt.Local, toSpawnPlacement(Local))
-	assert.Equal(t, goakt.RoundRobin, toSpawnPlacement(RoundRobin))
+	specs.Describe(t, "toSpawnPlacement maps each eGo placement strategy to its GoAkt equivalent", func(s *specs.Spec) {
+		s.It("maps LeastLoad, Random, Local and RoundRobin", func(ctx *specs.Context) {
+			ctx.Expect(toSpawnPlacement(LeastLoad)).ToEqual(goakt.LeastLoad)
+			ctx.Expect(toSpawnPlacement(Random)).ToEqual(goakt.Random)
+			ctx.Expect(toSpawnPlacement(Local)).ToEqual(goakt.Local)
+			ctx.Expect(toSpawnPlacement(RoundRobin)).ToEqual(goakt.RoundRobin)
+		})
+	})
 }
 
 // TestToSupervisorDirective maps eGo supervisor directives to goakt.
 func TestToSupervisorDirective(t *testing.T) {
-	t.Run("stop maps to Stop", func(t *testing.T) {
-		// concrete assertion is on stringer; behavior is "anything not RestartDirective stops".
-		// Negative test below.
-	})
-	t.Run("restart maps to Restart (default)", func(t *testing.T) {
-		dir := toSupervisorDirective(RestartDirective)
-		require.NotNil(t, dir)
+	specs.Describe(t, "toSupervisorDirective maps eGo supervisor directives to GoAkt", func(s *specs.Spec) {
+		s.It("stop maps to Stop", func(ctx *specs.Context) {
+			// concrete assertion is on stringer; behavior is "anything not RestartDirective stops".
+			// Negative test below.
+		})
+		s.It("restart maps to Restart (default)", func(ctx *specs.Context) {
+			dir := toSupervisorDirective(RestartDirective)
+			ctx.Expect(dir).ToEqual(supervisor.RestartDirective)
+		})
 	})
 }
 
@@ -1869,21 +1889,29 @@ func TestEngineSendCommandWithTelemetry(t *testing.T) {
 
 // TestToSupervisorDirectiveStop covers the StopDirective branch.
 func TestToSupervisorDirectiveStop(t *testing.T) {
-	assert.Equal(t, supervisor.StopDirective, toSupervisorDirective(StopDirective))
-	assert.Equal(t, supervisor.RestartDirective, toSupervisorDirective(RestartDirective))
+	specs.Describe(t, "toSupervisorDirective maps the StopDirective and RestartDirective branches", func(s *specs.Spec) {
+		s.It("maps StopDirective to Stop and RestartDirective to Restart", func(ctx *specs.Context) {
+			ctx.Expect(toSupervisorDirective(StopDirective)).ToEqual(supervisor.StopDirective)
+			ctx.Expect(toSupervisorDirective(RestartDirective)).ToEqual(supervisor.RestartDirective)
+		})
+	})
 }
 
 // TestEngineStartWithoutActorSystem covers the guard in Start that returns
 // ErrActorSystemRequired when the engine's atomic actor-system reference has
 // been detached (e.g. mid-shutdown or in a manually-constructed instance).
 func TestEngineStartWithoutActorSystem(t *testing.T) {
-	e := &Engine{
-		eventsStore:   testkit.NewEventsStore(),
-		logger:        DiscardLogger,
-		eventsStreams: syncmap.New[string, *eventsStream](),
-		statesStreams: syncmap.New[string, *statesStream](),
-	}
-	require.ErrorIs(t, e.Start(context.Background()), ErrActorSystemRequired)
+	specs.Describe(t, "Engine.Start refuses an engine whose actor-system reference was detached", func(s *specs.Spec) {
+		s.It("returns ErrActorSystemRequired", func(ctx *specs.Context) {
+			e := &Engine{
+				eventsStore:   testkit.NewEventsStore(),
+				logger:        DiscardLogger,
+				eventsStreams: syncmap.New[string, *eventsStream](),
+				statesStreams: syncmap.New[string, *statesStream](),
+			}
+			ctx.Expect(e.Start(context.Background())).To(specs.MatchError(ErrActorSystemRequired))
+		})
+	})
 }
 
 // TestEngineProjectionLagClampsNegative seeds the offset store with a value
@@ -2189,80 +2217,84 @@ func synthEngineWithStores(eventsStore persistence.EventsStore, snapStore persis
 // EraseEntity's full-erase block (lines 906-918): GetLatestEvent failure,
 // DeleteEvents failure, and DeleteSnapshots failure.
 func TestEngineEraseEntityStoreErrors(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "EraseEntity wraps the store failures of its full-erase block", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("GetLatestEvent error", func(t *testing.T) {
-		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
-			Return(nil, errors.New("boom"))
+		s.It("GetLatestEvent error", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+				Return(nil, errors.New("boom"))
 
-		engine := synthEngineWithStores(eventsStore, nil, nil)
-		err := engine.EraseEntity(ctx, "pid-1", true)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to get latest event for erasure")
-	})
+			engine := synthEngineWithStores(eventsStore, nil, nil)
+			err := engine.EraseEntity(bg, "pid-1", true)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to get latest event for erasure"))
+		})
 
-	t.Run("DeleteEvents error", func(t *testing.T) {
-		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
-			Return(&egopb.Event{SequenceNumber: 5}, nil)
-		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(5)).
-			Return(errors.New("delete fail"))
+		s.It("DeleteEvents error", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+				Return(&egopb.Event{SequenceNumber: 5}, nil)
+			eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(5)).
+				Return(errors.New("delete fail"))
 
-		engine := synthEngineWithStores(eventsStore, nil, nil)
-		err := engine.EraseEntity(ctx, "pid-2", true)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to delete events for erasure")
-	})
+			engine := synthEngineWithStores(eventsStore, nil, nil)
+			err := engine.EraseEntity(bg, "pid-2", true)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to delete events for erasure"))
+		})
 
-	t.Run("DeleteSnapshots error", func(t *testing.T) {
-		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
-			Return(&egopb.Event{SequenceNumber: 7}, nil)
-		eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
-			Return(nil)
+		s.It("DeleteSnapshots error", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("GetLatestEvent", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string")).
+				Return(&egopb.Event{SequenceNumber: 7}, nil)
+			eventsStore.On("DeleteEvents", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
+				Return(nil)
 
-		snapStore := new(mockpersistence.SnapshotStore)
-		snapStore.On("DeleteSnapshots", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
-			Return(errors.New("snap fail"))
+			snapStore := new(mockpersistence.SnapshotStore)
+			snapStore.On("DeleteSnapshots", mock.Anything, persistence.Unscoped(), mock.AnythingOfType("string"), uint64(7)).
+				Return(errors.New("snap fail"))
 
-		engine := synthEngineWithStores(eventsStore, snapStore, nil)
-		err := engine.EraseEntity(ctx, "pid-3", true)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to delete snapshots for erasure")
+			engine := synthEngineWithStores(eventsStore, snapStore, nil)
+			err := engine.EraseEntity(bg, "pid-3", true)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to delete snapshots for erasure"))
+		})
 	})
 }
 
 // TestEngineProjectionLagStoreErrors covers ProjectionLag's per-store error
 // wraps: ShardOffsets failure and GetCurrentOffset failure.
 func TestEngineProjectionLagStoreErrors(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "ProjectionLag wraps the failures of each store it reads", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("ShardOffsets failure", func(t *testing.T) {
-		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64(nil), errors.New("shards down"))
-		offsetStore := new(mockoffsetstore.OffsetStore)
+		s.It("ShardOffsets failure", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64(nil), errors.New("shards down"))
+			offsetStore := new(mockoffsetstore.OffsetStore)
 
-		engine := synthEngineWithStores(eventsStore, nil, offsetStore)
-		lags, err := engine.ProjectionLag(ctx, "any")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to fetch shard offsets")
-		require.Nil(t, lags)
-	})
+			engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+			lags, err := engine.ProjectionLag(bg, "any")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to fetch shard offsets"))
+			ctx.Expect(lags == nil).To(specs.BeTrue())
+		})
 
-	t.Run("GetCurrentOffset failure", func(t *testing.T) {
-		eventsStore := new(mockpersistence.EventsStore)
-		eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{1: 100}, nil)
+		s.It("GetCurrentOffset failure", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{1: 100}, nil)
 
-		offsetStore := new(mockoffsetstore.OffsetStore)
-		offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
-			Return(nil, errors.New("offset down"))
+			offsetStore := new(mockoffsetstore.OffsetStore)
+			offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
+				Return(nil, errors.New("offset down"))
 
-		engine := synthEngineWithStores(eventsStore, nil, offsetStore)
-		lags, err := engine.ProjectionLag(ctx, "any")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed to get offset for shard")
-		require.Nil(t, lags)
+			engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+			lags, err := engine.ProjectionLag(bg, "any")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to get offset for shard"))
+			ctx.Expect(lags == nil).To(specs.BeTrue())
+		})
 	})
 }
 
@@ -2270,19 +2302,21 @@ func TestEngineProjectionLagStoreErrors(t *testing.T) {
 // lag is the difference between the shard's latest event timestamp (as
 // reported by ShardOffsets) and the projection's committed offset.
 func TestEngineProjectionLagComputation(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "ProjectionLag is the shard's latest event timestamp minus the projection's committed offset", func(s *specs.Spec) {
+		s.It("reports 1500 - 500 as a lag of 1000 for the shard", func(ctx *specs.Context) {
+			eventsStore := new(mockpersistence.EventsStore)
+			eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{7: 1500}, nil)
 
-	eventsStore := new(mockpersistence.EventsStore)
-	eventsStore.On("ShardOffsets", mock.Anything).Return(map[uint64]int64{7: 1500}, nil)
+			offsetStore := new(mockoffsetstore.OffsetStore)
+			offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
+				Return(&egopb.Offset{Value: 500}, nil)
 
-	offsetStore := new(mockoffsetstore.OffsetStore)
-	offsetStore.On("GetCurrentOffset", mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).
-		Return(&egopb.Offset{Value: 500}, nil)
-
-	engine := synthEngineWithStores(eventsStore, nil, offsetStore)
-	lags, err := engine.ProjectionLag(ctx, "any")
-	require.NoError(t, err)
-	require.Equal(t, time.Duration(1000), lags[7])
+			engine := synthEngineWithStores(eventsStore, nil, offsetStore)
+			lags, err := engine.ProjectionLag(context.Background(), "any")
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, lags[7]).ToEqual(time.Duration(1000))
+		})
+	})
 }
 
 // TestEngineSagaSpawnError covers the Spawn-failure wrap in Engine.Saga
