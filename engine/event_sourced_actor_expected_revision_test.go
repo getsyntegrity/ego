@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,23 +51,17 @@ import (
 // -----------------------------------------------------------------------
 
 func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
-	tests := []struct {
-		name        string
-		revision    uint64
-		hasRevision bool
-		want        persistence.WritePrecondition
-	}{
-		{name: "absent is unconditional", revision: 0, hasRevision: false, want: persistence.Unconditional()},
-		{name: "zero is genesis, not absence", revision: 0, hasRevision: true, want: persistence.ExpectGenesis()},
-		{name: "positive revision is an exact expectation", revision: 42, hasRevision: true, want: persistence.ExpectRevision(42)},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := preconditionFromRevision(tc.revision, tc.hasRevision)
-			assert.Equal(t, tc.want, got)
+	specs.Describe(t, "preconditionFromRevision maps an expected revision to a write precondition", func(s *specs.Spec) {
+		s.It("absent is unconditional", func(ctx *specs.Context) {
+			ctx.Expect(preconditionFromRevision(0, false)).ToEqual(persistence.Unconditional())
 		})
-	}
+		s.It("zero is genesis, not absence", func(ctx *specs.Context) {
+			ctx.Expect(preconditionFromRevision(0, true)).ToEqual(persistence.ExpectGenesis())
+		})
+		s.It("positive revision is an exact expectation", func(ctx *specs.Context) {
+			ctx.Expect(preconditionFromRevision(42, true)).ToEqual(persistence.ExpectRevision(42))
+		})
+	})
 }
 
 func TestShouldStayAliveAfterConflict(t *testing.T) {
