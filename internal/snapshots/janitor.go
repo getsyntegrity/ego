@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package snapshots
 
 import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
@@ -31,12 +31,12 @@ import (
 	"github.com/getsyntegrity/ego/persistence"
 )
 
-// applyRetentionRequest is sent from the [snapshotsWriterActor] to the
-// [eventsJanitorActor] to delete old events and snapshots according to the
+// applyRetentionRequest is sent from the [writerActor] to the
+// [janitorActor] to delete old events and snapshots according to the
 // configured retention policy.
 //
 // scope carries the owning EventSourcedActor's bound persistence.Scope
-// (TENANT-003 T4). eventsJanitorActor is a separate child actor with no
+// (TENANT-003 T4). janitorActor is a separate child actor with no
 // PreStart access to the parent's dependencies, so the scope must travel on
 // this request rather than be re-derived here.
 type applyRetentionRequest struct {
@@ -49,40 +49,39 @@ type applyRetentionRequest struct {
 	scope                     persistence.Scope
 }
 
-// eventsJanitorActor handles cleanup of old events and snapshots after a successful
+// janitorActor handles cleanup of old events and snapshots after a successful
 // snapshot write. It receives applyRetentionRequest messages via Tell
 // (fire-and-forget) and operates independently of the command processing path.
 //
 // Failures are logged but do not propagate to the parent actor or the command
 // caller. This decouples storage cleanup from command latency.
-type eventsJanitorActor struct {
+type janitorActor struct {
 	eventsStore   persistence.EventsStore
 	snapshotStore persistence.SnapshotStore
 	logger        kitlog.Logger
 }
 
-var _ goakt.Actor = (*eventsJanitorActor)(nil)
+var _ goakt.Actor = (*janitorActor)(nil)
 
-// newEventsJanitorActor creates an instance of [eventsJanitorActor].
-func newEventsJanitorActor() *eventsJanitorActor {
-	return &eventsJanitorActor{}
+// newJanitorActor creates an instance of [janitorActor].
+func newJanitorActor() *janitorActor {
+	return &janitorActor{}
 }
 
 // PreStart loads the events store and snapshot store from the actor system
 // extensions. The snapshot store is genuinely optional here: a missing
 // registration is not an error, but a mismatched type registered under its
-// extension ID is (see optionalExtension in extension_lookup.go and
-// issue #99).
-func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
+// extension ID is (see extensions.Optional and issue #99).
+func (a *janitorActor) PreStart(ctx *goakt.Context) error {
 	a.logger = goaktlog.Backend(ctx.Logger())
 
-	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
 	}
 	a.eventsStore = eventsStoreExt.Underlying()
 
-	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
 	}
@@ -93,7 +92,7 @@ func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
 }
 
 // Receive handles incoming messages. Only applyRetentionRequest is expected.
-func (a *eventsJanitorActor) Receive(ctx *goakt.ReceiveContext) {
+func (a *janitorActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
 		// no-op
@@ -105,7 +104,7 @@ func (a *eventsJanitorActor) Receive(ctx *goakt.ReceiveContext) {
 }
 
 // PostStop performs cleanup when the actor is stopped.
-func (a *eventsJanitorActor) PostStop(_ *goakt.Context) error {
+func (a *janitorActor) PostStop(_ *goakt.Context) error {
 	return nil
 }
 
@@ -113,7 +112,7 @@ func (a *eventsJanitorActor) PostStop(_ *goakt.Context) error {
 // policy. Each delete operation is retried with exponential backoff and
 // executed independently so that a failure in one does not prevent the other
 // from running.
-func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req *applyRetentionRequest) {
+func (a *janitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req *applyRetentionRequest) {
 	if req.deleteEventsOnSnapshot {
 		deleteUpTo := req.eventsCounter
 		if req.eventsRetentionCount > 0 {

@@ -37,6 +37,17 @@ import (
 	"github.com/getsyntegrity/ego/persistence"
 )
 
+// mistypedExtension is a goakt extension.Extension whose ID() collides with a
+// real extension slot (e.g. extensions.SnapshotStoreExtensionID) but whose
+// concrete type does not match what the actor's PreStart expects there. It
+// simulates a wiring bug where the wrong extension ends up registered under
+// an existing extension ID; see issue #99 and extension_lookup.go.
+type mistypedExtension struct {
+	id string
+}
+
+func (m *mistypedExtension) ID() string { return m.id }
+
 // requireExtensionProbeActor exercises requireExtension directly from
 // PreStart, so the helper's branches can be pinned down without spinning up
 // a full entity, saga, or projection actor for every case.

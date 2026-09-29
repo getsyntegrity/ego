@@ -45,6 +45,7 @@ import (
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/runner"
+	"github.com/getsyntegrity/ego/internal/snapshots"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/tenancy"
@@ -244,8 +245,7 @@ type EventSourcedActor struct {
 	// tenantAware is false, or the tenant scope carried by the per-spawn
 	// extensions.EntityTenantScope dependency Engine.Entity injects when
 	// tenantAware is true. Threaded through to the child writer/janitor
-	// actors on their request structs (the events writer request scope,
-	// persistSnapshotRequest.scope, applyRetentionRequest.scope) rather
+	// actors on their request structs (the events writer request scope, the snapshots.Tell scope) rather
 	// than re-derived there, since those are separate actors that never
 	// see PreStart's dependencies.
 	//
@@ -539,11 +539,11 @@ func (entity *EventSourcedActor) spawnChildren(ctx *goakt.ReceiveContext) {
 	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, eventswriter.New(), opts...)
 
 	if entity.snapshotStore != nil {
-		entity.snapshotsWriter = ctx.Spawn(snapshotsWriterChildName, newSnapshotsWriterActor(), opts...)
+		entity.snapshotsWriter = ctx.Spawn(snapshotsWriterChildName, snapshots.NewWriter(), opts...)
 	}
 
 	if entity.retentionPolicy != nil {
-		entity.eventsJanitor = ctx.Spawn(eventsJanitorChildName, newEventsJanitorActor(), opts...)
+		entity.eventsJanitor = ctx.Spawn(eventsJanitorChildName, snapshots.NewJanitor(), opts...)
 	}
 }
 
@@ -1297,29 +1297,24 @@ func (entity *EventSourcedActor) triggerSnapshotAndRetention(ctx *goakt.ReceiveC
 // retention request is bundled so cleanup occurs only after the snapshot
 // is confirmed persisted.
 func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
-	req := &persistSnapshotRequest{
-		snapshot: entity.newSnapshotEnvelope(entity.currentStateAny()),
-		scope:    entity.scope,
-	}
-
+	var retention *snapshots.Retention
 	if entity.eventsJanitor != nil && entity.retentionPolicy != nil {
-		req.retentionReq = &applyRetentionRequest{
-			persistenceID:             entity.persistenceID,
-			eventsCounter:             entity.eventsCounter,
-			snapshotInterval:          entity.snapshotInterval,
-			deleteEventsOnSnapshot:    entity.retentionPolicy.DeleteEventsOnSnapshot,
-			deleteSnapshotsOnSnapshot: entity.retentionPolicy.DeleteSnapshotsOnSnapshot,
-			eventsRetentionCount:      entity.retentionPolicy.EventsRetentionCount,
-			scope:                     entity.scope,
+		retention = &snapshots.Retention{
+			Janitor:                   entity.eventsJanitor,
+			PersistenceID:             entity.persistenceID,
+			EventsCounter:             entity.eventsCounter,
+			SnapshotInterval:          entity.snapshotInterval,
+			DeleteEventsOnSnapshot:    entity.retentionPolicy.DeleteEventsOnSnapshot,
+			DeleteSnapshotsOnSnapshot: entity.retentionPolicy.DeleteSnapshotsOnSnapshot,
+			EventsRetentionCount:      entity.retentionPolicy.EventsRetentionCount,
 		}
-		req.janitor = entity.eventsJanitor
 	}
 
-	ctx.Tell(entity.snapshotsWriter, req)
+	snapshots.Tell(ctx, entity.snapshotsWriter, entity.newSnapshotEnvelope(entity.currentStateAny()), entity.scope, retention)
 }
 
 // newSnapshotEnvelope creates a [egopb.Snapshot] with unencrypted state from
-// the current entity. Encryption is handled by the [snapshotsWriterActor].
+// the current entity. Encryption is handled by the snapshots writer.
 // In tenant-aware mode, the actor's established entity.actorTenant is
 // serialized onto the snapshot's TenantMetadata field (D5, EGO-TENANT-002
 // Phase 2): a snapshot may be taken with no in-flight command context (e.g.

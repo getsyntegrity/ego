@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package snapshots
 
 import (
 	"context"
@@ -39,7 +39,7 @@ import (
 )
 
 // persistSnapshotRequest is sent from the EventSourcedActor to the
-// snapshotsWriterActor to persist a point-in-time snapshot of the entity state.
+// writerActor to persist a point-in-time snapshot of the entity state.
 //
 // The snapshot carries unencrypted state; encryption is handled by the writer
 // so that crypto work runs off the parent's hot path.
@@ -49,7 +49,7 @@ import (
 // persisted. This eliminates the race where retention could delete old data
 // before the new snapshot is safely written.
 // scope carries the owning EventSourcedActor's bound persistence.Scope
-// (TENANT-003 T4). snapshotsWriterActor is a separate child actor with no
+// (TENANT-003 T4). writerActor is a separate child actor with no
 // PreStart access to the parent's dependencies, so the scope must travel on
 // this request rather than be re-derived here.
 type persistSnapshotRequest struct {
@@ -59,7 +59,7 @@ type persistSnapshotRequest struct {
 	scope        persistence.Scope
 }
 
-// snapshotsWriterActor persists snapshots to the snapshot store asynchronously.
+// writerActor persists snapshots to the snapshot store asynchronously.
 // Snapshot persistence is an optimization for faster recovery and is not required
 // for correctness. Failures are retried with exponential backoff; if all
 // attempts fail, the error is logged but does not propagate to the parent actor
@@ -74,28 +74,27 @@ type persistSnapshotRequest struct {
 //
 // This actor is spawned as a child of the EventSourcedActor. It receives
 // persistSnapshotRequest messages via Tell (fire-and-forget).
-type snapshotsWriterActor struct {
+type writerActor struct {
 	snapshotStore persistence.SnapshotStore
 	encryptor     encryption.Encryptor
 	logger        kitlog.Logger
 }
 
-var _ goakt.Actor = (*snapshotsWriterActor)(nil)
+var _ goakt.Actor = (*writerActor)(nil)
 
-// newSnapshotsWriterActor creates an instance of [snapshotsWriterActor].
-func newSnapshotsWriterActor() *snapshotsWriterActor {
-	return &snapshotsWriterActor{}
+// newWriterActor creates an instance of [writerActor].
+func newWriterActor() *writerActor {
+	return &writerActor{}
 }
 
 // PreStart loads the snapshot store and optional encryptor from the actor
 // system extensions. Both are genuinely optional here: a missing
 // registration is not an error, but a mismatched type registered under
-// either extension ID is (see optionalExtension in extension_lookup.go and
-// issue #99).
-func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
+// either extension ID is (see extensions.Optional and issue #99).
+func (a *writerActor) PreStart(ctx *goakt.Context) error {
 	a.logger = goaktlog.Backend(ctx.Logger())
 
-	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
 	}
@@ -103,7 +102,7 @@ func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
 		a.snapshotStore = snapshotStoreExt.Underlying()
 	}
 
-	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	encryptorExt, err := extensions.Optional[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
 	if err != nil {
 		return err
 	}
@@ -115,7 +114,7 @@ func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
 }
 
 // Receive handles incoming messages. Only persistSnapshotRequest is expected.
-func (a *snapshotsWriterActor) Receive(ctx *goakt.ReceiveContext) {
+func (a *writerActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
 		// no-op
@@ -127,14 +126,14 @@ func (a *snapshotsWriterActor) Receive(ctx *goakt.ReceiveContext) {
 }
 
 // PostStop performs cleanup when the actor is stopped.
-func (a *snapshotsWriterActor) PostStop(_ *goakt.Context) error {
+func (a *writerActor) PostStop(_ *goakt.Context) error {
 	return nil
 }
 
 // handlePersistSnapshot encrypts the snapshot state (if configured), writes
 // it to the store with retry, and forwards the retention request to the
 // janitor on success.
-func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, req *persistSnapshotRequest) {
+func (a *writerActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, req *persistSnapshotRequest) {
 	if a.snapshotStore == nil {
 		return
 	}
@@ -170,7 +169,7 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 
 // encryptSnapshotState returns a copy of the snapshot with an encrypted state
 // field. The original snapshot is not modified.
-func (a *snapshotsWriterActor) encryptSnapshotState(ctx context.Context, snapshot *egopb.Snapshot) (*egopb.Snapshot, error) {
+func (a *writerActor) encryptSnapshotState(ctx context.Context, snapshot *egopb.Snapshot) (*egopb.Snapshot, error) {
 	stateBytes, err := proto.Marshal(snapshot.GetState())
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal state for encryption: %w", err)

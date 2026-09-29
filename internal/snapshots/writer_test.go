@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package snapshots
 
 import (
 	"context"
@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -46,11 +47,11 @@ import (
 
 // mistypedExtension is a goakt extension.Extension whose ID() collides with
 // a real extension slot (e.g. extensions.SnapshotStoreExtensionID) but whose
-// concrete type does not match what snapshotsWriterActor.PreStart expects
+// concrete type does not match what writerActor.PreStart expects
 // there. It simulates a wiring bug where the wrong extension ends up
 // registered under an existing extension ID.
 //
-// See issue #99: snapshotsWriterActor.PreStart nil-checks
+// See issue #99: writerActor.PreStart nil-checks
 // extensions.SnapshotStoreExtensionID and extensions.EncryptorExtensionID
 // before asserting their type (both are genuinely optional dependencies),
 // but the assertion itself was unchecked
@@ -81,7 +82,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -91,7 +92,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -136,7 +137,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor := encryption.NewAESEncryptor(keyStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -147,7 +148,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -195,7 +196,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -205,11 +206,11 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		snapshotPID, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		snapshotPID, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, snapshotPID)
 
-		janitorPID, err := actorSystem.Spawn(ctx, "janitor-test", newEventsJanitorActor())
+		janitorPID, err := actorSystem.Spawn(ctx, "janitor-test", newJanitorActor())
 		require.NoError(t, err)
 		require.NotNil(t, janitorPID)
 
@@ -263,7 +264,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -273,11 +274,11 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		snapshotPID, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		snapshotPID, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, snapshotPID)
 
-		janitorPID, err := actorSystem.Spawn(ctx, "janitor-test", newEventsJanitorActor())
+		janitorPID, err := actorSystem.Spawn(ctx, "janitor-test", newJanitorActor())
 		require.NoError(t, err)
 		require.NotNil(t, janitorPID)
 
@@ -328,7 +329,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -338,7 +339,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -379,7 +380,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, "entity-1", mock.Anything).Return(nil, "", assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -390,7 +391,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -431,7 +432,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -440,7 +441,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -475,7 +476,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedStoreSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -485,10 +486,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-store", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-store", newWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		require.NoError(t, eventStore.Disconnect(ctx))
 		eventStream.Close()
@@ -504,7 +505,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedEncSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -514,10 +515,10 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-enc", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-enc", newWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		require.NoError(t, eventStore.Disconnect(ctx))
 		eventStream.Close()
@@ -533,7 +534,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -542,7 +543,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newSnapshotsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-test", newWriterActor())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
