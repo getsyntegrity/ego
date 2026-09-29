@@ -28,10 +28,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -73,10 +73,31 @@ func probeEnv(base []string, modCache string) []string {
 	return append(env, "GOWORK=off", "GOENV=off", "GOMODCACHE="+modCache)
 }
 
+var (
+	modulePathRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~/-]*$`)
+	versionRe    = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+)
+
+// validateTarget rejects a module path or version that could be read as a
+// flag or carry anything but the characters Go allows, before either reaches
+// a subprocess. Versions must be full semantic versions (tags, pseudo
+// versions): a branch name or query such as "latest" is not a version.
+func validateTarget(module, version string) error {
+	if !modulePathRe.MatchString(module) || strings.Contains(module, "..") {
+		return fmt.Errorf("malformed module path %q", module)
+	}
+	if !versionRe.MatchString(version) {
+		return fmt.Errorf("malformed version %q: want a full semantic version such as v1.2.3", version)
+	}
+	return nil
+}
+
 // probeCommand builds the exact command of one attempt:
 // `go mod download -json <module>@<version>`, run in dir with probeEnv.
 func probeCommand(ctx context.Context, goBin, module, version, dir, modCache string, baseEnv []string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, goBin, "mod", "download", "-json", module+"@"+version)
+	// module and version are validated by validateTarget (parseConfig and
+	// Probe) before this point; there is no shell involved.
+	cmd := exec.CommandContext(ctx, goBin, "mod", "download", "-json", module+"@"+version) //nolint:gosec // inputs validated by validateTarget, no shell
 	cmd.Dir = dir
 	cmd.Env = probeEnv(baseEnv, modCache)
 	return cmd
@@ -109,23 +130,26 @@ type execProber struct {
 // Probe makes one attempt in a fresh temporary directory with a fresh
 // temporary module cache, both removed afterwards.
 func (p *execProber) Probe(ctx context.Context, module, version string) ProbeResult {
+	if err := validateTarget(module, version); err != nil {
+		return ProbeResult{Output: "modwait: " + err.Error()}
+	}
 	root, err := os.MkdirTemp("", "modwait-")
 	if err != nil {
 		return ProbeResult{Output: "modwait: cannot create a temporary directory: " + err.Error()}
 	}
-	defer removeAll(root)
+	defer p.cleanup(root)
 
 	work := filepath.Join(root, "work")
 	modCache := filepath.Join(root, "modcache")
 	for _, d := range []string{work, modCache} {
-		if err := os.Mkdir(d, 0o755); err != nil {
+		if err := os.Mkdir(d, 0o700); err != nil {
 			return ProbeResult{Output: "modwait: cannot create a temporary directory: " + err.Error()}
 		}
 	}
 	// A throwaway main module keeps `go mod download` off any surrounding
 	// go.mod or go.work. Its name is not the checked module, so there is
 	// no replace or self-reference.
-	if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte("module modwait.invalid/probe\n\ngo 1.21\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte("module modwait.invalid/probe\n\ngo 1.21\n"), 0o600); err != nil {
 		return ProbeResult{Output: "modwait: cannot write the probe go.mod: " + err.Error()}
 	}
 
@@ -166,13 +190,15 @@ func parseDownload(stdout, stderr string, runErr error) ProbeResult {
 	return ProbeResult{Output: strings.Join(parts, "\n")}
 }
 
-// removeAll deletes dir even though Go writes its module cache read-only.
-func removeAll(dir string) {
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			_ = os.Chmod(path, 0o755)
-		}
-		return nil
-	})
-	_ = os.RemoveAll(dir)
+// cleanup removes the attempt's temporary tree. Go writes the module cache
+// read-only, so a plain RemoveAll fails on it; `go clean -modcache` is Go's
+// own supported way to delete it, run against the temporary GOMODCACHE only.
+// No permission walk is needed (and none races with the filesystem).
+func (p *execProber) cleanup(root string) {
+	modCache := filepath.Join(root, "modcache")
+	clean := exec.Command(p.goBin, "clean", "-modcache") //nolint:gosec // fixed arguments, goBin comes from exec.LookPath
+	clean.Dir = root
+	clean.Env = probeEnv(p.baseEnv, modCache)
+	_ = clean.Run()
+	_ = os.RemoveAll(root)
 }

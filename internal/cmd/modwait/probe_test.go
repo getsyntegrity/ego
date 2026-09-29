@@ -187,6 +187,7 @@ func writeFakeGo(t *testing.T, body string) (goBin, record string) {
 	record = filepath.Join(dir, "record")
 	goBin = filepath.Join(dir, "go")
 	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = clean ]; then chmod -R u+w \"$GOMODCACHE\"; rm -rf \"$GOMODCACHE\"; exit 0; fi\n" +
 		"{ echo \"ARGS=$*\"; echo \"PWD=$(pwd)\"; env; } > " + record + "\n" +
 		"mkdir -p \"$GOMODCACHE/cache/download\" && touch \"$GOMODCACHE/cache/download/f\" && chmod -R a-w \"$GOMODCACHE/cache\"\n" +
 		body + "\n"
@@ -247,11 +248,49 @@ func TestExecProber_RunsInFreshDirsAndCleansUp(t *testing.T) {
 func TestExecProber_FailureCarriesOutput(t *testing.T) {
 	goBin, _ := writeFakeGo(t, `echo '{"Error":"reading https://sum.golang.org/lookup/m@v1: 404 Not Found"}'; echo "stderr line" >&2; exit 1`)
 	p := &execProber{goBin: goBin, baseEnv: []string{"PATH=" + os.Getenv("PATH")}}
-	res := p.Probe(context.Background(), "m", "v1")
+	res := p.Probe(context.Background(), "m", "v1.0.0")
 	if res.OK {
 		t.Fatal("want a failed probe")
 	}
 	if c := Classify(res.Output); c.Class != Transient {
 		t.Errorf("class = %v (%q), want transient", c.Class, res.Output)
+	}
+}
+
+func TestValidateTarget(t *testing.T) {
+	for _, tc := range []struct {
+		module, version string
+		ok              bool
+	}{
+		{"github.com/getsyntegrity/ego", "v1.0.0", true},
+		{"github.com/getsyntegrity/ego/v4", "v4.0.0", true},
+		{"github.com/getsyntegrity/ego/publisher/kafka", "v0.2.0-rc.1", true},
+		{"github.com/x/y", "v0.0.0-20260102150405-abcdef123456", true},
+		{"-x", "v1.0.0", false},
+		{"", "v1.0.0", false},
+		{"github.com/x/../y", "v1.0.0", false},
+		{"github.com/x y", "v1.0.0", false},
+		{"github.com/x/y;rm", "v1.0.0", false},
+		{"github.com/x/y", "latest", false},
+		{"github.com/x/y", "-v1.0.0", false},
+		{"github.com/x/y", "v1.0", false},
+		{"github.com/x/y", "v01.0.0", false},
+		{"github.com/x/y", "v1.0.0 -x", false},
+	} {
+		if err := validateTarget(tc.module, tc.version); (err == nil) != tc.ok {
+			t.Errorf("validateTarget(%q, %q) err = %v, want ok=%v", tc.module, tc.version, err, tc.ok)
+		}
+	}
+}
+
+func TestExecProber_RejectsMalformedTargetWithoutRunning(t *testing.T) {
+	goBin, record := writeFakeGo(t, `echo '{}'`)
+	p := &execProber{goBin: goBin, baseEnv: []string{"PATH=" + os.Getenv("PATH")}}
+	res := p.Probe(context.Background(), "-x", "v1.0.0")
+	if res.OK || Classify(res.Output).Class != Permanent {
+		t.Errorf("res = %+v, want a permanent failure", res)
+	}
+	if _, err := os.Stat(record); err == nil {
+		t.Error("go must not run for a malformed target")
 	}
 }

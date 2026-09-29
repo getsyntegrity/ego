@@ -113,6 +113,9 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	if strings.Contains(*module, "@") || strings.Contains(*version, "@") {
 		return config{}, errors.New("-module and -version must not contain \"@\"; pass them separately")
 	}
+	if err := validateTarget(*module, *version); err != nil {
+		return config{}, err
+	}
 	if *timeout < 0 {
 		return config{}, fmt.Errorf("-timeout must not be negative, got %s", *timeout)
 	}
