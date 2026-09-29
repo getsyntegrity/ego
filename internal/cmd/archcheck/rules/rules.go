@@ -153,7 +153,7 @@ func DefaultRules(rootModulePath string) []Rule {
 		},
 		{
 			ID:          "application-no-runtime",
-			Description: "the migration application must not import the engine package, internal/extensions or the GoAkt runtime",
+			Description: "the migration application must not import the engine package, internal/engine/..., internal/extensions or the GoAkt runtime",
 			Source:      "design.md §3",
 			Layer:       ApplicationLayer(rootModulePath),
 			Semantics:   Denylist,
@@ -166,12 +166,12 @@ func DefaultRules(rootModulePath string) []Rule {
 		},
 		{
 			ID:          "external-adapter-no-runtime",
-			Description: "nested adapter modules under publisher/ must not import the engine package or the GoAkt runtime",
+			Description: "nested adapter modules under publisher/ must not import the engine package, internal/engine/... or the GoAkt runtime",
 			Source:      "design.md §3",
 			Layer:       ExternalAdapterLayer(rootModulePath),
 			Semantics:   Denylist,
 			Forbids: func(importPath string) bool {
-				if importPath == enginePackagePath(rootModulePath) {
+				if importPath == enginePackagePath(rootModulePath) || isEngineInternal(rootModulePath, importPath) {
 					return true
 				}
 				return hasPathOrSubpath(importPath, "github.com/tochemey/goakt/v4")
@@ -179,6 +179,9 @@ func DefaultRules(rootModulePath string) []Rule {
 			Reason: func(importPath string) string {
 				if importPath == enginePackagePath(rootModulePath) {
 					return "imports the engine package " + enginePackagePath(rootModulePath) + " directly, not a contract package"
+				}
+				if isEngineInternal(rootModulePath, importPath) {
+					return "imports " + importPath + ", part of the engine's internal packages (" + engineInternalPath(rootModulePath) + "), not a contract package"
 				}
 				return "imports the GoAkt runtime (github.com/tochemey/goakt/v4)"
 			},
@@ -201,7 +204,7 @@ func DefaultRules(rootModulePath string) []Rule {
 		},
 		{
 			ID:          "composition-no-runtime",
-			Description: "the runtime-neutral composition packages (compose and compose/internal/...) must not import the engine package, internal/extensions or the GoAkt runtime",
+			Description: "the runtime-neutral composition packages (compose and compose/internal/...) must not import the engine package, internal/engine/..., internal/extensions or the GoAkt runtime",
 			Source:      "ego-arch-003/design.md §D8",
 			Layer:       CompositionLayer(rootModulePath),
 			Semantics:   Denylist,
@@ -249,12 +252,15 @@ func DefaultRules(rootModulePath string) []Rule {
 }
 
 // forbidsRuntime is the denylist application-no-runtime and
-// composition-no-runtime share: the engine package itself,
-// internal/extensions (the GoAkt adapter's internals) and the GoAkt
+// composition-no-runtime share: the engine package itself, the engine's
+// internal packages (internal/engine/...), internal/extensions (the GoAkt adapter's internals) and the GoAkt
 // runtime. The two rules keep separate layers; sharing the denylist does
 // not widen either layer.
 func forbidsRuntime(rootModulePath, importPath string) bool {
 	if importPath == enginePackagePath(rootModulePath) {
+		return true
+	}
+	if isEngineInternal(rootModulePath, importPath) {
 		return true
 	}
 	if hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions") {
@@ -270,11 +276,26 @@ func enginePackagePath(rootModulePath string) string {
 	return rootModulePath + "/engine"
 }
 
+// engineInternalPath is the root of the packages the engine package is built
+// from (the actors, the command protocol and their test fixtures). They are the
+// runtime too, so the runtime-neutral rules forbid them like the engine itself.
+func engineInternalPath(rootModulePath string) string {
+	return rootModulePath + "/internal/engine"
+}
+
+// isEngineInternal reports whether importPath is internal/engine or a package
+// under it.
+func isEngineInternal(rootModulePath, importPath string) bool {
+	return hasPathOrSubpath(importPath, engineInternalPath(rootModulePath))
+}
+
 // runtimeReason names which forbidsRuntime prefix importPath matched.
 func runtimeReason(rootModulePath, importPath string) string {
 	switch {
 	case importPath == enginePackagePath(rootModulePath):
 		return "imports the engine package " + enginePackagePath(rootModulePath) + " directly, not a runtime-neutral contract"
+	case isEngineInternal(rootModulePath, importPath):
+		return "imports " + importPath + ", part of the engine's internal packages (" + engineInternalPath(rootModulePath) + "), not a runtime-neutral contract"
 	case hasPathOrSubpath(importPath, rootModulePath+"/internal/extensions"):
 		return "imports " + rootModulePath + "/internal/extensions, the GoAkt runtime adapter's internal package"
 	default:

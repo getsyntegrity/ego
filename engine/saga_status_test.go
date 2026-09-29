@@ -34,6 +34,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
@@ -69,16 +70,16 @@ func TestEngineSagaStatusReportsLifecycleStatus(t *testing.T) {
 	spawnSagaReactingTo := func(t *testing.T, entityID string, action func() *SagaAction, compensate func(context.Context, State) ([]SagaCommand, error)) string {
 		t.Helper()
 		sagaID := "saga-" + uuid.NewString()
-		saga := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+		saga := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
 				created, ok := event.(*testpb.AccountCreated)
 				if !ok || created.GetAccountId() != entityID {
 					return &SagaAction{}, nil
 				}
 				return action(), nil
 			},
-			compensate: compensate,
+			CompensateFn: compensate,
 		}
 		require.NoError(t, engine.SpawnSaga(ctx, saga, 0))
 		return sagaID
@@ -195,12 +196,12 @@ func TestEngineSagaStatusMapsWireStatus(t *testing.T) {
 				Reply: &egopb.CommandReply_StateReply{
 					StateReply: &egopb.StateReply{
 						PersistenceId: sagaID,
-						State:         mustAny(t, &samplepb.Account{AccountId: sagaID}),
+						State:         enginetest.MustAny(t, &samplepb.Account{AccountId: sagaID}),
 						SagaStatus:    tc.wire,
 					},
 				},
 			}
-			_, err := engine.ActorSystem().Spawn(ctx, sagaID, &simpleReplyActor{reply: reply}, goakt.WithLongLived())
+			_, err := engine.ActorSystem().Spawn(ctx, sagaID, &enginetest.SimpleReplyActor{Reply: reply}, goakt.WithLongLived())
 			require.NoError(t, err)
 
 			info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
@@ -212,17 +213,4 @@ func TestEngineSagaStatusMapsWireStatus(t *testing.T) {
 			assert.Equal(t, sagaID, account.GetAccountId())
 		})
 	}
-}
-
-// TestSagaStatusWireRoundTrip pins the SagaStatus <-> SagaLifecycleStatus
-// mapping the saga actor and Engine.SagaStatus share (#153).
-func TestSagaStatusWireRoundTrip(t *testing.T) {
-	for _, status := range []SagaStatus{SagaRunning, SagaCompleted, SagaCompensating, SagaFailed} {
-		t.Run(status.String(), func(t *testing.T) {
-			wire := sagaStatusToProto(status)
-			assert.NotEqual(t, egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE, wire, "the saga actor must always report a status")
-			assert.Equal(t, status, sagaStatusFromProto(wire))
-		})
-	}
-	assert.Equal(t, SagaRunning, sagaStatusFromProto(egopb.SagaLifecycleStatus(99)), "an unknown wire value reads as SagaRunning")
 }

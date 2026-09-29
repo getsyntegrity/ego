@@ -35,6 +35,7 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
@@ -91,7 +92,7 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 	states := &countingStatePublisher{id: "states-1"}
 	require.NoError(t, engine.AddEventPublishers(first, second))
 	require.NoError(t, engine.AddStatePublishers(states))
-	require.Positive(t, engine.eventStream.SubscribersCount(eventsTopic))
+	require.Positive(t, engine.eventStream.SubscribersCount(protocol.EventsTopic))
 
 	err := engine.Stop(ctx)
 	require.Error(t, err)
@@ -103,8 +104,8 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 	assert.EqualValues(t, 1, first.closes.Load(), "first event publisher closed once")
 	assert.EqualValues(t, 1, second.closes.Load(), "second event publisher closed once")
 	assert.EqualValues(t, 1, states.closes.Load(), "state publisher closed")
-	assert.Zero(t, engine.eventStream.SubscribersCount(eventsTopic), "event stream closed")
-	assert.Zero(t, engine.eventStream.SubscribersCount(statesTopic), "event stream closed")
+	assert.Zero(t, engine.eventStream.SubscribersCount(protocol.EventsTopic), "event stream closed")
+	assert.Zero(t, engine.eventStream.SubscribersCount(protocol.StatesTopic), "event stream closed")
 	assert.Zero(t, engine.eventsStreams.Len())
 	assert.Zero(t, engine.statesStreams.Len())
 	assert.False(t, engine.Started())
@@ -216,7 +217,7 @@ func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
 	kinds := []kind{
 		{
 			name:       "events",
-			topic:      eventsTopic,
+			topic:      protocol.EventsTopic,
 			registered: func(e *Engine) int { return e.eventsStreams.Len() },
 			newPub:     func(id string) closeCounter { return &countingEventPublisher{id: id} },
 			add: func(e *Engine, ps ...closeCounter) error {
@@ -229,7 +230,7 @@ func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
 		},
 		{
 			name:       "states",
-			topic:      statesTopic,
+			topic:      protocol.StatesTopic,
 			registered: func(e *Engine) int { return e.statesStreams.Len() },
 			newPub:     func(id string) closeCounter { return &countingStatePublisher{id: id} },
 			add: func(e *Engine, ps ...closeCounter) error {

@@ -187,25 +187,6 @@ func (c *Config) GoaktOptions() []goakt.Option {
 	return opts
 }
 
-// ClusterKinds returns the actor kinds eGo needs registered in the cluster
-// configuration so that entity, durable-state, saga, and projection actors
-// can be relocated across nodes.
-//
-// Plug them into goakt.NewClusterConfig().WithKinds(...) alongside any
-// caller-defined kinds. Has no effect in single-node deployments.
-//
-// ClusterKinds covers the actor types only. The behaviors those actors are
-// spawned with travel as dependencies and need their own registration on
-// every node — see WithBehaviorKinds.
-func ClusterKinds() []goakt.Actor {
-	return []goakt.Actor{
-		new(EventSourcedActor),
-		new(DurableStateActor),
-		new(SagaActor),
-		new(ProjectionActor),
-	}
-}
-
 // Option configures a Config.
 //
 // Options are applied by NewConfig and surface through both GoaktOptions and

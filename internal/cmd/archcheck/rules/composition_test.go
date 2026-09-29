@@ -45,10 +45,10 @@ func TestCompositionRules_SourceCitesArch003(t *testing.T) {
 }
 
 // composition-no-runtime rejects compose and compose/internal/lifecycle
-// importing the engine package, internal/extensions or GoAkt — the same denylist
+// importing the engine package, internal/engine/..., internal/extensions or GoAkt — the same denylist
 // as application-no-runtime.
 func TestCompositionNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
-	forbidden := []string{engine, root + "/internal/extensions", "github.com/tochemey/goakt/v4/actor"}
+	forbidden := []string{engine, root + "/internal/engine/eventsource", root + "/internal/extensions", "github.com/tochemey/goakt/v4/actor"}
 	graph := Graph{Packages: []Package{
 		{ImportPath: root + "/compose", Name: "compose", Kind: RootModule, Imports: forbidden},
 		{ImportPath: root + "/compose/internal/lifecycle", Name: "lifecycle", Kind: RootModule, Imports: forbidden},
@@ -57,8 +57,8 @@ func TestCompositionNoRuntime_ForbidsRootAndGoAktAndExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate returned error: %v", err)
 	}
-	if len(result.Violations) != 6 {
-		t.Fatalf("len(Violations) = %d, want 6 (3 imports x 2 packages): %+v", len(result.Violations), result.Violations)
+	if len(result.Violations) != 8 {
+		t.Fatalf("len(Violations) = %d, want 8 (4 imports x 2 packages): %+v", len(result.Violations), result.Violations)
 	}
 	for _, v := range result.Violations {
 		if v.Rule != "composition-no-runtime" {

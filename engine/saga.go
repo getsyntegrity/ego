@@ -60,16 +60,6 @@ type SagaAction = behaviorport.SagaAction
 // derives one from the saga's own root Metadata.
 type SagaCommand = behaviorport.SagaCommand
 
-// sagaActionIsNoop reports whether the action has no observable effect: nothing
-// to persist, no command to dispatch, no completion, no compensation. A saga
-// behavior returns such an action for stream events it recognizes as
-// irrelevant (SG4: this lets the caller skip tenant binding for events the
-// saga was never going to act on). It is a function rather than a method
-// because SagaAction is declared in port/behavior.
-func sagaActionIsNoop(a *SagaAction) bool {
-	return a == nil || (len(a.Commands) == 0 && len(a.Events) == 0 && !a.Complete && !a.Compensate)
-}
-
 // SagaStatus represents the current status of a saga. It is an alias of
 // [runtimeport.SagaStatus], so engine.SagaStatus and runtime.SagaStatus are the
 // same type, and String is the same method.

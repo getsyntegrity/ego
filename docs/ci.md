@@ -265,11 +265,11 @@ Each rule applies to one layer and checks the direct import edges of every packa
 | Rule | Applies to | Constraint |
 |---|---|---|
 | `contract-allowlist` | `tenancy`, `command`, `persistence` (except `persistence/conformance`, which is test support), `offsetstore`, `projection`, `eventstream`, `encryption`, `eventadapter`, everything under `port/` | Only stdlib, other contract packages, `egopb`, `google.golang.org/protobuf/...`, `internal/queue`, `internal/syncmap`, `github.com/google/uuid`, `go.uber.org/atomic` — and stdlib itself excludes `net/http`, `net/rpc`, `database/sql` and everything under them |
-| `application-no-runtime` | `migration` | Must not import package `engine`, `internal/extensions` or GoAkt |
-| `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `engine` or GoAkt |
+| `application-no-runtime` | `migration` | Must not import package `engine`, `internal/engine/...`, `internal/extensions` or GoAkt |
+| `external-adapter-no-runtime` | nested modules under `publisher/` | Must not import package `engine`, `internal/engine/...` or GoAkt |
 | `no-cross-module-internal` | every package of every module, root and nested | Must not import an `internal/...` package that belongs to a different in-repository module, in either direction (generalized in ego-arch-006 slice S1 from "nested module to root `internal/`") |
 | `no-module-cycle` | the module table (`go.mod` requirements) | No in-repository module may require, directly or through other in-repository modules, a module that requires it back; every requirement edge on a cycle is reported (ego-arch-001 design §3, ego-arch-006 slice S1) |
-| `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `engine`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
+| `composition-no-runtime` | `compose`, everything under `compose/internal/` | Must not import package `engine`, `internal/engine/...`, `internal/extensions` or GoAkt (ego-arch-003 design §D8) |
 | `composition-leaf` | root-module packages outside `compose/`, except `main` packages and `example/...` | Must not import `compose` or anything under it (ego-arch-003 design §D8) |
 | `external-adapter-no-composition` | nested modules under `publisher/`, every package including `main` packages and examples inside them | Must not import `compose` or anything under it; the composition root depends on adapters, not the reverse (ego-arch-004 design §D7). The test side is covered by each publisher's `closure_test.go`, because archcheck does not read `_test.go` files |
 

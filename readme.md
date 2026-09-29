@@ -626,7 +626,7 @@ See the [changelog](./CHANGELOG.md) for breaking changes and version-specific mi
 
 ## Contributing
 
-Contributions are welcome. Read the [contribution guide](./contributing.md) before opening a pull request.
+Contributions are welcome. Read the [contribution guide](./contributing.md) before opening a pull request. To find your way around the engine code, see [how the engine is laid out](./docs/engine.md).
 
 ---
 

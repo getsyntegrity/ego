@@ -531,6 +531,42 @@ func TestEvaluate_ViolationReasonNamesForbiddenPrefix(t *testing.T) {
 			wantSubstr: "goakt",
 		},
 		{
+			name:   "application-no-runtime internal/engine import",
+			ruleID: "application-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/migration", Kind: RootModule, Imports: []string{root + "/internal/engine/eventsource"}},
+			}},
+			wantImport: root + "/internal/engine/eventsource",
+			wantSubstr: "internal/engine",
+		},
+		{
+			name:   "composition-no-runtime internal/engine import",
+			ruleID: "composition-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/compose", Kind: RootModule, Imports: []string{root + "/internal/engine/eventsource"}},
+			}},
+			wantImport: root + "/internal/engine/eventsource",
+			wantSubstr: "internal/engine",
+		},
+		{
+			name:   "external-adapter-no-runtime internal/engine import",
+			ruleID: "external-adapter-no-runtime",
+			graph: Graph{Packages: []Package{
+				{ImportPath: repoRoot + "/publisher/kafka", Kind: NestedModule, Imports: []string{root + "/internal/engine/eventsource"}},
+			}},
+			wantImport: root + "/internal/engine/eventsource",
+			wantSubstr: "internal/engine",
+		},
+		{
+			name:   "contract-allowlist internal/engine import",
+			ruleID: "contract-allowlist",
+			graph: Graph{Packages: []Package{
+				{ImportPath: root + "/persistence", Kind: RootModule, Imports: []string{root + "/internal/engine/protocol"}},
+			}},
+			wantImport: root + "/internal/engine/protocol",
+			wantSubstr: "",
+		},
+		{
 			name:   "no-cross-module-internal import",
 			ruleID: "no-cross-module-internal",
 			graph: Graph{Packages: []Package{
