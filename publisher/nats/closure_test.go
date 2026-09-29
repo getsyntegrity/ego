@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // hermeticGoEnv returns a copy of the current process environment with any
@@ -107,24 +109,28 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 // anything under it) as well as GoAkt and the engine package, matched by
 // whole path segment.
 func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
-	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/compose",
-		"github.com/getsyntegrity/ego/compose/goakt",
-		"github.com/getsyntegrity/ego/compose/internal/lifecycle",
-		"github.com/getsyntegrity/ego/engine",
-		"github.com/tochemey/goakt/v4/actor",
-	} {
-		if closureViolation(dep) == "" {
-			t.Errorf("closureViolation(%q) = \"\", want a rejection", dep)
+	specs.Describe(t, "the closure guard rejects the runtime, the engine and the composition root by whole path segment", func(s *specs.Spec) {
+		rejected := []struct{ name, dep string }{
+			{"the composition root", "github.com/getsyntegrity/ego/compose"},
+			{"a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt"},
+			{"a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle"},
+			{"the engine package", "github.com/getsyntegrity/ego/engine"},
+			{"a GoAkt package", "github.com/tochemey/goakt/v4/actor"},
 		}
-	}
-	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/composer",
-		"github.com/getsyntegrity/ego/port/publishing",
-		"github.com/getsyntegrity/ego/egopb",
-	} {
-		if msg := closureViolation(dep); msg != "" {
-			t.Errorf("closureViolation(%q) = %q, want it allowed", dep, msg)
+		for _, tc := range rejected {
+			s.It("rejects "+tc.name, func(ctx *specs.Context) {
+				ctx.Expect(closureViolation(tc.dep)).To(specs.Not(specs.Equal("")))
+			})
 		}
-	}
+		allowed := []struct{ name, dep string }{
+			{"a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer"},
+			{"the publishing port", "github.com/getsyntegrity/ego/port/publishing"},
+			{"the protobuf package", "github.com/getsyntegrity/ego/egopb"},
+		}
+		for _, tc := range allowed {
+			s.It("allows "+tc.name, func(ctx *specs.Context) {
+				ctx.Expect(closureViolation(tc.dep)).ToEqual("")
+			})
+		}
+	})
 }
