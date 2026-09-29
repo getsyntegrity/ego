@@ -87,19 +87,6 @@ func spawnDependency(sys goakt.ActorSystem, b interface{ ID() string }) (extensi
 	return nil, &BehaviorPlacementError{Kind: fmt.Sprintf("%T", b), EntityID: b.ID(), Err: cause}
 }
 
-// behaviorFrom reads a behavior of contract T from a spawn dependency, as an
-// actor's PreStart sees it in ctx.Dependencies(): either the behavior itself
-// (the pass-through case of spawnDependency) or an extensions.LocalBehavior
-// that wraps it.
-func behaviorFrom[T any](dependency extension.Dependency) (T, bool) {
-	if local, ok := dependency.(*extensions.LocalBehavior); ok {
-		b, ok := local.Behavior().(T)
-		return b, ok
-	}
-	b, ok := dependency.(T)
-	return b, ok
-}
-
 // isNonNilPointer reports whether v is a non-nil pointer, the only kind of
 // value GoAkt's type registry can name.
 func isNonNilPointer(v any) bool {

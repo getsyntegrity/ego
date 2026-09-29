@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package protocol
 
 import (
 	"strings"
@@ -34,7 +34,7 @@ import (
 type resultBuilder func(md command.Metadata, message string) (command.Result, error)
 
 // classifierRegistry is the ordered, table-driven classifier (design.md D8)
-// resultFromReply consults to turn an egopb.CommandReply_ErrorReply's
+// ResultFromReply consults to turn an egopb.CommandReply_ErrorReply's
 // message into the correct command.Result outcome. Matching is by
 // strings.HasPrefix against each entry's sentinel text; declaration order
 // is match priority, and the first match wins. This registry's invariant
@@ -89,11 +89,11 @@ func buildConcurrencyConflictResult(md command.Metadata, message string) (comman
 	return command.NewRejected(md, failure)
 }
 
-// classifyErrorReply maps an egopb.CommandReply_ErrorReply's message onto
+// ClassifyErrorReply maps an egopb.CommandReply_ErrorReply's message onto
 // the correct command.Result outcome via classifierRegistry. A message
 // matching no entry's sentinel falls through to OutcomeFailed, preserving
-// the deliberately lossy default mapping documented on resultFromReply.
-func classifyErrorReply(md command.Metadata, message string) (command.Result, error) {
+// the deliberately lossy default mapping documented on ResultFromReply.
+func ClassifyErrorReply(md command.Metadata, message string) (command.Result, error) {
 	for _, entry := range classifierRegistry {
 		if strings.HasPrefix(message, entry.sentinel) {
 			return entry.build(md, message)

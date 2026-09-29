@@ -49,6 +49,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/pause"
 	"github.com/getsyntegrity/ego/internal/syncmap"
@@ -1128,13 +1129,13 @@ func TestParseCommandReply(t *testing.T) {
 				ErrorReply: &egopb.ErrorReply{Message: "something failed"},
 			},
 		}
-		_, _, err := parseCommandReply(reply)
+		_, _, err := protocol.ParseCommandReply(reply)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "something failed")
 	})
 
 	t.Run("no reply", func(t *testing.T) {
-		_, _, err := parseCommandReply(&egopb.CommandReply{})
+		_, _, err := protocol.ParseCommandReply(&egopb.CommandReply{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no state received")
 	})
@@ -1150,7 +1151,7 @@ func TestParseCommandReply(t *testing.T) {
 				},
 			},
 		}
-		result, seq, err := parseCommandReply(reply)
+		result, seq, err := protocol.ParseCommandReply(reply)
 		require.NoError(t, err)
 		assert.EqualValues(t, 5, seq)
 		assert.NotNil(t, result)
@@ -1165,7 +1166,7 @@ func TestParseCommandReply(t *testing.T) {
 				},
 			},
 		}
-		_, _, err := parseCommandReply(reply)
+		_, _, err := protocol.ParseCommandReply(reply)
 		require.Error(t, err)
 	})
 }

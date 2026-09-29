@@ -36,6 +36,7 @@ import (
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
@@ -139,11 +140,11 @@ func newSagaActor() *SagaActor {
 
 // PreStart initializes the saga actor: loads stores, recovers state, subscribes to events.
 func (s *SagaActor) PreStart(ctx *goakt.Context) error {
-	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
 	}
-	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	eventsStreamExt, err := extensions.Require[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
 	if err != nil {
 		return err
 	}
@@ -172,7 +173,7 @@ func (s *SagaActor) PreStart(ctx *goakt.Context) error {
 			continue
 		}
 
-		if behavior, ok := behaviorFrom[behaviorport.Saga](dependency); ok {
+		if behavior, ok := extensions.BehaviorFrom[behaviorport.Saga](dependency); ok {
 			s.behavior = behavior
 		}
 
@@ -197,7 +198,7 @@ func (s *SagaActor) PreStart(ctx *goakt.Context) error {
 	// from every shard; the shard is carried in the event payload for any
 	// downstream filtering the saga behavior wants to apply.
 	s.subscriber = s.eventsStream.AddSubscriber()
-	s.eventsStream.Subscribe(s.subscriber, eventsTopic)
+	s.eventsStream.Subscribe(s.subscriber, protocol.EventsTopic)
 
 	return nil
 }
@@ -243,7 +244,7 @@ func (s *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 	case *egopb.GetStateCommand:
 		s.getStateAndReply(ctx)
 	case *egopb.TenantBindingQuery:
-		ctx.Response(answerTenantBinding(s.tenantAware, s.scope, message))
+		ctx.Response(protocol.AnswerTenantBinding(s.tenantAware, s.scope, message))
 	default:
 		ctx.Unhandled()
 	}
@@ -496,7 +497,7 @@ func (s *SagaActor) handleStreamEvent(event *egopb.Event) {
 	// Once bound, verify BEFORE HandleEvent (fail closed without ever
 	// exposing a foreign-tenant payload to the saga's own business logic).
 	// While unbound, defer the bind past HandleEvent (SG4 correction): every
-	// saga on the shared eventsTopic runs its own entity/type relevance
+	// saga on the shared protocol.EventsTopic runs its own entity/type relevance
 	// filter first, and only a genuinely actionable result (a non-noop
 	// SagaAction — the only signal HandleEvent has for "this belongs to me")
 	// commits boundTenant. This stops an unrelated tenant's noise event from
@@ -680,7 +681,7 @@ func (s *SagaActor) persistAndApplyEvents(ctx context.Context, events []Event) e
 // exactly this shape). The marker carries no business payload
 // (behavior.ApplyEvent is deliberately never called for it, see recover's
 // *emptypb.Empty check) — other saga instances subscribed to the same
-// eventsTopic see it like any other event type they don't recognize and
+// protocol.EventsTopic see it like any other event type they don't recognize and
 // their own HandleEvent relevance filter returns noop for it, the same
 // tolerance the design already requires for arbitrary irrelevant domain
 // events crossing the shared topic (SG2).
@@ -734,7 +735,7 @@ func (s *SagaActor) persistTenantBinding(ctx context.Context, tc tenancy.TenantC
 // Engine.Dispatch/SendCommand (see metadataFromContext).
 func (s *SagaActor) attachCommandMetadata(ctx context.Context, explicit command.Metadata) context.Context {
 	if explicit.OperationID() != "" {
-		return attachCarrier(ctx, command.MarshalMetadata(explicit))
+		return protocol.AttachCarrier(ctx, command.MarshalMetadata(explicit))
 	}
 
 	op, err := command.GenerateOperationID()
@@ -747,7 +748,7 @@ func (s *SagaActor) attachCommandMetadata(ctx context.Context, explicit command.
 		s.logger.Warn("saga: failed to derive command metadata; dispatching without metadata", "saga_id", s.sagaID, "error", err)
 		return ctx
 	}
-	return attachCarrier(ctx, command.MarshalMetadata(md))
+	return protocol.AttachCarrier(ctx, command.MarshalMetadata(md))
 }
 
 // sendCommand sends a command to an entity and handles the result. ctx
@@ -781,7 +782,7 @@ func (s *SagaActor) sendCommand(ctx context.Context, cmd SagaCommand) {
 		return
 	}
 
-	resultState, _, err := parseCommandReply(commandReply)
+	resultState, _, err := protocol.ParseCommandReply(commandReply)
 	if err != nil {
 		action, handleErr := s.behavior.HandleError(ctx, cmd.EntityID, err, s.currentState)
 		if handleErr != nil {

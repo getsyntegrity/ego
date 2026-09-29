@@ -35,7 +35,6 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -205,29 +204,6 @@ func TestClassifyTenantBinding(t *testing.T) {
 	err := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{})
 	require.ErrorIs(t, err, ErrSpawnTenantUnverified)
 	assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
-}
-
-// TestAnswerTenantBinding pins the actors' shared query handler: it answers
-// from the bound scope only, never discloses the bound tenant, and reports
-// no binding in legacy mode or for an administrative-looking query.
-func TestAnswerTenantBinding(t *testing.T) {
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-
-	match := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.True(t, match.GetTenantAware())
-	assert.True(t, match.GetMatches())
-
-	other := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "globex"})
-	assert.True(t, other.GetTenantAware())
-	assert.False(t, other.GetMatches())
-
-	invalid := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: ""})
-	assert.False(t, invalid.GetMatches(), "an invalid queried tenant never matches")
-
-	legacy := answerTenantBinding(false, persistence.Unscoped(), &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.False(t, legacy.GetTenantAware())
-	assert.False(t, legacy.GetMatches())
 }
 
 // TestDispatchRejectsTenantBindingQuery pins that the control message can

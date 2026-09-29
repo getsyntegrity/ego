@@ -46,6 +46,7 @@ import (
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/syncmap"
@@ -144,7 +145,7 @@ var (
 	// never start without a bound persistence.Scope, since that is exactly
 	// the condition that would let it silently read or write Unscoped()
 	// records across tenants.
-	ErrEntityTenantScopeMissing = errors.New("eGo: tenant-aware actor spawned without a bound tenant scope")
+	ErrEntityTenantScopeMissing = extensions.ErrEntityTenantScopeMissing
 	// ErrBehaviorNotSerializable is the cause carried by a
 	// *BehaviorPlacementError when a behavior without MarshalBinary and
 	// UnmarshalBinary is spawned in cluster mode. In cluster mode GoAkt
@@ -706,8 +707,8 @@ func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
 	engine.mutex.RUnlock()
 
 	subscriber := eventStream.AddSubscriber()
-	eventStream.Subscribe(subscriber, eventsTopic)
-	eventStream.Subscribe(subscriber, statesTopic)
+	eventStream.Subscribe(subscriber, protocol.EventsTopic)
+	eventStream.Subscribe(subscriber, protocol.StatesTopic)
 
 	return subscriber, nil
 }
@@ -1224,7 +1225,7 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 		ctx = attachedCtx
 	}
 
-	ctx = attachCarrier(ctx, command.MarshalMetadata(env.Metadata()))
+	ctx = protocol.AttachCarrier(ctx, command.MarshalMetadata(env.Metadata()))
 
 	reply, sendErr := ref.noSender.SendSync(ctx, entityID, env.Payload(), timeout)
 	if sendErr != nil {
@@ -1262,7 +1263,7 @@ func (engine *Engine) Dispatch(ctx context.Context, entityID string, env command
 		return command.Result{}, ErrCommandReplyUnmarshalling
 	}
 
-	return resultFromReply(commandReply, env.Metadata())
+	return protocol.ResultFromReply(commandReply, env.Metadata())
 }
 
 // SendCommand sends a command to the specified entity and processes its response.
@@ -1326,7 +1327,7 @@ func (engine *Engine) deriveMetadata(ctx context.Context) (command.Metadata, err
 	if err != nil {
 		return command.Metadata{}, err
 	}
-	if parent, ok := metadataFromContext(ctx); ok {
+	if parent, ok := protocol.MetadataFromContext(ctx); ok {
 		return parent.Derive(op)
 	}
 	return command.NewMetadata(op)
@@ -1392,8 +1393,8 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
-		engine.logger.Debug("events publisher subscribing to topic", "publisher", publisher.ID(), "topic", eventsTopic)
-		engine.eventStream.Subscribe(subscriber, eventsTopic)
+		engine.logger.Debug("events publisher subscribing to topic", "publisher", publisher.ID(), "topic", protocol.EventsTopic)
+		engine.eventStream.Subscribe(subscriber, protocol.EventsTopic)
 
 		// create an instance of the event subscriber
 		eventSubscriber := &eventsStream{
@@ -1447,8 +1448,8 @@ func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
 
 	for _, publisher := range publishers {
 		subscriber := engine.eventStream.AddSubscriber()
-		engine.logger.Debug("durable state publisher subscribing to topic", "publisher", publisher.ID(), "topic", statesTopic)
-		engine.eventStream.Subscribe(subscriber, statesTopic)
+		engine.logger.Debug("durable state publisher subscribing to topic", "publisher", publisher.ID(), "topic", protocol.StatesTopic)
+		engine.eventStream.Subscribe(subscriber, protocol.StatesTopic)
 
 		// create an instance of the state subscriber
 		stateSubscriber := &statesStream{
@@ -1623,7 +1624,7 @@ func (engine *Engine) SagaStatus(ctx context.Context, sagaID string, timeout tim
 		return nil, fmt.Errorf("unexpected reply type from saga %s", sagaID)
 	}
 
-	state, _, err := parseCommandReply(commandReply)
+	state, _, err := protocol.ParseCommandReply(commandReply)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,74 +1795,6 @@ func (engine *Engine) ProjectionLag(ctx context.Context, projectionName string) 
 	}
 
 	return lags, nil
-}
-
-// parseCommandReply parses the command reply
-func parseCommandReply(reply *egopb.CommandReply) (State, uint64, error) {
-	var (
-		state State
-		err   error
-	)
-
-	switch r := reply.GetReply().(type) {
-	case *egopb.CommandReply_StateReply:
-		msg, err := r.StateReply.GetState().UnmarshalNew()
-		if err != nil {
-			return state, 0, err
-		}
-
-		switch v := msg.(type) {
-		case State:
-			return v, r.StateReply.GetSequenceNumber(), nil
-		default:
-			return state, 0, fmt.Errorf("got %s", r.StateReply.GetState().GetTypeUrl())
-		}
-	case *egopb.CommandReply_ErrorReply:
-		err = errors.New(r.ErrorReply.GetMessage())
-		return state, 0, err
-	}
-	return state, 0, errors.New("no state received")
-}
-
-// resultFromReply maps a wire-level egopb.CommandReply onto the canonical
-// command.Result taxonomy, carrying md (the dispatched Envelope's own
-// Metadata, since the wire reply itself carries none back) as the Result's
-// Metadata.
-//
-// egopb.ErrorReply -> command.OutcomeFailed is a deliberately lossy mapping
-// (#60's Alcance calls this out explicitly): the wire protocol has no way
-// to distinguish a domain rejection from an application failure, a timeout
-// or a cancellation, so every CommandReply_ErrorReply becomes OutcomeFailed
-// regardless of its true cause — with two recognized exceptions, applied by
-// classifyErrorReply's ordered registry (reply_classification.go, design.md
-// D8): a message produced by an actor's checkDeadline gate
-// (deadline_gate.go), identified by its
-// errActorDeadlineExceeded/errActorContextCanceled prefix, maps to
-// OutcomeTimedOut/OutcomeCanceled instead, so a mid-handler deadline
-// rejection is classifiable the same way a pre-dispatch one is; and a
-// message produced by a conditional write's *persistence.ConflictError
-// (D3/D7), identified by its persistence.ErrConcurrencyConflict prefix,
-// maps to OutcomeRejected with Failure.Code() ==
-// command.CodeConcurrencyConflict (D6). An empty ErrorReply.Message (never
-// produced by this repo's own sendErrorReply call sites, but not ruled out
-// for an external egopb.CommandReply) is substituted with a placeholder,
-// since command.NewFailure rejects an empty message.
-func resultFromReply(reply *egopb.CommandReply, md command.Metadata) (command.Result, error) {
-	switch r := reply.GetReply().(type) {
-	case *egopb.CommandReply_StateReply:
-		state, err := r.StateReply.GetState().UnmarshalNew()
-		if err != nil {
-			return command.Result{}, err
-		}
-		return command.NewSuccess(md, state, r.StateReply.GetSequenceNumber())
-	case *egopb.CommandReply_ErrorReply:
-		message := r.ErrorReply.GetMessage()
-		if message == "" {
-			message = "command: empty error reply message"
-		}
-		return classifyErrorReply(md, message)
-	}
-	return command.Result{}, errors.New("no state received")
 }
 
 // resultToLegacy maps a command.Result back onto SendCommand's legacy

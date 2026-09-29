@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -561,7 +562,7 @@ func TestSagaActorAttachCommandMetadata(t *testing.T) {
 	t.Run("zero-value metadata is auto-derived from the saga's root", func(t *testing.T) {
 		ctx := s.attachCommandMetadata(context.Background(), command.Metadata{})
 
-		md, ok := metadataFromContext(ctx)
+		md, ok := protocol.MetadataFromContext(ctx)
 		require.True(t, ok)
 		assert.NotEqual(t, rootMetadata.OperationID(), md.OperationID(), "derived metadata must carry a fresh operation id, not the root's")
 		assert.Equal(t, rootMetadata.CorrelationID(), md.CorrelationID(), "correlation id must be inherited from the root (D7)")
@@ -578,7 +579,7 @@ func TestSagaActorAttachCommandMetadata(t *testing.T) {
 
 		ctx := s.attachCommandMetadata(context.Background(), explicit)
 
-		md, ok := metadataFromContext(ctx)
+		md, ok := protocol.MetadataFromContext(ctx)
 		require.True(t, ok)
 		assert.Equal(t, explicit.OperationID(), md.OperationID())
 		assert.Equal(t, explicit.CorrelationID(), md.CorrelationID())

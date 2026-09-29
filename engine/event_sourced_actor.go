@@ -41,6 +41,7 @@ import (
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/eventswriter"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
@@ -51,12 +52,6 @@ import (
 )
 
 const (
-	// eventsTopic is the single in-process pub/sub topic eGo's event-sourced
-	// entities publish to and the engine's publishers/subscribers consume
-	// from. The shard each event belongs to is carried in egopb.Event.Shard,
-	// so downstream consumers can filter by shard without the topic name
-	// having to encode it.
-	eventsTopic              = "topic.events"
 	eventsWriterChildName    = "events-writer"
 	snapshotsWriterChildName = "snapshots-writer"
 	eventsJanitorChildName   = "events-janitor"
@@ -285,11 +280,11 @@ func newEventSourcedActor() *EventSourcedActor {
 // recovers the actor state from the events and snapshot stores. Child actors
 // are spawned in PostStart where [goakt.ReceiveContext] is available.
 func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
-	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
 	}
-	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	eventsStreamExt, err := extensions.Require[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
 	if err != nil {
 		return err
 	}
@@ -336,7 +331,7 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 	case *egopb.GetStateCommand:
 		entity.handleGetStateCommand(ctx)
 	case *egopb.TenantBindingQuery:
-		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, msg))
+		ctx.Response(protocol.AnswerTenantBinding(entity.tenantAware, entity.scope, msg))
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
 	case *eventswriter.Response:
@@ -381,7 +376,7 @@ func (entity *EventSourcedActor) PostStop(ctx *goakt.Context) error {
 // instead of letting the runtime panic (see optionalExtension in
 // extension_lookup.go and issue #99).
 func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) error {
-	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
 	}
@@ -389,7 +384,7 @@ func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) erro
 		entity.snapshotStore = snapshotStoreExt.Underlying()
 	}
 
-	eventAdaptersExt, err := optionalExtension[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
+	eventAdaptersExt, err := extensions.Optional[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
 	if err != nil {
 		return err
 	}
@@ -397,7 +392,7 @@ func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) erro
 		entity.eventAdapters = eventAdaptersExt.Adapters()
 	}
 
-	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	encryptorExt, err := extensions.Optional[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
 	if err != nil {
 		return err
 	}
@@ -405,7 +400,7 @@ func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) erro
 		entity.encryptor = encryptorExt.Encryptor()
 	}
 
-	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	telemetryExt, err := extensions.Optional[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
 	if err != nil {
 		return err
 	}
@@ -425,7 +420,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 			continue
 		}
 
-		if behavior, ok := behaviorFrom[behaviorport.EventSourced](dependency); ok {
+		if behavior, ok := extensions.BehaviorFrom[behaviorport.EventSourced](dependency); ok {
 			entity.behavior = behavior
 		}
 
@@ -771,7 +766,7 @@ func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd C
 	if !ok {
 		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
 	}
-	md, ok := metadataFromContext(goCtx)
+	md, ok := protocol.MetadataFromContext(goCtx)
 	if !ok {
 		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
 	}
@@ -791,7 +786,7 @@ func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd C
 // carries metadata but declares no ExpectedRevision: both resolve to "no
 // declared revision" and, via preconditionFromRevision, to Unconditional().
 func expectedRevisionFromContext(goCtx context.Context) (uint64, bool) {
-	md, ok := metadataFromContext(goCtx)
+	md, ok := protocol.MetadataFromContext(goCtx)
 	if !ok {
 		return 0, false
 	}
@@ -963,7 +958,7 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// Metadata's deadline, and the caller's timeout). If it has already
 	// expired or been canceled, fail closed before the handler runs — the
 	// handler must never execute past the deadline.
-	if err := checkDeadline(goCtx, "before handler execution"); err != nil {
+	if err := protocol.CheckDeadline(goCtx, "before handler execution"); err != nil {
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -994,7 +989,7 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// context, so this re-check is the actual barrier that stops a late
 	// handler output from mutating currentState or reaching the store.
 	// envelopes/pendingState/pendingCounter are discarded, never persisted.
-	if err := checkDeadline(goCtx, "before persistence"); err != nil {
+	if err := protocol.CheckDeadline(goCtx, "before persistence"); err != nil {
 		entity.sendErrorReply(ctx, err)
 		return
 	}
@@ -1059,7 +1054,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 	ctx.Stash()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return eventswriter.Ask(writer, envelopes, eventsTopic, timeout, precondition, scope)
+		return eventswriter.Ask(writer, envelopes, protocol.EventsTopic, timeout, precondition, scope)
 	})
 
 	entity.phase = phasePersisting
@@ -1435,7 +1430,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// Deadline pre-handler gate: same barrier as processCommandAndReply — see
 	// its comment for the rationale. Must fail closed here too, before the
 	// handler ever runs against batchState.
-	if deadlineErr := checkDeadline(goCtx, "before handler execution"); deadlineErr != nil {
+	if deadlineErr := protocol.CheckDeadline(goCtx, "before handler execution"); deadlineErr != nil {
 		if span != nil {
 			span.End()
 		}
@@ -1534,7 +1529,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// pendingCounter are discarded here, never appended to batchBuffer/
 	// batchState/batchEntries, so a later flushBatch never persists them and
 	// a subsequent valid command on this actor is unaffected.
-	if deadlineErr := checkDeadline(goCtx, "before persistence"); deadlineErr != nil {
+	if deadlineErr := protocol.CheckDeadline(goCtx, "before persistence"); deadlineErr != nil {
 		if span != nil {
 			span.End()
 		}
@@ -1635,7 +1630,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 	entity.stopFlushTimer()
 
-	topic := eventsTopic
+	topic := protocol.EventsTopic
 	envelopes := entity.batchBuffer
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package protocol
 
 import (
 	"github.com/getsyntegrity/ego/egopb"
@@ -28,14 +28,14 @@ import (
 	"github.com/getsyntegrity/ego/tenancy"
 )
 
-// answerTenantBinding is the single implementation of the engine-internal
+// AnswerTenantBinding is the single implementation of the engine-internal
 // egopb.TenantBindingQuery, shared by EventSourcedActor, DurableStateActor,
 // and SagaActor. It answers from the actor's own spawn binding — the
 // persistence.Scope PreStart bound via resolveScope, which never changes
 // for the actor's lifetime — and runs no business behavior, resolves no
 // tenant, and touches no store. The reply says only whether the binding is
 // the queried tenant, never which tenant it is.
-func answerTenantBinding(tenantAware bool, scope persistence.Scope, query *egopb.TenantBindingQuery) *egopb.TenantBindingReply {
+func AnswerTenantBinding(tenantAware bool, scope persistence.Scope, query *egopb.TenantBindingQuery) *egopb.TenantBindingReply {
 	if !tenantAware || !scope.Valid() || scope.IsUnscoped() {
 		return &egopb.TenantBindingReply{}
 	}

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package protocol
 
 import (
 	"errors"
@@ -58,9 +58,9 @@ func TestClassifyErrorReplyContextCanceled(t *testing.T) {
 	md := newTestMetadata(t)
 	message := errActorContextCanceled.Error() + ": dispatchToBehavior"
 
-	result, err := classifyErrorReply(md, message)
+	result, err := ClassifyErrorReply(md, message)
 	if err != nil {
-		t.Fatalf("classifyErrorReply: %v", err)
+		t.Fatalf("ClassifyErrorReply: %v", err)
 	}
 	if result.Outcome() != command.OutcomeCanceled {
 		t.Fatalf("got outcome %s, want OutcomeCanceled", result.Outcome())
@@ -74,9 +74,9 @@ func TestClassifyErrorReplyDeadlineExceeded(t *testing.T) {
 	md := newTestMetadata(t)
 	message := errActorDeadlineExceeded.Error() + ": dispatchToBehavior"
 
-	result, err := classifyErrorReply(md, message)
+	result, err := ClassifyErrorReply(md, message)
 	if err != nil {
-		t.Fatalf("classifyErrorReply: %v", err)
+		t.Fatalf("ClassifyErrorReply: %v", err)
 	}
 	if result.Outcome() != command.OutcomeTimedOut {
 		t.Fatalf("got outcome %s, want OutcomeTimedOut", result.Outcome())
@@ -91,9 +91,9 @@ func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 	conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 	message := conflictErr.Error()
 
-	result, err := classifyErrorReply(md, message)
+	result, err := ClassifyErrorReply(md, message)
 	if err != nil {
-		t.Fatalf("classifyErrorReply: %v", err)
+		t.Fatalf("ClassifyErrorReply: %v", err)
 	}
 	if result.Outcome() != command.OutcomeRejected {
 		t.Fatalf("got outcome %s, want OutcomeRejected", result.Outcome())
@@ -133,7 +133,7 @@ func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 // or classification degrades to OutcomeFailed. [...] A store whose error
 // does not conform simply does not classify: the caller sees today's
 // OutcomeFailed, never a wrong conflict." This documents the invariant
-// rather than weakening it: classifyErrorReply matches by
+// rather than weakening it: ClassifyErrorReply matches by
 // strings.HasPrefix against the message, so a non-empty prefix in front of
 // the *ConflictError's own Error() text makes the sentinel match fail and
 // the message fall through to the registry's default (OutcomeFailed), not
@@ -143,9 +143,9 @@ func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 	conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 
 	t.Run("unwrapped conflict classifies as concurrency_conflict", func(t *testing.T) {
-		result, err := classifyErrorReply(md, conflictErr.Error())
+		result, err := ClassifyErrorReply(md, conflictErr.Error())
 		if err != nil {
-			t.Fatalf("classifyErrorReply: %v", err)
+			t.Fatalf("ClassifyErrorReply: %v", err)
 		}
 		if result.Outcome() != command.OutcomeRejected {
 			t.Fatalf("got outcome %s, want OutcomeRejected", result.Outcome())
@@ -164,9 +164,9 @@ func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 		wrapped := fmt.Errorf("actor: %w", conflictErr)
 		message := wrapped.Error()
 
-		result, err := classifyErrorReply(md, message)
+		result, err := ClassifyErrorReply(md, message)
 		if err != nil {
-			t.Fatalf("classifyErrorReply: %v", err)
+			t.Fatalf("ClassifyErrorReply: %v", err)
 		}
 		if result.Outcome() != command.OutcomeFailed {
 			t.Fatalf("got outcome %s, want OutcomeFailed (D7: a wrapped ConflictError must not classify as concurrency_conflict)", result.Outcome())
@@ -191,9 +191,9 @@ func TestClassifyErrorReplyDefaultsToFailed(t *testing.T) {
 	md := newTestMetadata(t)
 	message := "some unrelated application error"
 
-	result, err := classifyErrorReply(md, message)
+	result, err := ClassifyErrorReply(md, message)
 	if err != nil {
-		t.Fatalf("classifyErrorReply: %v", err)
+		t.Fatalf("ClassifyErrorReply: %v", err)
 	}
 	if result.Outcome() != command.OutcomeFailed {
 		t.Fatalf("got outcome %s, want OutcomeFailed", result.Outcome())

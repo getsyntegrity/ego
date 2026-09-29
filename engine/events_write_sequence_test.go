@@ -35,6 +35,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -88,7 +89,7 @@ type sequenceEventsStream struct {
 }
 
 func (x *sequenceEventsStream) Publish(topic string, msg any) {
-	if topic == eventsTopic {
+	if topic == protocol.EventsTopic {
 		x.seq.add("publish")
 	}
 	x.Stream.Publish(topic, msg)

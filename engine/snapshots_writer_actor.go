@@ -95,7 +95,7 @@ func newSnapshotsWriterActor() *snapshotsWriterActor {
 func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
 	a.logger = goaktlog.Backend(ctx.Logger())
 
-	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func (a *snapshotsWriterActor) PreStart(ctx *goakt.Context) error {
 		a.snapshotStore = snapshotStoreExt.Underlying()
 	}
 
-	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	encryptorExt, err := extensions.Optional[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
 	if err != nil {
 		return err
 	}

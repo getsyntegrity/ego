@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package protocol
 
 import (
 	"context"
@@ -35,40 +35,40 @@ import (
 type commandCarrierContextKey struct{}
 
 // commandCarrierKey is the single key under which a command.Carrier is
-// stored in a context.Context by attachCarrier.
+// stored in a context.Context by AttachCarrier.
 var commandCarrierKey = commandCarrierContextKey{}
 
-// attachCarrier binds c into ctx under this package's own key and returns
+// AttachCarrier binds c into ctx under this package's own key and returns
 // the resulting context. This is how Metadata crosses the goakt actor
 // boundary (M-3, design.md option (c), #60): on a local hop goakt's
 // SendSync passes ctx through unchanged into the receiving actor's
-// ReceiveContext, so metadataFromContext can rematerialize the same
+// ReceiveContext, so MetadataFromContext can rematerialize the same
 // Metadata on the other side via command.UnmarshalMetadata without a wire
 // change. It does not yet cover a genuinely remote or cluster hop — see
 // the #60 final report for that explicitly deferred gap.
-func attachCarrier(ctx context.Context, c command.Carrier) context.Context {
+func AttachCarrier(ctx context.Context, c command.Carrier) context.Context {
 	return context.WithValue(ctx, commandCarrierKey, c)
 }
 
-// carrierFromContext returns the command.Carrier bound to ctx by
-// attachCarrier, if any. The second return value is false when no Carrier
+// CarrierFromContext returns the command.Carrier bound to ctx by
+// AttachCarrier, if any. The second return value is false when no Carrier
 // is attached — e.g. a caller that reaches an entity directly via
 // actorSystem.NoSender() instead of Engine.Dispatch/SendCommand or a
 // migrated SagaActor.
-func carrierFromContext(ctx context.Context) (command.Carrier, bool) {
+func CarrierFromContext(ctx context.Context) (command.Carrier, bool) {
 	c, ok := ctx.Value(commandCarrierKey).(command.Carrier)
 	return c, ok
 }
 
-// metadataFromContext extracts the command.Carrier bound to ctx and
+// MetadataFromContext extracts the command.Carrier bound to ctx and
 // rematerializes it into a command.Metadata via command.UnmarshalMetadata.
 // The second return value is false when no Carrier is attached, or the
 // attached Carrier fails to unmarshal (e.g. it is missing a required
 // field) — both are treated as "no envelope metadata available" by
 // callers, which fall back to the legacy Command-only dispatch path rather
 // than failing the command outright.
-func metadataFromContext(ctx context.Context) (command.Metadata, bool) {
-	c, ok := carrierFromContext(ctx)
+func MetadataFromContext(ctx context.Context) (command.Metadata, bool) {
+	c, ok := CarrierFromContext(ctx)
 	if !ok {
 		return command.Metadata{}, false
 	}

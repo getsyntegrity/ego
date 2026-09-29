@@ -197,7 +197,7 @@ func TestSagaActorBindOnFirstEvent(t *testing.T) {
 
 	t.Run("does not bind on an unrelated event, binds once the saga's own event arrives", func(t *testing.T) {
 		// Codex P1 (PR #78, saga_actor.go handleStreamEvent): every saga
-		// subscribes to the shared eventsTopic, so the first event observed may
+		// subscribes to the shared protocol.EventsTopic, so the first event observed may
 		// belong to a different tenant and be irrelevant to this saga. Binding
 		// must not commit to that tenant before HandleEvent's own relevance
 		// filter has a chance to reject it.

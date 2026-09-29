@@ -27,6 +27,7 @@ import (
 	"fmt"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 )
 
 // ErrMissingRequiredExtensions reports that an actor could not find an
@@ -70,4 +71,51 @@ func Require[T any](ctx *goakt.Context, extensionID string) (T, error) {
 	}
 
 	return typed, nil
+}
+
+// Optional looks up the extension registered under extensionID on
+// the actor system reachable through ctx and asserts it to type T, but,
+// unlike Require, treats a missing registration as valid: it
+// returns the zero value and a nil error when no extension is registered
+// under extensionID at all. This fits PreStart paths for which the
+// extension is a genuine optional dependency, e.g. snapshotsWriterActor's
+// snapshot store and encryptor extensions.
+//
+// It still guards against the same crash-the-process failure mode described
+// on Require: if an extension IS registered under extensionID but
+// under an unexpected concrete type — for example because of a wiring bug
+// that registers the wrong extension under an existing ID — an unchecked
+// ext.(T) assertion would panic, and because PreStart runs on a goroutine
+// driven through golang.org/x/sync/singleflight.Group, that panic would be
+// re-panicked by singleflight on a fresh, unrecoverable goroutine and crash
+// the whole process (see Require). Optional returns a
+// descriptive error instead in that case.
+func Optional[T any](ctx *goakt.Context, extensionID string) (T, error) {
+	var zero T
+
+	ext := ctx.Extension(extensionID)
+	if ext == nil {
+		return zero, nil
+	}
+
+	typed, ok := ext.(T)
+	if !ok {
+		return zero, fmt.Errorf("%w: %s was registered with unexpected type %T (actor=%q)",
+			ErrMissingRequiredExtensions, extensionID, ext, ctx.ActorName())
+	}
+
+	return typed, nil
+}
+
+// BehaviorFrom reads a behavior of contract T from a spawn dependency, as an
+// actor's PreStart sees it in ctx.Dependencies(): either the behavior itself
+// (the pass-through case of spawnDependency) or an LocalBehavior
+// that wraps it.
+func BehaviorFrom[T any](dependency extension.Dependency) (T, bool) {
+	if local, ok := dependency.(*LocalBehavior); ok {
+		b, ok := local.Behavior().(T)
+		return b, ok
+	}
+	b, ok := dependency.(T)
+	return b, ok
 }

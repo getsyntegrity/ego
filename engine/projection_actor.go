@@ -31,6 +31,7 @@ import (
 	gerrors "github.com/tochemey/goakt/v4/errors"
 	"github.com/tochemey/goakt/v4/supervisor"
 
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
@@ -99,15 +100,15 @@ func NewProjectionActor() *ProjectionActor {
 
 // PreStart prepares the projection
 func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
-	offsetStoreExt, err := requireExtension[*extensions.OffsetStore](ctx, extensions.OffsetStoreExtensionID)
+	offsetStoreExt, err := extensions.Require[*extensions.OffsetStore](ctx, extensions.OffsetStoreExtensionID)
 	if err != nil {
 		return err
 	}
-	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
 	}
-	registry, err := requireExtension[*extensions.ProjectionExtension](ctx, extensions.ProjectionExtensionID)
+	registry, err := extensions.Require[*extensions.ProjectionExtension](ctx, extensions.ProjectionExtensionID)
 	if err != nil {
 		return err
 	}
@@ -134,7 +135,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		opts = append(opts, projectionrunner.WithDeadLetterHandler(options.DeadLetterHandler))
 	}
 
-	eventAdaptersExt, err := optionalExtension[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
+	eventAdaptersExt, err := extensions.Optional[*extensions.EventAdapters](ctx, extensions.EventAdaptersExtensionID)
 	if err != nil {
 		return err
 	}
@@ -144,15 +145,15 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 
 	// Events persisted on this node trigger an immediate pull instead of
 	// waiting for the next pull interval.
-	eventsStreamExt, err := optionalExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	eventsStreamExt, err := extensions.Optional[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
 	if err != nil {
 		return err
 	}
 	if eventsStreamExt != nil {
-		opts = append(opts, projectionrunner.WithEventsStream(eventsStreamExt.Underlying(), eventsTopic))
+		opts = append(opts, projectionrunner.WithEventsStream(eventsStreamExt.Underlying(), protocol.EventsTopic))
 	}
 
-	encryptorExt, err := optionalExtension[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
+	encryptorExt, err := extensions.Optional[*extensions.EncryptorExtension](ctx, extensions.EncryptorExtensionID)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,7 @@ func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
 		opts = append(opts, projectionrunner.WithEncryptor(encryptorExt.Encryptor()))
 	}
 
-	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	telemetryExt, err := extensions.Optional[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
 	if err != nil {
 		return err
 	}

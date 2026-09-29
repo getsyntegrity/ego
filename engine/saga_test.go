@@ -40,6 +40,7 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
@@ -592,7 +593,7 @@ func TestSagaActor(t *testing.T) {
 		require.NotNil(t, pid)
 
 		// Publish a non-*egopb.Event payload
-		stream.Publish(eventsTopic, new(emptypb.Empty))
+		stream.Publish(protocol.EventsTopic, new(emptypb.Empty))
 
 		require.Never(t, func() bool {
 			select {
@@ -650,7 +651,7 @@ func TestSagaActor(t *testing.T) {
 			SequenceNumber: 1,
 			Event:          eventAny,
 		}
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		stream.Publish(topic, ownEvent)
 
 		require.Never(t, func() bool {
@@ -711,7 +712,7 @@ func TestSagaActor(t *testing.T) {
 			SequenceNumber: 1,
 			Event:          eventAny,
 		}
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 
 		// First event: triggers Complete → saga status becomes SagaCompleted
 		stream.Publish(topic, domainEvent)
@@ -771,7 +772,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 
 		// First event: bad type URL → UnmarshalNew fails → logged and skipped
 		badEvent := &egopb.Event{
@@ -845,7 +846,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 
@@ -899,7 +900,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -951,7 +952,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1007,7 +1008,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1075,7 +1076,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1137,7 +1138,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1201,7 +1202,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1252,7 +1253,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1329,7 +1330,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1389,7 +1390,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1449,7 +1450,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1514,7 +1515,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1589,7 +1590,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1660,7 +1661,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1737,7 +1738,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1813,7 +1814,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1875,7 +1876,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
@@ -1990,7 +1991,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
-		topic := eventsTopic
+		topic := protocol.EventsTopic
 		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)

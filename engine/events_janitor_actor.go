@@ -76,13 +76,13 @@ func newEventsJanitorActor() *eventsJanitorActor {
 func (a *eventsJanitorActor) PreStart(ctx *goakt.Context) error {
 	a.logger = goaktlog.Backend(ctx.Logger())
 
-	eventsStoreExt, err := requireExtension[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
 	}
 	a.eventsStore = eventsStoreExt.Underlying()
 
-	snapshotStoreExt, err := optionalExtension[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
 	}

@@ -37,6 +37,7 @@ import (
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/runner"
@@ -44,13 +45,6 @@ import (
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/tenancy"
 )
-
-// statesTopic is the single in-process pub/sub topic eGo's durable-state
-// entities publish to and the engine's state publishers/subscribers consume
-// from. The shard each state version belongs to is carried in
-// egopb.DurableState.Shard, so downstream consumers can filter by shard
-// without the topic name having to encode it.
-const statesTopic = "topic.states"
 
 // DurableStateActor is a durable state based actor
 type DurableStateActor struct {
@@ -129,11 +123,11 @@ func newDurableStateActor() *DurableStateActor {
 
 // PreStart pre-starts the actor
 func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
-	stateStoreExt, err := requireExtension[*extensions.DurableStateStore](ctx, extensions.DurableStateStoreExtensionID)
+	stateStoreExt, err := extensions.Require[*extensions.DurableStateStore](ctx, extensions.DurableStateStoreExtensionID)
 	if err != nil {
 		return err
 	}
-	eventsStreamExt, err := requireExtension[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
+	eventsStreamExt, err := extensions.Require[*extensions.EventsStream](ctx, extensions.EventsStreamExtensionID)
 	if err != nil {
 		return err
 	}
@@ -160,14 +154,14 @@ func (entity *DurableStateActor) PreStart(ctx *goakt.Context) error {
 
 	for _, dependency := range ctx.Dependencies() {
 		if dependency != nil {
-			if behavior, ok := behaviorFrom[behaviorport.DurableState](dependency); ok {
+			if behavior, ok := extensions.BehaviorFrom[behaviorport.DurableState](dependency); ok {
 				entity.behavior = behavior
 				break
 			}
 		}
 	}
 
-	telemetryExt, err := optionalExtension[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
+	telemetryExt, err := extensions.Optional[*extensions.TelemetryExtension](ctx, extensions.TelemetryExtensionID)
 	if err != nil {
 		return err
 	}
@@ -204,7 +198,7 @@ func (entity *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 	case *egopb.GetStateCommand:
 		entity.getStateAndReply(ctx)
 	case *egopb.TenantBindingQuery:
-		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, message))
+		ctx.Response(protocol.AnswerTenantBinding(entity.tenantAware, entity.scope, message))
 	default:
 		msg := message.(Command)
 		entity.processCommand(ctx, msg)
@@ -373,7 +367,7 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	// Metadata's deadline, and the caller's timeout). If it has already
 	// expired or been canceled, fail closed before the handler runs — the
 	// handler must never execute past the deadline.
-	if err := checkDeadline(ctx, "before handler execution"); err != nil {
+	if err := protocol.CheckDeadline(ctx, "before handler execution"); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
@@ -399,7 +393,7 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	// persisted: commitState (DS1/DS-DUR, #77) is the only place those fields
 	// are mutated, and only after WriteState confirms the durable write, so
 	// there is nothing to unwind on this gate's error path.
-	if err := checkDeadline(ctx, "before persistence"); err != nil {
+	if err := protocol.CheckDeadline(ctx, "before persistence"); err != nil {
 		entity.sendErrorReply(receiveContext, err)
 		return
 	}
@@ -492,7 +486,7 @@ func (entity *DurableStateActor) dispatchToBehavior(ctx context.Context, cmd Com
 	if !ok {
 		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
 	}
-	md, ok := metadataFromContext(ctx)
+	md, ok := protocol.MetadataFromContext(ctx)
 	if !ok {
 		return entity.behavior.HandleCommand(ctx, cmd, priorVersion, priorState)
 	}
@@ -704,7 +698,7 @@ func (entity *DurableStateActor) commitState(ctx context.Context, newState State
 		entity.actorTenant = candidateTenant
 	}
 
-	entity.eventsStream.Publish(statesTopic, durableState)
+	entity.eventsStream.Publish(protocol.StatesTopic, durableState)
 	return nil
 }
 
@@ -735,6 +729,6 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 		return err
 	}
 
-	entity.eventsStream.Publish(statesTopic, durableState)
+	entity.eventsStream.Publish(protocol.StatesTopic, durableState)
 	return nil
 }
