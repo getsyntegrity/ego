@@ -32,6 +32,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // optionalInterfaces are the optional SPI interfaces that may be
@@ -212,25 +214,25 @@ func unrelated(v any) {
 	}
 }
 `
-	got, err := assertionSites("sample/sample.go", []byte(src))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"sample/sample.go:aliased",
-		"sample/sample.go:bare",
-		"sample/sample.go:bareAliased",
-		"sample/sample.go:embedded",
-		"sample/sample.go:inline",
-		"sample/sample.go:local",
-		"sample/sample.go:qualified",
-		"sample/sample.go:switched",
-		"sample/sample.go:wrapped",
-	}
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Fatalf("assertionSites = %v, want %v", got, want)
-	}
+	specs.Describe(t, "assertionSites finds every optional-interface assertion in a source file", func(s *specs.Spec) {
+		s.It("reports each assertion site and ignores unrelated assertions", func(ctx *specs.Context) {
+			got, err := assertionSites("sample/sample.go", []byte(src))
+			ctx.Expect(err).To(specs.BeNil())
+			want := []string{
+				"sample/sample.go:aliased",
+				"sample/sample.go:bare",
+				"sample/sample.go:bareAliased",
+				"sample/sample.go:embedded",
+				"sample/sample.go:inline",
+				"sample/sample.go:local",
+				"sample/sample.go:qualified",
+				"sample/sample.go:switched",
+				"sample/sample.go:wrapped",
+			}
+			slices.Sort(got)
+			ctx.Expect(got).ToEqual(want)
+		})
+	})
 }
 
 // skipDir reports whether a directory holds no first-party production Go
