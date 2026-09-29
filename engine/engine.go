@@ -47,6 +47,7 @@ import (
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
+	"github.com/getsyntegrity/ego/internal/engine/saga"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/syncmap"
@@ -1538,7 +1539,7 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 
 	sagaCfg := extensions.NewSagaConfig(timeout)
 	_ = actorSystem.Inject(sagaCfg)
-	actor := newSagaActor()
+	actor := new(SagaActor)
 
 	deps := []extension.Dependency{behaviorDep, sagaCfg}
 	if tenantScope != nil {
@@ -1631,7 +1632,7 @@ func (engine *Engine) SagaStatus(ctx context.Context, sagaID string, timeout tim
 
 	return &SagaInfo{
 		ID:     sagaID,
-		Status: sagaStatusFromProto(commandReply.GetStateReply().GetSagaStatus()),
+		Status: saga.StatusFromProto(commandReply.GetStateReply().GetSagaStatus()),
 		State:  state,
 	}, nil
 }

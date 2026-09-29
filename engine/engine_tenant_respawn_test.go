@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -114,8 +115,8 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 	t.Run("Saga", func(t *testing.T) {
 		engine := newRespawnTestEngine(t)
 		id := "saga-" + uuid.NewString()
-		saga := func() *callbackSagaBehavior {
-			return &callbackSagaBehavior{id: id, handleEvent: func(context.Context, Event, State) (*SagaAction, error) {
+		saga := func() *enginetest.CallbackSagaBehavior {
+			return &enginetest.CallbackSagaBehavior{SagaID: id, HandleEventFn: func(context.Context, Event, State) (*SagaAction, error) {
 				return &SagaAction{}, nil
 			}}
 		}

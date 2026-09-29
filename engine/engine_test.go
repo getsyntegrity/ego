@@ -49,6 +49,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/pause"
@@ -2095,7 +2096,7 @@ func TestEngineSendCommandUnexpectedReply(t *testing.T) {
 	require.NotNil(t, sys)
 	entityID := "weird-" + uuid.NewString()
 	_, err := sys.Spawn(ctx, entityID,
-		&simpleReplyActor{reply: &samplepb.Account{AccountId: entityID}},
+		&enginetest.SimpleReplyActor{Reply: &samplepb.Account{AccountId: entityID}},
 		goakt.WithLongLived())
 	require.NoError(t, err)
 
@@ -2138,7 +2139,7 @@ func TestEngineSagaStatusErrorPaths(t *testing.T) {
 	t.Run("unexpected reply type", func(t *testing.T) {
 		sagaID := "saga-bad-reply-" + uuid.NewString()
 		_, err := sys.Spawn(ctx, sagaID,
-			&simpleReplyActor{reply: &samplepb.Account{}},
+			&enginetest.SimpleReplyActor{Reply: &samplepb.Account{}},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 		info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
@@ -2155,7 +2156,7 @@ func TestEngineSagaStatusErrorPaths(t *testing.T) {
 			},
 		}
 		_, err := sys.Spawn(ctx, sagaID,
-			&simpleReplyActor{reply: errReply},
+			&enginetest.SimpleReplyActor{Reply: errReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 		info, err := engine.SagaStatus(ctx, sagaID, time.Minute)

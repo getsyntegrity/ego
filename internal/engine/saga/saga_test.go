@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package saga
 
 import (
 	"context"
@@ -33,31 +33,34 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
+	"github.com/getsyntegrity/ego/internal/engine/eventsource"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
 func TestSagaStatus_String(t *testing.T) {
 	tests := []struct {
-		status   SagaStatus
+		status   runtimeport.SagaStatus
 		expected string
 	}{
-		{SagaRunning, "running"},
-		{SagaCompleted, "completed"},
-		{SagaCompensating, "compensating"},
-		{SagaFailed, "failed"},
-		{SagaStatus(99), "unknown"},
+		{runtimeport.SagaRunning, "running"},
+		{runtimeport.SagaCompleted, "completed"},
+		{runtimeport.SagaCompensating, "compensating"},
+		{runtimeport.SagaFailed, "failed"},
+		{runtimeport.SagaStatus(99), "unknown"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.expected, func(t *testing.T) {
@@ -79,7 +82,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -89,7 +92,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		// Spawn with no behavior dependency
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(), goakt.WithLongLived())
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(), goakt.WithLongLived())
 		require.Error(t, err)
 		require.Nil(t, pid)
 
@@ -107,7 +110,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -116,10 +119,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.Error(t, err)
@@ -140,7 +143,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -149,10 +152,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.Error(t, err)
@@ -179,7 +182,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -188,10 +191,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.Error(t, err)
@@ -221,7 +224,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -230,10 +233,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.Error(t, err)
@@ -264,7 +267,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -273,15 +276,15 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			applyEvent: func(_ context.Context, _ Event, state State) (State, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			ApplyEventFn: func(_ context.Context, _ Event, state State) (State, error) {
 				return nil, assert.AnError
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.Error(t, err)
@@ -313,7 +316,7 @@ func TestSagaActor(t *testing.T) {
 
 		applied := make(chan struct{}, 1)
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -322,9 +325,9 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			applyEvent: func(_ context.Context, _ Event, state State) (State, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			ApplyEventFn: func(_ context.Context, _ Event, state State) (State, error) {
 				select {
 				case applied <- struct{}{}:
 				default:
@@ -334,7 +337,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -363,7 +366,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -372,10 +375,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -408,7 +411,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -418,9 +421,9 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		compensated := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			compensate: func(_ context.Context, _ State) ([]SagaCommand, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
 				select {
 				case compensated <- struct{}{}:
 				default:
@@ -431,7 +434,7 @@ func TestSagaActor(t *testing.T) {
 		// 200ms timeout so the test runs quickly
 		sagaCfg := extensions.NewSagaConfig(200 * time.Millisecond)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -459,7 +462,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -469,9 +472,9 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		compensateCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			compensate: func(_ context.Context, _ State) ([]SagaCommand, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
 				select {
 				case compensateCalled <- struct{}{}:
 				default:
@@ -481,14 +484,14 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
 		// Manually send sagaTimeoutMsg twice: first triggers compensation (status → Compensating),
-		// second should be a no-op because status is no longer SagaRunning.
+		// second should be a no-op because status is no longer runtimeport.SagaRunning.
 		require.NoError(t, goakt.Tell(ctx, pid, &sagaTimeoutMsg{}))
 
 		// Drain first compensation signal
@@ -526,7 +529,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -535,10 +538,10 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{id: sagaID}
+		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -567,7 +570,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -577,16 +580,16 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handleEventCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				handleEventCalled <- struct{}{}
-				return &SagaAction{}, nil
+				return &sagaAction{}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -620,7 +623,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -630,16 +633,16 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handleEventCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				handleEventCalled <- struct{}{}
-				return &SagaAction{}, nil
+				return &sagaAction{}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -679,7 +682,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -691,16 +694,16 @@ func TestSagaActor(t *testing.T) {
 		// the saga processes events on its own goroutine, so the counter must
 		// be atomic for the test goroutine to read it safely
 		var callCount atomic.Int32
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				callCount.Add(1)
-				return &SagaAction{Complete: true}, nil
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -714,7 +717,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		topic := protocol.EventsTopic
 
-		// First event: triggers Complete → saga status becomes SagaCompleted
+		// First event: triggers Complete → saga status becomes runtimeport.SagaCompleted
 		stream.Publish(topic, domainEvent)
 		require.Eventually(t, func() bool { return callCount.Load() >= 1 }, 2*time.Second, 10*time.Millisecond,
 			"HandleEvent was not called for the first event")
@@ -744,7 +747,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -754,19 +757,19 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		secondEventHandled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				select {
 				case secondEventHandled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{}, nil
+				return &sagaAction{}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -813,7 +816,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -824,9 +827,9 @@ func TestSagaActor(t *testing.T) {
 
 		callCount := 0
 		secondHandled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				callCount++
 				if callCount == 1 {
 					return nil, assert.AnError
@@ -835,12 +838,12 @@ func TestSagaActor(t *testing.T) {
 				case secondHandled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{}, nil
+				return &sagaAction{}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -875,7 +878,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -885,16 +888,16 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				handled <- struct{}{}
 				return nil, nil // nil action
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -929,7 +932,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -938,15 +941,15 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Complete: true}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -976,7 +979,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -989,20 +992,20 @@ func TestSagaActor(t *testing.T) {
 		// the saga processes events on its own goroutine, so the counter must
 		// be atomic for the test goroutine to read it safely
 		var applyCallCount atomic.Int32
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
 				handled <- struct{}{}
-				return &SagaAction{Events: []Event{event}}, nil
+				return &sagaAction{Events: []Event{event}}, nil
 			},
-			applyEvent: func(_ context.Context, _ Event, state State) (State, error) {
+			ApplyEventFn: func(_ context.Context, _ Event, state State) (State, error) {
 				applyCallCount.Add(1)
 				return nil, assert.AnError
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1053,7 +1056,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1062,15 +1065,15 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Events: []Event{event}}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Events: []Event{event}}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1106,7 +1109,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1116,13 +1119,13 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		applied := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id:           sagaID,
-			initialState: func() State { return &samplepb.Account{} },
-			handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Events: []Event{event}}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID:         sagaID,
+			InitialStateFn: func() State { return &samplepb.Account{} },
+			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Events: []Event{event}}, nil
 			},
-			applyEvent: func(_ context.Context, _ Event, _ State) (State, error) {
+			ApplyEventFn: func(_ context.Context, _ Event, _ State) (State, error) {
 				select {
 				case applied <- struct{}{}:
 				default:
@@ -1132,7 +1135,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1164,7 +1167,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
-	t.Run("compensate: behavior failure sets SagaFailed", func(t *testing.T) {
+	t.Run("compensate: behavior failure sets runtimeport.SagaFailed", func(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
@@ -1176,7 +1179,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1185,18 +1188,18 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Compensate: true}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Compensate: true}, nil
 			},
-			compensate: func(_ context.Context, _ State) ([]SagaCommand, error) {
+			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
 				return nil, assert.AnError
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1213,7 +1216,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
-	t.Run("compensate: command SendSync failure sets SagaFailed", func(t *testing.T) {
+	t.Run("compensate: command SendSync failure sets runtimeport.SagaFailed", func(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
@@ -1225,7 +1228,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1234,20 +1237,20 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Compensate: true}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Compensate: true}, nil
 			},
-			compensate: func(_ context.Context, _ State) ([]SagaCommand, error) {
-				return []SagaCommand{
+			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
+				return []sagaCommand{
 					{EntityID: "nonexistent-entity", Command: new(emptypb.Empty), Timeout: 500 * time.Millisecond},
 				}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1266,7 +1269,7 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
-	t.Run("compensate: successful compensation sets SagaCompleted", func(t *testing.T) {
+	t.Run("compensate: successful compensation sets runtimeport.SagaCompleted", func(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 		targetID := uuid.NewString()
@@ -1279,7 +1282,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1294,27 +1297,27 @@ func TestSagaActor(t *testing.T) {
 				StateReply: &egopb.StateReply{
 					PersistenceId:  targetID,
 					SequenceNumber: 1,
-					State:          mustAny(t, &samplepb.Account{}),
+					State:          enginetest.MustAny(t, &samplepb.Account{}),
 				},
 			},
 		}
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: compensationReply},
+			&enginetest.SimpleReplyActor{Reply: compensationReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		compensated := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Compensate: true}, nil
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Compensate: true}, nil
 			},
-			compensate: func(_ context.Context, _ State) ([]SagaCommand, error) {
-				return []SagaCommand{
+			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
+				return []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}, nil
 			},
-			applyEvent: func(_ context.Context, _ Event, state State) (State, error) {
+			ApplyEventFn: func(_ context.Context, _ Event, state State) (State, error) {
 				select {
 				case compensated <- struct{}{}:
 				default:
@@ -1324,7 +1327,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1335,7 +1338,7 @@ func TestSagaActor(t *testing.T) {
 		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
 		stream.Publish(topic, event)
 
-		// compensate() (saga_actor.go) marks SagaCompleted directly on a
+		// compensate() (saga_actor.go) marks runtimeport.SagaCompleted directly on a
 		// successful SendSync; it never calls ApplyEvent, so `compensated`
 		// (wired for a different code path) cannot be awaited here. Poll
 		// survival over the same window the original blind sleep used.
@@ -1357,7 +1360,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1367,24 +1370,24 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handleErrorCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: "nonexistent-entity", Command: new(emptypb.Empty), Timeout: 500 * time.Millisecond},
 				}}, nil
 			},
-			handleError: func(_ context.Context, _ string, _ error, _ State) (*SagaAction, error) {
+			HandleErrorFn: func(_ context.Context, _ string, _ error, _ State) (*sagaAction, error) {
 				select {
 				case handleErrorCalled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{Complete: true}, nil
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1417,7 +1420,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1427,14 +1430,14 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handleErrorCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: "nonexistent-entity", Command: new(emptypb.Empty), Timeout: 500 * time.Millisecond},
 				}}, nil
 			},
-			handleError: func(_ context.Context, _ string, _ error, _ State) (*SagaAction, error) {
+			HandleErrorFn: func(_ context.Context, _ string, _ error, _ State) (*sagaAction, error) {
 				select {
 				case handleErrorCalled <- struct{}{}:
 				default:
@@ -1444,7 +1447,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1479,7 +1482,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1490,26 +1493,26 @@ func TestSagaActor(t *testing.T) {
 
 		// Target responds with a non-CommandReply message
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: new(emptypb.Empty)},
+			&enginetest.SimpleReplyActor{Reply: new(emptypb.Empty)},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		commandSent := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				select {
 				case commandSent <- struct{}{}:
 				default:
 				}
-				return &SagaAction{Commands: []SagaCommand{
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1546,7 +1549,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1562,29 +1565,29 @@ func TestSagaActor(t *testing.T) {
 			},
 		}
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: errorReply},
+			&enginetest.SimpleReplyActor{Reply: errorReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		handleErrorCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}}, nil
 			},
-			handleError: func(_ context.Context, _ string, _ error, _ State) (*SagaAction, error) {
+			HandleErrorFn: func(_ context.Context, _ string, _ error, _ State) (*sagaAction, error) {
 				select {
 				case handleErrorCalled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{Complete: true}, nil
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1618,7 +1621,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1633,19 +1636,19 @@ func TestSagaActor(t *testing.T) {
 			},
 		}
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: errorReply},
+			&enginetest.SimpleReplyActor{Reply: errorReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		handleErrorCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}}, nil
 			},
-			handleError: func(_ context.Context, _ string, _ error, _ State) (*SagaAction, error) {
+			HandleErrorFn: func(_ context.Context, _ string, _ error, _ State) (*sagaAction, error) {
 				select {
 				case handleErrorCalled <- struct{}{}:
 				default:
@@ -1655,7 +1658,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1690,7 +1693,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1705,24 +1708,24 @@ func TestSagaActor(t *testing.T) {
 				StateReply: &egopb.StateReply{
 					PersistenceId:  targetID,
 					SequenceNumber: 1,
-					State:          mustAny(t, &samplepb.Account{}),
+					State:          enginetest.MustAny(t, &samplepb.Account{}),
 				},
 			},
 		}
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: successReply},
+			&enginetest.SimpleReplyActor{Reply: successReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		handleResultCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}}, nil
 			},
-			handleResult: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
+			HandleResultFn: func(_ context.Context, _ string, _ State, _ State) (*sagaAction, error) {
 				select {
 				case handleResultCalled <- struct{}{}:
 				default:
@@ -1732,7 +1735,7 @@ func TestSagaActor(t *testing.T) {
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1767,7 +1770,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1781,34 +1784,34 @@ func TestSagaActor(t *testing.T) {
 				StateReply: &egopb.StateReply{
 					PersistenceId:  targetID,
 					SequenceNumber: 1,
-					State:          mustAny(t, &samplepb.Account{}),
+					State:          enginetest.MustAny(t, &samplepb.Account{}),
 				},
 			},
 		}
 		_, err = actorSystem.Spawn(ctx, targetID,
-			&simpleReplyActor{reply: successReply},
+			&enginetest.SimpleReplyActor{Reply: successReply},
 			goakt.WithLongLived())
 		require.NoError(t, err)
 
 		handleResultCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
-				return &SagaAction{Commands: []SagaCommand{
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: new(emptypb.Empty), Timeout: 3 * time.Second},
 				}}, nil
 			},
-			handleResult: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
+			HandleResultFn: func(_ context.Context, _ string, _ State, _ State) (*sagaAction, error) {
 				select {
 				case handleResultCalled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{Complete: true}, nil
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1842,7 +1845,7 @@ func TestSagaActor(t *testing.T) {
 		defer stream.Close()
 
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1852,25 +1855,25 @@ func TestSagaActor(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		handleErrorCalled := make(chan struct{}, 1)
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				// Timeout=0 should default to 5s in sendCommand
-				return &SagaAction{Commands: []SagaCommand{
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: "nonexistent-entity", Command: new(emptypb.Empty), Timeout: 0},
 				}}, nil
 			},
-			handleError: func(_ context.Context, _ string, _ error, _ State) (*SagaAction, error) {
+			HandleErrorFn: func(_ context.Context, _ string, _ error, _ State) (*sagaAction, error) {
 				select {
 				case handleErrorCalled <- struct{}{}:
 				default:
 				}
-				return &SagaAction{Complete: true}, nil
+				return &sagaAction{Complete: true}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			goakt.WithDependencies(behavior, sagaCfg))
 		require.NoError(t, err)
@@ -1892,27 +1895,19 @@ func TestSagaActor(t *testing.T) {
 	})
 }
 
-// mustAny wraps proto.Message in anypb.Any, failing the test on error.
-func mustAny(t *testing.T, msg proto.Message) *anypb.Any {
-	t.Helper()
-	a, err := anypb.New(msg)
-	require.NoError(t, err)
-	return a
-}
-
-// TestSagaFailsClosed documents and proves the known #54 limitation: SagaActor
+// TestSagaFailsClosed documents and proves the known #54 limitation: Actor
 // dispatches commands via sendCommand/compensate using context.Background()
 // (saga_actor.go, read-only in this change), which never carries a
 // TenantContext. In tenant-aware mode this means a saga can never legitimately
 // reach a domain handler on its own — it fails closed at the exact same
-// pre-handler gate added to EventSourcedActor and DurableStateActor for T4-A
+// pre-handler gate added to eventsource.Actor and DurableStateActor for T4-A
 // (see TestEventSourcedActorTenancyGate, TestDurableStateActorTenancyGate).
 //
 // This is not a new mechanism: the saga's context.Background() dispatch is
 // architecturally identical to the "artificial loss of TenantContext" case
 // already covered directly against the actors. This test additionally proves
-// it end-to-end, through a real SagaActor reacting to a real event and
-// invoking a real tenant-aware EventSourcedActor via SendSync, exactly as
+// it end-to-end, through a real Actor reacting to a real event and
+// invoking a real tenant-aware eventsource.Actor via SendSync, exactly as
 // production code would.
 func TestSagaFailsClosed(t *testing.T) {
 	t.Run("saga-dispatched command in tenant-aware mode is blocked before HandleCommand", func(t *testing.T) {
@@ -1933,7 +1928,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		// at all: the saga must never be able to reach one (see structural
 		// invariant), and this test does not need one to prove the gate.
 		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(stream),
@@ -1943,7 +1938,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		// The saga's real target: a genuine tenant-aware EventSourcedActor,
+		// The saga's real target: a genuine tenant-aware eventsource.Actor,
 		// not a stub. If the gate ever regressed and let a saga-dispatched
 		// command through, this probe would record it.
 		//
@@ -1953,16 +1948,16 @@ func TestSagaFailsClosed(t *testing.T) {
 		// Engine.Entity injects when given engine.WithTenant (TENANT-003 T4,
 		// corrected). Without it, tenancy being active
 		// (extensions.NewTenancyMarker() above) makes the target's own
-		// PreStart fail closed with ErrEntityTenantScopeMissing before this
+		// PreStart fail closed with extensions.ErrEntityTenantScopeMissing before this
 		// test ever reaches the saga-dispatch gate it means to prove.
-		targetProbe := newTenancyProbeEventSourcedBehavior(targetID)
-		_, err = actorSystem.Spawn(ctx, targetID, new(EventSourcedActor),
+		targetProbe := enginetest.NewTenancyProbeEventSourcedBehavior(targetID)
+		_, err = actorSystem.Spawn(ctx, targetID, eventsource.New(),
 			goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 
-		// Post-EGO-TENANT-002/PR3, SagaActor reconstructs a TenantContext from
+		// Post-EGO-TENANT-002/PR3, Actor reconstructs a TenantContext from
 		// each incoming event's own tenant metadata (SG2) and rejects the
-		// event outright — before HandleEvent ever runs, so no SagaAction and
+		// event outright — before HandleEvent ever runs, so no sagaAction and
 		// no command is ever produced — when that metadata is absent or
 		// malformed (SG4). This is a strictly earlier and stronger form of
 		// the structural invariant this test originally proved by relying on
@@ -1971,18 +1966,18 @@ func TestSagaFailsClosed(t *testing.T) {
 		// fallback path no longer exists because the saga never reaches
 		// sendCommand for a tenant-less event in the first place.
 		var handleEventCalls atomic.Int32
-		behavior := &callbackSagaBehavior{
-			id: sagaID,
-			handleEvent: func(_ context.Context, _ Event, _ State) (*SagaAction, error) {
+		behavior := &enginetest.CallbackSagaBehavior{
+			SagaID: sagaID,
+			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
 				handleEventCalls.Add(1)
-				return &SagaAction{Commands: []SagaCommand{
+				return &sagaAction{Commands: []sagaCommand{
 					{EntityID: targetID, Command: &testpb.CreateAccount{AccountBalance: 500}, Timeout: 3 * time.Second},
 				}}, nil
 			},
 		}
 		sagaCfg := extensions.NewSagaConfig(0)
 
-		pid, err := actorSystem.Spawn(ctx, sagaID, newSagaActor(),
+		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
 			goakt.WithLongLived(),
 			// Same reasoning as the target's spawn above: this saga is also
 			// spawned directly through actorSystem.Spawn, so it needs its own

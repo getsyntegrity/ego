@@ -36,7 +36,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -318,51 +317,6 @@ func TestEngineSendCommandDispatchesDurableStateHandleEnvelope(t *testing.T) {
 	require.NotEmpty(t, env.Metadata().OperationID())
 
 	require.NoError(t, engine.Stop(ctx))
-}
-
-// TestSagaActorAttachCommandMetadata exercises SagaCommand's dual metadata
-// behavior (#60, issue #60's "SagaCommand gana metadata" scope item):
-// when a SagaCommand carries an explicit Metadata, attachCommandMetadata
-// must use it verbatim; when left as the zero value, it must derive a
-// fresh child from the saga's own rootMetadata (correlation inherited,
-// causation set to the saga's root operation).
-func TestSagaActorAttachCommandMetadata(t *testing.T) {
-	rootOp, err := command.NewOperationID("saga-root-1")
-	require.NoError(t, err)
-	rootMetadata, err := command.NewMetadata(rootOp)
-	require.NoError(t, err)
-
-	s := &SagaActor{
-		sagaID:       "saga-root-1",
-		rootMetadata: rootMetadata,
-		logger:       DiscardLogger,
-	}
-
-	t.Run("zero-value metadata is auto-derived from the saga's root", func(t *testing.T) {
-		ctx := s.attachCommandMetadata(context.Background(), command.Metadata{})
-
-		md, ok := protocol.MetadataFromContext(ctx)
-		require.True(t, ok)
-		assert.NotEqual(t, rootMetadata.OperationID(), md.OperationID(), "derived metadata must carry a fresh operation id, not the root's")
-		assert.Equal(t, rootMetadata.CorrelationID(), md.CorrelationID(), "correlation id must be inherited from the root (D7)")
-		causation, ok := md.CausationID()
-		require.True(t, ok)
-		assert.Equal(t, command.CausationID(rootMetadata.OperationID()), causation, "causation must be the saga's root operation")
-	})
-
-	t.Run("explicit metadata is used verbatim", func(t *testing.T) {
-		explicitOp, err := command.NewOperationID("explicit-op-1")
-		require.NoError(t, err)
-		explicit, err := command.NewMetadata(explicitOp, command.WithCorrelationID("explicit-correlation"))
-		require.NoError(t, err)
-
-		ctx := s.attachCommandMetadata(context.Background(), explicit)
-
-		md, ok := protocol.MetadataFromContext(ctx)
-		require.True(t, ok)
-		assert.Equal(t, explicit.OperationID(), md.OperationID())
-		assert.Equal(t, explicit.CorrelationID(), md.CorrelationID())
-	})
 }
 
 // dispatchOutcome carries an engine.Dispatch call's result back across a

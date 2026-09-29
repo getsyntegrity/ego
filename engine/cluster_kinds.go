@@ -27,6 +27,7 @@ import (
 
 	"github.com/getsyntegrity/ego/internal/engine/durablestate"
 	"github.com/getsyntegrity/ego/internal/engine/eventsource"
+	"github.com/getsyntegrity/ego/internal/engine/saga"
 )
 
 // The four actor types below are the cluster kinds of eGo. Each one stays
@@ -102,6 +103,33 @@ func (a *DurableStateActor) Receive(ctx *goakt.ReceiveContext) {
 
 // PostStop releases the actor's resources when it stops.
 func (a *DurableStateActor) PostStop(ctx *goakt.Context) error {
+	return a.impl.PostStop(ctx)
+}
+
+// SagaActor implements a saga/process manager as a Go-Akt actor.
+// It subscribes to the event stream, reacts to events via the SagaBehavior,
+// persists its own events, and coordinates commands to other entities.
+//
+// The implementation lives in internal/engine/saga.
+type SagaActor struct {
+	impl saga.Actor
+}
+
+var _ goakt.Actor = (*SagaActor)(nil)
+
+// PreStart loads extensions and dependencies, validates configuration, and
+// recovers the saga state from the events store.
+func (a *SagaActor) PreStart(ctx *goakt.Context) error {
+	return a.impl.PreStart(ctx)
+}
+
+// Receive handles the messages sent to the saga, including state queries.
+func (a *SagaActor) Receive(ctx *goakt.ReceiveContext) {
+	a.impl.Receive(ctx)
+}
+
+// PostStop releases the saga's resources when it stops.
+func (a *SagaActor) PostStop(ctx *goakt.Context) error {
 	return a.impl.PostStop(ctx)
 }
 
