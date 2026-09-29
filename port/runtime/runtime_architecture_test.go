@@ -36,7 +36,7 @@ import (
 // the command, tenancy, eventstream and port/behavior contracts, the packages
 // eventstream brings in (internal/queue, internal/syncmap, uuid, atomic) and
 // the protobuf runtime. The list covers the interfaces that arrive in S4-3, so
-// it does not change then. It is intentionally narrower than archcheck's
+// it does not change then. It is intentionally narrower than the former architecture checker's
 // contract-allowlist rule: any new dependency should be a reviewed change to
 // this list. An allowlist, rather than a denylist of GoAkt, also catches a
 // dependency nobody thought to forbid.

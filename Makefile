@@ -81,17 +81,11 @@ docker-lint: docker-image
 	@echo "Running golangci-lint..."
 	$(DOCKER_RUN) golangci-lint run --timeout 10m
 
-# Run the test suite with race detection and coverage inside the CI image.
-# Package selection and exclusions come from internal/cmd/ciselect (-all:
-# the same full-suite selection build.yml runs on push to main), matched
-# by whole path segment rather than the substring list this target used to
-# grep with -- that old list silently dropped ./testkit ("test" matched as
-# a substring). Coverage is native `go test`, not go-acc.
+# Run the root module test suite with coverage inside the CI image (no race
+# detector; coverage is native `go test`).
 docker-test: docker-image
-	@echo "Running tests with race detector..."
-	$(DOCKER_RUN) sh -c '\
-		go run ./internal/cmd/ciselect -all -out-dir /tmp/ci && \
-		GOFLAGS=-mod=vendor GO_TEST_RACE=1 scripts/ci/go-test.sh /tmp/ci coverage.out'
+	@echo "Running tests..."
+	$(DOCKER_RUN) go test -coverprofile=coverage.out ./...
 
 # Regenerate mocks via mockery inside the CI image. Output is written to ./mocks.
 docker-mock: docker-image

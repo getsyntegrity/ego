@@ -48,10 +48,10 @@ func hermeticGoEnv() []string {
 }
 
 // TestProductionClosureExcludesRootAndGoAkt guards the S4-1 removal of the
-// last archcheck baseline entry (#147, ego-arch-001 §3): migration's
+// last architecture-checker baseline entry (#147, ego-arch-001 §3): migration's
 // production build must never again reach the engine package or the
 // GoAkt runtime. Only `go list -deps .` (no -test) is checked — migration's
-// tests may still import the engine (archcheck's application-no-runtime rule
+// tests may still import the engine (the former architecture checker's application-no-runtime rule
 // evaluates production edges only), so a test-only import of the engine here is
 // not a regression this guard cares about.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {

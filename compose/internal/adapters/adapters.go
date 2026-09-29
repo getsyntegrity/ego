@@ -27,7 +27,7 @@
 //
 // It inspects adapters only through port/adapter's accessors (StarterOf,
 // PingerOf, Describe), never with its own type assertions. It imports no
-// runtime: internal/cmd/archcheck's composition-no-runtime rule covers it
+// runtime: the former architecture checker's composition-no-runtime rule covers it
 // like compose/internal/lifecycle.
 package adapters
 

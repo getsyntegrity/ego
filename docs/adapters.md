@@ -2,8 +2,7 @@
 
 An adapter is the code that connects Ego to one piece of infrastructure: a store, a publisher, an
 encryptor, a tenant resolver. This guide explains how to add one **without editing any file outside
-your own module**. The one exception is a line in archcheck when your adapter opens a new family of
-adapter modules (step 2).
+your own module**.
 
 The rules behind the guide are in [`openspec/changes/ego-arch-004/design.md`](../openspec/changes/ego-arch-004/design.md)
 (the adapter SPI, "service provider interface": what an adapter implements so core can use it). The
@@ -45,13 +44,11 @@ change), not an adapter.
 Put the adapter in its own directory with its own `go.mod`, under the family's adapter root.
 Publishers live under `publisher/` today (`publisher/websocket`, `publisher/kafka`, ...). For a new
 family of adapters, the root is decided when its first module arrives (maintainer decision O6,
-design §9); adding that root to `ExternalAdapterLayer` in `internal/cmd/archcheck/rules/layers.go`
-is the one-line change mentioned above.
+design §9).
 
 Import only contract packages and `egopb`. Never import package `engine`, the GoAkt runtime, or
-`compose` and anything under it: archcheck's rules `external-adapter-no-runtime` and
-`external-adapter-no-composition` reject that in production code. archcheck does not read test
-files, so copy `closure_test.go` from an existing publisher; it runs `go list -deps -test ./...`
+`compose` and anything under it: the layering rules reject that in production code. Test files are not covered by those rules,
+so copy `closure_test.go` from an existing publisher; it runs `go list -deps -test ./...`
 and fails if your tests pull in the runtime, the engine package or the composition root.
 
 ## 3. Implement the port
@@ -194,13 +191,11 @@ and, when it declares one, by its descriptor name.
 
 ## 8. CI
 
-Nothing to register. `ciselect` discovers the module from its `go.mod`, and the module is verified
-like any other nested module (`scripts/ci/verify-module.sh <dir>`). If the module is released, list
-it in [`docs/ci.md`](ci.md).
+Nothing to register. CI discovers the module from its `go.mod`. If the module is released, see
+[`docs/ci.md`](ci.md).
 
 ## 9. Pull request checklist
 
-- [ ] `go run ./internal/cmd/archcheck` is green.
 - [ ] The closure test (`closure_test.go`) is green.
 - [ ] The conformance suites are green; anything skipped is skipped only through
       `adaptertest.ErrUnreachable`, with the reason in the pull request.
