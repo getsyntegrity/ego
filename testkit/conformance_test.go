@@ -29,9 +29,10 @@ package testkit
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/offsetstore"
@@ -48,20 +49,32 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestEventStoreConformance(t *testing.T) {
-	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
-		return NewEventsStore()
+	specs.Describe(t, "the in-repo EventStore satisfies the EventsStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunEventsStoreConformance(ctx.T, func(t *testing.T) persistence.EventsStore {
+				return NewEventsStore()
+			})
+		})
 	})
 }
 
 func TestDurableStoreConformance(t *testing.T) {
-	conformance.RunStateStoreConformance(t, func(t *testing.T) persistence.StateStore {
-		return NewDurableStore()
+	specs.Describe(t, "the in-repo DurableStore satisfies the StateStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunStateStoreConformance(ctx.T, func(t *testing.T) persistence.StateStore {
+				return NewDurableStore()
+			})
+		})
 	})
 }
 
 func TestSnapshotStoreConformance(t *testing.T) {
-	conformance.RunSnapshotStoreConformance(t, func(t *testing.T) persistence.SnapshotStore {
-		return NewSnapshotStore()
+	specs.Describe(t, "the in-repo SnapshotStore satisfies the SnapshotStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunSnapshotStoreConformance(ctx.T, func(t *testing.T) persistence.SnapshotStore {
+				return NewSnapshotStore()
+			})
+		})
 	})
 }
 
@@ -95,20 +108,32 @@ func TestStoresAdapterConformance(t *testing.T) {
 		{"DurableStore", persistence.PortStateStore, func() any { return NewDurableStore() }},
 		{"OffsetStore", offsetstore.PortOffsetStore, func() any { return NewOffsetStore() }},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			results := adaptertest.Run(t, adaptertest.Target{
-				Port:      tc.port,
-				Ownership: adaptertest.Borrowed,
-				New:       func(*testing.T) (any, error) { return tc.new(), nil },
+	specs.Describe(t, "the in-memory stores pass the adapter lifecycle checks as Borrowed adapters", func(s *specs.Spec) {
+		for _, tc := range cases {
+			s.It(tc.name, func(ctx *specs.Context) {
+				results := adaptertest.Run(ctx.T, adaptertest.Target{
+					Port:      tc.port,
+					Ownership: adaptertest.Borrowed,
+					New:       func(*testing.T) (any, error) { return tc.new(), nil },
+				})
+				ctx.Expect(len(results)).ToEqual(len(wantStoreAdapterOutcomes))
+
+				// Collect the checks that are unknown or ended in another
+				// outcome, so a failure prints each offender with its detail.
+				var offenders []string
+				for _, r := range results {
+					want, known := wantStoreAdapterOutcomes[r.Check]
+					switch {
+					case !known:
+						offenders = append(offenders, fmt.Sprintf("%s: unexpected check", r.Check))
+					case want != r.Outcome:
+						offenders = append(offenders, fmt.Sprintf("%s: got %v, want %v: %s", r.Check, r.Outcome, want, r.Detail))
+					}
+				}
+				ctx.Expect(offenders).To(specs.BeNil())
 			})
-			require.Len(t, results, len(wantStoreAdapterOutcomes))
-			for _, r := range results {
-				require.Contains(t, wantStoreAdapterOutcomes, r.Check)
-				require.Equal(t, wantStoreAdapterOutcomes[r.Check], r.Outcome, "%s: %s", r.Check, r.Detail)
-			}
-		})
-	}
+		}
+	})
 }
 
 // The descriptors declare no capability: CapReady is implied by the store
@@ -122,11 +147,15 @@ func TestStoreDescriptors(t *testing.T) {
 		"DurableStore": {NewDurableStore(), persistence.PortStateStore},
 		"OffsetStore":  {NewOffsetStore(), offsetstore.PortOffsetStore},
 	}
-	for name, tc := range cases {
-		d, ok := adapter.Describe(tc.value)
-		require.True(t, ok, "%s is undeclared", name)
-		require.Equal(t, adapter.Descriptor{Ports: []adapter.Port{tc.port}, Name: "testkit-memory"}, d, name)
-	}
+	specs.Describe(t, "each store declares its port and the testkit-memory name in its descriptor", func(s *specs.Spec) {
+		for name, tc := range cases {
+			s.It(name, func(ctx *specs.Context) {
+				d, ok := adapter.Describe(tc.value)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(d).ToEqual(adapter.Descriptor{Ports: []adapter.Port{tc.port}, Name: "testkit-memory"})
+			})
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -149,38 +178,40 @@ func TestStoreDescriptors(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConformanceCatchesNonIsolatingStore(t *testing.T) {
-	t.Run("EventsStore", func(t *testing.T) {
-		results := conformance.CaptureEventsStoreChecks(newNonIsolatingEventsStore)
-		assertSuiteDetectedNonIsolation(t, results)
-	})
+	specs.Describe(t, "the conformance suite fails against a store that does not isolate by scope", func(s *specs.Spec) {
+		s.It("EventsStore", func(ctx *specs.Context) {
+			results := conformance.CaptureEventsStoreChecks(newNonIsolatingEventsStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 
-	t.Run("StateStore", func(t *testing.T) {
-		results := conformance.CaptureStateStoreChecks(newNonIsolatingDurableStore)
-		assertSuiteDetectedNonIsolation(t, results)
-	})
+		s.It("StateStore", func(ctx *specs.Context) {
+			results := conformance.CaptureStateStoreChecks(newNonIsolatingDurableStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 
-	t.Run("SnapshotStore", func(t *testing.T) {
-		results := conformance.CaptureSnapshotStoreChecks(newNonIsolatingSnapshotStore)
-		assertSuiteDetectedNonIsolation(t, results)
+		s.It("SnapshotStore", func(ctx *specs.Context) {
+			results := conformance.CaptureSnapshotStoreChecks(newNonIsolatingSnapshotStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 	})
 }
 
-// assertSuiteDetectedNonIsolation requires at least one captured check to
+// assertSuiteDetectedNonIsolation expects at least one captured check to
 // have failed, and logs every result (with -v) so a future silent recovery
 // to an always-passing suite is visible check-by-check, not just as a single
 // boolean.
-func assertSuiteDetectedNonIsolation(t *testing.T, results []conformance.CheckResult) {
-	t.Helper()
-	require.NotEmpty(t, results)
+func assertSuiteDetectedNonIsolation(ctx *specs.Context, results []conformance.CheckResult) {
+	ctx.T.Helper()
+	ctx.Expect(len(results) > 0).To(specs.BeTrue())
 
 	var failed []string
 	for _, r := range results {
-		t.Logf("check %-65s failed=%v errors=%v", r.Name, r.Failed, r.Errors)
+		ctx.T.Logf("check %-65s failed=%v errors=%v", r.Name, r.Failed, r.Errors)
 		if r.Failed {
 			failed = append(failed, r.Name)
 		}
 	}
-	require.NotEmpty(t, failed, "the conformance suite must detect at least one isolation violation against a non-isolating store")
+	ctx.Expect(failed).To(specs.Not(specs.BeNil()))
 }
 
 // ---------------------------------------------------------------------------
