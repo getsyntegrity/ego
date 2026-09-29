@@ -42,6 +42,11 @@ type bodyScan struct {
 	envs       []Signal
 	skips      bool
 	called     map[string]bool
+	// goLiteral is set when a scanned body mentions the string "go", as in
+	// exec.LookPath("go"). It tells a toolchain call whose arguments are variables
+	// apart from a foreign program.
+	goLiteral   bool
+	pendingExec []Signal
 }
 
 func newBodyScan(pkg *pkgFuncs) *bodyScan {
@@ -54,6 +59,12 @@ func (b *bodyScan) scan(fn *ast.FuncDecl, pf *parsedFile, via string) {
 		b.self = fn.Name.Name
 	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok {
+			if s, ok := stringLit(lit); ok && s == "go" {
+				b.goLiteral = true
+			}
+			return true
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -93,6 +104,8 @@ func (b *bodyScan) add(id, via, detail string) {
 
 func (b *bodyScan) methodCall(name, via string) {
 	switch name {
+	case "Start", "Spawn", "SpawnOn", "SpawnNamed", "SpawnSingleton":
+		b.add(SigLifecycle, via, name)
 	case "TempDir":
 		b.add(SigFSTempDir, via, "")
 	case "Parallel":
@@ -212,7 +225,7 @@ func (b *bodyScan) execCall(call *ast.CallExpr, via string) {
 			return
 		}
 	}
-	b.add(SigProcessExec, via, detail)
+	b.pendingExec = append(b.pendingExec, Signal{ID: SigProcessExec, Via: via, Detail: detail})
 }
 
 func (b *bodyScan) wait(id string, call *ast.CallExpr, pf *parsedFile, via string) {
@@ -238,6 +251,12 @@ func stringLit(e ast.Expr) (string, bool) {
 // finish writes the accumulated signals into t. An environment read only becomes
 // a skip signal when the test or one of its helpers can also skip.
 func (b *bodyScan) finish(t *Test) {
+	for _, p := range b.pendingExec {
+		if b.goLiteral {
+			p.ID = SigGoToolchain
+		}
+		b.signals[p] = true
+	}
 	if b.skips {
 		for _, e := range b.envs {
 			b.signals[e] = true

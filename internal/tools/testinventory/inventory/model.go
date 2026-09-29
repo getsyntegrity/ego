@@ -91,4 +91,5 @@ const (
 	SigFSTempDir        = "fs.tempdir"
 	SigFSIO             = "fs.io"
 	SigParallel         = "concurrency.parallel"
+	SigLifecycle        = "lifecycle.start"
 )

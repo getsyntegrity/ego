@@ -46,10 +46,10 @@ or package, which the issue explicitly forbids and which would misclassify the i
 
 ## Tasks
 
-- [ ] **T1 Lane contract.** `docs/testing/lanes.md`: each lane, the objective signals that put a test in it, how
+- [x] **T1 Lane contract.** `docs/testing/lanes.md`: each lane, the objective signals that put a test in it, how
   mixed files are handled, and where each lane runs (PR, main, manual). Check: doc reviewed against the epic's
   decisions; every signal named is detectable by T2 or listed as an override reason.
-- [ ] **T2 Generator.** `internal/tools/testinventory`: AST signal scan + `go test -json` enumeration per module →
+- [x] **T2 Generator.** `internal/tools/testinventory`: AST signal scan + `go test -json` enumeration per module →
   JSON. Check: TDD unit tests on fixtures (a test that listens, execs, opens SQL, starts an actor system, skips on
   env, has subtests); `go vet`, lint clean.
 - [ ] **T3 Overrides and review.** `docs/testing/inventory-overrides.json` with justification per entry; manual
@@ -79,4 +79,19 @@ Delegated direct: one writer (the work spans 2+ non-trivial files and needs a br
 
 ## Progress and evidence
 
-(empty)
+Working notes (writer, strict TDD, runner `go test`, no `-race`):
+
+- Overrides use JSON (`docs/testing/inventory-overrides.json`): the root `go.mod` has no direct YAML dependency and the
+  tool must not add one. The file also holds `example_modules`.
+- T1 (`fdd24df`): `docs/testing/lanes.md`. Check: every signal id named in its table is a constant in
+  `inventory/model.go` (script over the table, none missing), so T2 detects each one.
+- T2 RED: `go test ./internal/tools/testinventory/...` failed to build (`undefined: Signal, Lane, Module, Test`) for the
+  scanner and classifier tests; later slices went RED with `undefined: RunData`, `undefined: Inventory` and `undefined: run`.
+  One signal (`lifecycle.start`) and the variable-argument `go` toolchain rule were added after reading real data;
+  their fixture tests were written first for the second one only in the sense that the fixture case fails without it.
+- T2 GREEN: `go test ./internal/tools/...` ok (scanner, classifier, `go test -json` parser incl. a real run of a tiny
+  module, overrides, check, renderer, CLI end to end); `go vet ./internal/tools/...` clean; `golangci-lint run
+  ./internal/tools/...` 0 issues.
+- Commits: `build(tools): scan Test functions and classify them into lanes (#202)`,
+  `build(tools): merge go test -json results and overrides into entries (#202)`, then the summary/check/CLI commit.
+

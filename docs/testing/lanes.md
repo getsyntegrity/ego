@@ -40,6 +40,7 @@ The generator (`internal/tools/testinventory`) reads the body of every `Test` fu
 | `wait.sleep`, `wait.pause` | `time.Sleep`, `pause.For`; the duration is evaluated when it is a constant | evidence only. Their sum is the test's `fixed_wait_ms` |
 | `fs.tempdir`, `fs.io` | `t.TempDir`, `os.MkdirTemp`, `os.CreateTemp`; other `os` file calls | evidence only |
 | `concurrency.parallel` | `t.Parallel()` | evidence only |
+| `lifecycle.start` | a `Start`, `Spawn`, `SpawnOn`, `SpawnNamed` or `SpawnSingleton` call on any value | evidence only. It nominates a unit test for the review queue in `inventory.md`, because the scanner cannot tell a fake from a real actor system; a person confirms it with an override |
 
 The example lane is the one place where location matters: modules listed under `example_modules` in [`inventory-overrides.json`](inventory-overrides.json) put their tests in `example`, unless a stronger signal makes them `integration` first. This is deliberate: the resource an example test touches is not the reason it leaves the pull request lane, its role is. The PostgreSQL tests of `example/cluster` therefore stay `integration`, not `example`.
 

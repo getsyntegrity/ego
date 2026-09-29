@@ -45,3 +45,8 @@ func TestCluster(t *testing.T) {
 func TestActorTypesOnly(t *testing.T) {
 	var _ goakt.Actor
 }
+
+func TestStartsThroughAMethod(t *testing.T) {
+	app := newApp()
+	_ = app.Start(nil)
+}

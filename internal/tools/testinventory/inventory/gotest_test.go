@@ -35,7 +35,7 @@ func parseRunFixture(t *testing.T) RunData {
 	t.Helper()
 	f, err := os.Open("../testdata/gotest/run.json")
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	run, err := ParseTestJSON(f)
 	require.NoError(t, err)
 	return run

@@ -67,10 +67,10 @@ func TestScanFindsOnlyRealTestFunctions(t *testing.T) {
 	sort.Strings(names)
 	assert.Equal(t, []string{
 		"TestActorSystem", "TestActorTypesOnly", "TestCluster", "TestDials", "TestFromExternalPackage",
-		"TestGoList", "TestGoListThroughVariable", "TestHTTPServer", "TestIntegrationInName",
+		"TestGoList", "TestGoListThroughVariable", "TestGoViaLookPath", "TestHTTPServer", "TestIntegrationInName",
 		"TestKafkaTypesOnly", "TestKafkaWriter", "TestListens", "TestNATSConnect", "TestOtherBinary",
 		"TestParallelFlag", "TestParsesSource", "TestPureAdd", "TestRecorderOnly", "TestSQLOpen",
-		"TestSkipOnOptionalFlag", "TestSkipsThroughHelper", "TestSkipsWithoutDSN", "TestSleeps",
+		"TestSkipOnOptionalFlag", "TestSkipsThroughHelper", "TestSkipsWithoutDSN", "TestSleeps", "TestStartsThroughAMethod",
 		"TestTempDir", "TestTestkit", "TestUnresolvedWait", "TestUsesPgx", "TestWaitInHelper",
 	}, names)
 }
@@ -93,6 +93,7 @@ func TestScanSignals(t *testing.T) {
 		"TestRecorderOnly":          nil,
 		"TestGoList":                {"process.go-toolchain"},
 		"TestGoListThroughVariable": {"process.go-toolchain"},
+		"TestGoViaLookPath":         {"process.go-toolchain"},
 		"TestOtherBinary":           {"process.exec"},
 		"TestParsesSource":          {"source.inspect"},
 		"TestSQLOpen":               {"db.sql"},
@@ -104,6 +105,7 @@ func TestScanSignals(t *testing.T) {
 		"TestTestkit":               {"actor.system"},
 		"TestCluster":               {"cluster"},
 		"TestActorTypesOnly":        nil,
+		"TestStartsThroughAMethod":  {"lifecycle.start"},
 		"TestSleeps":                {"wait.pause", "wait.sleep"},
 		"TestUnresolvedWait":        {"wait.sleep"},
 		"TestWaitInHelper":          {"wait.sleep"},

@@ -44,3 +44,9 @@ func TestGoListThroughVariable(t *testing.T) {
 func TestParsesSource(t *testing.T) {
 	_, _ = parser.ParseDir(nil, ".", nil, 0)
 }
+
+func TestGoViaLookPath(t *testing.T) {
+	args := []string{"list", "./..."}
+	goBin, _ := exec.LookPath("go")
+	_, _ = exec.Command(goBin, args...).CombinedOutput()
+}
