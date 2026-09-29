@@ -1,0 +1,7 @@
+{
+  "example_modules": [
+    "benchmark",
+    "example/cluster"
+  ],
+  "overrides": []
+}
