@@ -1,0 +1,21 @@
+{"Action":"start","Package":"example.com/fixture/sample"}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestPureAdd"}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestPureAdd/one"}
+{"Action":"output","Package":"example.com/fixture/sample","Test":"TestPureAdd/one","Output":"=== RUN   TestPureAdd/one\n"}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestPureAdd/two"}
+{"Action":"pass","Package":"example.com/fixture/sample","Test":"TestPureAdd/one","Elapsed":0.25}
+{"Action":"pass","Package":"example.com/fixture/sample","Test":"TestPureAdd/two","Elapsed":0}
+{"Action":"pass","Package":"example.com/fixture/sample","Test":"TestPureAdd","Elapsed":0.5}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestSkipsWithoutDSN"}
+{"Action":"output","Package":"example.com/fixture/sample","Test":"TestSkipsWithoutDSN","Output":"=== RUN   TestSkipsWithoutDSN\n"}
+{"Action":"output","Package":"example.com/fixture/sample","Test":"TestSkipsWithoutDSN","Output":"    sql_test.go:29: SAMPLE_POSTGRES_DSN is not set\n"}
+{"Action":"output","Package":"example.com/fixture/sample","Test":"TestSkipsWithoutDSN","Output":"--- SKIP: TestSkipsWithoutDSN (0.00s)\n"}
+{"Action":"skip","Package":"example.com/fixture/sample","Test":"TestSkipsWithoutDSN","Elapsed":0}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestBroken"}
+{"Action":"output","Package":"example.com/fixture/sample","Test":"TestBroken","Output":"    broken_test.go:12: expected 1, got 2\n"}
+{"Action":"fail","Package":"example.com/fixture/sample","Test":"TestBroken","Elapsed":1.2345}
+{"Action":"run","Package":"example.com/fixture/sample","Test":"TestNotInSource"}
+{"Action":"pass","Package":"example.com/fixture/sample","Test":"TestNotInSource","Elapsed":0}
+{"Action":"fail","Package":"example.com/fixture/sample","Elapsed":2.5}
+{"Action":"output","Package":"example.com/fixture/other","Output":"FAIL\texample.com/fixture/other [build failed]\n"}
+{"Action":"fail","Package":"example.com/fixture/other","Elapsed":0,"FailedBuild":"example.com/fixture/other [build failed]"}

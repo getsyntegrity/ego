@@ -59,9 +59,9 @@ func (l Lane) LeavesPR() bool {
 
 // Classification is the lane decision for one test with the evidence behind it.
 type Classification struct {
-	Lane        Lane
-	Destination string
-	Reason      string
+	Lane        Lane   `json:"lane"`
+	Destination string `json:"destination"`
+	Reason      string `json:"lane_reason"`
 }
 
 type integrationRule struct {
