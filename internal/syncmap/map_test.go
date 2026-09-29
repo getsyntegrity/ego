@@ -26,85 +26,111 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestNewAndSet(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Set(2, "two")
-	assert.Exactly(t, 2, sm.Len())
+	specs.Describe(t, "Set stores entries in a new map", func(s *specs.Spec) {
+		s.It("counts every distinct key set", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Set(2, "two")
+			ctx.Expect(sm.Len()).ToEqual(2)
+		})
+	})
 }
 
 func TestGet(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
+	specs.Describe(t, "Get looks up a value by key", func(s *specs.Spec) {
+		s.It("returns the value for a present key and reports a missing key", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
 
-	val, ok := sm.Get(1)
-	require.True(t, ok)
-	require.Equal(t, "one", val)
+			val, ok := sm.Get(1)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(val).ToEqual("one")
 
-	_, ok = sm.Get(2)
-	require.False(t, ok)
+			_, ok = sm.Get(2)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestDelete(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Delete(1)
-	_, ok := sm.Get(1)
-	require.False(t, ok)
-	sm.Delete(2) // just make sure this doesn't panic
+	specs.Describe(t, "Delete removes an entry by key", func(s *specs.Spec) {
+		s.It("removes the entry and tolerates a missing key", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Delete(1)
+			_, ok := sm.Get(1)
+			ctx.Expect(ok).To(specs.BeFalse())
+			sm.Delete(2) // just make sure this doesn't panic
+		})
+	})
 }
 
 func TestLen(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Set(2, "two")
-	sm.Set(3, "three")
-	sm.Delete(2)
-	assert.Exactly(t, 2, sm.Len())
+	specs.Describe(t, "Len counts the entries in the map", func(s *specs.Spec) {
+		s.It("excludes deleted entries", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Set(2, "two")
+			sm.Set(3, "three")
+			sm.Delete(2)
+			ctx.Expect(sm.Len()).ToEqual(2)
+		})
+	})
 }
 
 func TestForEach(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Set(2, "two")
+	specs.Describe(t, "Range visits every entry", func(s *specs.Spec) {
+		s.It("visits each key exactly once", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Set(2, "two")
 
-	keys := make([]int, 0)
-	sm.Range(func(k int, v string) { // nolint
-		keys = append(keys, k)
+			keys := make([]int, 0)
+			sm.Range(func(k int, v string) { // nolint
+				keys = append(keys, k)
+			})
+
+			ctx.Expect(len(keys)).ToEqual(2)
+			// Check if keys 1 and 2 are present
+			ctx.Expect(slices.Contains(keys, 1) && slices.Contains(keys, 2)).To(specs.BeTrue())
+		})
 	})
-
-	assert.Exactly(t, 2, len(keys))
-	// Check if keys 1 and 2 are present
-	if !slices.Contains(keys, 1) || !slices.Contains(keys, 2) {
-		t.Errorf("Expected keys 1 and 2, got %v", keys)
-	}
 }
 
 func TestValues(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Set(2, "two")
-	sm.Set(3, "three")
+	specs.Describe(t, "Values returns every stored value", func(s *specs.Spec) {
+		s.It("returns all values in any order", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Set(2, "two")
+			sm.Set(3, "three")
 
-	values := sm.Values()
-	assert.Exactly(t, 3, len(values))
-	assert.ElementsMatch(t, []string{"one", "two", "three"}, values)
+			values := sm.Values()
+			ctx.Expect(len(values)).ToEqual(3)
+			slices.Sort(values)
+			ctx.Expect(values).ToEqual([]string{"one", "three", "two"})
+		})
+	})
 }
 
 func TestReset(t *testing.T) {
-	sm := New[int, string]()
-	sm.Set(1, "one")
-	sm.Set(2, "two")
-	sm.Set(3, "three")
-	require.Equal(t, 3, sm.Len())
+	specs.Describe(t, "Reset empties the map", func(s *specs.Spec) {
+		s.It("drops every entry", func(ctx *specs.Context) {
+			sm := New[int, string]()
+			sm.Set(1, "one")
+			sm.Set(2, "two")
+			sm.Set(3, "three")
+			ctx.Expect(sm.Len()).ToEqual(3)
 
-	sm.Reset()
-	assert.Equal(t, 0, sm.Len())
+			sm.Reset()
+			ctx.Expect(sm.Len()).ToEqual(0)
 
-	_, ok := sm.Get(1)
-	assert.False(t, ok)
+			_, ok := sm.Get(1)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
