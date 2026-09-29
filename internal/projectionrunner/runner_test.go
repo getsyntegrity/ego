@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/stretchr/testify/assert"
@@ -58,455 +59,508 @@ import (
 	testkit2 "github.com/getsyntegrity/ego/testkit"
 )
 
+// errFailed is the failure the stubbed collaborators return.
+var errFailed = errors.New("failed")
+
+const (
+	// waitTimeout bounds every wait on an asynchronous effect of the runner.
+	waitTimeout = 10 * time.Second
+	// waitInterval is how often a waited-on condition is polled.
+	waitInterval = 2 * time.Millisecond
+)
+
+// waitUntil polls cond every interval until it holds and fails the test with
+// what when timeout passes first. It never waits without a bound.
+func waitUntil(t testing.TB, timeout, interval time.Duration, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %s", timeout, what)
+		}
+		time.Sleep(interval)
+	}
+}
+
+// awaitStopped waits until the runner has stopped processing.
+func awaitStopped(t testing.TB, runner *Runner) {
+	t.Helper()
+	waitUntil(t, waitTimeout, waitInterval, func() bool { return !runner.running.Load() }, "the runner to stop")
+}
+
+// awaitCalls waits until calls holds at least want.
+func awaitCalls(t testing.TB, calls *atomic.Int32, want int32, what string) {
+	t.Helper()
+	waitUntil(t, waitTimeout, waitInterval, func() bool { return calls.Load() >= want }, what)
+}
+
+// awaitFailure returns the next error the runner reported to its host.
+func awaitFailure(t testing.TB, failures <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-failures:
+		return err
+	case <-time.After(waitTimeout):
+		t.Fatalf("timed out after %s waiting for the failure callback", waitTimeout)
+	}
+	return nil
+}
+
+// errText is err's message, or "" for nil, so a text expectation on a missing
+// error fails on the expectation instead of panicking.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func TestProjectionRunnerErrorPaths(t *testing.T) {
-	t.Run("with decrypt failure in processEnvelope stops the runner", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-		timestamp := timestamppb.Now()
+	specs.Describe(t, "the runner stops when an event cannot be processed in processEnvelope", func(s *specs.Spec) {
+		s.It("with decrypt failure in processEnvelope stops the runner", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
+			timestamp := timestamppb.Now()
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
 
-		offset := &egopb.Offset{
-			ShardNumber:    shardNumber,
-			ProjectionName: projectionName,
-			Value:          timestamp.AsTime().Unix(),
-			Timestamp:      0,
-		}
+			offset := &egopb.Offset{
+				ShardNumber:    shardNumber,
+				ProjectionName: projectionName,
+				Value:          timestamp.AsTime().Unix(),
+				Timestamp:      0,
+			}
 
-		// Build a valid anypb payload
-		eventProto := &testpb.AccountCredited{}
-		eventAny, err := anypb.New(eventProto)
-		require.NoError(t, err)
+			// Build a valid anypb payload
+			eventProto := &testpb.AccountCredited{}
+			eventAny, err := anypb.New(eventProto)
+			ctx.Expect(err).To(specs.BeNil())
 
-		// Mark event as encrypted so the decrypt path is triggered
-		encryptedBytes := []byte("cipher")
-		events := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event: &anypb.Any{
-					TypeUrl: eventAny.GetTypeUrl(),
-					Value:   encryptedBytes,
+			// Mark event as encrypted so the decrypt path is triggered
+			encryptedBytes := []byte("cipher")
+			events := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event: &anypb.Any{
+						TypeUrl: eventAny.GetTypeUrl(),
+						Value:   encryptedBytes,
+					},
+					Timestamp:       timestamp.AsTime().Unix(),
+					Shard:           shardNumber,
+					IsEncrypted:     true,
+					EncryptionKeyId: "key-1",
 				},
-				Timestamp:       timestamp.AsTime().Unix(),
-				Shard:           shardNumber,
-				IsEncrypted:     true,
-				EncryptionKeyId: "key-1",
-			},
-		}
+			}
 
-		nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-		maxBufferSize := 10
-		resetOffsetTo := time.Now().UTC()
+			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
+			maxBufferSize := 10
+			resetOffsetTo := time.Now().UTC()
 
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(nil, assert.AnError)
+			encryptor := new(mockencryption.Encryptor)
+			encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(nil, errFailed)
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
 
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond),
-			WithEncryptor(encryptor),
-		)
-		runner.resetOffsetTo = resetOffsetTo
-		runner.maxBufferSize = maxBufferSize
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond),
+				WithEncryptor(encryptor),
+			)
+			runner.resetOffsetTo = resetOffsetTo
+			runner.maxBufferSize = maxBufferSize
 
-		err = runner.Start(ctx)
-		require.NoError(t, err)
+			err = runner.Start(bg)
+			ctx.Expect(err).To(specs.BeNil())
 
-		runner.Run(ctx, nil)
+			runner.Run(bg, nil)
 
-		pause.For(time.Second)
+			awaitStopped(ctx.T, runner)
 
-		encryptor.AssertExpectations(t)
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			encryptor.AssertExpectations(ctx.T)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		assert.False(t, runner.running.Load())
+			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with unmarshal failure after decrypt in processEnvelope stops the runner", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-		timestamp := timestamppb.Now()
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with unmarshal failure after decrypt in processEnvelope stops the runner", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
+			timestamp := timestamppb.Now()
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
 
-		offset := &egopb.Offset{
-			ShardNumber:    shardNumber,
-			ProjectionName: projectionName,
-			Value:          timestamp.AsTime().Unix(),
-			Timestamp:      0,
-		}
+			offset := &egopb.Offset{
+				ShardNumber:    shardNumber,
+				ProjectionName: projectionName,
+				Value:          timestamp.AsTime().Unix(),
+				Timestamp:      0,
+			}
 
-		eventProto := &testpb.AccountCredited{}
-		eventAny, err := anypb.New(eventProto)
-		require.NoError(t, err)
+			eventProto := &testpb.AccountCredited{}
+			eventAny, err := anypb.New(eventProto)
+			ctx.Expect(err).To(specs.BeNil())
 
-		encryptedBytes := []byte("cipher")
-		events := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event: &anypb.Any{
-					TypeUrl: eventAny.GetTypeUrl(),
-					Value:   encryptedBytes,
+			encryptedBytes := []byte("cipher")
+			events := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event: &anypb.Any{
+						TypeUrl: eventAny.GetTypeUrl(),
+						Value:   encryptedBytes,
+					},
+					Timestamp:       timestamp.AsTime().Unix(),
+					Shard:           shardNumber,
+					IsEncrypted:     true,
+					EncryptionKeyId: "key-1",
 				},
-				Timestamp:       timestamp.AsTime().Unix(),
-				Shard:           shardNumber,
-				IsEncrypted:     true,
-				EncryptionKeyId: "key-1",
-			},
-		}
+			}
 
-		nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-		maxBufferSize := 10
-		resetOffsetTo := time.Now().UTC()
+			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
+			maxBufferSize := 10
+			resetOffsetTo := time.Now().UTC()
 
-		// Return invalid bytes that cannot be unmarshalled as a proto message
-		invalidBytes := []byte("not-valid-proto")
+			// Return invalid bytes that cannot be unmarshalled as a proto message
+			invalidBytes := []byte("not-valid-proto")
 
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(invalidBytes, nil)
+			encryptor := new(mockencryption.Encryptor)
+			encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(invalidBytes, nil)
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
 
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond),
-			WithEncryptor(encryptor),
-		)
-		runner.resetOffsetTo = resetOffsetTo
-		runner.maxBufferSize = maxBufferSize
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond),
+				WithEncryptor(encryptor),
+			)
+			runner.resetOffsetTo = resetOffsetTo
+			runner.maxBufferSize = maxBufferSize
 
-		err = runner.Start(ctx)
-		require.NoError(t, err)
+			err = runner.Start(bg)
+			ctx.Expect(err).To(specs.BeNil())
 
-		runner.Run(ctx, nil)
+			runner.Run(bg, nil)
 
-		pause.For(time.Second)
+			awaitStopped(ctx.T, runner)
 
-		encryptor.AssertExpectations(t)
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			encryptor.AssertExpectations(ctx.T)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		assert.False(t, runner.running.Load())
+			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with event adapter chain failure in processEnvelope stops the runner", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-		timestamp := timestamppb.Now()
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with event adapter chain failure in processEnvelope stops the runner", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
+			timestamp := timestamppb.Now()
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
 
-		offset := &egopb.Offset{
-			ShardNumber:    shardNumber,
-			ProjectionName: projectionName,
-			Value:          timestamp.AsTime().Unix(),
-			Timestamp:      0,
-		}
+			offset := &egopb.Offset{
+				ShardNumber:    shardNumber,
+				ProjectionName: projectionName,
+				Value:          timestamp.AsTime().Unix(),
+				Timestamp:      0,
+			}
 
-		eventProto := &testpb.AccountCredited{}
-		eventAny, err := anypb.New(eventProto)
-		require.NoError(t, err)
+			eventProto := &testpb.AccountCredited{}
+			eventAny, err := anypb.New(eventProto)
+			ctx.Expect(err).To(specs.BeNil())
 
-		events := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          eventAny,
-				Timestamp:      timestamp.AsTime().Unix(),
-				Shard:          shardNumber,
-			},
-		}
+			events := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event:          eventAny,
+					Timestamp:      timestamp.AsTime().Unix(),
+					Shard:          shardNumber,
+				},
+			}
 
-		nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-		maxBufferSize := 10
-		resetOffsetTo := time.Now().UTC()
+			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
+			maxBufferSize := 10
+			resetOffsetTo := time.Now().UTC()
 
-		adapter := new(mockadapter.EventAdapter)
-		adapter.EXPECT().Adapt(eventAny, uint64(1)).Return(nil, assert.AnError)
+			adapter := new(mockadapter.EventAdapter)
+			adapter.EXPECT().Adapt(eventAny, uint64(1)).Return(nil, errFailed)
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
 
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond),
-			WithEventAdapters([]eventadapter.EventAdapter{adapter}),
-		)
-		runner.resetOffsetTo = resetOffsetTo
-		runner.maxBufferSize = maxBufferSize
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond),
+				WithEventAdapters([]eventadapter.EventAdapter{adapter}),
+			)
+			runner.resetOffsetTo = resetOffsetTo
+			runner.maxBufferSize = maxBufferSize
 
-		err = runner.Start(ctx)
-		require.NoError(t, err)
+			err = runner.Start(bg)
+			ctx.Expect(err).To(specs.BeNil())
 
-		runner.Run(ctx, nil)
+			runner.Run(bg, nil)
 
-		pause.For(time.Second)
+			awaitStopped(ctx.T, runner)
 
-		adapter.AssertExpectations(t)
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			adapter.AssertExpectations(ctx.T)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		assert.False(t, runner.running.Load())
+			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
-		require.NoError(t, runner.Stop())
-
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
 	})
 }
 
 func TestStoreRetryDelay(t *testing.T) {
-	assert.Equal(t, storeRetryInitialDelay, storeRetryDelay(1))
-	assert.Equal(t, 2*storeRetryInitialDelay, storeRetryDelay(2))
-	assert.Equal(t, 16*storeRetryInitialDelay, storeRetryDelay(5))
-	// 1s << 5 = 32s exceeds the cap
-	assert.Equal(t, storeRetryMaxDelay, storeRetryDelay(6))
-	// large shift counts wrap or zero out and clamp to the cap
-	assert.Equal(t, storeRetryMaxDelay, storeRetryDelay(40))
-	assert.Equal(t, storeRetryMaxDelay, storeRetryDelay(100))
+	specs.Describe(t, "storeRetryDelay backs off exponentially from the initial delay up to the cap", func(s *specs.Spec) {
+		s.It("doubles per failure, then clamps to the cap", func(ctx *specs.Context) {
+			ctx.Expect(storeRetryDelay(1)).ToEqual(storeRetryInitialDelay)
+			ctx.Expect(storeRetryDelay(2)).ToEqual(2 * storeRetryInitialDelay)
+			ctx.Expect(storeRetryDelay(5)).ToEqual(16 * storeRetryInitialDelay)
+			// 1s << 5 = 32s exceeds the cap
+			ctx.Expect(storeRetryDelay(6)).ToEqual(storeRetryMaxDelay)
+			// large shift counts wrap or zero out and clamp to the cap
+			ctx.Expect(storeRetryDelay(40)).ToEqual(storeRetryMaxDelay)
+			ctx.Expect(storeRetryDelay(100)).ToEqual(storeRetryMaxDelay)
+		})
+	})
 }
 
 func TestProjectionRunnerFatalPaths(t *testing.T) {
-	t.Run("with store error the runner retries in place and stays running", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
+	specs.Describe(t, "the runner retries failed store round trips in place and stops on unprocessable events", func(s *specs.Spec) {
+		s.It("with store error the runner retries in place and stays running", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
 
-		// the first ShardOffsets round trip fails, subsequent ones succeed
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, assert.AnError).Once()
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, nil)
+			// the first ShardOffsets round trip fails, subsequent ones succeed
+			retried := atomic.NewInt32(0)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, errFailed).Once()
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, nil).Run(func(_ context.Context) { retried.Inc() })
 
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond))
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond))
 
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
 
-		// wait past the first retry backoff so the failed pull is retried
-		pause.For(storeRetryInitialDelay + 500*time.Millisecond)
+			// the failed pull is retried once its first backoff has elapsed
+			awaitCalls(ctx.T, retried, 1, "the failed pull to be retried")
 
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		assert.True(t, runner.running.Load())
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with unprocessable event the Runner stops", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-		timestamp := timestamppb.Now()
+			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with unprocessable event the Runner stops", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			shardNumber := uint64(9)
+			timestamp := timestamppb.Now()
 
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
+			projectionID := &egopb.ProjectionId{
+				ProjectionName: projectionName,
+				ShardNumber:    shardNumber,
+			}
 
-		offset := &egopb.Offset{
-			ShardNumber:    shardNumber,
-			ProjectionName: projectionName,
-			Value:          timestamp.AsTime().Unix(),
-			Timestamp:      0,
-		}
+			offset := &egopb.Offset{
+				ShardNumber:    shardNumber,
+				ProjectionName: projectionName,
+				Value:          timestamp.AsTime().Unix(),
+				Timestamp:      0,
+			}
 
-		eventAny, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
+			eventAny, err := anypb.New(&testpb.AccountCredited{})
+			ctx.Expect(err).To(specs.BeNil())
 
-		events := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          eventAny,
-				Timestamp:      timestamp.AsTime().Unix(),
-				Shard:          shardNumber,
-			},
-		}
+			events := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event:          eventAny,
+					Timestamp:      timestamp.AsTime().Unix(),
+					Shard:          shardNumber,
+				},
+			}
 
-		nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-		maxBufferSize := 10
+			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
+			maxBufferSize := 10
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
 
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
 
-		// testHandler1 always fails and the default recovery policy is Fail
-		runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond))
-		runner.maxBufferSize = maxBufferSize
+			// testHandler1 always fails and the default recovery policy is Fail
+			runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond))
+			runner.maxBufferSize = maxBufferSize
 
-		failures := make(chan error, 2)
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, func(err error) { failures <- err })
+			failures := make(chan error, 2)
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, func(err error) { failures <- err })
 
-		// the unprocessable event stops the processing loop permanently
-		require.Eventually(t, func() bool {
-			return !runner.running.Load()
-		}, 2*time.Second, 10*time.Millisecond)
+			// the unprocessable event stops the processing loop permanently
+			awaitStopped(ctx.T, runner)
 
-		// the host is notified once, with the handler's own error: the
-		// runner's internal classification never leaks to the host
-		select {
-		case err := <-failures:
-			require.EqualError(t, err, "damn")
+			// the host is notified once, with the handler's own error: the
+			// runner's internal classification never leaks to the host
+			failure := awaitFailure(ctx.T, failures)
+			ctx.Expect(errText(failure)).ToEqual("damn")
 			var internal *eventError
-			assert.False(t, errors.As(err, &internal))
-		case <-time.After(2 * time.Second):
-			t.Fatal("the failure callback was not invoked")
-		}
-		assert.Empty(t, failures)
+			ctx.Expect(failure).To(specs.Not(specs.MatchErrorAs(&internal)))
+			ctx.Expect(len(failures)).ToEqual(0)
 
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with mixed store and event errors in one batch the Runner stops", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		storeShard := uint64(1)
-		poisonShard := uint64(2)
-		timestamp := timestamppb.Now()
-		offsetValue := timestamp.AsTime().Unix()
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with mixed store and event errors in one batch the Runner stops", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+			storeShard := uint64(1)
+			poisonShard := uint64(2)
+			timestamp := timestamppb.Now()
+			offsetValue := timestamp.AsTime().Unix()
 
-		eventAny, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
+			eventAny, err := anypb.New(&testpb.AccountCredited{})
+			ctx.Expect(err).To(specs.BeNil())
 
-		events := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          eventAny,
-				Timestamp:      offsetValue,
-				Shard:          poisonShard,
-			},
-		}
+			events := []*egopb.Event{
+				{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event:          eventAny,
+					Timestamp:      offsetValue,
+					Shard:          poisonShard,
+				},
+			}
 
-		nextOffset := timestamppb.New(time.Now().Add(time.Minute)).AsTime().UnixMilli()
-		maxBufferSize := 10
+			nextOffset := timestamppb.New(time.Now().Add(time.Minute)).AsTime().UnixMilli()
+			maxBufferSize := 10
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-		offsetStore.EXPECT().GetCurrentOffset(mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).Return(&egopb.Offset{Value: offsetValue}, nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).Return(&egopb.Offset{Value: offsetValue}, nil)
 
-		// one shard fails its store round trip while the other returns an
-		// event the handler cannot process
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{storeShard: nextOffset, poisonShard: nextOffset}, nil)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, 0, assert.AnError)
-		eventsStore.EXPECT().GetShardEvents(mock.Anything, poisonShard, offsetValue, uint64(maxBufferSize)).Return(events, nextOffset, nil)
+			// one shard fails its store round trip while the other returns an
+			// event the handler cannot process
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{storeShard: nextOffset, poisonShard: nextOffset}, nil)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, 0, errFailed)
+			eventsStore.EXPECT().GetShardEvents(mock.Anything, poisonShard, offsetValue, uint64(maxBufferSize)).Return(events, nextOffset, nil)
 
-		runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond))
-		runner.maxBufferSize = maxBufferSize
+			runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond))
+			runner.maxBufferSize = maxBufferSize
 
-		failures := make(chan error, 2)
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, func(err error) { failures <- err })
+			failures := make(chan error, 2)
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, func(err error) { failures <- err })
 
-		// the unprocessable event outranks the store failure: the loop stops
-		// instead of retrying, since retrying cannot advance past the event
-		require.Eventually(t, func() bool {
-			return !runner.running.Load()
-		}, 2*time.Second, 10*time.Millisecond)
+			// the unprocessable event outranks the store failure: the loop stops
+			// instead of retrying, since retrying cannot advance past the event
+			awaitStopped(ctx.T, runner)
 
-		// the host is notified with the event error, never the store error
-		select {
-		case err := <-failures:
-			require.EqualError(t, err, "damn")
-			assert.NotErrorIs(t, err, assert.AnError)
-		case <-time.After(2 * time.Second):
-			t.Fatal("the failure callback was not invoked")
-		}
+			// the host is notified with the event error, never the store error
+			failure := awaitFailure(ctx.T, failures)
+			ctx.Expect(errText(failure)).ToEqual("damn")
+			ctx.Expect(failure).To(specs.Not(specs.MatchError(errFailed)))
 
-		eventsStore.AssertExpectations(t)
-		offsetStore.AssertExpectations(t)
+			eventsStore.AssertExpectations(ctx.T)
+			offsetStore.AssertExpectations(ctx.T)
 
-		require.NoError(t, runner.Stop())
-	})
-	t.Run("with persistent store error Stop interrupts the retry backoff", func(t *testing.T) {
-		ctx := context.TODO()
-		projectionName := "db-writer"
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
+		})
+		s.It("with persistent store error Stop interrupts the retry backoff", func(ctx *specs.Context) {
+			bg := context.TODO()
+			projectionName := "db-writer"
 
-		offsetStore := new(mocksoffsetstore.OffsetStore)
-		offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetStore := new(mocksoffsetstore.OffsetStore)
+			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
 
-		eventsStore := new(mockseventstore.EventsStore)
-		eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, assert.AnError)
+			pulls := atomic.NewInt32(0)
+			eventsStore := new(mockseventstore.EventsStore)
+			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, errFailed).Run(func(_ context.Context) { pulls.Inc() })
 
-		handler := projection.NewDiscardHandler()
-		runner := New(projectionName, handler, eventsStore, offsetStore,
-			WithPullInterval(time.Millisecond))
+			handler := projection.NewDiscardHandler()
+			runner := New(projectionName, handler, eventsStore, offsetStore,
+				WithPullInterval(time.Millisecond))
 
-		require.NoError(t, runner.Start(ctx))
-		runner.Run(ctx, nil)
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
 
-		// wait for the first failed pull to enter its backoff wait, then stop
-		pause.For(100 * time.Millisecond)
-		require.NoError(t, runner.Stop())
+			// wait for the first failed pull, then stop
+			awaitCalls(ctx.T, pulls, 1, "the first failed pull")
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
 
-		assert.False(t, runner.running.Load())
+			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
+		})
 	})
 }
 
