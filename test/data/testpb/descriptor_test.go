@@ -25,6 +25,7 @@ package testpb_test
 import (
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
@@ -35,40 +36,37 @@ import (
 // See egopb/descriptor_test.go: go_package sits inside the serialized
 // descriptor, so the regenerated code must load and round-trip.
 func TestDescriptor_IsSoundAndCarriesTheModulePath(t *testing.T) {
-	fd := testpb.File_test_test_proto
-	if fd == nil {
-		t.Fatal("File_test_test_proto is nil")
-	}
-	opts, ok := fd.Options().(*descriptorpb.FileOptions)
-	if !ok {
-		t.Fatalf("file options = %T", fd.Options())
-	}
-	const want = "github.com/getsyntegrity/ego/test/data/testpb;testpb"
-	if got := opts.GetGoPackage(); got != want {
-		t.Fatalf("go_package = %q, want %q", got, want)
-	}
+	specs.Describe(t, "the generated file descriptor loads, carries the module path and round-trips every message", func(s *specs.Spec) {
+		fd := testpb.File_test_test_proto
+		s.It("is loaded", func(ctx *specs.Context) {
+			ctx.Expect(fd == nil).To(specs.BeFalse())
+		})
+		if fd == nil {
+			return
+		}
+		s.It("carries the module go_package", func(ctx *specs.Context) {
+			opts, ok := fd.Options().(*descriptorpb.FileOptions)
+			ctx.Expect(ok).To(specs.BeTrue())
+			const want = "github.com/getsyntegrity/ego/test/data/testpb;testpb"
+			ctx.Expect(opts.GetGoPackage()).ToEqual(want)
+		})
+		s.It("declares messages", func(ctx *specs.Context) {
+			ctx.Expect(fd.Messages().Len() > 0).To(specs.BeTrue())
+		})
 
-	msgs := fd.Messages()
-	if msgs.Len() == 0 {
-		t.Fatal("descriptor has no messages")
-	}
-	for i := 0; i < msgs.Len(); i++ {
-		name := msgs.Get(i).FullName()
-		mt, err := protoregistry.GlobalTypes.FindMessageByName(name)
-		if err != nil {
-			t.Fatalf("registry lookup %s: %v", name, err)
+		msgs := fd.Messages()
+		for i := 0; i < msgs.Len(); i++ {
+			name := msgs.Get(i).FullName()
+			s.It(string(name)+" resolves through the registry and survives a marshal round trip", func(ctx *specs.Context) {
+				mt, err := protoregistry.GlobalTypes.FindMessageByName(name)
+				ctx.Expect(err).To(specs.BeNil())
+				m := mt.New().Interface()
+				b, err := proto.Marshal(m)
+				ctx.Expect(err).To(specs.BeNil())
+				back := mt.New().Interface()
+				ctx.Expect(proto.Unmarshal(b, back)).To(specs.BeNil())
+				ctx.Expect(proto.Equal(m, back)).To(specs.BeTrue())
+			})
 		}
-		m := mt.New().Interface()
-		b, err := proto.Marshal(m)
-		if err != nil {
-			t.Fatalf("marshal %s: %v", name, err)
-		}
-		back := mt.New().Interface()
-		if err := proto.Unmarshal(b, back); err != nil {
-			t.Fatalf("unmarshal %s: %v", name, err)
-		}
-		if !proto.Equal(m, back) {
-			t.Errorf("%s did not round-trip", name)
-		}
-	}
+	})
 }
