@@ -27,6 +27,7 @@ import (
 
 	"github.com/getsyntegrity/ego/internal/engine/durablestate"
 	"github.com/getsyntegrity/ego/internal/engine/eventsource"
+	"github.com/getsyntegrity/ego/internal/engine/projection"
 	"github.com/getsyntegrity/ego/internal/engine/saga"
 )
 
@@ -138,6 +139,37 @@ func (a *SagaActor) Receive(ctx *goakt.ReceiveContext) {
 // PostStop releases the saga's resources when it stops.
 func (a *SagaActor) PostStop(ctx *goakt.Context) error {
 	return a.impl.PostStop(ctx)
+}
+
+// ProjectionActor defines the projection actor
+// Only a single instance of this will run throughout the cluster
+//
+// The implementation lives in internal/engine/projection.
+type ProjectionActor struct {
+	impl projection.Actor
+}
+
+// implements the Actor contract
+var _ goakt.Actor = (*ProjectionActor)(nil)
+
+// PreStart prepares the projection. It first tells the implementation to
+// escalate a permanent runner failure as a projectionRunnerError, the type
+// the projection supervisor keys its directive by.
+func (x *ProjectionActor) PreStart(ctx *goakt.Context) error {
+	x.impl.SetEscalation(func(cause error) error {
+		return &projectionRunnerError{err: cause}
+	})
+	return x.impl.PreStart(ctx)
+}
+
+// Receive handle the message sent to the projection actor
+func (x *ProjectionActor) Receive(ctx *goakt.ReceiveContext) {
+	x.impl.Receive(ctx)
+}
+
+// PostStop prepares the actor to gracefully shutdown
+func (x *ProjectionActor) PostStop(ctx *goakt.Context) error {
+	return x.impl.PostStop(ctx)
 }
 
 // ClusterKinds returns the actor kinds eGo needs registered in the cluster
