@@ -41,6 +41,7 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/pause"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -54,11 +55,11 @@ import (
 // the payload via egopb.Event.Shard / egopb.DurableState.Shard) removes that
 // failure mode.
 func TestTopicConstantsAreFixed(t *testing.T) {
-	assert.NotEmpty(t, eventsTopic, "eventsTopic must be set")
-	assert.NotEmpty(t, statesTopic, "statesTopic must be set")
-	assert.NotContains(t, eventsTopic, "%", "eventsTopic must not contain fmt directives")
-	assert.NotContains(t, statesTopic, "%", "statesTopic must not contain fmt directives")
-	assert.NotEqual(t, eventsTopic, statesTopic, "events and states must use distinct topics")
+	assert.NotEmpty(t, protocol.EventsTopic, "protocol.EventsTopic must be set")
+	assert.NotEmpty(t, protocol.StatesTopic, "protocol.StatesTopic must be set")
+	assert.NotContains(t, protocol.EventsTopic, "%", "protocol.EventsTopic must not contain fmt directives")
+	assert.NotContains(t, protocol.StatesTopic, "%", "protocol.StatesTopic must not contain fmt directives")
+	assert.NotEqual(t, protocol.EventsTopic, protocol.StatesTopic, "events and states must use distinct topics")
 }
 
 // recordingEventPublisher captures every event passed to Publish so tests can
@@ -526,8 +527,8 @@ func TestTopicConstantsAreNotPartitionedFormats(t *testing.T) {
 		name  string
 		value string
 	}{
-		{"eventsTopic", eventsTopic},
-		{"statesTopic", statesTopic},
+		{"protocol.EventsTopic", protocol.EventsTopic},
+		{"protocol.StatesTopic", protocol.StatesTopic},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Falsef(t, strings.Contains(tc.value, "%d"),

@@ -164,27 +164,3 @@ func TestSagaActionAndSagaCommandAreAliases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "account-1", moved.Commands[0].EntityID)
 }
-
-// TestSagaActionIsNoop covers the helper that replaced the unexported method
-// (*SagaAction).isNoop, which cannot stay a method once SagaAction is declared
-// in port/behavior (design.md §5.2).
-func TestSagaActionIsNoop(t *testing.T) {
-	testCases := []struct {
-		name   string
-		action *SagaAction
-		noop   bool
-	}{
-		{name: "nil action", action: nil, noop: true},
-		{name: "empty action", action: &SagaAction{}, noop: true},
-		{name: "empty slices", action: &SagaAction{Commands: []SagaCommand{}, Events: []Event{}}, noop: true},
-		{name: "command", action: &SagaAction{Commands: []SagaCommand{{EntityID: "a"}}}, noop: false},
-		{name: "event", action: &SagaAction{Events: []Event{nil}}, noop: false},
-		{name: "complete", action: &SagaAction{Complete: true}, noop: false},
-		{name: "compensate", action: &SagaAction{Compensate: true}, noop: false},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.noop, sagaActionIsNoop(tc.action))
-		})
-	}
-}

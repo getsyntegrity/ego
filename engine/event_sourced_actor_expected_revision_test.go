@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,69 +41,6 @@ import (
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
-
-// -----------------------------------------------------------------------
-// Unit tests for the pure helpers introduced for design.md D4/D9/D10
-// (EGO-WRITE-004 PR3). These exercise the mapping/decision logic in
-// isolation from the actor runtime; the end-to-end scenarios further down
-// prove the same logic wired correctly into the real command.Result path.
-// -----------------------------------------------------------------------
-
-func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
-	specs.Describe(t, "preconditionFromRevision maps an expected revision to a write precondition", func(s *specs.Spec) {
-		s.It("absent is unconditional", func(ctx *specs.Context) {
-			ctx.Expect(preconditionFromRevision(0, false)).ToEqual(persistence.Unconditional())
-		})
-		s.It("zero is genesis, not absence", func(ctx *specs.Context) {
-			ctx.Expect(preconditionFromRevision(0, true)).ToEqual(persistence.ExpectGenesis())
-		})
-		s.It("positive revision is an exact expectation", func(ctx *specs.Context) {
-			ctx.Expect(preconditionFromRevision(42, true)).ToEqual(persistence.ExpectRevision(42))
-		})
-	})
-}
-
-func TestShouldStayAliveAfterConflict(t *testing.T) {
-	t.Run("non-conflict error never stays alive", func(t *testing.T) {
-		entity := &EventSourcedActor{eventsCounter: 3}
-		assert.False(t, entity.shouldStayAliveAfterConflict(errors.New("boom")))
-	})
-
-	t.Run("actual revision matches in-memory counter: provably in sync, stays alive", func(t *testing.T) {
-		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
-		assert.True(t, entity.shouldStayAliveAfterConflict(conflictErr))
-	})
-
-	t.Run("actual revision diverges from in-memory counter: not provably in sync, shuts down", func(t *testing.T) {
-		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
-		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
-	})
-
-	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
-		entity := &EventSourcedActor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
-		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
-	})
-}
-
-func TestResolveBatchPrecondition(t *testing.T) {
-	t.Run("no admitted command declared a revision: unconditional", func(t *testing.T) {
-		entity := &EventSourcedActor{batchHasPrecondition: false, batchBase: 7}
-		assert.Equal(t, persistence.Unconditional(), entity.resolveBatchPrecondition())
-	})
-
-	t.Run("declared, base is empty store: genesis", func(t *testing.T) {
-		entity := &EventSourcedActor{batchHasPrecondition: true, batchBase: 0}
-		assert.Equal(t, persistence.ExpectGenesis(), entity.resolveBatchPrecondition())
-	})
-
-	t.Run("declared, non-empty base: exact revision", func(t *testing.T) {
-		entity := &EventSourcedActor{batchHasPrecondition: true, batchBase: 4}
-		assert.Equal(t, persistence.ExpectRevision(4), entity.resolveBatchPrecondition())
-	})
-}
 
 // -----------------------------------------------------------------------
 // End-to-end scenarios, dispatched through the real Engine/actor/persistence

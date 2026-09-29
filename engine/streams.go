@@ -1,0 +1,299 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+package engine
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/protocol"
+)
+
+type eventsStream struct {
+	publisher  EventPublisher
+	subscriber eventstream.Subscriber
+	done       chan Done
+}
+
+type statesStream struct {
+	publisher  StatePublisher
+	subscriber eventstream.Subscriber
+	done       chan Done
+}
+
+// Subscribe creates an events' subscriber.
+//
+// This function initializes a new subscriber for the event stream managed by the eGo engine. The subscriber
+// will receive events from the topics specified by the engine's configuration.
+//
+// Returns:
+//   - An eventstream.Subscriber instance that can be used to receive events.
+//   - An error if the engine has not started or if there is an issue creating the subscriber.
+func (engine *Engine) Subscribe() (eventstream.Subscriber, error) {
+	if !engine.Started() {
+		return nil, ErrEngineNotStarted
+	}
+
+	engine.mutex.RLock()
+	eventStream := engine.eventStream
+	engine.mutex.RUnlock()
+
+	subscriber := eventStream.AddSubscriber()
+	eventStream.Subscribe(subscriber, protocol.EventsTopic)
+	eventStream.Subscribe(subscriber, protocol.StatesTopic)
+
+	return subscriber, nil
+}
+
+// duplicatePublisherIDs checks a batch of publisher IDs of one kind before
+// any of them is registered. It returns an error wrapping
+// ErrDuplicatePublisherID that names, in batch order and once each, every ID
+// already registered (as reported by registered) or repeated in the batch;
+// otherwise nil.
+func duplicatePublisherIDs(ids []string, registered func(id string) bool) error {
+	seen := make(map[string]struct{}, len(ids))
+	reported := make(map[string]struct{})
+	var duplicates []string
+	for _, id := range ids {
+		_, repeated := seen[id]
+		seen[id] = struct{}{}
+		if !repeated && !registered(id) {
+			continue
+		}
+		if _, done := reported[id]; done {
+			continue
+		}
+		reported[id] = struct{}{}
+		duplicates = append(duplicates, strconv.Quote(id))
+	}
+	if len(duplicates) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrDuplicatePublisherID, strings.Join(duplicates, ", "))
+}
+
+// AddEventPublishers registers one or more event publishers with the eGo engine.
+// This function subscribes the publishers to the event stream, allowing them to receive events.
+//
+// Note: Event publishers are responsible for publishing events to external systems. They need to be added to the engine before processing any events.
+//
+// Parameters:
+//   - publishers: A list of event publishers to be added to the engine.
+//
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
+func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
+	if !engine.Started() {
+		return ErrEngineNotStarted
+	}
+
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.eventsStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
+
+	for _, publisher := range publishers {
+		subscriber := engine.eventStream.AddSubscriber()
+		engine.logger.Debug("events publisher subscribing to topic", "publisher", publisher.ID(), "topic", protocol.EventsTopic)
+		engine.eventStream.Subscribe(subscriber, protocol.EventsTopic)
+
+		// create an instance of the event subscriber
+		eventSubscriber := &eventsStream{
+			publisher:  publisher,
+			subscriber: subscriber,
+			done:       make(chan Done, 1),
+		}
+
+		// add the event publisher to the engine
+		engine.eventsStreams.Set(publisher.ID(), eventSubscriber)
+
+		// start the event publisher
+		engine.logger.Info("starting events publisher", "publisher", publisher.ID())
+		go engine.sendEvent(eventSubscriber)
+	}
+
+	return nil
+}
+
+// AddStatePublishers registers one or more state publishers with the eGo engine.
+// This function subscribes the publishers to the event stream, allowing them to receive state changes.
+//
+// Note: State publishers are responsible for publishing durable state changes to external systems.
+// They need to be added to the engine before processing any durable state.
+//
+// Parameters:
+//   - publishers: A list of state publishers to be added to the engine.
+//
+// Returns ErrEngineNotStarted if the engine has not started, and an error
+// wrapping ErrDuplicatePublisherID, naming the duplicate IDs, when a
+// publisher ID is already registered for this kind or repeated in the call;
+// in that case no publisher from the call is registered or started.
+func (engine *Engine) AddStatePublishers(publishers ...StatePublisher) error {
+	if !engine.Started() {
+		return ErrEngineNotStarted
+	}
+
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
+
+	ids := make([]string, len(publishers))
+	for i, publisher := range publishers {
+		ids[i] = publisher.ID()
+	}
+	if err := duplicatePublisherIDs(ids, func(id string) bool {
+		_, ok := engine.statesStreams.Get(id)
+		return ok
+	}); err != nil {
+		return err
+	}
+
+	for _, publisher := range publishers {
+		subscriber := engine.eventStream.AddSubscriber()
+		engine.logger.Debug("durable state publisher subscribing to topic", "publisher", publisher.ID(), "topic", protocol.StatesTopic)
+		engine.eventStream.Subscribe(subscriber, protocol.StatesTopic)
+
+		// create an instance of the state subscriber
+		stateSubscriber := &statesStream{
+			publisher:  publisher,
+			subscriber: subscriber,
+			done:       make(chan Done, 1),
+		}
+
+		// add the state publisher to the engine
+		engine.statesStreams.Set(publisher.ID(), stateSubscriber)
+
+		// start the state publisher
+		engine.logger.Info("starting durable state publisher", "publisher", publisher.ID())
+		go engine.sendState(stateSubscriber)
+	}
+
+	return nil
+}
+
+// sendEvent sends events to the event publisher.
+// It blocks on the subscriber's Ready signal when idle, then drains the
+// snapshot returned by Iterator. Selecting on Iterator directly would
+// busy-spin a CPU core: it returns a closed snapshot channel that yields
+// nil immediately whenever the queue is empty.
+func (engine *Engine) sendEvent(stream *eventsStream) {
+	for {
+		select {
+		case <-stream.done:
+			return
+		case <-stream.subscriber.Ready():
+		}
+
+		for message := range stream.subscriber.Iterator() {
+			select {
+			case <-stream.done:
+				return
+			default:
+			}
+
+			if message == nil {
+				continue
+			}
+
+			event, ok := message.Payload().(*egopb.Event)
+			if !ok {
+				continue
+			}
+
+			if err := stream.publisher.Publish(context.Background(), event); err != nil {
+				engine.logger.Error("failed to publish event",
+					"publisher", stream.publisher.ID(),
+					"persistence_id", event.GetPersistenceId(),
+					"sequence_number", event.GetSequenceNumber(),
+					"error", err)
+				continue
+			}
+
+			engine.logger.Info("event published",
+				"publisher", stream.publisher.ID(),
+				"persistence_id", event.GetPersistenceId(),
+				"sequence_number", event.GetSequenceNumber())
+		}
+	}
+}
+
+// sendState sends state changes to the state publisher.
+// It blocks on the subscriber's Ready signal when idle, then drains the
+// snapshot returned by Iterator. Selecting on Iterator directly would
+// busy-spin a CPU core: it returns a closed snapshot channel that yields
+// nil immediately whenever the queue is empty.
+func (engine *Engine) sendState(stream *statesStream) {
+	for {
+		select {
+		case <-stream.done:
+			return
+		case <-stream.subscriber.Ready():
+		}
+
+		for message := range stream.subscriber.Iterator() {
+			select {
+			case <-stream.done:
+				return
+			default:
+			}
+
+			if message == nil {
+				continue
+			}
+
+			msg, ok := message.Payload().(*egopb.DurableState)
+			if !ok {
+				continue
+			}
+
+			publisher := stream.publisher
+			if err := publisher.Publish(context.Background(), msg); err != nil {
+				engine.logger.Error("failed to publish durable state",
+					"publisher", publisher.ID(),
+					"persistence_id", msg.GetPersistenceId(),
+					"version", msg.GetVersionNumber(),
+					"error", err)
+				continue
+			}
+
+			engine.logger.Info("durable state published",
+				"publisher", publisher.ID(),
+				"persistence_id", msg.GetPersistenceId(),
+				"version", msg.GetVersionNumber())
+		}
+	}
+}

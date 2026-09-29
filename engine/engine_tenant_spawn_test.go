@@ -77,7 +77,7 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 		exists, existsErr := engine.EntityExists(ctx, entityID)
 		require.NoError(t, existsErr)
 		require.False(t, exists, "no actor may be spawned when the tenant cannot be determined")
-		require.Zero(t, probe.invocationCount(), "HandleCommand must never run: the entity was never spawned")
+		require.Zero(t, probe.InvocationCount(), "HandleCommand must never run: the entity was never spawned")
 
 		// No expectation was registered on this mock at all, so ANY call to
 		// it (Ping, GetLatestEvent, WriteEvents, ...) would already fail the
@@ -246,7 +246,7 @@ func TestEngineCommandRejectsTenantMismatchWithSpawnDeclaredTenant(t *testing.T)
 	mismatchedCtx := context.WithValue(ctx, perCallerTenantKey{}, "globex")
 	_, _, err := engine.SendCommand(mismatchedCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 	require.Error(t, err, "a command resolved to a different tenant than the entity was spawned under must be rejected")
-	assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for a mismatched tenant")
+	assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run for a mismatched tenant")
 
 	require.NoError(t, engine.Stop(ctx))
 }

@@ -98,7 +98,7 @@ func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
 
 		_, _, err := engine.SendCommand(adminCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.Error(t, err)
-		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run under an administrative scope")
+		assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run under an administrative scope")
 
 		acme, err := persistence.NewTenantScope("acme")
 		require.NoError(t, err)

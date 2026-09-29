@@ -34,8 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -95,7 +95,7 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 
 		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err)
-		assert.Zero(t, owner.invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
 	})
 
 	t.Run("DurableStateEntity", func(t *testing.T) {
@@ -109,14 +109,14 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 
 		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err)
-		assert.Zero(t, owner.invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
 	})
 
 	t.Run("Saga", func(t *testing.T) {
 		engine := newRespawnTestEngine(t)
 		id := "saga-" + uuid.NewString()
-		saga := func() *callbackSagaBehavior {
-			return &callbackSagaBehavior{id: id, handleEvent: func(context.Context, Event, State) (*SagaAction, error) {
+		saga := func() *enginetest.CallbackSagaBehavior {
+			return &enginetest.CallbackSagaBehavior{SagaID: id, HandleEventFn: func(context.Context, Event, State) (*SagaAction, error) {
 				return &SagaAction{}, nil
 			}}
 		}
@@ -172,7 +172,7 @@ func TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner(t *testing.T) {
 		loserCtx := context.WithValue(ctx, perCallerTenantKey{}, tenants[loser])
 		_, _, err := engine.SendCommand(loserCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err, "the losing tenant's command must be rejected")
-		assert.Zero(t, probes[0].invocationCount()+probes[1].invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, probes[0].InvocationCount()+probes[1].InvocationCount(), "a foreign command must never reach HandleCommand")
 	}
 }
 
@@ -205,29 +205,6 @@ func TestClassifyTenantBinding(t *testing.T) {
 	err := classifyTenantBinding("order-1", requested, &egopb.TenantBindingReply{})
 	require.ErrorIs(t, err, ErrSpawnTenantUnverified)
 	assert.NotErrorIs(t, err, ErrSpawnTenantMismatch)
-}
-
-// TestAnswerTenantBinding pins the actors' shared query handler: it answers
-// from the bound scope only, never discloses the bound tenant, and reports
-// no binding in legacy mode or for an administrative-looking query.
-func TestAnswerTenantBinding(t *testing.T) {
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-
-	match := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.True(t, match.GetTenantAware())
-	assert.True(t, match.GetMatches())
-
-	other := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "globex"})
-	assert.True(t, other.GetTenantAware())
-	assert.False(t, other.GetMatches())
-
-	invalid := answerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: ""})
-	assert.False(t, invalid.GetMatches(), "an invalid queried tenant never matches")
-
-	legacy := answerTenantBinding(false, persistence.Unscoped(), &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.False(t, legacy.GetTenantAware())
-	assert.False(t, legacy.GetMatches())
 }
 
 // TestDispatchRejectsTenantBindingQuery pins that the control message can

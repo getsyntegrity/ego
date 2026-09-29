@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -155,9 +156,9 @@ func TestTenantWritePathE2E(t *testing.T) {
 	require.NoError(t, engine.Entity(ctx, entityB, WithTenant(tenancy.TenantID("acme"))))
 
 	sagaID := "saga-" + uuid.NewString()
-	saga := &callbackSagaBehavior{
-		id: sagaID,
-		handleEvent: func(_ context.Context, event Event, state State) (*SagaAction, error) {
+	saga := &enginetest.CallbackSagaBehavior{
+		SagaID: sagaID,
+		HandleEventFn: func(_ context.Context, event Event, state State) (*SagaAction, error) {
 			created, ok := event.(*testpb.AccountCreated)
 			if !ok || created.GetAccountId() != entityAID {
 				return &SagaAction{}, nil
@@ -168,7 +169,7 @@ func TestTenantWritePathE2E(t *testing.T) {
 				},
 			}, nil
 		},
-		handleResult: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
+		HandleResultFn: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
 			return &SagaAction{Complete: true}, nil
 		},
 	}
@@ -223,9 +224,9 @@ func TestEngineSagaStatusTenantIsolation(t *testing.T) {
 	require.NoError(t, engine.Entity(ctx, entityA, WithTenant(tenancy.TenantID("acme"))))
 
 	sagaID := "saga-" + uuid.NewString()
-	saga := &callbackSagaBehavior{
-		id: sagaID,
-		handleEvent: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+	saga := &enginetest.CallbackSagaBehavior{
+		SagaID: sagaID,
+		HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
 			created, ok := event.(*testpb.AccountCreated)
 			if !ok || created.GetAccountId() != entityAID {
 				return &SagaAction{}, nil

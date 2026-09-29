@@ -24,6 +24,8 @@ package engine
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -444,9 +446,25 @@ func TestConfigGoaktOptionsProjectionDefaultsRecovery(t *testing.T) {
 	require.NotNil(t, sys.Extension(extensions.ProjectionExtensionID))
 }
 
+// TestClusterKindsExposesEgoActors pins the GoAkt kind names of the cluster
+// actors. GoAkt names a kind lower(reflect.Type.String()) and ships that name
+// in spawn, relocation and singleton records, so a node running another
+// version only understands these exact names: the types must stay declared in
+// package engine.
 func TestClusterKindsExposesEgoActors(t *testing.T) {
-	kinds := ClusterKinds()
-	require.Len(t, kinds, 4)
+	want := []string{
+		"engine.eventsourcedactor",
+		"engine.durablestateactor",
+		"engine.sagaactor",
+		"engine.projectionactor",
+	}
+
+	var got []string
+	for _, kind := range ClusterKinds() {
+		got = append(got, strings.ToLower(reflect.TypeOf(kind).Elem().String()))
+	}
+
+	assert.Equal(t, want, got)
 }
 
 // testEventAdapter is a no-op EventAdapter for testing.

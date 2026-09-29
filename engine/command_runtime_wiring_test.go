@@ -41,110 +41,6 @@ import (
 	"github.com/getsyntegrity/ego/testkit"
 )
 
-// envelopeCapturingEventSourcedBehavior implements both EventSourcedBehavior
-// and EventSourcedEnvelopeBehavior (#60). It records, for every invocation,
-// which method the runtime actually called and, when it was HandleEnvelope,
-// the command.Envelope it received — so tests can assert against the real
-// dispatch path instead of inferring it.
-type envelopeCapturingEventSourcedBehavior struct {
-	id string
-	// delay, when non-zero, is slept at the top of HandleCommand and
-	// HandleEnvelope before applying the command — used to prove Dispatch
-	// bounds SendSync's wait to the Metadata deadline rather than the
-	// caller-supplied timeout when the deadline is tighter.
-	delay time.Duration
-
-	mu               sync.Mutex
-	handleCommandHit int
-	handleEnvelope   int
-	lastEnvelope     command.Envelope
-}
-
-var (
-	_ EventSourcedBehavior         = (*envelopeCapturingEventSourcedBehavior)(nil)
-	_ EventSourcedEnvelopeBehavior = (*envelopeCapturingEventSourcedBehavior)(nil)
-)
-
-func newEnvelopeCapturingEventSourcedBehavior(id string) *envelopeCapturingEventSourcedBehavior {
-	return &envelopeCapturingEventSourcedBehavior{id: id}
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) ID() string { return x.id }
-
-func (x *envelopeCapturingEventSourcedBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) HandleCommand(_ context.Context, cmd Command, _ State) (events []Event, err error) {
-	if x.delay > 0 {
-		time.Sleep(x.delay)
-	}
-	x.mu.Lock()
-	x.handleCommandHit++
-	x.mu.Unlock()
-	return x.apply(cmd)
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) HandleEnvelope(_ context.Context, env command.Envelope, _ State) (events []Event, err error) {
-	if x.delay > 0 {
-		time.Sleep(x.delay)
-	}
-	x.mu.Lock()
-	x.handleEnvelope++
-	x.lastEnvelope = env
-	x.mu.Unlock()
-	return x.apply(env.Payload())
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) apply(cmd Command) (events []Event, err error) {
-	switch c := cmd.(type) {
-	case *testpb.CreateAccount:
-		return []Event{
-			&testpb.AccountCreated{
-				AccountId:      x.id,
-				AccountBalance: c.GetAccountBalance(),
-			},
-		}, nil
-	default:
-		return nil, errors.New("unhandled command")
-	}
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) HandleEvent(_ context.Context, event Event, _ State) (state State, err error) {
-	switch evt := event.(type) {
-	case *testpb.AccountCreated:
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: evt.GetAccountBalance(),
-		}, nil
-	default:
-		return nil, errors.New("unhandled event")
-	}
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-func (x *envelopeCapturingEventSourcedBehavior) snapshot() (handleCommandHit, handleEnvelopeHit int, lastEnvelope command.Envelope) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.handleCommandHit, x.handleEnvelope, x.lastEnvelope
-}
-
 // TestEngineSendCommandDispatchesHandleEnvelope proves the M-3 wiring
 // end-to-end: a behavior implementing the additive, optional
 // EventSourcedEnvelopeBehavior interface (#60) receives HandleEnvelope, not
@@ -174,7 +70,7 @@ func TestEngineSendCommandDispatchesHandleEnvelope(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 100, acct.GetAccountBalance())
 
-	handleCommandHit, handleEnvelopeHit, env := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit, "HandleCommand must not be called when the behavior implements HandleEnvelope and Metadata is available")
 	assert.Equal(t, 1, handleEnvelopeHit)
 
@@ -214,7 +110,7 @@ func TestEngineDispatchDispatchesHandleEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, command.OutcomeSuccess, result.Outcome())
 
-	handleCommandHit, handleEnvelopeHit, gotEnv := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, gotEnv := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit)
 	assert.Equal(t, 1, handleEnvelopeHit)
 	assert.Equal(t, op, gotEnv.Metadata().OperationID())
@@ -251,7 +147,7 @@ func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T
 	assert.ErrorIs(t, err, command.ErrInvalidMetadata)
 	assert.Equal(t, command.Result{}, result)
 
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on invalid metadata")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on invalid metadata")
 
@@ -293,7 +189,7 @@ func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
 		assert.Equal(t, command.Result{}, result)
 	})
 
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a zero-value envelope")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a zero-value envelope")
 
@@ -334,7 +230,7 @@ func TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler(t *testing.T
 	assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
 	assert.ErrorIs(t, result.Err(), command.ErrTimedOut)
 
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on an already-expired deadline")
 	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on an already-expired deadline")
 
@@ -360,7 +256,8 @@ func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
 	require.NoError(t, engine.Start(ctx))
 
 	entityID := uuid.NewString()
-	behavior := &envelopeCapturingEventSourcedBehavior{id: entityID, delay: 500 * time.Millisecond}
+	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+	behavior.SetDelay(500 * time.Millisecond)
 	require.NoError(t, engine.Entity(ctx, behavior))
 
 	op, err := command.NewOperationID("deadline-clamp-" + entityID)
@@ -384,105 +281,6 @@ func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
 	assert.Nil(t, event, "the actor's post-handler gate must discard the handler's output once the deadline has passed, even though the handler ignored ctx and ran to completion")
 
 	require.NoError(t, engine.Stop(ctx))
-}
-
-// TestEngineSendCommandFallsBackToHandleCommandWithoutMetadata proves the
-// additive-interface design's safety net: a behavior that DOES implement
-// EventSourcedEnvelopeBehavior still falls back to HandleCommand when no
-// Metadata is available for the incoming command (e.g. the entity is
-// reached directly through the actor system rather than through
-// Engine.Dispatch/SendCommand's Carrier attachment).
-func TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata(t *testing.T) {
-	entity := &EventSourcedActor{
-		behavior: newEnvelopeCapturingEventSourcedBehavior("no-metadata"),
-	}
-
-	events, err := entity.dispatchToBehavior(context.Background(), &testpb.CreateAccount{AccountBalance: 7}, new(testpb.Account))
-	require.NoError(t, err)
-	require.Len(t, events, 1)
-
-	behavior := entity.behavior.(*envelopeCapturingEventSourcedBehavior)
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
-	assert.Equal(t, 1, handleCommandHit)
-	assert.Zero(t, handleEnvelopeHit)
-}
-
-// envelopeCapturingDurableStateBehavior is the DurableStateBehavior
-// counterpart of envelopeCapturingEventSourcedBehavior, proving the same
-// M-3 wiring for DurableStateActor.dispatchToBehavior.
-type envelopeCapturingDurableStateBehavior struct {
-	id string
-
-	mu               sync.Mutex
-	handleCommandHit int
-	handleEnvelope   int
-	lastEnvelope     command.Envelope
-}
-
-var (
-	_ DurableStateBehavior         = (*envelopeCapturingDurableStateBehavior)(nil)
-	_ DurableStateEnvelopeBehavior = (*envelopeCapturingDurableStateBehavior)(nil)
-)
-
-func newEnvelopeCapturingDurableStateBehavior(id string) *envelopeCapturingDurableStateBehavior {
-	return &envelopeCapturingDurableStateBehavior{id: id}
-}
-
-func (x *envelopeCapturingDurableStateBehavior) ID() string { return x.id }
-
-func (x *envelopeCapturingDurableStateBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-// nolint
-func (x *envelopeCapturingDurableStateBehavior) HandleCommand(_ context.Context, cmd Command, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
-	x.mu.Lock()
-	x.handleCommandHit++
-	x.mu.Unlock()
-	return x.apply(cmd, priorVersion)
-}
-
-func (x *envelopeCapturingDurableStateBehavior) HandleEnvelope(_ context.Context, env command.Envelope, priorVersion uint64, _ State) (newState State, newVersion uint64, err error) {
-	x.mu.Lock()
-	x.handleEnvelope++
-	x.lastEnvelope = env
-	x.mu.Unlock()
-	return x.apply(env.Payload(), priorVersion)
-}
-
-func (x *envelopeCapturingDurableStateBehavior) apply(cmd Command, priorVersion uint64) (State, uint64, error) {
-	switch c := cmd.(type) {
-	case *testpb.CreateAccount:
-		return &testpb.Account{
-			AccountId:      x.id,
-			AccountBalance: c.GetAccountBalance(),
-		}, priorVersion + 1, nil
-	default:
-		return nil, 0, errors.New("unhandled command")
-	}
-}
-
-func (x *envelopeCapturingDurableStateBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *envelopeCapturingDurableStateBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-func (x *envelopeCapturingDurableStateBehavior) snapshot() (handleCommandHit, handleEnvelopeHit int, lastEnvelope command.Envelope) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.handleCommandHit, x.handleEnvelope, x.lastEnvelope
 }
 
 // TestEngineSendCommandDispatchesDurableStateHandleEnvelope is the
@@ -513,76 +311,12 @@ func TestEngineSendCommandDispatchesDurableStateHandleEnvelope(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 55, acct.GetAccountBalance())
 
-	handleCommandHit, handleEnvelopeHit, env := behavior.snapshot()
+	handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
 	assert.Zero(t, handleCommandHit)
 	assert.Equal(t, 1, handleEnvelopeHit)
 	require.NotEmpty(t, env.Metadata().OperationID())
 
 	require.NoError(t, engine.Stop(ctx))
-}
-
-// TestDurableStateActorFallsBackToHandleCommandWithoutMetadata mirrors
-// TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata for
-// DurableStateActor.dispatchToBehavior.
-func TestDurableStateActorFallsBackToHandleCommandWithoutMetadata(t *testing.T) {
-	entity := &DurableStateActor{
-		behavior: newEnvelopeCapturingDurableStateBehavior("no-metadata"),
-	}
-
-	newState, newVersion, err := entity.dispatchToBehavior(context.Background(), &testpb.CreateAccount{AccountBalance: 9}, 0, new(testpb.Account))
-	require.NoError(t, err)
-	require.EqualValues(t, 1, newVersion)
-	require.NotNil(t, newState)
-
-	behavior := entity.behavior.(*envelopeCapturingDurableStateBehavior)
-	handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
-	assert.Equal(t, 1, handleCommandHit)
-	assert.Zero(t, handleEnvelopeHit)
-}
-
-// TestSagaActorAttachCommandMetadata exercises SagaCommand's dual metadata
-// behavior (#60, issue #60's "SagaCommand gana metadata" scope item):
-// when a SagaCommand carries an explicit Metadata, attachCommandMetadata
-// must use it verbatim; when left as the zero value, it must derive a
-// fresh child from the saga's own rootMetadata (correlation inherited,
-// causation set to the saga's root operation).
-func TestSagaActorAttachCommandMetadata(t *testing.T) {
-	rootOp, err := command.NewOperationID("saga-root-1")
-	require.NoError(t, err)
-	rootMetadata, err := command.NewMetadata(rootOp)
-	require.NoError(t, err)
-
-	s := &SagaActor{
-		sagaID:       "saga-root-1",
-		rootMetadata: rootMetadata,
-		logger:       DiscardLogger,
-	}
-
-	t.Run("zero-value metadata is auto-derived from the saga's root", func(t *testing.T) {
-		ctx := s.attachCommandMetadata(context.Background(), command.Metadata{})
-
-		md, ok := metadataFromContext(ctx)
-		require.True(t, ok)
-		assert.NotEqual(t, rootMetadata.OperationID(), md.OperationID(), "derived metadata must carry a fresh operation id, not the root's")
-		assert.Equal(t, rootMetadata.CorrelationID(), md.CorrelationID(), "correlation id must be inherited from the root (D7)")
-		causation, ok := md.CausationID()
-		require.True(t, ok)
-		assert.Equal(t, command.CausationID(rootMetadata.OperationID()), causation, "causation must be the saga's root operation")
-	})
-
-	t.Run("explicit metadata is used verbatim", func(t *testing.T) {
-		explicitOp, err := command.NewOperationID("explicit-op-1")
-		require.NoError(t, err)
-		explicit, err := command.NewMetadata(explicitOp, command.WithCorrelationID("explicit-correlation"))
-		require.NoError(t, err)
-
-		ctx := s.attachCommandMetadata(context.Background(), explicit)
-
-		md, ok := metadataFromContext(ctx)
-		require.True(t, ok)
-		assert.Equal(t, explicit.OperationID(), md.OperationID())
-		assert.Equal(t, explicit.CorrelationID(), md.CorrelationID())
-	})
 }
 
 // dispatchOutcome carries an engine.Dispatch call's result back across a
@@ -987,7 +721,7 @@ func TestEngineDispatchEffectiveDeadlinePrecedence(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
 
-		handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 		assert.Zero(t, handleCommandHit)
 		assert.Zero(t, handleEnvelopeHit, "a 1-hour timeout must not override an already-expired Metadata deadline")
 	})
@@ -1012,7 +746,7 @@ func TestEngineDispatchEffectiveDeadlinePrecedence(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
 
-		handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 		assert.Zero(t, handleCommandHit)
 		assert.Zero(t, handleEnvelopeHit, "an already-expired ctx deadline must be honored even though Metadata/timeout are generous")
 	})
@@ -1078,7 +812,7 @@ func TestEngineDispatchEffectiveDeadlinePrecedence(t *testing.T) {
 		assert.Equal(t, command.OutcomeCanceled, result.Outcome())
 		assert.ErrorIs(t, result.Err(), command.ErrCanceled)
 
-		handleCommandHit, handleEnvelopeHit, _ := behavior.snapshot()
+		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
 		assert.Zero(t, handleCommandHit)
 		assert.Zero(t, handleEnvelopeHit)
 	})
