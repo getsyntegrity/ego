@@ -24,6 +24,7 @@ package persistence_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/getsyntegrity/ego/persistence"
@@ -261,30 +262,33 @@ var adversarialConflictIDs = []string{
 }
 
 func TestParseConflictErrorRoundTripsAdversarialIdentifiers(t *testing.T) {
+	persistenceIDs := append([]string{"", "line\nbreak", "nul\x00byte", "bad utf8 \xff\xfe", "\t leading tab"}, adversarialConflictIDs...)
+
+	scopes := []persistence.Scope{persistence.Unscoped()}
+	for _, id := range adversarialConflictIDs {
+		scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
+		if err != nil {
+			t.Fatalf("fixture tenant id must be valid: %q: %v", id, err)
+		}
+		scopes = append(scopes, scope)
+	}
+
+	// One case per scope and persistence id, named by the quoted error text, so a failure says which
+	// combination did not round-trip.
 	specs.Describe(t, "ParseConflictError round-trips adversarial identifiers", func(s *specs.Spec) {
-		s.It("restores every scope and persistence id combination exactly", func(ctx *specs.Context) {
-			persistenceIDs := append([]string{"", "line\nbreak", "nul\x00byte", "bad utf8 \xff\xfe", "\t leading tab"}, adversarialConflictIDs...)
-
-			var scopes []persistence.Scope
-			scopes = append(scopes, persistence.Unscoped())
-			for _, id := range adversarialConflictIDs {
-				scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
-				ctx.Expect(err).To(specs.BeNil())
-				scopes = append(scopes, scope)
-			}
-
-			for _, scope := range scopes {
-				for _, persistenceID := range persistenceIDs {
-					original := persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(7), persistence.WithActualRevision(8))
+		for _, scope := range scopes {
+			for _, persistenceID := range persistenceIDs {
+				original := persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(7), persistence.WithActualRevision(8))
+				s.It(fmt.Sprintf("%q", original.Error()), func(ctx *specs.Context) {
 					parsed, ok := persistence.ParseConflictError(original.Error())
 					ctx.Expect(ok).To(specs.BeTrue())
 					ctx.Expect(original.Scope().Equal(parsed.Scope())).To(specs.BeTrue())
 					ctx.Expect(parsed.PersistenceID()).ToEqual(persistenceID)
 					ctx.Expect(parsed.Error()).ToEqual(original.Error())
 					ctx.Expect(parsed).To(specs.MatchError(persistence.ErrConcurrencyConflict))
-				}
+				})
 			}
-		})
+		}
 	})
 }
 
