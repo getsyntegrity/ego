@@ -92,22 +92,57 @@ path should not mean hopping between packages. That move is one isolated commit
 it can be reverted if a separate package is preferred. `internal/extensions` keeps
 `Require`, the typed lookup #193 introduced, and the missing-extension sentinel.
 
+## The four actors: type in `engine`, implementation inside
+
+Each actor has two halves. The type GoAkt sees, and whose name travels between
+nodes, is declared in `engine/cluster_kinds.go`. The code that does the work is in an
+internal package, and the `engine` type only holds it in an unexported field and
+forwards `PreStart`, `Receive` and `PostStop` to it.
+
+| Cluster kind in `engine/cluster_kinds.go` | Implementation |
+|---|---|
+| `EventSourcedActor` | `eventsource.Actor` in `internal/engine/eventsource/event_sourced_actor.go` |
+| `DurableStateActor` | `durablestate.Actor` in `internal/engine/durablestate/durable_state_actor.go` |
+| `SagaActor` (built by `newSagaActor`) | `saga.Actor` in `internal/engine/saga/saga_actor.go` |
+| `ProjectionActor` (built by `NewProjectionActor`) | `projection.Actor` in `internal/engine/projection/projection_actor.go` |
+
+The projection's supervision is the one piece that stays next to it in `engine`, for the
+same naming reason: `engine/projection_supervision.go` holds `projectionRunnerError`
+and the supervisor that stops a projection on it. `ProjectionActor.PreStart`, in
+`cluster_kinds.go`, binds that error as the implementation's escalation error.
+
 ## Files of `engine`
+
+Grouped by what they are for. Every production file of the package is listed.
 
 | File | Holds |
 |---|---|
-| `engine.go` | `Engine`, `NewEngine`, extension validation, `Start`, `Stop`, `Started`, `ActorSystem` |
+| **Public API** | |
+| `behavior.go` | The `Command`, `Event` and `State` aliases and the event sourced and durable state behavior interfaces |
+| `saga.go` | `SagaBehavior` and the `SagaAction`, `SagaCommand`, `SagaStatus` (with its values) and `SagaInfo` aliases |
 | `errors.go` | The public error values and `BehaviorPlacementError` |
+| `publisher.go` | The event and state publisher aliases and `ErrPublisherNotStarted` |
+| `supervisor.go` | The `SupervisorDirective` alias and its values |
+| `telemetry.go` | `Telemetry` |
+| `logger.go` | `DiscardLogger`, `DefaultLogger`, `ResolveLogger` |
+| `retention.go` | `RetentionPolicy` |
+| `cluster_kinds.go` | The four cluster-kind types, their constructors (`newSagaActor`, `NewProjectionActor`) and `ClusterKinds()` |
+| `projection_supervision.go` | `projectionRunnerError` and the projection supervisor |
+| **Configuration** | |
+| `option.go` | `Config`, `NewConfig`, the engine options, `EntityKind`, `BehaviorKind`, `EntityFamily` |
+| `spawn_config.go` | The `SpawnOption` and `EntitiesPlacement` aliases and the per-spawn `With...` options |
+| `spawn_options.go` | Translation of a spawn's configuration into GoAkt spawn options, supervisors and placement |
+| **Runtime coordination** | |
+| `engine.go` | `Engine`, `NewEngine`, extension validation, `Start`, `Stop`, `Started`, `ActorSystem` |
+| `engine_runtime.go` | The compile-time check that `Engine` implements `port/runtime.Runtime` |
+| `engine_spawn.go` | `SpawnEventSourced`, `SpawnDurableState`, `SpawnSaga`, the `port/runtime` spawn methods |
 | `entities.go` | `Entity`, `DurableStateEntity`, `EntityExists`, `EraseEntity` and their spawns |
+| `sagas.go` | `Saga`, its spawn, and `SagaStatus` |
 | `spawn_tenancy.go` | Tenant scope, the spawn binding query and existing-spawn resolution |
+| `behavior_dependency.go` | How a behavior is handed to a spawn as a dependency (local or serializable) |
 | `commands.go` | `Dispatch`, `SendCommand`, metadata derivation, legacy result mapping |
-| `sagas.go` | `Saga`, `SagaStatus` |
 | `projections.go` | Projection start, stop, rebuild, status and lag |
 | `streams.go` | `Subscribe`, event and state publishers and their stream loops |
-| `spawn_options.go`, `spawn_config.go` | GoAkt spawn options, supervisors and placement; the spawn option types |
-| `cluster_kinds.go` | The four cluster-kind types and `ClusterKinds()` |
-| `projection_actor.go` | `projectionRunnerError`, the projection supervisor and `NewProjectionActor` |
-| `behavior.go`, `saga.go`, `option.go`, `publisher.go`, `retention.go`, ... | The public aliases, options and types |
 
 ## Changing it
 

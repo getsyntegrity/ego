@@ -81,7 +81,12 @@ type Engine struct {
 	// tenantResolver is the effective tenancy.TenantResolver carried over
 	// from Config; non-nil means tenant-aware mode is active. NewEngine has
 	// already validated there is at most one (ErrAmbiguousTenantResolver).
-	// Not yet consumed: resolve-and-attach at SendCommand lands separately.
+	// It is consumed on every tenant-aware path: Dispatch (and SendCommand,
+	// which goes through it) resolves the caller's tenant and attaches it
+	// before the command reaches the actor (commands.go),
+	// SagaStatus does the same for its state read (sagas.go), EraseEntity
+	// derives the scope to erase from it (entities.go), and spawnTenantScope
+	// uses its fixed tenant when a spawn names none (spawn_tenancy.go).
 	tenantResolver tenancy.TenantResolver
 
 	// entityFamilies is the set declared with WithEntityFamilies; zero means

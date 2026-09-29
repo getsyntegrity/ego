@@ -28,8 +28,8 @@ import (
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 )
 
-// Command, Event, State and the saga action types mirror the aliases the
-// engine package exports for the messages a saga behavior handles.
+// Event, State and the saga action types mirror the aliases the engine
+// package exports for the messages a saga behavior handles.
 type (
 	Event       = proto.Message
 	State       = proto.Message

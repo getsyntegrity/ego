@@ -29,6 +29,12 @@ import (
 	"github.com/tochemey/goakt/v4/supervisor"
 )
 
+// This file holds the supervision of projection actors: the error a projection
+// escalates when its runner stops permanently, and the supervisor that stops
+// the projection on it. The ProjectionActor type itself and its constructor
+// are in cluster_kinds.go with the other cluster kinds; ProjectionActor.PreStart
+// binds projectionRunnerError as the implementation's escalation error.
+
 // projectionRunnerError reports an event that cannot be processed: a failed
 // decryption, a failed event adaptation, or a handler error under the Fail
 // and RetryAndFail recovery policies. Retrying would only replay the same
@@ -66,9 +72,4 @@ func newProjectionSupervisor() *supervisor.Supervisor {
 		supervisor.WithDirective(&gerrors.InternalError{}, supervisor.StopDirective),
 		supervisor.WithDirective(&runtime.PanicNilError{}, supervisor.StopDirective),
 	)
-}
-
-// NewProjectionActor creates an instance of ProjectionActor
-func NewProjectionActor() *ProjectionActor {
-	return &ProjectionActor{}
 }

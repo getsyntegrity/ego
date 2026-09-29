@@ -152,6 +152,11 @@ type ProjectionActor struct {
 // implements the Actor contract
 var _ goakt.Actor = (*ProjectionActor)(nil)
 
+// NewProjectionActor creates an instance of ProjectionActor
+func NewProjectionActor() *ProjectionActor {
+	return &ProjectionActor{}
+}
+
 // PreStart prepares the projection. It first tells the implementation to
 // escalate a permanent runner failure as a projectionRunnerError, the type
 // the projection supervisor keys its directive by.
