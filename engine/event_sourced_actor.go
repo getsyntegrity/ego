@@ -41,6 +41,7 @@ import (
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/eventswriter"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/internal/runner"
@@ -111,7 +112,7 @@ type batchEntry struct {
 // EventSourcedActor persists state changes as a sequence of immutable events.
 //
 // Command processing generates events that are persisted through a child
-// [eventsWriterActor] before the in-memory state is updated. This guarantees
+// events writer (internal/eventswriter) before the in-memory state is updated. This guarantees
 // that the actor state always matches what is stored.
 //
 // The persistence write is dispatched asynchronously via goakt's PipeTo, so
@@ -243,7 +244,7 @@ type EventSourcedActor struct {
 	// tenantAware is false, or the tenant scope carried by the per-spawn
 	// extensions.EntityTenantScope dependency Engine.Entity injects when
 	// tenantAware is true. Threaded through to the child writer/janitor
-	// actors on their request structs (persistEventsRequest.scope,
+	// actors on their request structs (the events writer request scope,
 	// persistSnapshotRequest.scope, applyRetentionRequest.scope) rather
 	// than re-derived there, since those are separate actors that never
 	// see PreStart's dependencies.
@@ -324,8 +325,8 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 //
 // When event batching is enabled (batchThreshold > 0) additional internal
 // message types are handled: batchFlushTick triggers a timer-based flush,
-// and persistEventsResponse carries the result of an asynchronous batch write.
-// For non-batched entities, persistEventsResponse instead carries the result
+// and eventswriter.Response carries the result of an asynchronous batch write.
+// For non-batched entities, eventswriter.Response instead carries the result
 // of the single in-flight direct-path write (see persistAsync).
 func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
@@ -338,7 +339,7 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 		ctx.Response(answerTenantBinding(entity.tenantAware, entity.scope, msg))
 	case *batchFlushTick:
 		entity.handleBatchFlushTick(ctx)
-	case *persistEventsResponse:
+	case *eventswriter.Response:
 		if entity.batchEnabled() {
 			entity.handleBatchPersistResponse(ctx, msg)
 		} else {
@@ -535,7 +536,7 @@ func childSpawnOptions() []goakt.SpawnOption {
 func (entity *EventSourcedActor) spawnChildren(ctx *goakt.ReceiveContext) {
 	opts := childSpawnOptions()
 
-	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, newEventsWriterActor(), opts...)
+	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, eventswriter.New(), opts...)
 
 	if entity.snapshotStore != nil {
 		entity.snapshotsWriter = ctx.Spawn(snapshotsWriterChildName, newSnapshotsWriterActor(), opts...)
@@ -905,7 +906,7 @@ func (entity *EventSourcedActor) getStateAndReply(ctx *goakt.ReceiveContext) {
 }
 
 // processCommandAndReply handles an incoming command by generating events and
-// dispatching them to the [eventsWriterActor] asynchronously; state changes
+// dispatching them to the events writer asynchronously; state changes
 // are applied only after persistence is confirmed (see persistAsync,
 // handleDirectPersistResponse, replyDirect).
 //
@@ -1058,7 +1059,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 	ctx.Stash()
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, eventsTopic, timeout, precondition, scope)
+		return eventswriter.Ask(writer, envelopes, eventsTopic, timeout, precondition, scope)
 	})
 
 	entity.phase = phasePersisting
@@ -1067,7 +1068,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 // handleDirectPersistResponse processes the result PipeTo delivers after the
 // eventsWriter completes a single (non-batched) command's write, mirroring
 // handleBatchPersistResponse for the batched path.
-func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *persistEventsResponse) {
+func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
 	if entity.phase != phasePersisting {
 		return
 	}
@@ -1265,36 +1266,6 @@ func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error
 		return nil
 	}
 	return tenancy.VerifyUnchanged(entity.actorTenant, tc)
-}
-
-// askEventsWriter sends envelopes to the eventsWriter over a plain
-// goakt.Ask call — safe to run inside a plain goroutine via ctx.PipeTo,
-// unlike ctx.Ask, which blocks the calling dispatcher worker (see
-// persistAsync and flushBatch). Any transport-level failure is embedded in
-// the returned *persistEventsResponse's Err field rather than returned as a
-// Go error, so PipeTo always delivers a persistEventsResponse message that
-// Receive already knows how to route.
-func askEventsWriter(writer *goakt.PID, envelopes []*egopb.Event, topic string, timeout time.Duration, precondition persistence.WritePrecondition, scope persistence.Scope) (*persistEventsResponse, error) {
-	reply, err := goakt.Ask(context.Background(), writer, &persistEventsRequest{
-		envelopes:    envelopes,
-		topic:        topic,
-		precondition: precondition,
-		scope:        scope,
-	}, timeout)
-
-	if err != nil {
-		return &persistEventsResponse{Err: err}, nil
-	}
-
-	if reply == nil {
-		return &persistEventsResponse{Err: fmt.Errorf("event writer returned no response")}, nil
-	}
-
-	resp, ok := reply.(*persistEventsResponse)
-	if !ok {
-		return &persistEventsResponse{Err: fmt.Errorf("unexpected response type %T from event writer", reply)}, nil
-	}
-	return resp, nil
 }
 
 // applyConfirmedState updates the actor state after the events store has
@@ -1672,7 +1643,7 @@ func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 	scope := entity.scope
 
 	ctx.PipeTo(ctx.Self(), func() (any, error) {
-		return askEventsWriter(writer, envelopes, topic, timeout, precondition, scope)
+		return eventswriter.Ask(writer, envelopes, topic, timeout, precondition, scope)
 	})
 
 	entity.phase = phaseFlushing
@@ -1720,7 +1691,7 @@ func (entity *EventSourcedActor) handleBatchFlushTick(ctx *goakt.ReceiveContext)
 // stashed commands are unstashed so callers are notified, and the actor
 // shuts down after all replies have been sent so the supervisor can restart
 // it with clean state.
-func (entity *EventSourcedActor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *persistEventsResponse) {
+func (entity *EventSourcedActor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
 	if entity.phase != phaseFlushing {
 		return
 	}

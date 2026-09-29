@@ -161,6 +161,13 @@ func TestRequireExtension(t *testing.T) {
 // unchecked ext.(*T) assertion after the nil check, which panics on a type
 // mismatch and crashes the whole process the same way an unguarded
 // required-extension assertion did (see extension_lookup.go).
+func TestMissingRequiredExtensionsSentinel(t *testing.T) {
+	// Actors outside this package (internal/eventswriter) wrap the sentinel
+	// owned by internal/extensions; callers match it through the public name.
+	assert.Same(t, extensions.ErrMissingRequiredExtensions, ErrMissingRequiredExtensions)
+	assert.EqualError(t, ErrMissingRequiredExtensions, "actor system is missing required ego extensions")
+}
+
 func TestOptionalExtension(t *testing.T) {
 	t.Run("returns the zero value and no error when the extension is absent", func(t *testing.T) {
 		ctx := context.TODO()
