@@ -31,7 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 func TestNewEnvelope(t *testing.T) {

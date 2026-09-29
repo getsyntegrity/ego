@@ -28,8 +28,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/port/runtime"
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 func TestResolveSpawnOptionsDefaults(t *testing.T) {

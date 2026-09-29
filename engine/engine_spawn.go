@@ -26,7 +26,7 @@ import (
 	"context"
 	"time"
 
-	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 )
 
 // SpawnEventSourced spawns an event-sourced entity for b, a behavior written

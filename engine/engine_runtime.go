@@ -23,7 +23,7 @@
 package engine
 
 import (
-	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 )
 
 // Engine is the GoAkt implementation of the runtime SPI's application side

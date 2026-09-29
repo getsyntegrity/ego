@@ -27,7 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 )
 
 // TestRelocationDisabledByDefault pins the default that #154 found

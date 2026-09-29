@@ -25,7 +25,7 @@ package engine
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 // commandCarrierContextKey is this package's own unexported context.Context

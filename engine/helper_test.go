@@ -36,10 +36,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	samplepb "github.com/getsyntegrity/ego/v4/example/examplepb"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/tenancy"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/tenancy"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine

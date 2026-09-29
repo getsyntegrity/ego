@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Command ciselect decides which packages of the github.com/getsyntegrity/ego/v4
+// Command ciselect decides which packages of the github.com/getsyntegrity/ego
 // module a change must test and cover, and which Go modules of the
 // repository it must verify, and writes that decision out for the CI
 // workflows to consume. See internal/cmd/ciselect/selector for the
@@ -45,7 +45,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/getsyntegrity/ego/v4/internal/cmd/ciselect/selector"
+	"github.com/getsyntegrity/ego/internal/cmd/ciselect/selector"
 )
 
 // skipDirs are directories the satellite-module scan never descends into:

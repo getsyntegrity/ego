@@ -25,7 +25,7 @@ package offsetstore
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
+	"github.com/getsyntegrity/ego/egopb"
 )
 
 // OffsetStore defines the contract needed to persist offsets

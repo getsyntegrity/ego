@@ -25,7 +25,7 @@ package migration
 import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // Option configures the Migrator.

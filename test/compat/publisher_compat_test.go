@@ -30,8 +30,8 @@ import (
 	"github.com/getsyntegrity/ego/publisher/nats"
 	"github.com/getsyntegrity/ego/publisher/pulsar"
 	"github.com/getsyntegrity/ego/publisher/websocket"
-	"github.com/getsyntegrity/ego/v4/engine"
-	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // The publishers still satisfy the compatibility aliases in package engine (ADR

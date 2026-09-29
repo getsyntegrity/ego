@@ -117,11 +117,10 @@ func TestRun_MissingRequiredFlags(t *testing.T) {
 // repository (internal/cmd/releaseplan/../../.. is the repo root),
 // mirroring the feature document's "Real run on this repository" check:
 // a patch bump succeeds and orders the root before every publisher; a
-// major bump is refused once the root already carries a v4.x tag,
-// because its path ends in /v4 (an untagged publisher's first major,
-// v1.0.0, would be legal on its own). With no tag at all, a major bump
-// no longer refuses: it lands on v4.0.0, the root's first legal release
-// (#134) — covered separately below.
+// stray v4.0.0 tag (published under the old /v4 module path) is ignored
+// and reported, not a refusal. With no tag at all, a major bump lands on
+// v1.0.0, the root's first release under the suffix-less path — covered
+// separately below.
 func TestRun_RealRepository(t *testing.T) {
 	repoRoot := filepath.Join("..", "..", "..")
 	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
@@ -179,32 +178,61 @@ func TestRun_RealRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("major bump refuses an already-tagged root", func(t *testing.T) {
+	t.Run("the stray v4.0.0 tag is ignored, not a refusal", func(t *testing.T) {
+		// v4.0.0 was published under the old github.com/getsyntegrity/ego/v4
+		// module path. The root path is now suffix-less (v0/v1 only), so
+		// that tag is illegal for it: it is reported as ignored and the
+		// plan goes on from the v0.0.0 baseline.
 		dir := t.TempDir()
 		tagsFile := filepath.Join(dir, "tags.txt")
-		// v4.0.0 -bump major asks for v5.0.0, which the real root module's
-		// /v4 path suffix does not allow.
-		writeLines(t, tagsFile, []string{"v4.0.0"})
+		writeLines(t, tagsFile, []string{"v4.0.0", "publisher/kafka/v0.1.0", "publisher/nats/v0.1.0", "publisher/pulsar/v0.1.0", "publisher/websocket/v0.1.0"})
 		outDir := filepath.Join(dir, "out")
 
 		var stdout, stderr bytes.Buffer
-		err := run([]string{
+		if err := run([]string{
 			"-repo-root", repoRoot,
 			"-release", releaseFile,
 			"-tags", tagsFile,
-			"-bump", "major",
+			"-bump", "minor",
 			"-out-dir", outDir,
-		}, &stdout, &stderr)
-		if err == nil {
-			t.Fatal("expected a major bump to be refused for the already-tagged root")
+		}, &stdout, &stderr); err != nil {
+			t.Fatalf("run: %v (stderr: %s)", err, stderr.String())
+		}
+		planBytes, err := os.ReadFile(filepath.Join(outDir, "plan.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Modules []struct {
+				Dir         string   `json:"dir"`
+				CurrentTag  string   `json:"currentTag"`
+				NextTag     string   `json:"nextTag"`
+				IgnoredTags []string `json:"ignoredTags"`
+			} `json:"modules"`
+		}
+		if err := json.Unmarshal(planBytes, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range doc.Modules {
+			switch {
+			case m.Dir == ".":
+				if m.CurrentTag != "" || m.NextTag != "v0.1.0" || len(m.IgnoredTags) != 1 || m.IgnoredTags[0] != "v4.0.0" {
+					t.Errorf("root = %+v, want no current tag, next v0.1.0, ignored [v4.0.0]", m)
+				}
+			case strings.HasPrefix(m.Dir, "publisher/"):
+				if m.CurrentTag != m.Dir+"/v0.1.0" || m.NextTag != m.Dir+"/v0.2.0" {
+					t.Errorf("%s = %+v, want v0.1.0 -> v0.2.0", m.Dir, m)
+				}
+			}
+		}
+		if !strings.Contains(stdout.String(), "v4.0.0") || !strings.Contains(stdout.String(), "another major or module path") {
+			t.Errorf("summary must report the ignored tag:\n%s", stdout.String())
 		}
 	})
 
-	t.Run("major bump from no tags gives the root its first release, v4.0.0", func(t *testing.T) {
-		// The fix for #134: with no tag at all, the root's /v4 path suffix
-		// means there is no earlier v4 release to bump from, so every
-		// valid bump kind — including major — lands on v4.0.0 itself,
-		// never a refusal and never v5.0.0.
+	t.Run("major bump from no tags gives the root its first release, v1.0.0", func(t *testing.T) {
+		// The root path has no /vN suffix, so it starts from v0.0.0 and a
+		// major bump is the way to its first stable release, v1.0.0.
 		dir := t.TempDir()
 		tagsFile := filepath.Join(dir, "tags.txt")
 		writeLines(t, tagsFile, []string{})
@@ -235,8 +263,8 @@ func TestRun_RealRepository(t *testing.T) {
 			t.Fatalf("decoding plan.json: %v", err)
 		}
 		for _, m := range doc.Modules {
-			if m.Dir == "." && m.NextTag != "v4.0.0" {
-				t.Fatalf("root nextTag = %q, want v4.0.0", m.NextTag)
+			if m.Dir == "." && m.NextTag != "v1.0.0" {
+				t.Fatalf("root nextTag = %q, want v1.0.0", m.NextTag)
 			}
 		}
 	})

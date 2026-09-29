@@ -32,9 +32,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/persistence"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // newAccountEvent builds a single-event batch for persistenceID at

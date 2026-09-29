@@ -57,8 +57,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // EventsTarget describes an events publisher under test.

@@ -28,7 +28,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/internal/cmd/archcheck/rules"
+	"github.com/getsyntegrity/ego/internal/cmd/archcheck/rules"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -44,7 +44,7 @@ func writeFile(t *testing.T, path, content string) {
 func TestParseGoModModulePath(t *testing.T) {
 	dir := t.TempDir()
 	goMod := filepath.Join(dir, "go.mod")
-	writeFile(t, goMod, "module github.com/getsyntegrity/ego/publisher/kafka\n\ngo 1.21\n\nrequire github.com/getsyntegrity/ego/v4 v4.0.0\n")
+	writeFile(t, goMod, "module github.com/getsyntegrity/ego/publisher/kafka\n\ngo 1.21\n\nrequire github.com/getsyntegrity/ego v4.0.0\n")
 
 	got, err := parseGoModModulePath(goMod)
 	if err != nil {
@@ -60,19 +60,19 @@ func TestParseGoModModulePath(t *testing.T) {
 // this repository does not depend on golang.org/x/mod and hand-parses
 // go.mod files itself.
 func TestParseGoModModulePath_Forms(t *testing.T) {
-	const want = "github.com/getsyntegrity/ego/v4"
+	const want = "github.com/getsyntegrity/ego"
 	cases := []struct {
 		name    string
 		content string
 	}{
-		{"plain", "module github.com/getsyntegrity/ego/v4\n\ngo 1.21\n"},
-		{"quoted", "module \"github.com/getsyntegrity/ego/v4\"\n\ngo 1.21\n"},
-		{"trailing comment", "module github.com/getsyntegrity/ego/v4 // root module\n\ngo 1.21\n"},
-		{"quoted with trailing comment", "module \"github.com/getsyntegrity/ego/v4\" // root module\n\ngo 1.21\n"},
-		{"block form", "module (\n\tgithub.com/getsyntegrity/ego/v4\n)\n\ngo 1.21\n"},
-		{"block form quoted", "module (\n\t\"github.com/getsyntegrity/ego/v4\"\n)\n\ngo 1.21\n"},
-		{"block form with comment on the path line", "module (\n\tgithub.com/getsyntegrity/ego/v4 // root module\n)\n\ngo 1.21\n"},
-		{"leading comment line", "// this is the root module\nmodule github.com/getsyntegrity/ego/v4\n\ngo 1.21\n"},
+		{"plain", "module github.com/getsyntegrity/ego\n\ngo 1.21\n"},
+		{"quoted", "module \"github.com/getsyntegrity/ego\"\n\ngo 1.21\n"},
+		{"trailing comment", "module github.com/getsyntegrity/ego // root module\n\ngo 1.21\n"},
+		{"quoted with trailing comment", "module \"github.com/getsyntegrity/ego\" // root module\n\ngo 1.21\n"},
+		{"block form", "module (\n\tgithub.com/getsyntegrity/ego\n)\n\ngo 1.21\n"},
+		{"block form quoted", "module (\n\t\"github.com/getsyntegrity/ego\"\n)\n\ngo 1.21\n"},
+		{"block form with comment on the path line", "module (\n\tgithub.com/getsyntegrity/ego // root module\n)\n\ngo 1.21\n"},
+		{"leading comment line", "// this is the root module\nmodule github.com/getsyntegrity/ego\n\ngo 1.21\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -114,7 +114,7 @@ func fixtureNestedModule(t *testing.T) string {
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/v4"
+	"github.com/getsyntegrity/ego"
 )
 
 var _ = context.Background
@@ -135,7 +135,7 @@ var _ = fmt.Sprintf
 	// A vendor directory must never be walked into.
 	writeFile(t, filepath.Join(dir, "vendor", "bad", "bad.go"), `package bad
 
-import "github.com/getsyntegrity/ego/v4/internal/queue"
+import "github.com/getsyntegrity/ego/internal/queue"
 `)
 	return dir
 }
@@ -160,8 +160,8 @@ func TestLoadNestedModule(t *testing.T) {
 	if root.Kind != rules.NestedModule {
 		t.Errorf("root Kind = %v, want NestedModule", root.Kind)
 	}
-	if !containsImport(root.Imports, "github.com/getsyntegrity/ego/v4") {
-		t.Errorf("root Imports = %v, want to contain github.com/getsyntegrity/ego/v4", root.Imports)
+	if !containsImport(root.Imports, "github.com/getsyntegrity/ego") {
+		t.Errorf("root Imports = %v, want to contain github.com/getsyntegrity/ego", root.Imports)
 	}
 	if containsImport(root.Imports, "testing") {
 		t.Errorf("root Imports = %v, must not contain the test-only import testing", root.Imports)

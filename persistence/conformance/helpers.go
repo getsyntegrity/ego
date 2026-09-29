@@ -28,10 +28,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/tenancy"
-	testpb "github.com/getsyntegrity/ego/v4/test/data/testpb"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/tenancy"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // mustTenantScope builds a valid tenant persistence.Scope for id.

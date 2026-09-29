@@ -27,7 +27,7 @@ import (
 	"testing"
 )
 
-const root = "github.com/getsyntegrity/ego/v4"
+const root = "github.com/getsyntegrity/ego"
 
 // engine is the runtime engine package the runtime-neutral rules forbid
 // importing; the module root itself holds no Go files.

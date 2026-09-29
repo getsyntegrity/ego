@@ -34,7 +34,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/internal/cmd/archcheck/rules"
+	"github.com/getsyntegrity/ego/internal/cmd/archcheck/rules"
 )
 
 func requireGo(t *testing.T) {

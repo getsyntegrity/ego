@@ -51,7 +51,7 @@ func hermeticGoEnv() []string {
 // rootModule and compositionRoot are the root module's path and the
 // composition root under it.
 const (
-	rootModule      = "github.com/getsyntegrity/ego/v4"
+	rootModule      = "github.com/getsyntegrity/ego"
 	compositionRoot = rootModule + "/compose"
 	// enginePackage is the runtime engine package; the module root itself
 	// holds no Go files.
@@ -108,10 +108,10 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 // whole path segment.
 func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
 	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/v4/compose",
-		"github.com/getsyntegrity/ego/v4/compose/goakt",
-		"github.com/getsyntegrity/ego/v4/compose/internal/lifecycle",
-		"github.com/getsyntegrity/ego/v4/engine",
+		"github.com/getsyntegrity/ego/compose",
+		"github.com/getsyntegrity/ego/compose/goakt",
+		"github.com/getsyntegrity/ego/compose/internal/lifecycle",
+		"github.com/getsyntegrity/ego/engine",
 		"github.com/tochemey/goakt/v4/actor",
 	} {
 		if closureViolation(dep) == "" {
@@ -119,9 +119,9 @@ func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
 		}
 	}
 	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/v4/composer",
-		"github.com/getsyntegrity/ego/v4/port/publishing",
-		"github.com/getsyntegrity/ego/v4/egopb",
+		"github.com/getsyntegrity/ego/composer",
+		"github.com/getsyntegrity/ego/port/publishing",
+		"github.com/getsyntegrity/ego/egopb",
 	} {
 		if msg := closureViolation(dep); msg != "" {
 			t.Errorf("closureViolation(%q) = %q, want it allowed", dep, msg)

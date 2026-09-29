@@ -40,8 +40,8 @@ import (
 // allowlist, rather than a denylist of GoAkt or OpenTelemetry, also catches a
 // dependency nobody thought to forbid.
 var allowedDependencies = []string{
-	"github.com/getsyntegrity/ego/v4/command",
-	"github.com/getsyntegrity/ego/v4/tenancy",
+	"github.com/getsyntegrity/ego/command",
+	"github.com/getsyntegrity/ego/tenancy",
 	"google.golang.org/protobuf/",
 }
 

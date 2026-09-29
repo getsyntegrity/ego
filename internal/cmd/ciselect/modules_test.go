@@ -33,7 +33,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getsyntegrity/ego/v4/internal/cmd/ciselect/selector"
+	"github.com/getsyntegrity/ego/internal/cmd/ciselect/selector"
 )
 
 // writeFile creates path (and its parent directories) with the given

@@ -25,7 +25,7 @@
 // causation, a tenant slot composing tenancy/, a principal slot, governed
 // custom metadata, temporal fields and a six-kind outcome taxonomy. This
 // package imports nothing beyond the standard library,
-// google.golang.org/protobuf and ego/v4/tenancy — no GoAkt, no engine, no
+// google.golang.org/protobuf and ego/tenancy — no GoAkt, no engine, no
 // transport or auth library. It is a value contract only: Engine.SendCommand,
 // its dispatch path and SagaActor are untouched by this package.
 package command

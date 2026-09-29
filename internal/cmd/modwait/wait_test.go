@@ -75,7 +75,7 @@ func newHarness() (*fakeClock, *fakeSleeper) {
 }
 
 func testConfig(timeout, interval time.Duration) config {
-	return config{module: "github.com/getsyntegrity/ego/v4", version: "v4.0.0", timeout: timeout, interval: interval}
+	return config{module: "github.com/getsyntegrity/ego", version: "v4.0.0", timeout: timeout, interval: interval}
 }
 
 func TestWait_ImmediateSuccess(t *testing.T) {
@@ -146,7 +146,7 @@ func TestWait_PermanentFailsImmediately(t *testing.T) {
 				t.Errorf("calls=%d sleeps=%v, want exactly one probe and no sleep", p.calls, slp.sleeps)
 			}
 			line := errorLine(t, out.String())
-			for _, want := range []string{"github.com/getsyntegrity/ego/v4@v4.0.0", "permanent"} {
+			for _, want := range []string{"github.com/getsyntegrity/ego@v4.0.0", "permanent"} {
 				if !strings.Contains(line, want) {
 					t.Errorf("::error:: line %q lacks %q", line, want)
 				}
@@ -169,7 +169,7 @@ func TestWait_TimeoutNamesResumeSteps(t *testing.T) {
 	}
 	line := errorLine(t, out.String())
 	for _, want := range []string{
-		"github.com/getsyntegrity/ego/v4@v4.0.0",
+		"github.com/getsyntegrity/ego@v4.0.0",
 		"2m0s",
 		"transient",
 		"HTTP 404",
@@ -251,7 +251,7 @@ func TestWait_LogsHeaderWithLimits(t *testing.T) {
 	p := &scriptedProber{results: []ProbeResult{okResult}}
 	var out bytes.Buffer
 	_ = waitForModule(context.Background(), p, testConfig(20*time.Minute, 30*time.Second), clk, slp, &out)
-	for _, want := range []string{"github.com/getsyntegrity/ego/v4@v4.0.0", "20m0s", "30s", "sum.golang.org"} {
+	for _, want := range []string{"github.com/getsyntegrity/ego@v4.0.0", "20m0s", "30s", "sum.golang.org"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("log %q lacks %q", out.String(), want)
 		}

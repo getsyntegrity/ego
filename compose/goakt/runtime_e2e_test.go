@@ -27,11 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/compose"
-	egoakt "github.com/getsyntegrity/ego/v4/compose/goakt"
-	"github.com/getsyntegrity/ego/v4/engine"
-	"github.com/getsyntegrity/ego/v4/internal/runtimeconsumer"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/compose"
+	egoakt "github.com/getsyntegrity/ego/compose/goakt"
+	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/ego/internal/runtimeconsumer"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // TestRuntime_ConsumerDrivesTheAppEndToEnd is #147's end-to-end criterion

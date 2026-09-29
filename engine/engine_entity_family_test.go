@@ -32,8 +32,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/testkit"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 // familyTestEngine builds a started engine with an events store and a state

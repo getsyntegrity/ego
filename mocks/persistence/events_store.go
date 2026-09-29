@@ -5,8 +5,8 @@ package persistence
 import (
 	context "context"
 
-	egopb "github.com/getsyntegrity/ego/v4/egopb"
-	persistence "github.com/getsyntegrity/ego/v4/persistence"
+	egopb "github.com/getsyntegrity/ego/egopb"
+	persistence "github.com/getsyntegrity/ego/persistence"
 	mock "github.com/stretchr/testify/mock"
 )
 

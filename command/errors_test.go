@@ -29,7 +29,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 func TestErrorClassification(t *testing.T) {

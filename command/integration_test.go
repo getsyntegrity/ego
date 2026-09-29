@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 // TestIntegrationMetadataEnvelopeResultCarrier exercises the full chain a

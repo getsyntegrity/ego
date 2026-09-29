@@ -124,7 +124,7 @@ func ApplicationLayer(rootModulePath string) Layer {
 // publisher/ keeps the root's major-version-free repository identity in its
 // own module path (e.g. "github.com/getsyntegrity/ego/publisher/kafka"): it
 // never shares the root module's own "/vN" path
-// ("github.com/getsyntegrity/ego/v4"), so a rule that matches publisher
+// ("github.com/getsyntegrity/ego"), so a rule that matches publisher
 // packages by prefix must match against the repository path, not the root
 // module path.
 func repoPathFromModule(rootModulePath string) string {

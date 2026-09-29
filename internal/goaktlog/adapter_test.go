@@ -36,7 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/v4/internal/logging"
+	"github.com/getsyntegrity/ego/internal/logging"
 )
 
 // capturedRecord is one record that reached the kit-logger sink.

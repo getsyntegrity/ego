@@ -326,7 +326,7 @@ func TestInstrumentationStaysRuntimeNeutral(t *testing.T) {
 	for _, dep := range deps {
 		assert.Falsef(t, strings.HasPrefix(dep, "github.com/tochemey/goakt"),
 			"internal/instrumentation must not depend on GoAkt; found %s", dep)
-		assert.Falsef(t, strings.HasSuffix(dep, "/v4/engine"),
+		assert.Falsef(t, strings.HasSuffix(dep, "/ego/engine"),
 			"internal/instrumentation must not depend on the engine package; found %s", dep)
 		assert.Falsef(t, strings.HasSuffix(dep, "/internal/extensions"),
 			"internal/instrumentation must not depend on the GoAkt adapter's internals; found %s", dep)

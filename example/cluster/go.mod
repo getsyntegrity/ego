@@ -3,10 +3,10 @@ module github.com/getsyntegrity/ego/example/cluster
 go 1.26.0
 
 // Use the local ego module so the example always builds against the current source.
-replace github.com/getsyntegrity/ego/v4 => ../../
+replace github.com/getsyntegrity/ego => ../../
 
 require (
-	github.com/getsyntegrity/ego/v4 v4.4.3
+	github.com/getsyntegrity/ego v1.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/stretchr/testify v1.12.1

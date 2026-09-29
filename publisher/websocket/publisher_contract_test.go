@@ -23,7 +23,7 @@
 package websocket
 
 import (
-	"github.com/getsyntegrity/ego/v4/port/publishing"
+	"github.com/getsyntegrity/ego/port/publishing"
 )
 
 // The publishers implement the contracts from port/publishing directly, with

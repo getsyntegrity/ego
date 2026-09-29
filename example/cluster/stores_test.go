@@ -37,8 +37,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/v4/egopb"
-	"github.com/getsyntegrity/ego/v4/persistence"
+	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // unvalidatedStore returns a *PostgresEventStore with a nil pool, so any test

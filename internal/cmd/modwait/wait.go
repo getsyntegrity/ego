@@ -94,7 +94,7 @@ func (e *reportedError) Error() string { return e.msg }
 func parseConfig(args []string, stderr io.Writer) (config, error) {
 	fs := flag.NewFlagSet("modwait", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	module := fs.String("module", "", "module path, e.g. github.com/getsyntegrity/ego/v4")
+	module := fs.String("module", "", "module path, e.g. github.com/getsyntegrity/ego")
 	version := fs.String("version", "", "module version, e.g. v4.0.0")
 	timeout := fs.Duration("timeout", 20*time.Minute, "maximum total time to wait; 0 makes a single attempt and never waits")
 	interval := fs.Duration("interval", 30*time.Second, "time between attempts (each sleep is clamped to the time left)")

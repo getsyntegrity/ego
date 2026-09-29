@@ -94,8 +94,8 @@ func TestProbeEnv_DoesNotInventGOSUMDBWhenUnset(t *testing.T) {
 }
 
 func TestProbeCommand_ArgsAndDir(t *testing.T) {
-	cmd := probeCommand(context.Background(), "go", "github.com/getsyntegrity/ego/v4", "v4.0.0", "/tmp/work", "/tmp/mod", []string{"PATH=/usr/bin"})
-	want := []string{"go", "mod", "download", "-json", "github.com/getsyntegrity/ego/v4@v4.0.0"}
+	cmd := probeCommand(context.Background(), "go", "github.com/getsyntegrity/ego", "v4.0.0", "/tmp/work", "/tmp/mod", []string{"PATH=/usr/bin"})
+	want := []string{"go", "mod", "download", "-json", "github.com/getsyntegrity/ego@v4.0.0"}
 	if strings.Join(cmd.Args, " ") != strings.Join(want, " ") {
 		t.Errorf("Args = %v, want %v", cmd.Args, want)
 	}
@@ -200,7 +200,7 @@ func writeFakeGo(t *testing.T, body string) (goBin, record string) {
 func TestExecProber_RunsInFreshDirsAndCleansUp(t *testing.T) {
 	goBin, record := writeFakeGo(t, `echo '{"Path":"m","Version":"v1.0.0"}'`)
 	p := &execProber{goBin: goBin, baseEnv: []string{"PATH=" + os.Getenv("PATH"), "GOSUMDB=sum.golang.org", "GONOSUMDB=evil", "GOFLAGS=-insecure"}}
-	res := p.Probe(context.Background(), "github.com/getsyntegrity/ego/v4", "v4.0.0")
+	res := p.Probe(context.Background(), "github.com/getsyntegrity/ego", "v4.0.0")
 	if !res.OK {
 		t.Fatalf("Probe not OK: %q", res.Output)
 	}
@@ -210,7 +210,7 @@ func TestExecProber_RunsInFreshDirsAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := string(data)
-	for _, want := range []string{"ARGS=mod download -json github.com/getsyntegrity/ego/v4@v4.0.0", "GOSUMDB=sum.golang.org", "GOWORK=off"} {
+	for _, want := range []string{"ARGS=mod download -json github.com/getsyntegrity/ego@v4.0.0", "GOSUMDB=sum.golang.org", "GOWORK=off"} {
 		if !strings.Contains(rec, want) {
 			t.Errorf("record lacks %q:\n%s", want, rec)
 		}
@@ -263,7 +263,7 @@ func TestValidateTarget(t *testing.T) {
 		ok              bool
 	}{
 		{"github.com/getsyntegrity/ego", "v1.0.0", true},
-		{"github.com/getsyntegrity/ego/v4", "v4.0.0", true},
+		{"github.com/getsyntegrity/ego", "v4.0.0", true},
 		{"github.com/getsyntegrity/ego/publisher/kafka", "v0.2.0-rc.1", true},
 		{"github.com/x/y", "v0.0.0-20260102150405-abcdef123456", true},
 		{"-x", "v1.0.0", false},

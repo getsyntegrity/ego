@@ -36,12 +36,12 @@ import (
 // GoAkt, transport, auth library or other first-party runtime package.
 var commandArchitectureAllowedModules = []string{
 	"google.golang.org/protobuf",
-	"github.com/getsyntegrity/ego/v4/tenancy",
+	"github.com/getsyntegrity/ego/tenancy",
 }
 
 // TestCommandArchitecture enforces design.md's import allowlist for
 // command/ (EGO-WRITE-003): stdlib, google.golang.org/protobuf and
-// ego/v4/tenancy only — no GoAkt, no engine, no transport or auth
+// ego/tenancy only — no GoAkt, no engine, no transport or auth
 // library. It mirrors TestTenancyArchitecture's mechanism (a real `go
 // list -deps ./command/...` subprocess, not a source-text scan) so it
 // also catches transitive dependencies.
@@ -87,7 +87,7 @@ func TestCommandArchitecture(t *testing.T) {
 		}
 		require.Truef(t, allowed,
 			"command/ must not depend on %q: only the standard library, google.golang.org/protobuf "+
-				"and ego/v4/tenancy are allowed (design.md's import allowlist, EGO-WRITE-003) — command "+
+				"and ego/tenancy are allowed (design.md's import allowlist, EGO-WRITE-003) — command "+
 				"is a leaf package with no GoAkt, transport, auth, or other first-party runtime dependency", dep)
 	}
 	require.NotZero(t, checked, "no external dependency was checked against the allowlist, so this test proves nothing")

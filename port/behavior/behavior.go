@@ -42,7 +42,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/v4/command"
+	"github.com/getsyntegrity/ego/command"
 )
 
 // Command is a command sent to an entity. It is an alias for [proto.Message],

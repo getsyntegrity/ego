@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tochemey/goakt/v4/extension"
 
-	"github.com/getsyntegrity/ego/v4/command"
-	behaviorport "github.com/getsyntegrity/ego/v4/port/behavior"
+	"github.com/getsyntegrity/ego/command"
+	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 )
 
 // The old behavior names in package engine are re-expressed on top of the

@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/apache/pulsar-client-go v0.21.0
-	github.com/getsyntegrity/ego/v4 v4.0.0
+	github.com/getsyntegrity/ego v1.0.0
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
@@ -109,4 +109,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego/v4 => ../../
+replace github.com/getsyntegrity/ego => ../../

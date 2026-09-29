@@ -67,13 +67,13 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/v4/compose"
-	"github.com/getsyntegrity/ego/v4/compose/internal/adapters"
-	"github.com/getsyntegrity/ego/v4/compose/internal/lifecycle"
-	"github.com/getsyntegrity/ego/v4/engine"
-	"github.com/getsyntegrity/ego/v4/eventstream"
-	"github.com/getsyntegrity/ego/v4/port/adapter"
-	runtimeport "github.com/getsyntegrity/ego/v4/port/runtime"
+	"github.com/getsyntegrity/ego/compose"
+	"github.com/getsyntegrity/ego/compose/internal/adapters"
+	"github.com/getsyntegrity/ego/compose/internal/lifecycle"
+	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/port/adapter"
+	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 )
 
 // The names of App.Start's five steps (design §D6). A failed Start returns

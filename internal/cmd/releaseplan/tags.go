@@ -120,6 +120,42 @@ func latestTag(dir string, tags []string) (v semver, tag string, found bool) {
 	return v, tag, found
 }
 
+// legalMajor reports whether major may appear in a version of the module
+// at modPath under Go's rules: exactly N for a "/vN" suffix, otherwise 0 or
+// 1.
+func legalMajor(modPath string, major int) bool {
+	return validateMajor(modPath, major) == nil
+}
+
+// latestLegalTag is latestTag restricted to tags whose major is legal for
+// modPath. The other tags under the same prefix are returned in ignored, in
+// input order: they belong to another major or another module path (the ego
+// root's v4.0.0 was published under the old .../ego/v4 path, so it is
+// illegal for the suffix-less path) and must not decide the next version,
+// nor refuse the whole plan. Tags that are not X.Y.Z under the prefix are
+// neither used nor reported.
+func latestLegalTag(dir, modPath string, tags []string) (v semver, tag string, found bool, ignored []string) {
+	prefix := tagPrefix(dir)
+	var legal []string
+	for _, t := range tags {
+		rest, ok := strings.CutPrefix(t, prefix)
+		if !ok {
+			continue
+		}
+		parsed, ok := parseSemver(rest)
+		if !ok {
+			continue
+		}
+		if !legalMajor(modPath, parsed.major) {
+			ignored = append(ignored, t)
+			continue
+		}
+		legal = append(legal, t)
+	}
+	v, tag, found = latestTag(dir, legal)
+	return v, tag, found, ignored
+}
+
 // noTagBaseline is the synthetic "current version" nextTag bumps from
 // when no existing tag matches a module's prefix. A path with a "/vN"
 // suffix starts at vN.0.0, the only major D2 (a) allows for it — and,
@@ -191,14 +227,22 @@ func validateMajor(modPath string, major int) error {
 // vN.1.0 — a version nobody chose — on every dry run of an untagged
 // module, which is the actual defect this function fixes.
 func nextTag(dir, modPath string, tags []string, bumpKind string) (currentTag string, next semver, err error) {
-	base, curTag, found := latestTag(dir, tags)
+	currentTag, next, _, err = nextTagDetailed(dir, modPath, tags, bumpKind)
+	return currentTag, next, err
+}
+
+// nextTagDetailed is nextTag plus the tags it ignored because their major
+// is not legal for modPath (see latestLegalTag). Ignored tags never cause a
+// refusal; the caller reports them.
+func nextTagDetailed(dir, modPath string, tags []string, bumpKind string) (currentTag string, next semver, ignored []string, err error) {
+	base, curTag, found, ignored := latestLegalTag(dir, modPath, tags)
 	if !found {
 		base = noTagBaseline(modPath)
 	}
 
 	next, err = bumpVersion(base, bumpKind)
 	if err != nil {
-		return "", semver{}, fmt.Errorf("module %s (%s): %w", dir, modPath, err)
+		return "", semver{}, nil, fmt.Errorf("module %s (%s): %w", dir, modPath, err)
 	}
 
 	if !found {
@@ -208,11 +252,11 @@ func nextTag(dir, modPath string, tags []string, bumpKind string) (currentTag st
 	}
 
 	if err := validateMajor(modPath, next.major); err != nil {
-		return "", semver{}, fmt.Errorf("module %s (%s): refusing tag %s%s: %w", dir, modPath, tagPrefix(dir), next.String(), err)
+		return "", semver{}, nil, fmt.Errorf("module %s (%s): refusing tag %s%s: %w", dir, modPath, tagPrefix(dir), next.String(), err)
 	}
 
 	if found {
 		currentTag = curTag
 	}
-	return currentTag, next, nil
+	return currentTag, next, ignored, nil
 }

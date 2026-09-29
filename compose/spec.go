@@ -49,14 +49,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/getsyntegrity/ego/v4/encryption"
-	"github.com/getsyntegrity/ego/v4/eventadapter"
-	"github.com/getsyntegrity/ego/v4/offsetstore"
-	"github.com/getsyntegrity/ego/v4/persistence"
-	"github.com/getsyntegrity/ego/v4/port/adapter"
-	"github.com/getsyntegrity/ego/v4/port/publishing"
-	"github.com/getsyntegrity/ego/v4/projection"
-	"github.com/getsyntegrity/ego/v4/tenancy"
+	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/ego/eventadapter"
+	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/ego/tenancy"
 )
 
 // Family is a bit set of the entity families a deployment runs. Which

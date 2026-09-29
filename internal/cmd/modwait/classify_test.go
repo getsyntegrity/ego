@@ -31,8 +31,8 @@ import (
 // attempt 1 (job 109106620419): sum.golang.org answered 404 for a tag the
 // proxy already served. The text carries "invalid version: unknown
 // revision", which must NOT make it permanent: the HTTP status wins.
-const realSumdb404 = `github.com/getsyntegrity/ego/v4@v4.0.0: verifying module: github.com/getsyntegrity/ego/v4@v4.0.0: reading https://sum.golang.org/lookup/github.com/getsyntegrity/ego/v4@v4.0.0: 404 Not Found
-	server response: not found: github.com/getsyntegrity/ego/v4@v4.0.0: invalid version: unknown revision v4.0.0`
+const realSumdb404 = `github.com/getsyntegrity/ego@v4.0.0: verifying module: github.com/getsyntegrity/ego@v4.0.0: reading https://sum.golang.org/lookup/github.com/getsyntegrity/ego@v4.0.0: 404 Not Found
+	server response: not found: github.com/getsyntegrity/ego@v4.0.0: invalid version: unknown revision v4.0.0`
 
 func TestClassify(t *testing.T) {
 	tests := []struct {
@@ -87,7 +87,7 @@ func TestClassify(t *testing.T) {
 
 func TestClassify_LastLine(t *testing.T) {
 	got := Classify(realSumdb404)
-	want := "server response: not found: github.com/getsyntegrity/ego/v4@v4.0.0: invalid version: unknown revision v4.0.0"
+	want := "server response: not found: github.com/getsyntegrity/ego@v4.0.0: invalid version: unknown revision v4.0.0"
 	if got.LastLine != want {
 		t.Errorf("LastLine = %q, want %q", got.LastLine, want)
 	}
