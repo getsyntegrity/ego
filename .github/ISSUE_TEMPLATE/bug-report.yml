@@ -1,0 +1,96 @@
+name: Bug
+description: Something in Ego does not work as it should
+labels: ["kind/bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. The more concrete you are, the faster it gets fixed.
+        **If it is a security problem, do not report it here**: use the private channel (see the options when creating the issue).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the exact error or the observed behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest possible code that shows the problem. Ideally, a failing test.
+      render: go
+      placeholder: |
+        func TestRepro(t *testing.T) {
+            got, err := ego.Something(...)
+            // ...
+        }
+    validations:
+      required: true
+
+  - type: input
+    id: ego-version
+    attributes:
+      label: Ego version
+      description: "Output of `go list -m github.com/getsyntegrity/ego` in the service that uses it"
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: "Output of `go version`"
+      placeholder: go1.27.1 linux/amd64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is it a regression?
+      options:
+        - "No / I don't know"
+        - "Yes: it worked in an earlier version (state it below)"
+    validations:
+      required: true
+
+  - type: input
+    id: last-good
+    attributes:
+      label: Last version that worked
+      placeholder: v0.0.9
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - "Blocking: affects production with no workaround"
+        - "High: there is a workaround but it is costly"
+        - "Low: annoying, but it can be lived with"
+    validations:
+      required: true
+
+  - type: input
+    id: consumer
+    attributes:
+      label: Affected service
+      description: Which service consumes Ego and is affected
+      placeholder: my-service
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Anything else we should know?
+      description: Logs, stack traces, context. Long logs go inside `<details>`.

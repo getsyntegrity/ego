@@ -28,7 +28,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -135,7 +134,7 @@ func tenancyArchitectureGoList(t *testing.T, goBin, dir string, args ...string) 
 }
 
 // tenancyArchitectureGoBinary locates the Go toolchain binary. It prefers
-// PATH, then falls back to GOROOT/bin/go, so the test still runs in an
+// PATH, then falls back to $GOROOT/bin/go, so the test still runs in an
 // environment where `go` is not on PATH but a test binary was still built
 // with a known toolchain.
 func tenancyArchitectureGoBinary() (string, error) {
@@ -143,12 +142,12 @@ func tenancyArchitectureGoBinary() (string, error) {
 		return p, nil
 	}
 
-	if root := runtime.GOROOT(); root != "" {
+	if root := os.Getenv("GOROOT"); root != "" {
 		candidate := filepath.Join(root, "bin", "go")
 		if _, statErr := os.Stat(candidate); statErr == nil {
 			return candidate, nil
 		}
 	}
 
-	return "", fmt.Errorf("go toolchain not found on PATH or GOROOT (GOROOT=%q)", runtime.GOROOT())
+	return "", fmt.Errorf("go toolchain not found on PATH or GOROOT (GOROOT=%q)", os.Getenv("GOROOT"))
 }

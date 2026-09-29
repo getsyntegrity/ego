@@ -36,7 +36,7 @@
 // (ego-arch-004 design §D6).
 //
 // This package imports contract packages only. It must not import package
-// ego, internal/extensions or the GoAkt runtime; internal/cmd/archcheck's
+// ego, internal/extensions or the GoAkt runtime; the former architecture checker's
 // composition-no-runtime rule enforces that, and its composition-leaf rule
 // keeps every other production package in the root module, except main
 // packages and examples, from importing compose (design §D8).

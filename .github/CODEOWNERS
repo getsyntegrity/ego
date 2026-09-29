@@ -1,2 +1,3 @@
-# Default owner for everything in this repository.
-* @pablogore
+# What GitHub enforces to request reviews automatically.
+# It must match the approvers in /OWNERS (verified by the pr-meta check).
+*   @pablogore

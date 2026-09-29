@@ -85,11 +85,13 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 		require.Equal(t, reflect.TypeOf(p.runtime), reflect.TypeOf(p.ego))
 	}
 
-	var info *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted}
+	var _ *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted} //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+	info := &SagaInfo{ID: "s", Status: SagaCompleted}
 	require.Equal(t, runtimeport.SagaCompleted, info.Status)
 
-	var opt runtimeport.SpawnOption = WithPlacement(Local)
-	var egoOpt SpawnOption = opt
+	opt := WithPlacement(Local)
+	var _ runtimeport.SpawnOption = opt //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+	var egoOpt SpawnOption = opt        //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
 	require.Equal(t, runtimeport.Local, runtimeport.ResolveSpawnOptions(egoOpt).Placement())
 
 	require.Equal(t, runtimeport.RoundRobin, RoundRobin)

@@ -69,12 +69,15 @@ func newAnyEvent(t *testing.T, persistenceID string, seqNr uint64, msg proto.Mes
 
 // --- Phase 1: eventContext (SG2) --------------------------------------------
 
+// sagaTenantMarkerKey is the context key used to tag the parent context.
+type sagaTenantMarkerKey struct{}
+
 // TestSagaActorEventContext covers tasks.md 1.1-1.3.
 func TestSagaActorEventContext(t *testing.T) {
 	t.Run("legacy mode passthrough returns (parent, nil)", func(t *testing.T) {
 		// 1.3
 		s := &SagaActor{tenantAware: false}
-		parent := context.WithValue(context.Background(), struct{}{}, "marker")
+		parent := context.WithValue(context.Background(), sagaTenantMarkerKey{}, "marker")
 		event := newAnyEvent(t, "p1", 1, &testpb.AccountCreated{AccountId: "p1"}, nil)
 
 		got, err := s.eventContext(parent, event)

@@ -1,0 +1,57 @@
+# Heavy security scanning, kept off the PR path. It warns, it does not block.
+name: security
+
+on:
+  push:
+    branches: [develop]
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          queries: security-and-quality
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
+
+  govulncheck-strict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - run: |
+          set -o pipefail
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./... | tee vuln_out.txt
+          if grep -q "=== Informational ===" vuln_out.txt; then exit 1; fi
+
+  notify:
+    if: failure() && github.event_name == 'schedule'
+    needs: [codeql, govulncheck-strict]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/notify
+        with:
+          status: failure
+          title: ${{ github.event.repository.name }} security nightly
+          details: CodeQL or govulncheck reported findings.
+          slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel: ${{ vars.SLACK_CHANNEL }}

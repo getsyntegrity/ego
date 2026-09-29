@@ -1,93 +1,14 @@
+# golangci-lint v2. The binary version is pinned in ci.yml (lint job).
 version: "2"
-run:
-  concurrency: 4
-  issues-exit-code: 2
-  tests: false
-  modules-download-mode: vendor
-  relative-path-mode: gomod
-  timeout: 10m
-output:
-  path-prefix: ""
+
 linters:
-  default: none
+  default: standard     # errcheck, govet, ineffassign, staticcheck, unused
   enable:
-    - gocyclo
-    - gosec
-    - misspell
-    - revive
-    - staticcheck
-    - whitespace
-    - govet
-    - goheader
-  settings:
-    goheader:
-      template: |-
-        MIT License
+    - misspell          # typos in comments and strings (visible in the public docs)
+    - errorlint         # errors.Is/As instead of == and type assertions on wrapped errors
+    - unconvert         # unnecessary type conversions
 
-        Copyright (c) 2022-2026 Arsene Tochemey Gandote
-
-        Permission is hereby granted, free of charge, to any person obtaining a copy
-        of this software and associated documentation files (the "Software"), to deal
-        in the Software without restriction, including without limitation the rights
-        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-        copies of the Software, and to permit persons to whom the Software is
-        furnished to do so, subject to the following conditions:
-
-        The above copyright notice and this permission notice shall be included in all
-        copies or substantial portions of the Software.
-
-        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-        SOFTWARE.
-    gosec:
-      excludes:
-        - G115
-        - G602
-        - G702
-        - G703
-        - G704
-        - G117
-        - G118
-    misspell:
-      locale: US
-      ignore-rules:
-        - cancelled
-        - behaviour
-        - initialised
-        - synchronisation
-  exclusions:
-    generated: lax
-    presets:
-      - comments
-      - common-false-positives
-      - legacy
-      - std-error-handling
-    rules:
-      - linters:
-          - revive
-        path: _test\.go
-        text: context.Context should be the first parameter of a function
-      - linters:
-          - revive
-        path: _test\.go
-        text: exported func.*returns unexported type.*which can be annoying to use
-    paths:
-      - mocks
-      - third_party$
-      - builtin$
-      - examples$
 formatters:
   enable:
     - gofmt
     - goimports
-  exclusions:
-    generated: lax
-    paths:
-      - mocks
-      - third_party$
-      - builtin$
-      - examples$

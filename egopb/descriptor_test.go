@@ -26,7 +26,6 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
@@ -78,7 +77,7 @@ func TestDescriptor_IsSoundAndCarriesTheModulePath(t *testing.T) {
 	}
 
 	found, err := protoregistry.GlobalFiles.FindFileByPath("ego/ego.proto")
-	if err != nil || protoreflect.FileDescriptor(found) != fd {
+	if err != nil || found != fd {
 		t.Fatalf("file not registered under ego/ego.proto: %v", err)
 	}
 }

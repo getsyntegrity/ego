@@ -38,7 +38,7 @@ import (
 func TestRuntime_NilBeforeStart(t *testing.T) {
 	app := mustNew(t, newFixture(t, "runtime-nil-before-start").spec)
 
-	var rt runtimeport.Runtime = app.Runtime()
+	rt := app.Runtime()
 	if rt != nil {
 		t.Fatalf("Runtime() before Start = %#v, want an untyped nil interface", rt)
 	}

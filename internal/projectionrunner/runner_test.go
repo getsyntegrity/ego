@@ -1976,7 +1976,7 @@ func TestProjectionRunnerDefaultLogger(t *testing.T) {
 }
 
 // TestProjectionRunnerStaysRuntimeNeutral checks the transitive dependency
-// closure, which archcheck does not see: projection execution must not reach
+// closure, which the former architecture checker does not see: projection execution must not reach
 // the actor runtime that hosts it.
 func TestProjectionRunnerStaysRuntimeNeutral(t *testing.T) {
 	goBin, err := exec.LookPath("go")

@@ -34,7 +34,7 @@ import (
 // allowedDependencies lists every non-standard-library package that
 // port/behavior may depend on: the command contract, the tenancy contract that
 // command imports, and the protobuf runtime. It is intentionally narrower than
-// archcheck's contract-allowlist rule (ADR ego-arch-001 design.md §3), which
+// the former architecture checker's contract-allowlist rule (ADR ego-arch-001 design.md §3), which
 // would also admit egopb and other contracts: port/behavior needs none of them,
 // and any new dependency should be a reviewed change to this list. An
 // allowlist, rather than a denylist of GoAkt or OpenTelemetry, also catches a

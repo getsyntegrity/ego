@@ -61,7 +61,7 @@ const (
 // closureViolation returns why dep must not appear in this module's
 // unit-test closure, or "" when it may. It rejects the GoAkt runtime, the
 // engine package (#122) and the composition root, compose and anything
-// under it (ego-arch-004 design §D7): archcheck's
+// under it (ego-arch-004 design §D7): the former architecture checker's
 // external-adapter-no-composition rule never reads _test.go files, so this
 // guard covers the test side.
 func closureViolation(dep string) string {
@@ -86,7 +86,7 @@ func closureViolation(dep string) string {
 // docs/ci.md, "Compatibility checks: the test/compat module"), specifically
 // so this command stays clean. The child `go list` runs under
 // hermeticGoEnv() so a stray root go.work file or an inherited GOFLAGS can
-// never change the result, independently of verify-module.sh's own GOWORK=off.
+// never change the result, independently of the CI job's own GOWORK=off.
 func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps", "-test", "./...")
 	cmd.Env = hermeticGoEnv()

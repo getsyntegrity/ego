@@ -62,7 +62,7 @@ func TestResolveLogger(t *testing.T) {
 
 // TestLoggingStaysRuntimeNeutral guards the reason this package exists:
 // migration resolves its logger here precisely because the dependency
-// closure carries no actor runtime. The archcheck rules only see direct
+// closure carries no actor runtime. The architecture-checker rules only see direct
 // imports, so this asserts the transitive closure via go list -deps.
 func TestLoggingStaysRuntimeNeutral(t *testing.T) {
 	goBin, err := exec.LookPath("go")

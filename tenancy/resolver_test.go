@@ -155,7 +155,7 @@ func TestCapFixedTenant_IsAnUntypedConstant(t *testing.T) {
 	// port/adapter (ego-arch-004 design §D3). Assigning it to a plain
 	// string and to a named string type both compile only if it is untyped.
 	type capability string
-	var asString string = tenancy.CapFixedTenant
+	asString := tenancy.CapFixedTenant
 	var asNamed capability = tenancy.CapFixedTenant
 	assert.Equal(t, "tenancy.fixed-tenant", asString)
 	assert.Equal(t, capability("tenancy.fixed-tenant"), asNamed)
