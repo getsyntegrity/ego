@@ -57,7 +57,7 @@ Go behavior; RED/GREEN does not apply. Ordinary functional checks below replace 
 
 - [x] T1 Remove the current pipeline: workflows, `scripts/ci/`, `internal/cmd/*`, old `.md`
       issue templates, `renovate.json`, and dangling references (Makefile, docs). Route: delegated.
-- [ ] T2 Import the zip pipeline with the adaptations above. Route: delegated.
+- [x] T2 Import the zip pipeline with the adaptations above. Route: delegated.
 - [ ] T3 Update `docs/ci.md`, `docs/main-branch-policy.md`, `contributing.md`, `readme.md` to the
       develop/main model and new checks. Route: delegated.
 
@@ -72,4 +72,12 @@ is mostly deletions plus copied config, a single PR is the reviewable unit.
 
 T1 done (commit recorded below). Checks: `go build ./... && go vet ./...` OK; `go mod tidy` no change;
 Makefile `docker-test` now runs plain `go test -coverprofile`; comments naming archcheck reworded.
-T2, T3 pending.
+T2 done. Checks: actionlint v1.7.12 clean; `bash -n` OK on all 5 scripts (shellcheck not installed);
+root `go build/vet/test ./...` green; each nested module build/vet/test green and `go mod tidy` clean;
+`next-version.sh develop` on a tag-less repo prints `version=v0.1.0` (local clone has v4.x tags, so it
+refuses there by design). Decisions: go-setup lost its `token`/`private` inputs (callers updated);
+notify takes `channel` (from `vars.SLACK_CHANNEL`) and skips without token or channel; jobs that write
+(changelog, sync_develop, go-sdk-update) got explicit `permissions` because the token can fall back to
+`github.token`; root `SECURITY.md` (a GoAkt copy) removed in favor of `.github/SECURITY.md`; new `modules`
+matrix job in ci.yml is part of `ci-ok`. `.go-version` 1.27.1 kept (release exists).
+T3 pending.

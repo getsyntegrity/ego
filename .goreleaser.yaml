@@ -1,0 +1,12 @@
+# GoReleaser v2 for a LIBRARY: no binaries and no images.
+# It publishes the GitHub Release of the tag. The notes do NOT come from here: the
+# pipeline generates them with .github/scripts/changelog.sh (Kubernetes format) and
+# passes them with --release-notes.
+# Try it locally without publishing:  goreleaser release --snapshot --clean
+version: 2
+
+builds:
+  - skip: true
+
+release:
+  prerelease: auto

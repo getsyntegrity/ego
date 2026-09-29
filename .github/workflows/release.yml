@@ -1,0 +1,211 @@
+# Merge to main (from develop or hotfix/*) -> semver tag + GitHub Release.
+# For a Go library the tag IS the release: it is what `go get` resolves.
+# If it came from hotfix/*, it opens the main -> develop PR to synchronize.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false   # never two releases at once, never one cut halfway
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write        # create the tag and the GitHub Release
+      pull-requests: read    # read the PR that originated the merge
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source: ${{ steps.version.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Re-run: if this commit already has a tag, it is reused.
+          existing=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)
+          if [ -n "$existing" ]; then
+            { echo "version=$existing"; echo "tagged=true"; echo "source=rerun"; } >> "$GITHUB_OUTPUT"
+            echo "::notice::HEAD already has $existing, reusing it"
+            exit 0
+          fi
+          # PR that produced this commit (works with merge commits and squash)
+          pr=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+               | jq -c '[.[] | select(.merged_at != null and .base.ref == "main")][0] // {}')
+          head_ref=$(jq -r '.head.ref // ""' <<<"$pr")
+          labels=$(jq -r '[.labels[]?.name] | join(",")' <<<"$pr")
+          echo "PR #$(jq -r '.number // "?"' <<<"$pr") from '$head_ref' labels='$labels'"
+          .github/scripts/next-version.sh "$head_ref" "$labels" | tee -a "$GITHUB_OUTPUT"
+          echo "tagged=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        if: steps.version.outputs.tagged == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+      - name: Release already published?
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$VERSION")
+          echo "exists=$([ "$code" = 200 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # go: GoReleaser uses it to read the module path and changelog.sh for the go.mod diff.
+      - if: steps.published.outputs.exists == 'false'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      # Notes in the Kubernetes CHANGELOG format, from the PRs' release-note blocks.
+      - name: Release notes
+        if: steps.published.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/changelog.sh "$VERSION" --notes "$RUNNER_TEMP/release-notes.md"
+
+      # Library: it builds no binaries, it only publishes the GitHub Release with those notes.
+      - if: steps.published.outputs.exists == 'false'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # CHANGELOG/ lives in the repo: develop cannot be pushed to directly, so it goes through a PR.
+  # If a changelog PR is already open, it is added to that same branch (releases accumulate).
+  # ORG_CHECKOUT_TOKEN (a PAT) is optional: without it the fallback is github.token, and the PR
+  # it opens will not trigger CI by itself (GitHub does not start workflows from GITHUB_TOKEN).
+  changelog:
+    needs: [release]
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # push the docs/changelog branch
+      pull-requests: write   # open the changelog PR and label it
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: develop
+          fetch-depth: 0                                                 # all the tags
+          token: ${{ secrets.ORG_CHECKOUT_TOKEN || github.token }}       # PAT: the PR has to trigger CI
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Update CHANGELOG and open PR
+        env:
+          GH_TOKEN: ${{ secrets.ORG_CHECKOUT_TOKEN || github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="docs/changelog"
+          open=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls?state=open&base=develop&head=${GITHUB_REPOSITORY_OWNER}:${branch}" \
+                 | jq -r '.[0].number // empty')
+          if [ -n "$open" ]; then
+            git fetch -q origin "$branch" && git switch -q -c "$branch" "origin/$branch"
+          else
+            git switch -q -C "$branch"
+          fi
+
+          .github/scripts/changelog.sh "$VERSION" --write
+          if [ -z "$(git status --porcelain CHANGELOG)" ]; then
+            echo "::notice::CHANGELOG already had $VERSION"; exit 0
+          fi
+          git add CHANGELOG
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "docs: CHANGELOG $VERSION"
+          git push -q --force origin "$branch"
+
+          if [ -n "$open" ]; then
+            echo "::notice::Added $VERSION to changelog PR #$open"; exit 0
+          fi
+          body=$(jq -n --arg v "$VERSION" --arg b "$branch" '{
+            head: $b, base: "develop",
+            title: "docs: CHANGELOG \($v)",
+            body: "Automatic PR after release **\($v)**. If more releases happen before it is merged, they are added to this same PR.\n\n```release-note\nNONE\n```"
+          }')
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+                   -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls" -d "$body")
+          if [ "$code" != 201 ]; then echo "::error::Could not create the PR ($code): $(jq -r .message resp.json)"; exit 1; fi
+          echo "::notice::Changelog PR: $(jq -r .html_url resp.json)"
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/$(jq -r .number resp.json)/labels" \
+            -d '{"labels":["skip-changelog","kind/docs"]}' >/dev/null || echo "::warning::Could not set the labels"
+
+  # Hotfix: the flow requires synchronizing develop. It uses the PAT when available because a
+  # PR created with GITHUB_TOKEN does not trigger CI and would stay blocked waiting for "ci-ok".
+  sync_develop:
+    if: needs.release.outputs.source == 'hotfix'
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # open the main -> develop PR and label it
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.ORG_CHECKOUT_TOKEN || github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          body=$(jq -n --arg v "$VERSION" '{
+            head: "main", base: "develop",
+            title: "chore: sync hotfix \($v) main → develop",
+            body: "Automatic PR after hotfix \($v). Review conflicts and merge.\n\n```release-note\nNONE\n```"
+          }')
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+                   -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls" -d "$body")
+          case "$code" in
+            201) echo "::notice::Sync PR created: $(jq -r .html_url resp.json)"
+                 curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/$(jq -r .number resp.json)/labels" \
+                   -d '{"labels":["skip-changelog"]}' >/dev/null || echo "::warning::Could not set the skip-changelog label" ;;
+            422) echo "::notice::Not created: a main→develop PR already exists or there are no differences" ;;
+            *)   echo "::warning::Could not create the sync PR ($code): $(jq -r .message resp.json)" ;;
+          esac
+
+  notify:
+    if: always()
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+      - uses: ./.github/actions/notify
+        with:
+          status: ${{ needs.release.result }}
+          title: ${{ github.event.repository.name }} ${{ needs.release.outputs.version || '(no version)' }}
+          details: ${{ github.event.head_commit.message }}
+          slack-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel: ${{ vars.SLACK_CHANNEL }}

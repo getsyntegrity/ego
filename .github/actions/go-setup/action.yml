@@ -1,0 +1,15 @@
+name: go-setup
+description: >
+  Go (version read from .go-version) with the module and build cache enabled.
+inputs:
+  go-version:
+    description: Only for special cases (e.g. testing the minimum version). Empty = .go-version
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version: ${{ inputs.go-version }}
+        go-version-file: ${{ inputs.go-version == '' && '.go-version' || '' }}
+        cache: true

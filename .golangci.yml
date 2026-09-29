@@ -1,0 +1,14 @@
+# golangci-lint v2. The binary version is pinned in ci.yml (lint job).
+version: "2"
+
+linters:
+  default: standard     # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - misspell          # typos in comments and strings (visible in the public docs)
+    - errorlint         # errors.Is/As instead of == and type assertions on wrapped errors
+    - unconvert         # unnecessary type conversions
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,15 @@
+# Repository owners, in the Kubernetes OWNERS format (https://go.k8s.io/owners).
+#
+# GitHub does NOT read this file: what GitHub enforces is .github/CODEOWNERS.
+# OWNERS documents the roles; the "pr-meta" check verifies that the approvers
+# listed here and the owners in CODEOWNERS are exactly the same.
+#
+#   approvers: can approve and merge any change.
+#   reviewers: are asked for review; their approval counts but is not enough on its own.
+#   emeritus_approvers: former approvers, kept as a historical record.
+
+approvers:
+  - pablogore
+reviewers:
+  - pablogore
+emeritus_approvers: []
