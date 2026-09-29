@@ -14,6 +14,7 @@ permissions:
 jobs:
   codeql:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -25,7 +26,17 @@ jobs:
         with:
           languages: go
           queries: security-and-quality
-      - uses: github/codeql-action/autobuild@v4
+          build-mode: manual
+      # Manual build: autobuild runs `make` with no target, and the first
+      # Makefile target starts an example that blocks waiting for SIGINT.
+      - name: Build all modules
+        run: |
+          for mod in $(git ls-files '*go.mod' ':!:vendor/**'); do
+            dir=$(dirname "$mod")
+            echo "::group::go build ($dir)"
+            (cd "$dir" && go build ./...)
+            echo "::endgroup::"
+          done
       - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:go"
