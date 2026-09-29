@@ -18,7 +18,7 @@ set -euo pipefail
 #   <module-dir>   repo-relative path to the nested module, e.g.
 #                  "publisher/kafka".
 #   <ego-version>  the root module version to verify against, e.g.
-#                  "v4.5.0" (no local replace may satisfy this: it must
+#                  "v1.0.0" (no local replace may satisfy this: it must
 #                  already be resolvable from the module proxy).
 
 usage() {
@@ -32,7 +32,7 @@ fi
 
 module_dir=$1
 ego_version=$2
-root_module="github.com/getsyntegrity/ego/v4"
+root_module="github.com/getsyntegrity/ego"
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)

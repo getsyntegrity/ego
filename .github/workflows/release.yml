@@ -143,7 +143,7 @@ jobs:
           EGO_VERSION: ${{ steps.ego-version.outputs.version }}
         run: |
           go run ./internal/cmd/modwait \
-            -module github.com/getsyntegrity/ego/v4 \
+            -module github.com/getsyntegrity/ego \
             -version "${EGO_VERSION}" \
             -timeout 20m \
             -interval 30s
@@ -181,7 +181,7 @@ jobs:
 
             # Update go.mod
             cd "publisher/${PUB}"
-            go get "github.com/getsyntegrity/ego/v4@${EGO_VERSION}"
+            go get "github.com/getsyntegrity/ego@${EGO_VERSION}"
             go mod tidy
             cd ../..
 

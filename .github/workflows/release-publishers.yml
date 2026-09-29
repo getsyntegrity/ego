@@ -20,7 +20,7 @@ on:
         required: true
         type: string
       ego_version:
-        description: "ego root version publishers must require, e.g. v4.0.0"
+        description: "ego root version publishers must require, e.g. v1.0.0"
         required: true
         type: string
       bump:
@@ -30,6 +30,9 @@ on:
         # minor, not patch: an untagged suffix-less publisher starts from
         # v0.0.0, so the first release must be v0.1.0 (#134), never v0.0.1.
         # Pinned by TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher.
+        # After the v1 root migration the publishers already carry v0.1.0
+        # tags, so the same default gives v0.2.0: a minor bump in v0, which is
+        # the breaking-change slot because their root dependency changes path.
         default: minor
         options:
           - patch
