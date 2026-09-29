@@ -27,167 +27,182 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
+// errText returns err's message, or "<nil>" when err is nil, so a nil error fails
+// a message comparison instead of panicking.
+func errText(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return err.Error()
+}
+
 func TestChain(t *testing.T) {
-	t.Run("With AddRunner FailFast", func(t *testing.T) {
-		var (
-			calledFn1 = false
-			calledFn2 = false
-			calledFn3 = false
-		)
+	specs.Describe(t, "Chain runs its runners according to the configured error policy", func(s *specs.Spec) {
+		s.It("With AddRunner FailFast", func(ctx *specs.Context) {
+			var (
+				calledFn1 = false
+				calledFn2 = false
+				calledFn3 = false
+			)
 
-		fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-		fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-		fn3 := func() error { calledFn3 = true; return errors.New("err3") }
+			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
+			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
+			fn3 := func() error { calledFn3 = true; return errors.New("err3") }
 
-		chain := New(WithFailFast()).
-			AddRunner(fn1).
-			AddRunner(fn2).
-			AddRunner(fn3)
-		actual := chain.Run()
+			chain := New(WithFailFast()).
+				AddRunner(fn1).
+				AddRunner(fn2).
+				AddRunner(fn3)
+			actual := chain.Run()
 
-		require.EqualError(t, actual, "err1")
-		require.True(t, calledFn1)
-		require.False(t, calledFn2)
-		require.False(t, calledFn3)
-	})
+			ctx.Expect(errText(actual)).ToEqual("err1")
+			ctx.Expect(calledFn1).To(specs.BeTrue())
+			ctx.Expect(calledFn2).To(specs.BeFalse())
+			ctx.Expect(calledFn3).To(specs.BeFalse())
+		})
 
-	t.Run("With AddRunners FailFast", func(t *testing.T) {
-		var (
-			calledFn1 = false
-			calledFn2 = false
-			calledFn3 = false
-		)
+		s.It("With AddRunners FailFast", func(ctx *specs.Context) {
+			var (
+				calledFn1 = false
+				calledFn2 = false
+				calledFn3 = false
+			)
 
-		fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-		fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-		fn3 := func() error { calledFn3 = true; return errors.New("err3") }
+			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
+			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
+			fn3 := func() error { calledFn3 = true; return errors.New("err3") }
 
-		chain := New(WithFailFast()).AddRunners(fn1, fn2, fn3)
-		actual := chain.Run()
+			chain := New(WithFailFast()).AddRunners(fn1, fn2, fn3)
+			actual := chain.Run()
 
-		require.EqualError(t, actual, "err1")
-		require.True(t, calledFn1)
-		require.False(t, calledFn2)
-		require.False(t, calledFn3)
-	})
+			ctx.Expect(errText(actual)).ToEqual("err1")
+			ctx.Expect(calledFn1).To(specs.BeTrue())
+			ctx.Expect(calledFn2).To(specs.BeFalse())
+			ctx.Expect(calledFn3).To(specs.BeFalse())
+		})
 
-	t.Run("With AddRunner ReturnAll", func(t *testing.T) {
-		var (
-			calledFn1 = false
-			calledFn2 = false
-			calledFn3 = false
-		)
+		s.It("With AddRunner ReturnAll", func(ctx *specs.Context) {
+			var (
+				calledFn1 = false
+				calledFn2 = false
+				calledFn3 = false
+			)
 
-		fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-		fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-		fn3 := func() error { calledFn3 = true; return nil }
+			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
+			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
+			fn3 := func() error { calledFn3 = true; return nil }
 
-		chain := New(WithRunAll()).
-			AddRunner(fn1).
-			AddRunner(fn2).
-			AddRunner(fn3)
-		actual := chain.Run()
+			chain := New(WithRunAll()).
+				AddRunner(fn1).
+				AddRunner(fn2).
+				AddRunner(fn3)
+			actual := chain.Run()
 
-		require.EqualError(t, actual, "err1; err2")
-		require.True(t, calledFn1)
-		require.True(t, calledFn2)
-		require.True(t, calledFn3)
+			ctx.Expect(errText(actual)).ToEqual("err1; err2")
+			ctx.Expect(calledFn1).To(specs.BeTrue())
+			ctx.Expect(calledFn2).To(specs.BeTrue())
+			ctx.Expect(calledFn3).To(specs.BeTrue())
+		})
 	})
 }
 
 func TestAddContextRunnerIf(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "AddContextRunnerIf adds a context runner only when its condition holds", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("FailFast - condition true, error returned", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err1")
-		}
-		chain := New(WithFailFast(), WithContext(ctx)).AddContextRunnerIf(true, fn)
-		require.EqualError(t, chain.Run(), "err1")
-		require.True(t, called)
-	})
+		s.It("FailFast - condition true, error returned", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err1")
+			}
+			chain := New(WithFailFast(), WithContext(bg)).AddContextRunnerIf(true, fn)
+			ctx.Expect(errText(chain.Run())).ToEqual("err1")
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 
-	t.Run("FailFast - condition false, fn not called", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err1")
-		}
-		chain := New(WithFailFast()).AddContextRunnerIf(false, fn)
-		require.NoError(t, chain.Run())
-		require.False(t, called)
-	})
+		s.It("FailFast - condition false, fn not called", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err1")
+			}
+			chain := New(WithFailFast()).AddContextRunnerIf(false, fn)
+			ctx.Expect(chain.Run()).To(specs.BeNil())
+			ctx.Expect(called).To(specs.BeFalse())
+		})
 
-	t.Run("ReturnAll - condition true, error returned", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err2")
-		}
-		chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
-		require.EqualError(t, chain.Run(), "err2")
-		require.True(t, called)
-	})
+		s.It("ReturnAll - condition true, error returned", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err2")
+			}
+			chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
+			ctx.Expect(errText(chain.Run())).ToEqual("err2")
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 
-	t.Run("ReturnAll - condition false, fn not called", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err2")
-		}
-		chain := New(WithRunAll()).AddContextRunnerIf(false, fn)
-		require.NoError(t, chain.Run())
-		require.False(t, called)
-	})
+		s.It("ReturnAll - condition false, fn not called", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err2")
+			}
+			chain := New(WithRunAll()).AddContextRunnerIf(false, fn)
+			ctx.Expect(chain.Run()).To(specs.BeNil())
+			ctx.Expect(called).To(specs.BeFalse())
+		})
 
-	t.Run("ReturnAll - condition true, fn returns nil", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return nil
-		}
-		chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
-		require.NoError(t, chain.Run())
-		require.True(t, called)
+		s.It("ReturnAll - condition true, fn returns nil", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return nil
+			}
+			chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
+			ctx.Expect(chain.Run()).To(specs.BeNil())
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 	})
 }
 
 func TestAddContextRunner(t *testing.T) {
-	t.Run("FailFast - fn not called, error returned", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err1")
-		}
-		chain := New(WithFailFast()).AddContextRunner(fn)
-		require.Error(t, chain.Run())
-		require.True(t, called)
-	})
+	specs.Describe(t, "AddContextRunner adds a context runner that always runs", func(s *specs.Spec) {
+		s.It("FailFast - fn not called, error returned", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err1")
+			}
+			chain := New(WithFailFast()).AddContextRunner(fn)
+			ctx.Expect(chain.Run()).To(specs.Not(specs.BeNil()))
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 
-	t.Run("ReturnAll - fn not called", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return errors.New("err2")
-		}
-		chain := New(WithRunAll()).AddContextRunner(fn)
-		require.Error(t, chain.Run())
-		require.True(t, called)
-	})
+		s.It("ReturnAll - fn not called", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return errors.New("err2")
+			}
+			chain := New(WithRunAll()).AddContextRunner(fn)
+			ctx.Expect(chain.Run()).To(specs.Not(specs.BeNil()))
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 
-	t.Run("ReturnAll - fn returns nil", func(t *testing.T) {
-		called := false
-		fn := func(_ context.Context) error {
-			called = true
-			return nil
-		}
-		chain := New(WithRunAll()).AddContextRunner(fn)
-		require.NoError(t, chain.Run())
-		require.True(t, called)
+		s.It("ReturnAll - fn returns nil", func(ctx *specs.Context) {
+			called := false
+			fn := func(_ context.Context) error {
+				called = true
+				return nil
+			}
+			chain := New(WithRunAll()).AddContextRunner(fn)
+			ctx.Expect(chain.Run()).To(specs.BeNil())
+			ctx.Expect(called).To(specs.BeTrue())
+		})
 	})
 }
