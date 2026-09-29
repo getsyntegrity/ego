@@ -52,7 +52,7 @@ or package, which the issue explicitly forbids and which would misclassify the i
 - [x] **T2 Generator.** `internal/tools/testinventory`: AST signal scan + `go test -json` enumeration per module →
   JSON. Check: TDD unit tests on fixtures (a test that listens, execs, opens SQL, starts an actor system, skips on
   env, has subtests); `go vet`, lint clean.
-- [ ] **T3 Overrides and review.** `docs/testing/inventory-overrides.json` with justification per entry; manual
+- [x] **T3 Overrides and review.** `docs/testing/inventory-overrides.json` with justification per entry; manual
   review of mixed files and the special lists named in #202 (19 Postgres skips, engine/compose cluster tests,
   `go list`/exec, local `httptest`, in-memory "integration"/"e2e" names). Check: every override has a reason and
   points at an existing test.
@@ -94,4 +94,21 @@ Working notes (writer, strict TDD, runner `go test`, no `-race`):
   ./internal/tools/...` 0 issues.
 - Commits: `build(tools): scan Test functions and classify them into lanes (#202)`,
   `build(tools): merge go test -json results and overrides into entries (#202)`, then the summary/check/CLI commit.
+
+- T3 review (static inventory, before the run). Reviewed by reading the tests:
+  - 19 PostgreSQL tests of `example/cluster` are `integration` (#211) through the helper that reads
+    `EGO_EXAMPLE_POSTGRES_DSN` and opens `pgxpool`; they need no override.
+  - Cluster: 9 root tests are real single-node or two-node clusters on `127.0.0.1` ports from `dynaport` and stay
+    `integration` (#212): eight in `engine`, one in `compose/goakt`. Three `compose/goakt` tests that only build a
+    cluster configuration were false positives and were overridden (two to `unit`, one to `component`).
+  - 12 `engine` and 12 `compose/goakt` tests reach a real actor system through a wrapper two helper levels deep or
+    through `App.Start`; they are overridden to `component`. 26 more `Start` calls were reviewed and confirmed `unit`
+    (in-memory step runner, fake stores, bare structs, span and timer tests).
+  - `go list` and exec: 22 `architecture` tests (#208). `TestAssertionSitesNegativeControl` parses an in-memory
+    string only and was overridden to `unit`.
+  - In-memory tests named integration or end-to-end: none of them touches a real resource; the list is in
+    `inventory.md`. No test named like integration is integration by behavior except none: the 9 cluster tests are
+    named `...ClusterMode` or `...MultiNode`.
+  - Check: `go run ./internal/tools/testinventory -update && ... -check` is clean, and `ApplyOverrides` rejects an
+    override without reason, with an invalid lane, listed twice, or pointing at no test (unit tests).
 

@@ -3,5 +3,132 @@
     "benchmark",
     "example/cluster"
   ],
-  "overrides": []
+  "overrides": [
+    {
+      "dir": "compose/goakt",
+      "lane": "component",
+      "tests": [
+        "TestApp_ValidSpecRunsAnEngine",
+        "TestEngine_UndeclaredFamilyReturnsTypedError",
+        "TestStart_AttachStepStartsAndProbesPublishersFirst",
+        "TestStart_FailureAtEachStepReleasesEverything",
+        "TestStart_PublisherFailureAtK",
+        "TestStart_PublisherPingFailureNamesTheAdapter",
+        "TestStop_AfterStopIsNoOp",
+        "TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown",
+        "TestStop_OrderMatchesD7",
+        "TestRuntime_ConsumerDrivesTheAppEndToEnd",
+        "TestRuntime_IsTheEngineAfterStartAndAfterStop",
+        "TestRuntime_NilAfterFailedStart"
+      ],
+      "reason": "App.Start runs the real start steps, including a real single-node GoAkt actor system and the engine; the failure or the stop being tested happens after they are up. The scanner does not resolve methods such as App.Start."
+    },
+    {
+      "dir": "compose/goakt",
+      "lane": "component",
+      "test": "TestStart_ActorSystemStepFailsForReal",
+      "reason": "Starts a real actor system whose cluster configuration GoAkt rejects inside step 2 (no discovery provider, no remoting), so no cluster socket is opened. The cluster signal only comes from building the configuration."
+    },
+    {
+      "dir": "compose/goakt",
+      "lane": "unit",
+      "tests": [
+        "TestNew_G1_ClusterRequiresEntityKinds",
+        "TestNew_ReportsEveryProblem"
+      ],
+      "reason": "Passes a cluster configuration to New only to validate it. New starts nothing and opens no socket, so the cluster signal is a false positive."
+    },
+    {
+      "dir": "compose/goakt",
+      "lane": "unit",
+      "tests": [
+        "TestStart_CancelledContextStartsNothing",
+        "TestStart_ProbeFailureNamesTheStore"
+      ],
+      "reason": "Start fails at its first step (a cancelled context or a failing store probe) before any actor system exists; the stores are in-memory fakes. Confirmed after review of the Start call."
+    },
+    {
+      "dir": "engine",
+      "lane": "component",
+      "tests": [
+        "TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshBatch",
+        "TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter",
+        "TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter",
+        "TestBatchedZeroEventAdmittedCommandStillPreservesLaterPrecondition",
+        "TestBatchedZeroEventFounderNeverOpensBatch",
+        "TestDispatchRejectsTenantBindingQuery",
+        "TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner",
+        "TestEngineRespawnUnderAnotherTenantIsRejected",
+        "TestWithEntityFamilies_Combined",
+        "TestWithEntityFamilies_NotDeclaredAllowsEveryFamily",
+        "TestWithEntityFamilies_UndeclaredFamilyIsRejected",
+        "TestWithEntityFamilies_UnknownBitsAreIgnored"
+      ],
+      "reason": "The engine comes from a wrapper (newBatchHarness, newRespawnTestEngine or familyTestEngine) around newTestEngine, which creates a real single-node GoAkt actor system. That is two helper levels deep and the scanner follows one."
+    },
+    {
+      "dir": "engine",
+      "lane": "unit",
+      "test": "TestEngineStartWithoutActorSystem",
+      "reason": "Builds a bare Engine struct with no actor system and expects ErrActorSystemRequired from Start. Confirmed after review."
+    },
+    {
+      "dir": "port/adapter",
+      "lane": "unit",
+      "test": "TestAssertionSitesNegativeControl",
+      "reason": "Parses an in-memory source string with go/parser as a negative control and reads no repository file, so it is not an architecture check."
+    },
+    {
+      "dir": "port/adapter",
+      "lane": "unit",
+      "test": "TestAccessors_ImplementingValueIsReturned",
+      "reason": "Start is the adapter.Starter method of an in-memory fake. Confirmed after review."
+    },
+    {
+      "dir": "compose/internal/lifecycle",
+      "lane": "unit",
+      "tests": [
+        "TestCleanup_RunsUnderWithoutCancelAndTimeout",
+        "TestStartAndStop_AreSerialized",
+        "TestStart_ChecksContextBeforeEachStep",
+        "TestStart_FailureAtEachStepRollsBackInReverseThenReleases",
+        "TestStart_IsSingleUse",
+        "TestStart_PanickingStepRollsBackReleasesAndFails",
+        "TestStart_RollbackAttemptsEveryUndoAndReportsEveryError",
+        "TestStart_RunsStepsInOrder",
+        "TestStart_StepsWithoutStopAreSkippedOnRollback",
+        "TestState_TransitionsAreVisibleInsideSteps",
+        "TestStop_AfterFailedStartIsNoOp",
+        "TestStop_FailureAtEachStepStillRunsTheRest",
+        "TestStop_IsIdempotent",
+        "TestStop_JoinsEveryError",
+        "TestStop_UndoesEveryStepInReverseOrder"
+      ],
+      "reason": "Start and Stop belong to an in-memory step runner that is only given function values; it starts no actor system and does no I/O. Confirmed after review."
+    },
+    {
+      "dir": "internal/instrumentation",
+      "lane": "unit",
+      "test": "TestStartCommandSpan",
+      "reason": "Start begins a span on an in-memory recording tracer. Confirmed after review."
+    },
+    {
+      "dir": "internal/projectionrunner",
+      "lane": "unit",
+      "tests": [
+        "TestProjectionRunnerErrorPaths",
+        "TestProjectionRunnerFatalPaths",
+        "TestProjectionRunnerLagMetrics",
+        "TestRunner",
+        "TestRunnerPullEfficiency"
+      ],
+      "reason": "Runner.Start drives the projection loop over in-memory fakes. The only real waits are pause.For timers, which issue #207 owns. Confirmed after review."
+    },
+    {
+      "dir": "internal/ticker",
+      "lane": "unit",
+      "test": "TestTicker",
+      "reason": "Ticker.Start starts a timer and nothing else. It waits about half a second of real time. Confirmed after review."
+    }
+  ]
 }
