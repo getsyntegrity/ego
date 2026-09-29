@@ -8,12 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### 💥 Breaking Changes
 
-- **BREAKING: the root package `ego` moved to `github.com/getsyntegrity/ego/v4/engine` (package `engine`); the module root no longer contains any Go files (#124, #159).** The module path, the `go get github.com/getsyntegrity/ego/v4` command and every other package path (`persistence`, `projection`, `testkit`, `compose/goakt`, `port/...`) are unchanged. Only code that imported the root package has to change: replace the import path and rename the qualifier. No symbol was renamed, added or removed, so `ego.NewEngine` is `engine.NewEngine` and `ego.EventSourcedBehavior` is `engine.EventSourcedBehavior`.
+- **BREAKING: the root module path is now `github.com/getsyntegrity/ego`, with no `/v4` suffix; its first version is `v1.0.0`.** Before this change the root was `github.com/getsyntegrity/ego/v4`. A path without a `/vN` suffix carries `v0` and `v1` only, so the first release under it is `v1.0.0`. The publisher module paths do not change (`github.com/getsyntegrity/ego/publisher/<name>`); the four publishers move from `v0.1.0` to `v0.2.0`, a minor bump in v0 because their root dependency changes path, and `v0.2.0` requires the new root.
+
+  To migrate, rewrite the import path and the requirement:
 
   | Before | After |
   |---|---|
-  | `import "github.com/getsyntegrity/ego/v4"` | `import "github.com/getsyntegrity/ego/v4/engine"` |
-  | `import ego "github.com/getsyntegrity/ego/v4"` | `import "github.com/getsyntegrity/ego/v4/engine"` |
+  | `require github.com/getsyntegrity/ego/v4 v4.0.0` | `require github.com/getsyntegrity/ego v1.0.0` |
+  | `import "github.com/getsyntegrity/ego/v4/engine"` | `import "github.com/getsyntegrity/ego/engine"` |
+  | `import "github.com/getsyntegrity/ego/v4/<pkg>"` (any other package) | `import "github.com/getsyntegrity/ego/<pkg>"` |
+  | `go get github.com/getsyntegrity/ego/v4@v4.0.0` | `go get github.com/getsyntegrity/ego@v1.0.0` |
+
+  A mechanical rewrite does it: run `find . -name '*.go' -exec sed -i 's#getsyntegrity/ego/v4#getsyntegrity/ego#g' {} +`, then `go mod tidy`. No symbol was renamed. Regenerated protobuf code changes only the embedded `go_package` string (`egopb` now reports `github.com/getsyntegrity/ego/egopb`).
+
+  `v4.0.0` stays published under the old path `github.com/getsyntegrity/ego/v4`: a published version cannot be removed, and it cannot be retracted from the new path because it is a version of a different module. It has no known consumers; do not use it. No tag is deleted or moved. `internal/cmd/releaseplan` now ignores, and reports, tags whose major is not legal for a module's current path, so the stray `v4.0.0` no longer affects release planning.
+
+- **BREAKING: the root package `ego` moved to `github.com/getsyntegrity/ego/engine` (package `engine`); the module root no longer contains any Go files (#124, #159).** Apart from the module path change in the entry above, the `go get` command and every other package path (`persistence`, `projection`, `testkit`, `compose/goakt`, `port/...`) are unchanged. Only code that imported the root package has to change: replace the import path and rename the qualifier. No symbol was renamed, added or removed, so `ego.NewEngine` is `engine.NewEngine` and `ego.EventSourcedBehavior` is `engine.EventSourcedBehavior`.
+
+  | Before | After |
+  |---|---|
+  | `import "github.com/getsyntegrity/ego"` | `import "github.com/getsyntegrity/ego/engine"` |
+  | `import ego "github.com/getsyntegrity/ego"` | `import "github.com/getsyntegrity/ego/engine"` |
   | `ego.NewConfig`, `ego.NewEngine`, `ego.With…` | `engine.NewConfig`, `engine.NewEngine`, `engine.With…` |
   | `ego.Engine`, `ego.Config`, `ego.State`, `ego.Command`, `ego.Event` | `engine.Engine`, `engine.Config`, `engine.State`, `engine.Command`, `engine.Event` |
   | `ego.EventSourcedBehavior`, `ego.DurableStateBehavior` | `engine.EventSourcedBehavior`, `engine.DurableStateBehavior` |
@@ -22,11 +37,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   A local variable named `engine` (common in application code: `engine, err := ego.NewEngine(...)`) now shadows the package name after its declaration; rename the variable (for example to `eng`) or import the package under an alias.
 
-  **Why now, and why in the v4 line.** The root directory was one package with 28 production and 54 white-box test files, which cannot be split without exporting internals; moving it whole to a subdirectory is the smallest change that empties the root and unblocks the package split tracked in #159. Strict SemVer would ship this as `/v5`. This release targets `v4.1.0` instead, by explicit maintainer decision, because `v4.0.0` (2026-09-28) has no known consumers: GitHub code search finds no importer outside this repository. If you do import `github.com/getsyntegrity/ego/v4` directly, pin `v4.0.0` until you have applied the table above. A Go shim left at the root was rejected because it would defeat the goal of an empty root.
+  **Why now.** The root directory was one package with 28 production and 54 white-box test files, which cannot be split without exporting internals; moving it whole to a subdirectory is the smallest change that empties the root and unblocks the package split tracked in #159. Together with the module path change below, this ships as `v1.0.0` of `github.com/getsyntegrity/ego`. A Go shim left at the root was rejected because it would defeat the goal of an empty root.
 
   `archcheck` enforces the result with a new `root-no-go-files` check, and its runtime-neutral rules (`application-no-runtime`, `composition-no-runtime`, `external-adapter-no-runtime`) now forbid importing the `engine` package. The architecture tests that used to run from the module root now locate it by walking up to `go.mod`.
 
 ### 🐛 Bug Fixes
+
+- **`release.yml` waits for `sum.golang.org`, not only the proxy, before the publisher bump (#189).** The old wait ran `go list -m`, which only proves the proxy serves the version; the next step's `go get` also verifies against the checksum database, which failed with a 404 in the first release (run 36474920456, attempt 1). The wait is now `internal/cmd/modwait`: it runs `go mod download -json` with proxy and checksum verification on and a fresh module cache, classifies each failure as transient (404, 5xx, 429, network) or permanent (410, checksum mismatch, wrong module path), retries transient ones up to `-timeout` (default 20m, `-interval` 30s) and, on timeout, explains how to resume with "Re-run failed jobs" without touching the root tag. See `docs/ci.md`.
 
 - **`release-publishers.yml` defaults `bump` to `minor`, so the first publisher release is `v0.1.0` (#134).** An untagged, suffix-less publisher starts from `v0.0.0`, so the previous `patch` default planned `publisher/<name>/v0.0.1` for all four publishers instead of the intended `v0.1.0`. `TestFirstPublisherRelease_DefaultBumpPlansV010ForEveryPublisher` (`internal/cmd/releaseplan`) reads the workflow's default and runs the publishers-only plan against this repository with only `v4.0.0` tagged, and requires `v0.1.0` for every publisher. A later fix release passes `bump: patch` explicitly.
 

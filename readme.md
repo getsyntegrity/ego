@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/getsyntegrity/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/build.yml?branch=main" alt="Build status"></a>
-  <a href="https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine"><img src="https://pkg.go.dev/badge/github.com/getsyntegrity/ego/v4/engine.svg" alt="Go reference"></a>
+  <a href="https://pkg.go.dev/github.com/getsyntegrity/ego/engine"><img src="https://pkg.go.dev/badge/github.com/getsyntegrity/ego/engine.svg" alt="Go reference"></a>
   <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/ego" alt="Go version"></a>
   <a href="https://github.com/getsyntegrity/ego/releases/latest"><img src="https://img.shields.io/github/v/release/getsyntegrity/ego?label=release" alt="Latest release"></a>
   <a href="https://github.com/getsyntegrity/ego/tags"><img src="https://img.shields.io/github/v/tag/getsyntegrity/ego?label=tag" alt="Pre-release"></a>
@@ -71,10 +71,10 @@ For production use, provide durable implementations of the stores your applicati
 ## Installation
 
 ```bash
-go get github.com/getsyntegrity/ego/v4
+go get github.com/getsyntegrity/ego
 ```
 
-The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/v4/engine` (package `engine`). Earlier snippets that imported `github.com/getsyntegrity/ego/v4` and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md) for the migration map.
+The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/engine` (package `engine`). The module path has no `/v4` suffix: it was `github.com/getsyntegrity/ego/v4` until `v4.0.0`, and the first release under the current path is `v1.0.0`. Earlier snippets that imported the old path and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md) for the migration map.
 
 ## Quick start
 
@@ -90,9 +90,9 @@ import (
 
     accountpb "example.com/myapp/gen/account/v1"
     goakt "github.com/tochemey/goakt/v4/actor"
-    "github.com/getsyntegrity/ego/v4/engine"
-    "github.com/getsyntegrity/ego/v4/projection"
-    "github.com/getsyntegrity/ego/v4/testkit"
+    "github.com/getsyntegrity/ego/engine"
+    "github.com/getsyntegrity/ego/projection"
+    "github.com/getsyntegrity/ego/testkit"
 )
 
 func main() {
@@ -249,7 +249,7 @@ Entity-specific options are passed when an entity is spawned:
 
 Event-sourced entities additionally support `WithSnapshotInterval`, `WithRetentionPolicy`, `WithBatchThreshold`, and `WithBatchFlushWindow`.
 
-API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/getsyntegrity/ego/v4/engine).
+API details and defaults are documented on [pkg.go.dev](https://pkg.go.dev/github.com/getsyntegrity/ego/engine).
 
 ## Snapshots and retention
 
