@@ -1635,3 +1635,104 @@ human opens and merges the ordinary, normally-reviewed pull request it
 prints the command for, and an explicitly dispatched
 `release-publishers.yml` run does the actual publisher tagging once that
 PR has landed on `main`.
+
+### Waiting for the module on the proxy and the checksum database (`modwait`, #189)
+
+`prepare-publisher-bump` bumps each publisher's `go.mod` with `go get
+github.com/getsyntegrity/ego/v4@<tag>`, so the root module must already
+be resolvable the way any consumer resolves it before that step runs. The
+wait step "Wait for ego module on the proxy and the checksum database"
+now runs `internal/cmd/modwait` for that:
+
+```sh
+go run ./internal/cmd/modwait \
+  -module github.com/getsyntegrity/ego/v4 -version "${EGO_VERSION}" \
+  -timeout 20m -interval 30s
+```
+
+**Why `go list -m` was not enough.** The old step looped `go list -m
+github.com/getsyntegrity/ego/v4@<tag>` (30 tries, 30 s apart). That only
+proves `proxy.golang.org` serves the version. `go get` also verifies the
+module against `sum.golang.org`, which can lag behind the proxy. In the
+first release, `release.yml` run
+[36474920456](https://github.com/getsyntegrity/ego/actions/runs/36474920456),
+attempt 1 (job 109106620419), the wait passed at 19:51:23Z and `go get`
+failed 15 seconds later:
+
+```text
+reading https://sum.golang.org/lookup/github.com/getsyntegrity/ego/v4@v4.0.0: 404 Not Found
+	server response: not found: github.com/getsyntegrity/ego/v4@v4.0.0: invalid version: unknown revision v4.0.0
+```
+
+Attempt 2 (20:07Z) passed with no code change. That points at checksum
+database propagation, though the cause was not proven.
+
+**What one attempt checks.** `modwait` runs `go mod download -json
+<module>@<version>` in a fresh temporary directory with a fresh temporary
+`GOMODCACHE`, and removes both afterwards. The fresh cache matters: a
+cached copy would skip the checksum lookup, and that lookup is exactly what
+`go get` does next. The environment is the job's own, so `GOPROXY` and
+`GOSUMDB` are whatever the runner has (Go's defaults). `modwait` never sets
+`GOSUMDB`, and it removes `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`,
+`GOINSECURE`, `GONOPROXY` and `GOFLAGS` from the probe, forces `GOWORK=off`
+and `GOENV=off` (so a `go env -w` file cannot reintroduce them), and adds
+no `replace`. It also refuses to start when the inherited environment has
+`GOSUMDB=off`, `GOPROXY=off` or `-insecure` in `GOFLAGS`. An attempt passes
+only when `go` exits 0 and the JSON `Error` field is empty.
+
+**Classification.** The pure function `Classify`
+(`internal/cmd/modwait/classify.go`) reads the attempt's output. The HTTP
+status wins over any text, in this order:
+
+| Output | Class | Action |
+|---|---|---|
+| `checksum mismatch`, `SECURITY ERROR` | permanent | fail at once |
+| HTTP 410 Gone | permanent | fail at once |
+| HTTP 404, 408, 429, 5xx (proxy or sumdb) | transient | retry until the deadline |
+| dial, i/o timeout, connection reset or refused, TLS handshake timeout, no such host, unexpected EOF | transient | retry |
+| `module declares its path as`, `but was required as`, `malformed ...`, major-suffix mismatch, any `invalid version` other than `unknown revision` | permanent | fail at once |
+| `unknown revision` with no HTTP status | transient | retry |
+| anything else | unclassified | retry, reported as `unclassified` |
+
+Two calls worth arguing with. First, the real failure above contains
+`invalid version: unknown revision` inside a sumdb 404; reading only the
+text would call it permanent and fail a release over a propagation delay,
+so the status is checked first. Second, `unknown revision` with no status
+is transient because the proxy or the VCS may not have the tag yet; the
+proxy's own 404 falls through to a direct VCS lookup, so a version that
+does not exist yet often shows up as exactly this message. The price of
+being wrong is one full wait, never a false success. Unclassified output is
+retried for the same reason: an unknown message is more likely a new
+phrasing of a transient condition, and the deadline bounds the cost.
+
+**The limit.** `-timeout` defaults to 20 minutes and `-interval` to 30
+seconds; both are printed in the first log line. Each sleep is clamped to
+the time left, so an interval larger than the timeout cannot overrun it,
+and the last attempt runs exactly at the deadline. `-timeout 0` makes a
+single attempt and never sleeps, which is the right mode for a manual check.
+One attempt is also capped at 3 minutes so a hung connection cannot stall
+the job.
+
+**How to resume without duplicate tags.** On timeout, `modwait` emits one
+`::error::` line naming `<module>@<version>`, the last classification and
+its last output line, and exits non-zero. A permanent failure emits its own
+`::error::` line with the cause and does not retry. To resume after a
+timeout: the root tag already exists, so do not delete or re-push it. Wait
+a few minutes, then use "Re-run failed jobs" on the same `release.yml` run.
+At this point the `release/publishers-<tag>` branch has not been pushed
+(the next step creates it), so re-running `prepare-publisher-bump` repeats
+nothing irreversible. A permanent failure needs the cause fixed first (a
+bad tag or a wrong module path), not a re-run.
+
+**Trying it without publishing anything.** Every call is read only. Against
+the already published root version it should pass; against a version that
+does not exist it fails at once with `-timeout 0`:
+
+```sh
+go run ./internal/cmd/modwait -module github.com/getsyntegrity/ego/v4 -version v4.0.0  -timeout 0   # passes
+go run ./internal/cmd/modwait -module github.com/getsyntegrity/ego/v4 -version v4.0.99 -timeout 0   # fails
+```
+
+The second run is classified as transient (`unknown revision`, no HTTP
+status), so with the default `-timeout` it would keep retrying until the
+limit. The post-publish consumer check is a separate concern (#190).

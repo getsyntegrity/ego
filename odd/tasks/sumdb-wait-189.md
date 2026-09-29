@@ -33,9 +33,9 @@ Output is classified by a pure function (`Classify`) into transient (retry until
 ## Tasks
 
 - [x] T1 Pure classifier `Classify` plus tests, including the verbatim run 36474920456 fixture. Check: RED (does not compile), then GREEN. Commit `0b49e80`.
-- [x] T2 Bounded wait loop (injected prober, clock, sleeper; flags, `-timeout 0`, sleep clamp, `::error::` messages) and the real prober (`go mod download -json` with a scrubbed environment and temp dirs cleaned; tests inspect env and args). Check: table tests without network, fake `go` binary for the exec plumbing. Tasks T2 and the former "real prober" task share one commit because `package main` needs `main()` and the real prober to build; splitting would leave a non-building commit.
-- [x] T3 Wire `release.yml`; actionlint, YAML parse, `bash -n`, no `${{` in run bodies, diff limited to the wait step.
-- [ ] T4 `docs/ci.md` section, live read-only probes, final verification, SHAs in this document.
+- [x] T2 Bounded wait loop (injected prober, clock, sleeper; flags, `-timeout 0`, sleep clamp, `::error::` messages) and the real prober (`go mod download -json` with a scrubbed environment and temp dirs cleaned; tests inspect env and args). Check: table tests without network, fake `go` binary for the exec plumbing. Commit `de5b947`. Tasks T2 and the former "real prober" task share one commit because `package main` needs `main()` and the real prober to build; splitting would leave a non-building commit.
+- [x] T3 Wire `release.yml`; actionlint, YAML parse, `bash -n`, no `${{` in run bodies, diff limited to the wait step. Commit `16e650e`.
+- [x] T4 `docs/ci.md` section, live read-only probes, final verification, SHAs in this document. Commit: the one that adds this text (docs only).
 
 ## Acceptance criteria
 
@@ -43,4 +43,9 @@ The list under "Requirements" of #189 and the maintainer's brief: immediate succ
 
 ## Evidence
 
-(Filled in as tasks close.)
+- Base: `cac848a7d4068600d2443eca7cb4ea7a621f450c`. Tested code head: `16e650e` (the docs commit after it changes only `docs/ci.md` and this file).
+- RED: `go test ./internal/cmd/modwait/...` before any implementation failed to compile (`undefined: Class`, `Transient`, then `ProbeResult`), for T1 and for the wait tests. GREEN: all pass after implementation. The probe tests were written before `probe.go` but shared the RED compile failure of the package rather than a run of their own.
+- Verification: `go test -count=1` on modwait, releasegate, releaseplan, ciselect, archcheck all ok; `go vet`, `gofmt -l`, staticcheck and revive report nothing; actionlint on `release.yml` has 0 findings; YAML parses; `bash -n` passes on all 9 run bodies; no `${{` inside any run body.
+- Live read-only probes (2026-09-28, public proxy and sumdb): `-version v4.0.0 -timeout 0` passes (exit 0, one attempt, about 6 s). `-version v4.0.99 -timeout 0` exits 1: classified `transient (unknown revision without an HTTP status)` because the proxy's 404 falls through to a direct VCS lookup, which answers `invalid version: unknown revision v4.0.99` with no 404; it then emits the `::error::` line with the resume message.
+- Judgement calls: `unknown revision` without a status is transient; unclassified output is retried and reported; `GOENV=off` and `GOWORK=off` are forced and `GONOPROXY` is stripped too (beyond the list in the brief), because a `go env -w` file or `GONOPROXY` would also change the public path; the tool refuses to start with `GOSUMDB=off`, `GOPROXY=off` or `-insecure`; one attempt is capped at 3 minutes; the resume hint text is a constant in `wait.go`, not a flag.
+- Limitations: not exercised against a real propagation delay (none available on demand); the step's `go run` needs the repository checkout at the tagged commit to contain `internal/cmd/modwait`, which holds for any tag cut after this change merges.
