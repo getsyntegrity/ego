@@ -28,11 +28,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 	"github.com/getsyntegrity/ego/tenancy"
 )
+
+// optRecovered runs fn and returns the value it panicked with, or nil.
+func optRecovered(fn func()) (value any) {
+	defer func() { value = recover() }()
+	fn()
+	return nil
+}
 
 // TestRuntimeSentinelsAreTheSameValues checks, for each of the ten sentinels
 // that moved to port/runtime (ego-runtime-001 design §D2), that the ego name
@@ -55,16 +62,18 @@ func TestRuntimeSentinelsAreTheSameValues(t *testing.T) {
 		{"ErrNotACommand", ErrNotACommand, runtimeport.ErrNotACommand},
 		{"ErrEntityFamilyNotDeclared", ErrEntityFamilyNotDeclared, runtimeport.ErrEntityFamilyNotDeclared},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.NotNil(t, tc.ego)
-			require.True(t, tc.ego == tc.runtime, "ego.%s and runtime.%s must be the same value", tc.name, tc.name) //nolint:errorlint // identity is the point
+	specs.Describe(t, "each moved sentinel is the same error value under the ego and port/runtime names", func(s *specs.Spec) {
+		for _, tc := range cases {
+			s.It(tc.name, func(ctx *specs.Context) {
+				ctx.Expect(tc.ego).To(specs.Not(specs.BeNil()))
+				ctx.Expect(tc.ego == tc.runtime).To(specs.BeTrue()) //nolint:errorlint // identity is the point
 
-			require.ErrorIs(t, fmt.Errorf("op: %w", tc.ego), tc.runtime)
-			require.ErrorIs(t, fmt.Errorf("op: %w", tc.runtime), tc.ego)
-			require.ErrorIs(t, fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime)), tc.ego)
-		})
-	}
+				ctx.Expect(fmt.Errorf("op: %w", tc.ego)).To(specs.MatchError(tc.runtime))
+				ctx.Expect(fmt.Errorf("op: %w", tc.runtime)).To(specs.MatchError(tc.ego))
+				ctx.Expect(fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime))).To(specs.MatchError(tc.ego))
+			})
+		}
+	})
 }
 
 // TestRuntimeMovedTypesAreAliases checks that each type that moved to
@@ -81,30 +90,34 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 		{SagaInfo{}, runtimeport.SagaInfo{}},
 		{(*SpawnOption)(nil), (*runtimeport.SpawnOption)(nil)},
 	}
-	for _, p := range pairs {
-		require.Equal(t, reflect.TypeOf(p.runtime), reflect.TypeOf(p.ego))
-	}
+	specs.Describe(t, "the types and constants that moved to port/runtime are aliases of the ego names", func(s *specs.Spec) {
+		s.It("aliases the moved types, constants and values", func(ctx *specs.Context) {
+			for _, p := range pairs {
+				ctx.Expect(reflect.TypeOf(p.ego)).ToEqual(reflect.TypeOf(p.runtime))
+			}
 
-	var _ *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted} //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
-	info := &SagaInfo{ID: "s", Status: SagaCompleted}
-	require.Equal(t, runtimeport.SagaCompleted, info.Status)
+			var _ *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted} //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+			info := &SagaInfo{ID: "s", Status: SagaCompleted}
+			ctx.Expect(info.Status).ToEqual(runtimeport.SagaCompleted)
 
-	opt := WithPlacement(Local)
-	var _ runtimeport.SpawnOption = opt //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
-	var egoOpt SpawnOption = opt        //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
-	require.Equal(t, runtimeport.Local, runtimeport.ResolveSpawnOptions(egoOpt).Placement())
+			opt := WithPlacement(Local)
+			var _ runtimeport.SpawnOption = opt //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+			var egoOpt SpawnOption = opt        //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+			ctx.Expect(runtimeport.ResolveSpawnOptions(egoOpt).Placement()).ToEqual(runtimeport.Local)
 
-	require.Equal(t, runtimeport.RoundRobin, RoundRobin)
-	require.Equal(t, runtimeport.Random, Random)
-	require.Equal(t, runtimeport.Local, Local)
-	require.Equal(t, runtimeport.LeastLoad, LeastLoad)
-	require.Equal(t, runtimeport.StopDirective, StopDirective)
-	require.Equal(t, runtimeport.RestartDirective, RestartDirective)
-	require.Equal(t, runtimeport.SagaRunning, SagaRunning)
-	require.Equal(t, runtimeport.SagaCompleted, SagaCompleted)
-	require.Equal(t, runtimeport.SagaCompensating, SagaCompensating)
-	require.Equal(t, runtimeport.SagaFailed, SagaFailed)
-	require.Equal(t, "compensating", SagaCompensating.String())
+			ctx.Expect(RoundRobin).ToEqual(runtimeport.RoundRobin)
+			ctx.Expect(Random).ToEqual(runtimeport.Random)
+			ctx.Expect(Local).ToEqual(runtimeport.Local)
+			ctx.Expect(LeastLoad).ToEqual(runtimeport.LeastLoad)
+			ctx.Expect(StopDirective).ToEqual(runtimeport.StopDirective)
+			ctx.Expect(RestartDirective).ToEqual(runtimeport.RestartDirective)
+			ctx.Expect(SagaRunning).ToEqual(runtimeport.SagaRunning)
+			ctx.Expect(SagaCompleted).ToEqual(runtimeport.SagaCompleted)
+			ctx.Expect(SagaCompensating).ToEqual(runtimeport.SagaCompensating)
+			ctx.Expect(SagaFailed).ToEqual(runtimeport.SagaFailed)
+			ctx.Expect(SagaCompensating.String()).ToEqual("compensating")
+		})
+	})
 }
 
 // TestEgoSpawnOptionsResolveThroughRuntime checks that every engine.With* spawn
@@ -112,72 +125,86 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 // neutral ones through their getters, the four write-side ones as adapter
 // settings under ego's own keys.
 func TestEgoSpawnOptionsResolveThroughRuntime(t *testing.T) {
-	policy := RetentionPolicy{DeleteEventsOnSnapshot: true, EventsRetentionCount: 7}
-	s := runtimeport.ResolveSpawnOptions(
-		WithPassivateAfter(2*time.Second),
-		WithRelocation(true),
-		WithSupervisorDirective(StopDirective),
-		WithPlacement(LeastLoad),
-		WithTenant(tenancy.TenantID("acme")),
-		WithSnapshotInterval(5),
-		WithRetentionPolicy(policy),
-		WithBatchThreshold(9),
-		WithBatchFlushWindow(3*time.Millisecond),
-	)
-	require.Equal(t, 2*time.Second, s.PassivateAfter())
-	require.True(t, s.Relocation())
-	require.Equal(t, StopDirective, s.SupervisorDirective())
-	require.Equal(t, LeastLoad, s.Placement())
-	require.Equal(t, tenancy.TenantID("acme"), s.Tenant())
+	specs.Describe(t, "engine spawn options are readable through the port/runtime ResolveSpawnOptions", func(s *specs.Spec) {
+		s.It("exposes the neutral options through getters and the write-side ones as adapter settings", func(ctx *specs.Context) {
+			policy := RetentionPolicy{DeleteEventsOnSnapshot: true, EventsRetentionCount: 7}
+			resolved := runtimeport.ResolveSpawnOptions(
+				WithPassivateAfter(2*time.Second),
+				WithRelocation(true),
+				WithSupervisorDirective(StopDirective),
+				WithPlacement(LeastLoad),
+				WithTenant(tenancy.TenantID("acme")),
+				WithSnapshotInterval(5),
+				WithRetentionPolicy(policy),
+				WithBatchThreshold(9),
+				WithBatchFlushWindow(3*time.Millisecond),
+			)
+			ctx.Expect(resolved.PassivateAfter()).ToEqual(2 * time.Second)
+			ctx.Expect(resolved.Relocation()).To(specs.BeTrue())
+			ctx.Expect(resolved.SupervisorDirective()).ToEqual(StopDirective)
+			ctx.Expect(resolved.Placement()).ToEqual(LeastLoad)
+			ctx.Expect(resolved.Tenant()).ToEqual(tenancy.TenantID("acme"))
 
-	v, ok := s.AdapterSetting(snapshotIntervalKey{})
-	require.True(t, ok)
-	require.Equal(t, uint64(5), v)
-	v, ok = s.AdapterSetting(retentionPolicyKey{})
-	require.True(t, ok)
-	require.Equal(t, policy, v)
-	v, ok = s.AdapterSetting(batchThresholdKey{})
-	require.True(t, ok)
-	require.Equal(t, 9, v)
-	v, ok = s.AdapterSetting(batchFlushWindowKey{})
-	require.True(t, ok)
-	require.Equal(t, 3*time.Millisecond, v)
+			v, ok := resolved.AdapterSetting(snapshotIntervalKey{})
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(v).ToEqual(uint64(5))
+			v, ok = resolved.AdapterSetting(retentionPolicyKey{})
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(v).ToEqual(policy)
+			v, ok = resolved.AdapterSetting(batchThresholdKey{})
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(v).ToEqual(9)
+			v, ok = resolved.AdapterSetting(batchFlushWindowKey{})
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(v).ToEqual(3 * time.Millisecond)
+		})
+	})
 }
 
 // TestNewSpawnConfigRoundTrip checks that the GoAkt adapter's private config
 // receives every option, including the write-side ones carried as adapter
 // settings.
 func TestNewSpawnConfigRoundTrip(t *testing.T) {
-	policy := RetentionPolicy{DeleteSnapshotsOnSnapshot: true, EventsRetentionCount: 3}
-	config := newSpawnConfig(
-		WithPassivateAfter(time.Minute),
-		WithRelocation(true),
-		WithSupervisorDirective(StopDirective),
-		WithPlacement(Random),
-		WithTenant(tenancy.TenantID("t1")),
-		WithSnapshotInterval(4),
-		WithRetentionPolicy(policy),
-		WithBatchThreshold(8),
-		WithBatchFlushWindow(time.Millisecond),
-	)
-	require.Equal(t, &spawnConfig{
-		passivateAfter:      time.Minute,
-		toRelocate:          true,
-		supervisorDirective: StopDirective,
-		entitiesPlacement:   Random,
-		snapshotInterval:    4,
-		retentionPolicy:     &policy,
-		batchThreshold:      8,
-		batchFlushWindow:    time.Millisecond,
-		tenantID:            tenancy.TenantID("t1"),
-	}, config)
+	specs.Describe(t, "newSpawnConfig hands the GoAkt adapter every spawn option", func(s *specs.Spec) {
+		s.It("carries the neutral and the write-side options into the private config", func(ctx *specs.Context) {
+			policy := RetentionPolicy{DeleteSnapshotsOnSnapshot: true, EventsRetentionCount: 3}
+			config := newSpawnConfig(
+				WithPassivateAfter(time.Minute),
+				WithRelocation(true),
+				WithSupervisorDirective(StopDirective),
+				WithPlacement(Random),
+				WithTenant(tenancy.TenantID("t1")),
+				WithSnapshotInterval(4),
+				WithRetentionPolicy(policy),
+				WithBatchThreshold(8),
+				WithBatchFlushWindow(time.Millisecond),
+			)
+			ctx.Expect(config).ToEqual(&spawnConfig{
+				passivateAfter:      time.Minute,
+				toRelocate:          true,
+				supervisorDirective: StopDirective,
+				entitiesPlacement:   Random,
+				snapshotInterval:    4,
+				retentionPolicy:     &policy,
+				batchThreshold:      8,
+				batchFlushWindow:    time.Millisecond,
+				tenantID:            tenancy.TenantID("t1"),
+			})
+		})
+	})
 }
 
 // TestNewSpawnConfigSkipsNilOption records the one behavior change of S4-2:
 // a nil SpawnOption used to panic in newSpawnConfig and is now skipped.
 func TestNewSpawnConfigSkipsNilOption(t *testing.T) {
-	require.NotPanics(t, func() {
-		config := newSpawnConfig(nil, WithBatchThreshold(2))
-		require.Equal(t, 2, config.batchThreshold)
+	specs.Describe(t, "newSpawnConfig skips a nil spawn option", func(s *specs.Spec) {
+		s.It("does not panic and still applies the other options", func(ctx *specs.Context) {
+			var config *spawnConfig
+			panicked := optRecovered(func() {
+				config = newSpawnConfig(nil, WithBatchThreshold(2))
+			})
+			ctx.Expect(panicked).To(specs.BeNil())
+			ctx.Expect(config.batchThreshold).ToEqual(2)
+		})
 	})
 }
