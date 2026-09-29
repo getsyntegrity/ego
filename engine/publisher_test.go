@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,11 +56,15 @@ import (
 // the payload via egopb.Event.Shard / egopb.DurableState.Shard) removes that
 // failure mode.
 func TestTopicConstantsAreFixed(t *testing.T) {
-	assert.NotEmpty(t, protocol.EventsTopic, "protocol.EventsTopic must be set")
-	assert.NotEmpty(t, protocol.StatesTopic, "protocol.StatesTopic must be set")
-	assert.NotContains(t, protocol.EventsTopic, "%", "protocol.EventsTopic must not contain fmt directives")
-	assert.NotContains(t, protocol.StatesTopic, "%", "protocol.StatesTopic must not contain fmt directives")
-	assert.NotEqual(t, protocol.EventsTopic, protocol.StatesTopic, "events and states must use distinct topics")
+	specs.Describe(t, "the events and states topics are fixed plain strings", func(s *specs.Spec) {
+		s.It("sets both topics, without fmt directives, and keeps them distinct", func(ctx *specs.Context) {
+			ctx.Expect(protocol.EventsTopic).To(specs.NotEqual(""))
+			ctx.Expect(protocol.StatesTopic).To(specs.NotEqual(""))
+			ctx.Expect(protocol.EventsTopic).To(specs.Not(specs.Contain("%")))
+			ctx.Expect(protocol.StatesTopic).To(specs.Not(specs.Contain("%")))
+			ctx.Expect(protocol.EventsTopic).To(specs.NotEqual(protocol.StatesTopic))
+		})
+	})
 }
 
 // recordingEventPublisher captures every event passed to Publish so tests can
@@ -523,18 +528,18 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 // test fires immediately rather than waiting for an event delivery to drop
 // in production.
 func TestTopicConstantsAreNotPartitionedFormats(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value string
-	}{
-		{"protocol.EventsTopic", protocol.EventsTopic},
-		{"protocol.StatesTopic", protocol.StatesTopic},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Falsef(t, strings.Contains(tc.value, "%d"),
-				"%s = %q should not contain a partition format directive", tc.name, tc.value)
-			assert.Falsef(t, strings.Contains(tc.value, "%"),
-				"%s = %q should not contain any fmt directive", tc.name, tc.value)
-		})
-	}
+	specs.Describe(t, "the topic constants carry no partition format directive", func(s *specs.Spec) {
+		for _, tc := range []struct {
+			name  string
+			value string
+		}{
+			{"protocol.EventsTopic", protocol.EventsTopic},
+			{"protocol.StatesTopic", protocol.StatesTopic},
+		} {
+			s.It(tc.name+" contains no fmt directive", func(ctx *specs.Context) {
+				ctx.Expect(strings.Contains(tc.value, "%d")).To(specs.BeFalse())
+				ctx.Expect(strings.Contains(tc.value, "%")).To(specs.BeFalse())
+			})
+		}
+	})
 }
