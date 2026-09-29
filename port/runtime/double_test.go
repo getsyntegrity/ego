@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -240,71 +240,90 @@ type doubleKeyA struct{}
 type doubleKeyB struct{}
 
 // spawn goes through the capability a consumer would hold, runtime.Entities.
-func spawn(t *testing.T, entities runtime.Entities, id string, opts ...runtime.SpawnOption) {
+func spawn(t testing.TB, entities runtime.Entities, id string, opts ...runtime.SpawnOption) {
 	t.Helper()
-	require.NoError(t, entities.SpawnEventSourced(context.Background(), &counter{id: id}, opts...))
+	if err := entities.SpawnEventSourced(context.Background(), &counter{id: id}, opts...); err != nil {
+		t.Fatalf("spawn %q: %v", id, err)
+	}
 }
 
 func TestDoubleSpawnResolvesDocumentedDefaults(t *testing.T) {
-	d := newDouble()
-	spawn(t, d, "account-1")
+	specs.Describe(t, "The double resolves the documented spawn defaults", func(s *specs.Spec) {
+		s.It("hosts an entity spawned without options with the documented default settings", func(ctx *specs.Context) {
+			d := newDouble()
+			spawn(ctx.T, d, "account-1")
 
-	s := d.entities["account-1"].settings
-	require.Zero(t, s.PassivateAfter())
-	require.False(t, s.Relocation())
-	require.Equal(t, runtime.RestartDirective, s.SupervisorDirective())
-	require.Equal(t, runtime.RoundRobin, s.Placement())
-	require.Empty(t, s.Tenant())
+			settings := d.entities["account-1"].settings
+			ctx.Expect(settings.PassivateAfter()).ToEqual(time.Duration(0))
+			ctx.Expect(settings.Relocation()).To(specs.BeFalse())
+			ctx.Expect(settings.SupervisorDirective()).ToEqual(runtime.RestartDirective)
+			ctx.Expect(settings.Placement()).ToEqual(runtime.RoundRobin)
+			ctx.Expect(settings.Tenant() == "").To(specs.BeTrue())
+		})
+	})
 }
 
 func TestDoubleSpawnAppliesOptionsInOrderAndSkipsNil(t *testing.T) {
-	d := newDouble()
-	spawn(t, d, "account-1",
-		runtime.WithPlacement(runtime.Random),
-		nil,
-		runtime.WithPlacement(runtime.Local),
-		runtime.WithSupervisorDirective(runtime.StopDirective),
-		runtime.WithAdapterSetting(doubleKeyA{}, 42),
-	)
+	specs.Describe(t, "The double applies spawn options in order and skips nil ones", func(s *specs.Spec) {
+		s.It("keeps the last placement, the supervisor directive and the adapter setting under its own key", func(ctx *specs.Context) {
+			d := newDouble()
+			spawn(ctx.T, d, "account-1",
+				runtime.WithPlacement(runtime.Random),
+				nil,
+				runtime.WithPlacement(runtime.Local),
+				runtime.WithSupervisorDirective(runtime.StopDirective),
+				runtime.WithAdapterSetting(doubleKeyA{}, 42),
+			)
 
-	s := d.entities["account-1"].settings
-	require.Equal(t, runtime.Local, s.Placement(), "a later option overrides an earlier one")
-	require.Equal(t, runtime.StopDirective, s.SupervisorDirective())
+			settings := d.entities["account-1"].settings
+			// A later option overrides an earlier one.
+			ctx.Expect(settings.Placement()).ToEqual(runtime.Local)
+			ctx.Expect(settings.SupervisorDirective()).ToEqual(runtime.StopDirective)
 
-	value, ok := s.AdapterSetting(doubleKeyA{})
-	require.True(t, ok, "an adapter setting is visible under its own key")
-	require.Equal(t, 42, value)
-	_, ok = s.AdapterSetting(doubleKeyB{})
-	require.False(t, ok, "an adapter setting is invisible under another key")
+			// An adapter setting is visible under its own key.
+			value, ok := settings.AdapterSetting(doubleKeyA{})
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(value).ToEqual(42)
+			// An adapter setting is invisible under another key.
+			_, ok = settings.AdapterSetting(doubleKeyB{})
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestDoubleSendCommandRunsTheBehavior(t *testing.T) {
-	d := newDouble()
-	spawn(t, d, "account-1")
-	var entities runtime.Entities = d
-	ctx := context.Background()
+	specs.Describe(t, "The double runs a command through the hosted behavior", func(s *specs.Spec) {
+		s.It("applies events, keeps the state on a no-event command and rejects a missing entity", func(ctx *specs.Context) {
+			d := newDouble()
+			spawn(ctx.T, d, "account-1")
+			var entities runtime.Entities = d
+			bg := context.Background()
 
-	state, revision, err := entities.SendCommand(ctx, "account-1", wrapperspb.Int64(5), time.Second)
-	require.NoError(t, err)
-	require.True(t, proto.Equal(wrapperspb.Int64(5), state))
-	require.EqualValues(t, 1, revision)
+			state, revision, err := entities.SendCommand(bg, "account-1", wrapperspb.Int64(5), time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(proto.Equal(wrapperspb.Int64(5), state)).To(specs.BeTrue())
+			ctx.Expect(revision).ToEqual(uint64(1))
 
-	state, revision, err = entities.SendCommand(ctx, "account-1", wrapperspb.Int64(7), time.Second)
-	require.NoError(t, err)
-	require.True(t, proto.Equal(wrapperspb.Int64(12), state))
-	require.EqualValues(t, 2, revision)
+			state, revision, err = entities.SendCommand(bg, "account-1", wrapperspb.Int64(7), time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(proto.Equal(wrapperspb.Int64(12), state)).To(specs.BeTrue())
+			ctx.Expect(revision).ToEqual(uint64(2))
 
-	state, revision, err = entities.SendCommand(ctx, "account-1", wrapperspb.Int64(0), time.Second)
-	require.NoError(t, err)
-	require.Nil(t, state, "no event, no state update")
-	require.EqualValues(t, 2, revision)
+			// No event, no state update.
+			state, revision, err = entities.SendCommand(bg, "account-1", wrapperspb.Int64(0), time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(state).To(specs.BeNil())
+			ctx.Expect(revision).ToEqual(uint64(2))
 
-	_, _, err = entities.SendCommand(ctx, "", wrapperspb.Int64(1), time.Second)
-	require.ErrorIs(t, err, runtime.ErrUndefinedEntityID)
+			_, _, err = entities.SendCommand(bg, "", wrapperspb.Int64(1), time.Second)
+			ctx.Expect(err).To(specs.MatchError(runtime.ErrUndefinedEntityID))
 
-	_, _, err = entities.SendCommand(ctx, "unknown", wrapperspb.Int64(1), time.Second)
-	require.Error(t, err)
-	require.NotErrorIs(t, err, runtime.ErrUnsupported, "a missing entity is not an unsupported operation")
+			_, _, err = entities.SendCommand(bg, "unknown", wrapperspb.Int64(1), time.Second)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			// A missing entity is not an unsupported operation.
+			ctx.Expect(err).To(specs.Not(specs.MatchError(runtime.ErrUnsupported)))
+		})
+	})
 }
 
 // TestDoubleUnsupportedOperations calls every operation the double lacks
@@ -313,82 +332,92 @@ func TestDoubleSendCommandRunsTheBehavior(t *testing.T) {
 // errors.ErrUnsupported, names the runtime and the operation, and is returned
 // before any side effect (the hosted entities are unchanged).
 func TestDoubleUnsupportedOperations(t *testing.T) {
-	d := newDouble()
-	spawn(t, d, "account-1")
-	_, _, err := d.SendCommand(context.Background(), "account-1", wrapperspb.Int64(3), time.Second)
-	require.NoError(t, err)
+	specs.Describe(t, "The double rejects every operation it lacks with an UnsupportedError before any side effect", func(s *specs.Spec) {
+		var (
+			d           *double
+			entities    runtime.Entities
+			sagas       runtime.Sagas
+			projections runtime.Projections
+			events      runtime.Events
+			env         command.Envelope
+		)
+		bg := context.Background()
 
-	var (
-		entities    runtime.Entities    = d
-		sagas       runtime.Sagas       = d
-		projections runtime.Projections = d
-		events      runtime.Events      = d
-	)
-	ctx := context.Background()
-	env, err := command.NewEnvelope(wrapperspb.Int64(1), command.Metadata{})
-	require.NoError(t, err)
+		s.BeforeEach(func(ctx *specs.Context) {
+			d = newDouble()
+			spawn(ctx.T, d, "account-1")
+			_, _, err := d.SendCommand(bg, "account-1", wrapperspb.Int64(3), time.Second)
+			ctx.Expect(err).To(specs.BeNil())
 
-	cases := []struct {
-		operation string
-		call      func(t *testing.T) error
-	}{
-		{"SpawnDurableState", func(*testing.T) error { return entities.SpawnDurableState(ctx, ledger{}) }},
-		{"EntityExists", func(t *testing.T) error {
-			exists, err := entities.EntityExists(ctx, "account-1")
-			require.False(t, exists)
-			return err
-		}},
-		{"Dispatch", func(*testing.T) error {
-			_, err := entities.Dispatch(ctx, "account-1", env, time.Second)
-			return err
-		}},
-		{"EraseEntity", func(*testing.T) error { return entities.EraseEntity(ctx, "account-1", true) }},
-		{"SpawnSaga", func(*testing.T) error { return sagas.SpawnSaga(ctx, idleSaga{}, time.Second) }},
-		{"SagaStatus", func(t *testing.T) error {
-			info, err := sagas.SagaStatus(ctx, "saga-1", time.Second)
-			require.Nil(t, info)
-			return err
-		}},
-		{"StartProjection", func(*testing.T) error { return projections.StartProjection(ctx, "balances") }},
-		{"StopProjection", func(*testing.T) error { return projections.StopProjection(ctx, "balances") }},
-		{"IsProjectionRunning", func(t *testing.T) error {
-			running, err := projections.IsProjectionRunning(ctx, "balances")
-			require.False(t, running)
-			return err
-		}},
-		{"RebuildProjection", func(*testing.T) error {
-			return projections.RebuildProjection(ctx, "balances", time.Time{})
-		}},
-		{"ProjectionLag", func(t *testing.T) error {
-			lag, err := projections.ProjectionLag(ctx, "balances")
-			require.Nil(t, lag)
-			return err
-		}},
-		{"Subscribe", func(t *testing.T) error {
-			subscriber, err := events.Subscribe()
-			require.Nil(t, subscriber)
-			return err
-		}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.operation, func(t *testing.T) {
-			before := maps.Clone(d.entities)
-			hosted := *d.entities["account-1"]
-
-			err := tc.call(t)
-
-			require.ErrorIs(t, err, runtime.ErrUnsupported)
-			require.ErrorIs(t, err, errors.ErrUnsupported)
-			var unsupportedErr *runtime.UnsupportedError
-			require.ErrorAs(t, err, &unsupportedErr)
-			require.Equal(t, doubleRuntime, unsupportedErr.Runtime)
-			require.Equal(t, tc.operation, unsupportedErr.Operation)
-
-			require.Equal(t, before, d.entities, "no entity was added or removed")
-			after := d.entities["account-1"]
-			require.Equal(t, hosted.revision, after.revision, "the hosted entity is unchanged")
-			require.True(t, proto.Equal(hosted.state, after.state), "the hosted entity is unchanged")
+			entities, sagas, projections, events = d, d, d, d
+			env, err = command.NewEnvelope(wrapperspb.Int64(1), command.Metadata{})
+			ctx.Expect(err).To(specs.BeNil())
 		})
-	}
+
+		cases := []struct {
+			operation string
+			call      func(c *specs.Context) error
+		}{
+			{"SpawnDurableState", func(*specs.Context) error { return entities.SpawnDurableState(bg, ledger{}) }},
+			{"EntityExists", func(c *specs.Context) error {
+				exists, err := entities.EntityExists(bg, "account-1")
+				c.Expect(exists).To(specs.BeFalse())
+				return err
+			}},
+			{"Dispatch", func(*specs.Context) error {
+				_, err := entities.Dispatch(bg, "account-1", env, time.Second)
+				return err
+			}},
+			{"EraseEntity", func(*specs.Context) error { return entities.EraseEntity(bg, "account-1", true) }},
+			{"SpawnSaga", func(*specs.Context) error { return sagas.SpawnSaga(bg, idleSaga{}, time.Second) }},
+			{"SagaStatus", func(c *specs.Context) error {
+				info, err := sagas.SagaStatus(bg, "saga-1", time.Second)
+				c.Expect(info).To(specs.BeNil())
+				return err
+			}},
+			{"StartProjection", func(*specs.Context) error { return projections.StartProjection(bg, "balances") }},
+			{"StopProjection", func(*specs.Context) error { return projections.StopProjection(bg, "balances") }},
+			{"IsProjectionRunning", func(c *specs.Context) error {
+				running, err := projections.IsProjectionRunning(bg, "balances")
+				c.Expect(running).To(specs.BeFalse())
+				return err
+			}},
+			{"RebuildProjection", func(*specs.Context) error {
+				return projections.RebuildProjection(bg, "balances", time.Time{})
+			}},
+			{"ProjectionLag", func(c *specs.Context) error {
+				lag, err := projections.ProjectionLag(bg, "balances")
+				c.Expect(lag).To(specs.BeNil())
+				return err
+			}},
+			{"Subscribe", func(c *specs.Context) error {
+				subscriber, err := events.Subscribe()
+				c.Expect(subscriber).To(specs.BeNil())
+				return err
+			}},
+		}
+
+		for _, tc := range cases {
+			s.It(tc.operation, func(ctx *specs.Context) {
+				before := maps.Clone(d.entities)
+				hosted := *d.entities["account-1"]
+
+				err := tc.call(ctx)
+
+				ctx.Expect(err).To(specs.MatchError(runtime.ErrUnsupported))
+				ctx.Expect(err).To(specs.MatchError(errors.ErrUnsupported))
+				var unsupportedErr *runtime.UnsupportedError
+				ctx.Expect(err).To(specs.MatchErrorAs(&unsupportedErr))
+				ctx.Expect(unsupportedErr.Runtime).ToEqual(doubleRuntime)
+				ctx.Expect(unsupportedErr.Operation).ToEqual(tc.operation)
+
+				// No entity was added or removed.
+				ctx.Expect(d.entities).ToEqual(before)
+				after := d.entities["account-1"]
+				// The hosted entity is unchanged.
+				ctx.Expect(after.revision).ToEqual(hosted.revision)
+				ctx.Expect(proto.Equal(hosted.state, after.state)).To(specs.BeTrue())
+			})
+		}
+	})
 }
