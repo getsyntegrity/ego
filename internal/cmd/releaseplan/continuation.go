@@ -205,6 +205,8 @@ type continuationParams struct {
 	checkRequiredVer  string
 	planPublishers    bool
 	checkTagConflicts string
+	retired           string
+	checkNotRetired   string
 }
 
 // runContinuation dispatches every "-continuation-*" flag main.go's run
@@ -227,6 +229,20 @@ func runContinuation(p continuationParams, stdout, _ io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "version %s: valid\n", p.checkVersion)
+	}
+
+	if p.checkNotRetired != "" {
+		if p.retired == "" {
+			return errors.New("-continuation-check-not-retired requires -retired")
+		}
+		retired, err := readRetiredTags(p.retired)
+		if err != nil {
+			return fmt.Errorf("reading -retired: %w", err)
+		}
+		if err := checkNotRetired(retired, p.checkNotRetired); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "tag %s: not retired\n", p.checkNotRetired)
 	}
 
 	if p.checkRequiredVer != "" {
@@ -283,6 +299,9 @@ func runContinuation(p continuationParams, stdout, _ io.Writer) error {
 		}
 		modules, err := planPublisherTags(graph, dirs, tags, p.bump)
 		if err != nil {
+			return err
+		}
+		if err := guardRetired(p.retired, tags, modules); err != nil {
 			return err
 		}
 

@@ -82,7 +82,9 @@ jobs:
         run: |
           go run ./internal/cmd/releaseplan \
             -continuation-check-sha "$SHA" \
-            -continuation-check-version "$EGO_VERSION"
+            -continuation-check-version "$EGO_VERSION" \
+            -retired scripts/ci/retired-tags.txt \
+            -continuation-check-not-retired "$EGO_VERSION"
 
       - name: Confirm ego_version tag exists and is on main
         env:
@@ -180,6 +182,7 @@ jobs:
             -tags "$SCRATCH/tags-combined.txt" \
             -bump "${BUMP}" \
             -continuation-plan-publishers \
+            -retired scripts/ci/retired-tags.txt \
             -continuation-check-tag-conflicts "$SCRATCH/tags-combined.txt" \
             -out-dir "$SCRATCH/plan"
 
@@ -220,6 +223,7 @@ jobs:
             -tags "$SCRATCH/tags-combined-recheck.txt" \
             -bump "${BUMP}" \
             -continuation-plan-publishers \
+            -retired scripts/ci/retired-tags.txt \
             -continuation-check-tag-conflicts "$SCRATCH/tags-combined-recheck.txt" \
             -out-dir "$SCRATCH/plan-recheck"
 
