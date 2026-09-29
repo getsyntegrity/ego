@@ -26,8 +26,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -37,17 +36,21 @@ import (
 // TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata for
 // Actor.dispatchToBehavior.
 func TestActorFallsBackToHandleCommandWithoutMetadata(t *testing.T) {
-	entity := &Actor{
-		behavior: enginetest.NewEnvelopeCapturingDurableStateBehavior("no-metadata"),
-	}
+	specs.Describe(t, "dispatchToBehavior falls back to HandleCommand when the command carries no Metadata", func(s *specs.Spec) {
+		s.It("calls HandleCommand once and never HandleEnvelope", func(ctx *specs.Context) {
+			entity := &Actor{
+				behavior: enginetest.NewEnvelopeCapturingDurableStateBehavior("no-metadata"),
+			}
 
-	newState, newVersion, err := entity.dispatchToBehavior(context.Background(), &testpb.CreateAccount{AccountBalance: 9}, 0, new(testpb.Account))
-	require.NoError(t, err)
-	require.EqualValues(t, 1, newVersion)
-	require.NotNil(t, newState)
+			newState, newVersion, err := entity.dispatchToBehavior(context.Background(), &testpb.CreateAccount{AccountBalance: 9}, 0, new(testpb.Account))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(newVersion).ToEqual(uint64(1))
+			ctx.Expect(newState == nil).To(specs.BeFalse())
 
-	behavior := entity.behavior.(*enginetest.EnvelopeCapturingDurableStateBehavior)
-	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-	assert.Equal(t, 1, handleCommandHit)
-	assert.Zero(t, handleEnvelopeHit)
+			behavior := entity.behavior.(*enginetest.EnvelopeCapturingDurableStateBehavior)
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			ctx.Expect(handleCommandHit).ToEqual(1)
+			ctx.Expect(handleEnvelopeHit).ToEqual(0)
+		})
+	})
 }
