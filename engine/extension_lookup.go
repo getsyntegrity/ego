@@ -26,43 +26,17 @@ import (
 	"fmt"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
+
+	"github.com/getsyntegrity/ego/v4/internal/extensions"
 )
 
 // requireExtension looks up the extension registered under extensionID on the
-// actor system reachable through ctx and asserts it to type T.
-//
-// ctx.Extension returns the plain extension.Extension interface, and every
-// actor PreStart in this package used to assert it directly, e.g.
-// ctx.Extension(id).(*extensions.EventsStore). That panics with an
-// unrecoverable "interface conversion" error whenever the extension is
-// missing or was registered under a different type. Because PreStart runs on
-// the goroutine created for the Spawn/SpawnChild call — which goakt drives
-// through a golang.org/x/sync/singleflight.Group so concurrent spawns of the
-// same identity coalesce onto one execution — a panic there is deliberately
-// re-panicked by singleflight on a fresh, unrecoverable goroutine (see
-// golang.org/x/sync/singleflight.(*Group).doCall), which crashes the whole
-// process instead of just failing the one Spawn call. This can happen for a
-// child actor (eventsWriterActor, eventsJanitorActor, ...) spawned while its
-// required extension was never registered, or a mismatched actor-system setup.
-//
-// requireExtension turns that panic into a descriptive PreStart error
-// instead, which goakt reports as an ordinary spawn/init failure.
+// actor system reachable through ctx and asserts it to type T. It returns an
+// error wrapping ErrMissingRequiredExtensions instead of panicking when the
+// extension is missing or has an unexpected type; see extensions.Require,
+// which the actors outside this package share, for why that matters.
 func requireExtension[T any](ctx *goakt.Context, extensionID string) (T, error) {
-	var zero T
-
-	ext := ctx.Extension(extensionID)
-	if ext == nil {
-		return zero, fmt.Errorf("%w: %s is not registered on the actor system (actor=%q)",
-			ErrMissingRequiredExtensions, extensionID, ctx.ActorName())
-	}
-
-	typed, ok := ext.(T)
-	if !ok {
-		return zero, fmt.Errorf("%w: %s was registered with unexpected type %T (actor=%q)",
-			ErrMissingRequiredExtensions, extensionID, ext, ctx.ActorName())
-	}
-
-	return typed, nil
+	return extensions.Require[T](ctx, extensionID)
 }
 
 // optionalExtension looks up the extension registered under extensionID on

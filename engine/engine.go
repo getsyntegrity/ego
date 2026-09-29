@@ -98,8 +98,9 @@ var (
 	// absent. The error message lists the missing extension IDs. Callers
 	// typically hit this when the actor system was built from a different
 	// Config than the one passed to NewEngine, or when cfg.GoaktOptions()
-	// was not applied at construction time.
-	ErrMissingRequiredExtensions = errors.New("actor system is missing required ego extensions")
+	// was not applied at construction time. Actors that cannot find an
+	// extension they require in PreStart wrap this same value.
+	ErrMissingRequiredExtensions = extensions.ErrMissingRequiredExtensions
 	// ErrSpawnTenantUndetermined is returned by Entity, DurableStateEntity,
 	// and Saga when tenancy is active (a tenancy.TenantResolver is
 	// registered via WithTenantResolver) but the engine cannot determine

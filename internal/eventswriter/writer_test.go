@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventswriter
 
 import (
 	"context"
@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/log"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/v4/egopb"
@@ -54,7 +55,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream.Subscribe(sub, "topic.events.0")
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -63,7 +64,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -85,7 +86,7 @@ func TestEventsWriterActor(t *testing.T) {
 			},
 		}
 
-		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+		reply, err := goakt.Ask(ctx, pid, &request{
 			scope:        persistence.Unscoped(),
 			envelopes:    envelopes,
 			topic:        "topic.events.0",
@@ -94,7 +95,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*persistEventsResponse)
+		resp, ok := reply.(*Response)
 		require.True(t, ok)
 		assert.Nil(t, resp.Err)
 
@@ -133,7 +134,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream.Subscribe(sub, "topic.events.0")
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -142,7 +143,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
@@ -158,7 +159,7 @@ func TestEventsWriterActor(t *testing.T) {
 			},
 		}
 
-		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+		reply, err := goakt.Ask(ctx, pid, &request{
 			scope:     persistence.Unscoped(),
 			envelopes: envelopes,
 			topic:     "topic.events.0",
@@ -166,7 +167,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*persistEventsResponse)
+		resp, ok := reply.(*Response)
 		require.True(t, ok)
 		assert.Error(t, resp.Err)
 		assert.ErrorIs(t, resp.Err, assert.AnError)
@@ -197,7 +198,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -206,13 +207,13 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
 		pause.For(time.Second)
 
-		reply, err := goakt.Ask(ctx, pid, &persistEventsRequest{
+		reply, err := goakt.Ask(ctx, pid, &request{
 			scope:        persistence.Unscoped(),
 			envelopes:    nil,
 			topic:        "topic.events.0",
@@ -221,7 +222,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply)
 
-		resp, ok := reply.(*persistEventsResponse)
+		resp, ok := reply.(*Response)
 		require.True(t, ok)
 		assert.Nil(t, resp.Err)
 
@@ -236,14 +237,14 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		// Deliberately omit extensions.NewEventsStore: this reproduces an
-		// eventsWriterActor being spawned against an actor system that never
+		// the events writer being spawned against an actor system that never
 		// registered (or already reset, e.g. via shutdown) the events store
 		// extension. Before the fix for issue #99, the unchecked type
 		// assertion in PreStart panicked with an unrecoverable "interface
 		// conversion" error that crashed the whole process instead of
 		// failing this one Spawn call.
 		actorSystem, err := goakt.NewActorSystem("TestWriterMissingExtSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStream(eventStream),
 			),
@@ -251,10 +252,10 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", newEventsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-missing-ext", New())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -269,7 +270,7 @@ func TestEventsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestWriterSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(log.DiscardLogger),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -278,7 +279,7 @@ func TestEventsWriterActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		pid, err := actorSystem.Spawn(ctx, "event-writer-test", newEventsWriterActor())
+		pid, err := actorSystem.Spawn(ctx, "event-writer-test", New())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
 
