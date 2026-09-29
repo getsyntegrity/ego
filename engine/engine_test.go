@@ -261,9 +261,9 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		// guard for the defect CI caught (a prior design resolved at spawn
 		// too, doubling this count).
 		assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once per command, never at spawn")
-		assert.EqualValues(t, 1, probe.invocationCount())
+		assert.EqualValues(t, 1, probe.InvocationCount())
 
-		tc, ok := probe.observedTenant()
+		tc, ok := probe.ObservedTenant()
 		require.True(t, ok, "HandleCommand must observe a TenantContext attached to its ctx via tenancy.From")
 		tenantID, ok := tc.Tenant()
 		require.True(t, ok)
@@ -295,7 +295,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		require.ErrorIs(t, err, wantErr, "SendCommand must surface the resolver error, not silently transform it")
 
 		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
-		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run when Resolve fails")
+		assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run when Resolve fails")
 
 		scopeA, err := persistence.NewTenantScope("acme")
 		require.NoError(t, err)
@@ -339,7 +339,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
 
 		assert.EqualValues(t, 1, resolver.callCount(), "only SendCommand's own resolve; spawn never calls Resolve")
-		assert.Zero(t, probe.invocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
+		assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run for an invalid resolved TenantContext")
 
 		scopeA, err := persistence.NewTenantScope("acme")
 		require.NoError(t, err)
@@ -379,7 +379,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 
 				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 				require.ErrorIs(t, err, tt.wantErr)
-				assert.Zero(t, probe.invocationCount())
+				assert.Zero(t, probe.InvocationCount())
 
 				scopeA, err := persistence.NewTenantScope("acme")
 				require.NoError(t, err)
@@ -435,7 +435,7 @@ func TestSendCommandTenantResolution(t *testing.T) {
 		wg.Wait()
 
 		for i := 0; i < tenantCount; i++ {
-			tc, ok := probes[i].observedTenant()
+			tc, ok := probes[i].ObservedTenant()
 			require.True(t, ok)
 			gotTenant, ok := tc.Tenant()
 			require.True(t, ok)
@@ -477,8 +477,8 @@ func TestSendCommandSingleTenantZeroPlumbing(t *testing.T) {
 	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 	require.NoError(t, err)
 
-	assert.EqualValues(t, 1, probe.invocationCount())
-	tc, ok := probe.observedTenant()
+	assert.EqualValues(t, 1, probe.InvocationCount())
+	tc, ok := probe.ObservedTenant()
 	require.True(t, ok, "HandleCommand must still observe a TenantContext even though the caller never attached one")
 	tenantID, ok := tc.Tenant()
 	require.True(t, ok)
@@ -524,8 +524,8 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
 		require.NoError(t, err)
 
-		assert.EqualValues(t, 1, probe.invocationCount())
-		tc, ok := probe.observedTenant()
+		assert.EqualValues(t, 1, probe.InvocationCount())
+		tc, ok := probe.ObservedTenant()
 		require.True(t, ok)
 		tenantID, ok := tc.Tenant()
 		require.True(t, ok)
@@ -549,8 +549,8 @@ func TestSendCommandResolverSwapIdenticalSequence(t *testing.T) {
 		// twice (spawn + SendCommand) for this exact sequence instead of
 		// once.
 		assert.EqualValues(t, 1, multiTenant.callCount(), "the multi-tenant resolver traverses the identical resolve step, exactly once")
-		assert.EqualValues(t, 1, probe.invocationCount())
-		tc, ok := probe.observedTenant()
+		assert.EqualValues(t, 1, probe.InvocationCount())
+		tc, ok := probe.ObservedTenant()
 		require.True(t, ok)
 		tenantID, ok := tc.Tenant()
 		require.True(t, ok)

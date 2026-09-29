@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
@@ -35,7 +35,7 @@ import (
 // [eventsJanitorActor] to delete old events and snapshots according to the
 // configured retention policy.
 //
-// scope carries the owning EventSourcedActor's bound persistence.Scope
+// scope carries the owning Actor's bound persistence.Scope
 // (TENANT-003 T4). eventsJanitorActor is a separate child actor with no
 // PreStart access to the parent's dependencies, so the scope must travel on
 // this request rather than be re-derived here.

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -35,7 +35,9 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
@@ -56,7 +58,7 @@ import (
 func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
 	ctx := context.Background()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	scopeA, err := persistence.NewTenantScope("acme")
 	require.NoError(t, err)
@@ -69,7 +71,7 @@ func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(store),
 			extensions.NewEventsStream(eventStream),
@@ -79,7 +81,7 @@ func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
@@ -127,13 +129,13 @@ func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
 func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 	ctx := context.Background()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	store := new(mocks.EventsStore)
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(store),
 			extensions.NewEventsStream(eventStream),
@@ -143,7 +145,7 @@ func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	// Deliberately no extensions.NewEntityTenantScope dependency: tenancy is
 	// active (extensions.NewTenancyMarker() above), but no scope was bound
 	// for this spawn.
@@ -151,8 +153,8 @@ func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 		goakt.WithDependencies(behavior),
 		goakt.WithLongLived(), goakt.WithStashing())
 	require.Error(t, err, "PreStart must fail closed when tenancy is active and no tenant scope was injected")
-	require.True(t, errors.Is(err, ErrEntityTenantScopeMissing),
-		"the rejection must be the typed ErrEntityTenantScopeMissing, not an invented error")
+	require.True(t, errors.Is(err, extensions.ErrEntityTenantScopeMissing),
+		"the rejection must be the typed extensions.ErrEntityTenantScopeMissing, not an invented error")
 	require.Nil(t, pid)
 	pause.For(time.Second)
 
@@ -176,7 +178,7 @@ func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 func TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore(t *testing.T) {
 	ctx := context.Background()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	store := new(mocks.EventsStore)
 	store.EXPECT().Ping(mock.Anything).Return(nil)
@@ -188,7 +190,7 @@ func TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore(t *testing.T) {
 	// No extensions.NewTenancyMarker() here: legacy mode, exactly like the
 	// pre-TENANT-003 actor system configuration.
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(store),
 			extensions.NewEventsStream(eventStream),
@@ -197,7 +199,7 @@ func TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior),
 		goakt.WithLongLived(), goakt.WithStashing())

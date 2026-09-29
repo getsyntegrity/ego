@@ -34,9 +34,9 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/emptypb"
 
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -84,101 +84,6 @@ func (m *mockClusterProvider) Register() error                  { return nil }
 func (m *mockClusterProvider) Deregister() error                { return nil }
 func (m *mockClusterProvider) DiscoverPeers() ([]string, error) { return m.peers, nil }
 func (m *mockClusterProvider) Close() error                     { return nil }
-
-// AccountEventSourcedBehavior implements EventSourcedBehavior
-type AccountEventSourcedBehavior struct {
-	id string
-}
-
-// enforces compilation error
-var _ EventSourcedBehavior = (*AccountEventSourcedBehavior)(nil)
-
-func NewAccountEventSourcedBehavior(id string) *AccountEventSourcedBehavior {
-	return &AccountEventSourcedBehavior{id: id}
-}
-func (x *AccountEventSourcedBehavior) ID() string {
-	return x.id
-}
-
-func (x *AccountEventSourcedBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (x *AccountEventSourcedBehavior) HandleCommand(_ context.Context, command Command, _ State) (events []Event, err error) {
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return []Event{
-			&testpb.AccountCreated{
-				AccountId:      x.id,
-				AccountBalance: cmd.GetAccountBalance(),
-			},
-		}, nil
-
-	case *testpb.CreditAccount:
-		if cmd.GetAccountId() == x.id {
-			return []Event{
-				&testpb.AccountCredited{
-					AccountId:      cmd.GetAccountId(),
-					AccountBalance: cmd.GetBalance(),
-				},
-			}, nil
-		}
-
-		return nil, errors.New("command sent to the wrong entity")
-
-	case *testpb.TestNoEvent:
-		return nil, nil
-
-	case *emptypb.Empty:
-		return []Event{new(emptypb.Empty)}, nil
-
-	default:
-		return nil, errors.New("unhandled command")
-	}
-}
-
-func (x *AccountEventSourcedBehavior) HandleEvent(_ context.Context, event Event, priorState State) (state State, err error) {
-	switch evt := event.(type) {
-	case *testpb.AccountCreated:
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: evt.GetAccountBalance(),
-		}, nil
-
-	case *testpb.AccountCredited:
-		account := priorState.(*testpb.Account)
-		bal := account.GetAccountBalance() + evt.GetAccountBalance()
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: bal,
-		}, nil
-
-	default:
-		return nil, errors.New("unhandled event")
-	}
-}
-
-func (x *AccountEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
-	serializable := struct {
-		ID string `json:"id"`
-	}{
-		ID: x.id,
-	}
-	return json.Marshal(serializable)
-}
-
-func (x *AccountEventSourcedBehavior) UnmarshalBinary(data []byte) error {
-	serializable := struct {
-		ID string `json:"id"`
-	}{}
-
-	if err := json.Unmarshal(data, &serializable); err != nil {
-		return err
-	}
-
-	x.id = serializable.ID
-	return nil
-}
 
 type AccountDurableStateBehavior struct {
 	id string
@@ -246,107 +151,6 @@ func (x *AccountDurableStateBehavior) UnmarshalBinary(data []byte) error {
 
 	x.id = serializable.ID
 	return nil
-}
-
-// tenancyProbeEventSourcedBehavior is a minimal EventSourcedBehavior that
-// records, from inside a real HandleCommand invocation, how many times it
-// was called and the ctx it was called with. Tests use it to prove (rather
-// than infer) that a TenantContext resolved and attached at the trust
-// boundary reaches domain code unchanged via tenancy.From, and that the
-// pre-handler gate prevents HandleCommand from ever running when no
-// TenantContext is attached.
-type tenancyProbeEventSourcedBehavior struct {
-	id string
-
-	mu          sync.Mutex
-	invocations int
-	lastCtx     context.Context
-}
-
-var _ EventSourcedBehavior = (*tenancyProbeEventSourcedBehavior)(nil)
-
-func newTenancyProbeEventSourcedBehavior(id string) *tenancyProbeEventSourcedBehavior {
-	return &tenancyProbeEventSourcedBehavior{id: id}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) ID() string {
-	return x.id
-}
-
-func (x *tenancyProbeEventSourcedBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (x *tenancyProbeEventSourcedBehavior) HandleCommand(ctx context.Context, command Command, _ State) (events []Event, err error) {
-	x.mu.Lock()
-	x.invocations++
-	x.lastCtx = ctx
-	x.mu.Unlock()
-
-	switch cmd := command.(type) {
-	case *testpb.CreateAccount:
-		return []Event{
-			&testpb.AccountCreated{
-				AccountId:      x.id,
-				AccountBalance: cmd.GetAccountBalance(),
-			},
-		}, nil
-	case *testpb.TestNoEvent:
-		// A genuinely idempotent no-op: no error, zero events. Used by the
-		// Blocker 3 cross-tenant batch-leak regression test, which needs a
-		// command that would otherwise reach processAndBatch's
-		// len(events)==0 reply path without ever erroring out first.
-		return nil, nil
-	default:
-		return nil, errors.New("unhandled command")
-	}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) HandleEvent(_ context.Context, event Event, _ State) (state State, err error) {
-	switch evt := event.(type) {
-	case *testpb.AccountCreated:
-		return &testpb.Account{
-			AccountId:      evt.GetAccountId(),
-			AccountBalance: evt.GetAccountBalance(),
-		}, nil
-	default:
-		return nil, errors.New("unhandled event")
-	}
-}
-
-func (x *tenancyProbeEventSourcedBehavior) MarshalBinary() (data []byte, err error) {
-	return json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: x.id})
-}
-
-func (x *tenancyProbeEventSourcedBehavior) UnmarshalBinary(data []byte) error {
-	aux := struct {
-		ID string `json:"id"`
-	}{}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	x.id = aux.ID
-	return nil
-}
-
-// invocationCount reports how many times HandleCommand has run so far.
-func (x *tenancyProbeEventSourcedBehavior) invocationCount() int {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return x.invocations
-}
-
-// observedTenant returns the tenancy.TenantContext bound to the ctx of the
-// most recent HandleCommand invocation, if any.
-func (x *tenancyProbeEventSourcedBehavior) observedTenant() (tenancy.TenantContext, bool) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if x.lastCtx == nil {
-		return tenancy.TenantContext{}, false
-	}
-	return tenancy.From(x.lastCtx)
 }
 
 // tenancyProbeDurableStateBehavior is the DurableStateBehavior counterpart of
@@ -566,3 +370,23 @@ func (a *simpleReplyActor) Receive(ctx *goakt.ReceiveContext) { ctx.Response(a.r
 
 // ensure time is used
 var _ = time.Second
+
+// The event sourced fixtures live in enginetest so that the actor packages
+// share one definition with these tests.
+type (
+	AccountEventSourcedBehavior      = enginetest.AccountEventSourcedBehavior
+	tenancyProbeEventSourcedBehavior = enginetest.TenancyProbeEventSourcedBehavior
+)
+
+var (
+	NewAccountEventSourcedBehavior      = enginetest.NewAccountEventSourcedBehavior
+	newTenancyProbeEventSourcedBehavior = enginetest.NewTenancyProbeEventSourcedBehavior
+)
+
+type FailingHandleEventBehavior = enginetest.FailingHandleEventBehavior
+
+var (
+	newEnvelopeCapturingEventSourcedBehavior = enginetest.NewEnvelopeCapturingEventSourcedBehavior
+)
+
+type envelopeCapturingEventSourcedBehavior = enginetest.EnvelopeCapturingEventSourcedBehavior

@@ -41,6 +41,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
@@ -63,7 +64,7 @@ func TestDurableStateActorPreStartExtensions(t *testing.T) {
 			goakt.WithExtensions(
 				extensions.NewDurableStateStore(durableStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.TelemetryExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)

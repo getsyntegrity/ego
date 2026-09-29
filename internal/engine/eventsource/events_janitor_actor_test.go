@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -34,7 +34,9 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
@@ -51,7 +53,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -95,7 +97,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(7)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -139,7 +141,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -187,7 +189,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -233,7 +235,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -278,7 +280,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -323,7 +325,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -370,7 +372,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -415,11 +417,11 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestJanitorMistypedSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
@@ -428,7 +430,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		pid, err := actorSystem.Spawn(ctx, "retention-mistyped-snapshot", newEventsJanitorActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -443,7 +445,7 @@ func TestEventsJanitorActor(t *testing.T) {
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),

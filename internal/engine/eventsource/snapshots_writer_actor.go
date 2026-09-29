@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -38,7 +38,7 @@ import (
 	"github.com/getsyntegrity/ego/persistence"
 )
 
-// persistSnapshotRequest is sent from the EventSourcedActor to the
+// persistSnapshotRequest is sent from the Actor to the
 // snapshotsWriterActor to persist a point-in-time snapshot of the entity state.
 //
 // The snapshot carries unencrypted state; encryption is handled by the writer
@@ -48,7 +48,7 @@ import (
 // writer can forward the cleanup request after the snapshot is confirmed
 // persisted. This eliminates the race where retention could delete old data
 // before the new snapshot is safely written.
-// scope carries the owning EventSourcedActor's bound persistence.Scope
+// scope carries the owning Actor's bound persistence.Scope
 // (TENANT-003 T4). snapshotsWriterActor is a separate child actor with no
 // PreStart access to the parent's dependencies, so the scope must travel on
 // this request rather than be re-derived here.
@@ -72,7 +72,7 @@ type persistSnapshotRequest struct {
 // to the janitor actor, guaranteeing retention only runs after the new snapshot
 // is safely persisted.
 //
-// This actor is spawned as a child of the EventSourcedActor. It receives
+// This actor is spawned as a child of the Actor. It receives
 // persistSnapshotRequest messages via Tell (fire-and-forget).
 type snapshotsWriterActor struct {
 	snapshotStore persistence.SnapshotStore

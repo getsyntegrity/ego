@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -36,37 +36,15 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
 	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
 	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/testkit"
 )
-
-// mistypedExtension is a goakt extension.Extension whose ID() collides with
-// a real extension slot (e.g. extensions.SnapshotStoreExtensionID) but whose
-// concrete type does not match what snapshotsWriterActor.PreStart expects
-// there. It simulates a wiring bug where the wrong extension ends up
-// registered under an existing extension ID.
-//
-// See issue #99: snapshotsWriterActor.PreStart nil-checks
-// extensions.SnapshotStoreExtensionID and extensions.EncryptorExtensionID
-// before asserting their type (both are genuinely optional dependencies),
-// but the assertion itself was unchecked
-// (ext.(*extensions.SnapshotStoreExt), ext.(*extensions.EncryptorExtension)).
-// A present-but-mismatched-type extension still panics with an
-// unrecoverable "interface conversion" error, and that panic crashes the
-// whole process instead of just failing the one Spawn call, because
-// goakt drives Spawn/SpawnChild through a
-// golang.org/x/sync/singleflight.Group that deliberately re-panics a
-// recovered panic on a fresh, unrecoverable goroutine (see
-// extension_lookup.go).
-type mistypedExtension struct {
-	id string
-}
-
-func (m *mistypedExtension) ID() string { return m.id }
 
 func TestSnapshotsWriterActor(t *testing.T) {
 	t.Run("persists snapshot to store on success", func(t *testing.T) {
@@ -81,7 +59,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -136,7 +114,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor := encryption.NewAESEncryptor(keyStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -195,7 +173,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -263,7 +241,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventsStoreMock.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventsStoreMock),
 				extensions.NewEventsStream(eventStream),
@@ -328,7 +306,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -379,7 +357,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, "entity-1", mock.Anything).Return(nil, "", assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -431,7 +409,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -475,11 +453,11 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedStoreSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
@@ -488,7 +466,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-store", newSnapshotsWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		require.NoError(t, eventStore.Disconnect(ctx))
 		eventStream.Close()
@@ -504,11 +482,11 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotMistypedEncSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.EncryptorExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.EncryptorExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
@@ -517,7 +495,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		pid, err := actorSystem.Spawn(ctx, "snapshot-writer-mistyped-enc", newSnapshotsWriterActor())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		require.NoError(t, eventStore.Disconnect(ctx))
 		eventStream.Close()
@@ -533,7 +511,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -37,7 +37,9 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
@@ -54,7 +56,7 @@ import (
 // mode (tenantAware == false) must write no tenant metadata at all (D2).
 func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
 	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		entity := &EventSourcedActor{persistenceID: "acct-1"}
+		entity := &Actor{persistenceID: "acct-1"}
 
 		envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tenancy.TenantContext{}, 1, time.Now(), 0)
 		require.NoError(t, err)
@@ -62,7 +64,7 @@ func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
 	})
 
 	t.Run("tenant-scoped context round-trips via tenancy.UnmarshalMetadata", func(t *testing.T) {
-		entity := &EventSourcedActor{persistenceID: "acct-1", tenantAware: true}
+		entity := &Actor{persistenceID: "acct-1", tenantAware: true}
 		tc, err := tenancy.NewTenantContext("acme")
 		require.NoError(t, err)
 
@@ -78,7 +80,7 @@ func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
 	})
 
 	t.Run("administrative-scoped context round-trips via tenancy.UnmarshalMetadata", func(t *testing.T) {
-		entity := &EventSourcedActor{persistenceID: "acct-1", tenantAware: true}
+		entity := &Actor{persistenceID: "acct-1", tenantAware: true}
 		admin, err := tenancy.NewAdministrative("ops-team", "crypto-shred")
 		require.NoError(t, err)
 		tc, err := tenancy.NewAdministrativeContext(admin)
@@ -101,7 +103,7 @@ func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
 // recover() (Phase 3) to seed from. Legacy mode writes nothing.
 func TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata(t *testing.T) {
 	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		entity := &EventSourcedActor{persistenceID: "acct-1", eventsCounter: 3, lastCommandTime: time.Now()}
+		entity := &Actor{persistenceID: "acct-1", eventsCounter: 3, lastCommandTime: time.Now()}
 		snapshot := entity.newSnapshotEnvelope(nil)
 		assert.Empty(t, snapshot.GetTenantMetadata())
 	})
@@ -110,7 +112,7 @@ func TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata(t *testing.T) 
 		tc, err := tenancy.NewTenantContext("acme")
 		require.NoError(t, err)
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID:   "acct-1",
 			eventsCounter:   3,
 			lastCommandTime: time.Now(),
@@ -177,9 +179,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
 			scope:         persistence.Unscoped(),
@@ -196,9 +198,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
@@ -217,9 +219,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
@@ -238,9 +240,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
@@ -257,9 +259,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, noTenantContext)}, persistence.Unconditional()))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
 			scope:         persistence.Unscoped(),
@@ -277,9 +279,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, snapshotStore.Connect(ctx))
 		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, noTenantContext)))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			snapshotStore: snapshotStore,
 			tenantAware:   true,
@@ -296,9 +298,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			scope:         persistence.Unscoped(),
 		}
@@ -311,9 +313,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		require.NoError(t, eventStore.Connect(ctx))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
 			scope:         persistence.Unscoped(),
@@ -340,9 +342,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			newEvent(3, tenantA),
 		}, persistence.Unconditional()))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
 			scope:         persistence.Unscoped(),
@@ -362,9 +364,9 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 			newEvent(3, tenantA),
 		}, persistence.Unconditional()))
 
-		entity := &EventSourcedActor{
+		entity := &Actor{
 			persistenceID: persistenceID,
-			behavior:      NewAccountEventSourcedBehavior(persistenceID),
+			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 			eventsStore:   eventStore,
 			tenantAware:   true,
 			scope:         persistence.Unscoped(),
@@ -421,9 +423,9 @@ func TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant(t *testing.T)
 	}
 	require.NoError(t, eventStore.WriteEvents(ctx, scopeA, []*egopb.Event{mismatched}, persistence.Unconditional()))
 
-	entity := &EventSourcedActor{
+	entity := &Actor{
 		persistenceID: persistenceID,
-		behavior:      NewAccountEventSourcedBehavior(persistenceID),
+		behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
 		eventsStore:   eventStore,
 		tenantAware:   true,
 	}
@@ -449,25 +451,25 @@ func TestEventSourcedActorSeedActorTenant(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("legacy mode is a no-op", func(t *testing.T) {
-		entity := &EventSourcedActor{}
+		entity := &Actor{}
 		require.NoError(t, entity.seedActorTenant(tenantA))
 		assert.Equal(t, noTenantContext, entity.actorTenant)
 	})
 
 	t.Run("first call unconditionally seeds", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true}
+		entity := &Actor{tenantAware: true}
 		require.NoError(t, entity.seedActorTenant(tenantA))
 		assert.Equal(t, tenantA, entity.actorTenant)
 	})
 
 	t.Run("second call with the same tenant is a no-op success", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true, actorTenant: tenantA}
+		entity := &Actor{tenantAware: true, actorTenant: tenantA}
 		require.NoError(t, entity.seedActorTenant(tenantA))
 		assert.Equal(t, tenantA, entity.actorTenant)
 	})
 
 	t.Run("second call with a different tenant fails with ErrDenied", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true, actorTenant: tenantA}
+		entity := &Actor{tenantAware: true, actorTenant: tenantA}
 		err := entity.seedActorTenant(tenantB)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, tenancy.ErrDenied))
@@ -486,14 +488,14 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -503,7 +505,7 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
@@ -557,14 +559,14 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -574,7 +576,7 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
@@ -625,14 +627,14 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -642,7 +644,7 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
@@ -683,14 +685,14 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := NewAccountEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
 	eventStream := eventstream.New()
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -707,7 +709,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 
 	// First actor instance: tenant A persists, establishing actorTenant,
 	// then is stopped so no in-memory state survives.
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())
@@ -729,7 +731,7 @@ func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
 	// Second actor instance under the same persistence ID: recover() must
 	// seed actorTenant from the persisted event before this new in-process
 	// actor accepts any command.
-	restarted := newEventSourcedActor()
+	restarted := New()
 	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
 		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(), goakt.WithStashing())

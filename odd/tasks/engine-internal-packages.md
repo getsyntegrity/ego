@@ -82,7 +82,7 @@ Route: delegated direct (writer trigger: every task touches 2+ non-trivial files
 Delivery: single PR with one work-unit commit per slice (explicit user request).
 
 - [x] T1 `internal/engine/protocol` and the `internal/extensions` helpers; `engine` rewired.
-- [ ] T2 `internal/engine/eventsource` with the cluster-kind wrapper and a wire-name pin.
+- [x] T2 `internal/engine/eventsource` with the cluster-kind wrapper and a wire-name pin.
 - [ ] T3 `internal/engine/durablestate` and `internal/engine/saga` (one commit each).
 - [ ] T4 `internal/engine/projection` (supervision key pinned) and `engine.go` split by responsibility.
 - [ ] T5 archcheck rule for `internal/engine/...`, architecture docs, full verification, PR.
@@ -104,6 +104,8 @@ violations) and `go test ./engine/... ./internal/...` green (engine 341 s).
 
 T1 (commit: work unit 1, moves the command protocol and extension helpers; no actor moved): `go build ./...`, `go vet ./engine/... ./internal/...`, archcheck (60 packages, 0 violations), `go test -count=1 ./internal/... ./engine/...` (engine 341 s) and `gofmt -l` all clean. `golangci-lint` could not run (vendor/modules.txt inconsistent with go.mod, tooling failure). Route: delegated direct (one writer). Review tier: not assessed here (RDD switch is user-owned).
 
+T2 (work unit 2): the event sourced actor and its three children moved to `internal/engine/eventsource` as `eventsource.Actor` (exported methods `PreStart`, `Receive`, `PostStop`; constructor `eventsource.New`). `engine/cluster_kinds.go` keeps `EventSourcedActor` as a wrapper around it and now holds `ClusterKinds()`. The wire-name pin `TestClusterKindsExposesEgoActors` (`engine.eventsourcedactor`, `engine.durablestateactor`, `engine.sagaactor`, `engine.projectionactor`) passed on the old code first and after the move. Shared fixtures went to `internal/engine/enginetest` (account and tenancy probe behaviors, failing-HandleEvent behavior, envelope-capturing behavior, mistyped extension, discard logger); `ExpectedRevisionFromContext` and `PreconditionFromRevision` moved to `protocol` because durable state also uses them. Checks: `go build ./...`, `go vet ./engine/... ./internal/...`, archcheck (62 packages, 0 violations), `go test -count=1 ./...` (engine 121 s), `gofmt -l` and `golangci-lint run ./engine/... ./internal/...` (0 issues, after `go mod vendor`) clean; nested modules build and vet. Route: delegated direct (one writer).
+
 ## Next step
 
-T2.
+T3.

@@ -229,7 +229,7 @@ func TestSpawnDependency(t *testing.T) {
 			kind     string
 		}{
 			{"nil", nil, "<nil>"},
-			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*engine.AccountEventSourcedBehavior"},
+			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*enginetest.AccountEventSourcedBehavior"},
 			{"typed-nil domain-only event-sourced", (*domainOnlyEventSourced)(nil), "*engine.domainOnlyEventSourced"},
 			{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*engine.AccountDurableStateBehavior"},
 			{"typed-nil domain-only durable state", (*domainOnlyDurableState)(nil), "*engine.domainOnlyDurableState"},

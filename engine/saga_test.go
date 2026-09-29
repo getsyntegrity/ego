@@ -1956,7 +1956,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		// PreStart fail closed with ErrEntityTenantScopeMissing before this
 		// test ever reaches the saga-dispatch gate it means to prove.
 		targetProbe := newTenancyProbeEventSourcedBehavior(targetID)
-		_, err = actorSystem.Spawn(ctx, targetID, newEventSourcedActor(),
+		_, err = actorSystem.Spawn(ctx, targetID, new(EventSourcedActor),
 			goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 
@@ -1999,7 +1999,7 @@ func TestSagaFailsClosed(t *testing.T) {
 		require.Never(t, func() bool { return handleEventCalls.Load() != 0 }, 2*time.Second, 20*time.Millisecond,
 			"HandleEvent must never run for an event with no tenant metadata in tenant-aware mode")
 
-		assert.Zero(t, targetProbe.invocationCount(),
+		assert.Zero(t, targetProbe.InvocationCount(),
 			"HandleCommand must never run for a command the saga could not have formed for a rejected event")
 
 		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), targetID)

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -59,7 +59,7 @@ const (
 	defaultBatchFlushWindow  = 5 * time.Millisecond
 )
 
-// persistPhase tracks the batch processing state of an [EventSourcedActor].
+// persistPhase tracks the batch processing state of an [Actor].
 type persistPhase int
 
 const (
@@ -91,7 +91,7 @@ type batchFlushTick struct{}
 // noTenantContext is the zero value of tenancy.TenantContext. Neither
 // tenancy.NewTenantContext nor tenancy.NewAdministrativeContext can ever
 // produce it (tenancy/tenant_context.go), so it safely marks "not yet
-// seeded" for EventSourcedActor.actorTenant, distinct from any real
+// seeded" for Actor.actorTenant, distinct from any real
 // resolved identity.
 var noTenantContext tenancy.TenantContext
 
@@ -104,7 +104,7 @@ type batchEntry struct {
 	span      trace.Span
 }
 
-// EventSourcedActor persists state changes as a sequence of immutable events.
+// Actor persists state changes as a sequence of immutable events.
 //
 // Command processing generates events that are persisted through a child
 // events writer (internal/eventswriter) before the in-memory state is updated. This guarantees
@@ -118,7 +118,7 @@ type batchEntry struct {
 //
 // Snapshots and retention cleanup are handled asynchronously by dedicated child
 // actors and never add latency to command processing.
-type EventSourcedActor struct {
+type Actor struct {
 	behavior         behaviorport.EventSourced
 	eventsStore      persistence.EventsStore
 	snapshotStore    persistence.SnapshotStore
@@ -130,7 +130,7 @@ type EventSourcedActor struct {
 	persistenceID    string
 	eventAdapters    []eventadapter.EventAdapter
 	snapshotInterval uint64
-	retentionPolicy  *RetentionPolicy
+	retentionPolicy  *retentionPolicy
 	encryptor        encryption.Encryptor
 	tracer           trace.Tracer
 	metrics          *instrumentation.Instruments
@@ -267,19 +267,19 @@ type EventSourcedActor struct {
 	scope persistence.Scope
 }
 
-var _ goakt.Actor = (*EventSourcedActor)(nil)
+var _ goakt.Actor = (*Actor)(nil)
 
-// newEventSourcedActor creates an instance of EventSourcedActor.
+// New creates an instance of Actor.
 // The constructor takes no arguments to support cluster relocation. Per-entity
 // configuration is injected via the entityConfig dependency at startup.
-func newEventSourcedActor() *EventSourcedActor {
-	return &EventSourcedActor{}
+func New() *Actor {
+	return &Actor{}
 }
 
 // PreStart loads extensions and dependencies, validates configuration, and
 // recovers the actor state from the events and snapshot stores. Child actors
 // are spawned in PostStart where [goakt.ReceiveContext] is available.
-func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
+func (entity *Actor) PreStart(ctx *goakt.Context) error {
 	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
@@ -323,7 +323,7 @@ func (entity *EventSourcedActor) PreStart(ctx *goakt.Context) error {
 // and eventswriter.Response carries the result of an asynchronous batch write.
 // For non-batched entities, eventswriter.Response instead carries the result
 // of the single in-flight direct-path write (see persistAsync).
-func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
+func (entity *Actor) Receive(ctx *goakt.ReceiveContext) {
 	switch msg := ctx.Message().(type) {
 	case *goakt.PostStart:
 		entity.shardNumber = ctx.ActorSystem().Partition(entity.persistenceID)
@@ -363,7 +363,7 @@ func (entity *EventSourcedActor) Receive(ctx *goakt.ReceiveContext) {
 
 // PostStop releases resources and resets counters when the actor shuts down.
 // nolint
-func (entity *EventSourcedActor) PostStop(ctx *goakt.Context) error {
+func (entity *Actor) PostStop(ctx *goakt.Context) error {
 	entity.metrics.EntityStopped(ctx.Context())
 	entity.stopFlushTimer()
 	entity.resetBatch()
@@ -375,7 +375,7 @@ func (entity *EventSourcedActor) PostStop(ctx *goakt.Context) error {
 // registration under any of these extension IDs is reported as an error
 // instead of letting the runtime panic (see optionalExtension in
 // extension_lookup.go and issue #99).
-func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) error {
+func (entity *Actor) loadOptionalExtensions(ctx *goakt.Context) error {
 	snapshotStoreExt, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
 	if err != nil {
 		return err
@@ -414,7 +414,7 @@ func (entity *EventSourcedActor) loadOptionalExtensions(ctx *goakt.Context) erro
 
 // setConfig reads the behavior and entity configuration from the
 // injected dependencies.
-func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
+func (entity *Actor) setConfig(ctx *goakt.Context) {
 	for _, dependency := range ctx.Dependencies() {
 		if dependency == nil {
 			continue
@@ -427,7 +427,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 		if config, ok := dependency.(*extensions.EntityConfig); ok {
 			entity.snapshotInterval = config.SnapshotInterval
 			if config.HasRetentionPolicy {
-				entity.retentionPolicy = &RetentionPolicy{
+				entity.retentionPolicy = &retentionPolicy{
 					DeleteEventsOnSnapshot:    config.DeleteEventsOnSnapshot,
 					DeleteSnapshotsOnSnapshot: config.DeleteSnapshotsOnSnapshot,
 					EventsRetentionCount:      config.EventsRetentionCount,
@@ -451,7 +451,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 //
 // tenantAware == true looks for the per-spawn extensions.EntityTenantScope
 // dependency Engine.Entity injects (engine.go's spawnTenantScope) and
-// fails closed with ErrEntityTenantScopeMissing when it is absent or
+// fails closed with extensions.ErrEntityTenantScopeMissing when it is absent or
 // carries an invalid tenant id: a tenant-aware actor must never start
 // without a bound scope. On success it also pre-seeds entity.actorTenant
 // with the corresponding tenancy.TenantContext, BEFORE recover() runs. This
@@ -460,7 +460,7 @@ func (entity *EventSourcedActor) setConfig(ctx *goakt.Context) {
 // recovered tenant_metadata that disagrees with the tenant this actor was
 // actually spawned for now fails closed via tenancy.VerifyUnchanged, rather
 // than being trusted as the source of actorTenant.
-func (entity *EventSourcedActor) resolveScope(deps []extension.Dependency) error {
+func (entity *Actor) resolveScope(deps []extension.Dependency) error {
 	if !entity.tenantAware {
 		entity.scope = persistence.Unscoped()
 		return nil
@@ -474,12 +474,12 @@ func (entity *EventSourcedActor) resolveScope(deps []extension.Dependency) error
 
 		scope, err := persistence.NewTenantScope(tenancy.TenantID(dep.TenantID))
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+			return fmt.Errorf("%w: %w", extensions.ErrEntityTenantScopeMissing, err)
 		}
 
 		tenantContext, err := tenancy.NewTenantContext(scope.TenantID())
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrEntityTenantScopeMissing, err)
+			return fmt.Errorf("%w: %w", extensions.ErrEntityTenantScopeMissing, err)
 		}
 
 		entity.scope = scope
@@ -487,12 +487,12 @@ func (entity *EventSourcedActor) resolveScope(deps []extension.Dependency) error
 		return nil
 	}
 
-	return ErrEntityTenantScopeMissing
+	return extensions.ErrEntityTenantScopeMissing
 }
 
 // validateAndRecover ensures required dependencies are present, pings the
 // backing stores, and replays persisted state.
-func (entity *EventSourcedActor) validateAndRecover(ctx *goakt.Context) error {
+func (entity *Actor) validateAndRecover(ctx *goakt.Context) error {
 	chain := runner.
 		New(runner.WithFailFast()).
 		AddRunner(func() error {
@@ -528,7 +528,7 @@ func childSpawnOptions() []goakt.SpawnOption {
 // spawnChildren creates the child actors responsible for event persistence,
 // snapshot writes, and retention cleanup. Each child accesses its backing store
 // through the actor system extensions.
-func (entity *EventSourcedActor) spawnChildren(ctx *goakt.ReceiveContext) {
+func (entity *Actor) spawnChildren(ctx *goakt.ReceiveContext) {
 	opts := childSpawnOptions()
 
 	entity.eventsWriter = ctx.Spawn(eventsWriterChildName, eventswriter.New(), opts...)
@@ -548,7 +548,7 @@ func (entity *EventSourcedActor) spawnChildren(ctx *goakt.ReceiveContext) {
 //  1. Load the latest snapshot (if a snapshot store is configured) to seed state.
 //  2. Determine the latest persisted event sequence number.
 //  3. Replay all events after the snapshot point to bring state up to date.
-func (entity *EventSourcedActor) recover(ctx context.Context) error {
+func (entity *Actor) recover(ctx context.Context) error {
 	state := entity.behavior.InitialState()
 	replayFrom := uint64(1)
 
@@ -608,7 +608,7 @@ func (entity *EventSourcedActor) recover(ctx context.Context) error {
 // recoverFromSnapshot loads the latest snapshot and returns the restored state
 // together with the sequence number to replay from. When no snapshot exists the
 // initial state and a replayFrom of 1 are returned unchanged.
-func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initial State) (State, uint64, error) {
+func (entity *Actor) recoverFromSnapshot(ctx context.Context, initial State) (State, uint64, error) {
 	snapshot, err := entity.snapshotStore.GetLatestSnapshot(ctx, entity.scope, entity.persistenceID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to load snapshot: %w", err)
@@ -651,7 +651,7 @@ func (entity *EventSourcedActor) recoverFromSnapshot(ctx context.Context, initia
 
 // replayEvents applies persisted events to the given state in sequence order
 // and returns the resulting state.
-func (entity *EventSourcedActor) replayEvents(ctx context.Context, state State, from, to uint64) (State, error) {
+func (entity *Actor) replayEvents(ctx context.Context, state State, from, to uint64) (State, error) {
 	events, err := entity.eventsStore.ReplayEvents(ctx, entity.scope, entity.persistenceID, from, to, to-from+1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to replay events: %w", err)
@@ -680,7 +680,7 @@ func (entity *EventSourcedActor) replayEvents(ctx context.Context, state State, 
 // seeded (recover() seeds it from the snapshot and/or latestEvent before
 // replaying), so every replayed event is cross-checked against it here,
 // fail-closed exactly like seedActorTenant.
-func (entity *EventSourcedActor) applyPersistedEvent(ctx context.Context, envelope *egopb.Event, state State) (State, error) {
+func (entity *Actor) applyPersistedEvent(ctx context.Context, envelope *egopb.Event, state State) (State, error) {
 	seqNr := envelope.GetSequenceNumber()
 
 	if entity.tenantAware {
@@ -720,7 +720,7 @@ func (entity *EventSourcedActor) applyPersistedEvent(ctx context.Context, envelo
 
 // decryptPayload decrypts an [anypb.Any] payload when encryption is enabled.
 // Unencrypted payloads are returned as-is.
-func (entity *EventSourcedActor) decryptPayload(ctx context.Context, payload *anypb.Any, encrypted bool, keyID string) (*anypb.Any, error) {
+func (entity *Actor) decryptPayload(ctx context.Context, payload *anypb.Any, encrypted bool, keyID string) (*anypb.Any, error) {
 	if !encrypted || entity.encryptor == nil {
 		return payload, nil
 	}
@@ -740,7 +740,7 @@ func (entity *EventSourcedActor) decryptPayload(ctx context.Context, payload *an
 
 // currentStateAny returns the cached anypb.Any of currentState, computing it
 // only when the state has changed since the last call.
-func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
+func (entity *Actor) currentStateAny() *anypb.Any {
 	if entity.cachedStateAny == nil {
 		entity.cachedStateAny, _ = anypb.New(entity.currentState)
 	}
@@ -754,14 +754,14 @@ func (entity *EventSourcedActor) currentStateAny() *anypb.Any {
 // already be unwrapped from the receiving ReceiveContext via
 // ctx.Context(): on a local dispatch this is the same
 // context.Context Engine.Dispatch attached a command.Carrier to (see
-// command_context.go), so metadataFromContext rematerializes it here
+// command_context.go), so protocol.MetadataFromContext rematerializes it here
 // without any wire-format change. Any behavior that does not implement the
 // optional interface, or any command reached without Metadata (e.g. a
 // caller that bypasses Engine.Dispatch/SendCommand), falls back to
 // HandleCommand unchanged — this method is called from both the
 // non-batched (processCommandAndReply) and batched (processAndBatch) paths
 // so both dispatch identically.
-func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd Command, priorState State) ([]Event, error) {
+func (entity *Actor) dispatchToBehavior(goCtx context.Context, cmd Command, priorState State) ([]Event, error) {
 	envBehavior, ok := entity.behavior.(behaviorport.EventSourcedEnvelope)
 	if !ok {
 		return entity.behavior.HandleCommand(goCtx, cmd, priorState)
@@ -777,36 +777,6 @@ func (entity *EventSourcedActor) dispatchToBehavior(goCtx context.Context, cmd C
 	return envBehavior.HandleEnvelope(goCtx, env, priorState)
 }
 
-// expectedRevisionFromContext extracts the ExpectedRevision metadata field
-// (design.md D5) from goCtx, if any. It reuses metadataFromContext — the
-// same lookup dispatchToBehavior performs — so both the direct and batched
-// paths agree on how a command's declared precondition intention is
-// recovered. A command reached without envelope metadata (e.g. one that
-// bypasses Engine.Dispatch/SendCommand) is treated identically to one that
-// carries metadata but declares no ExpectedRevision: both resolve to "no
-// declared revision" and, via preconditionFromRevision, to Unconditional().
-func expectedRevisionFromContext(goCtx context.Context) (uint64, bool) {
-	md, ok := protocol.MetadataFromContext(goCtx)
-	if !ok {
-		return 0, false
-	}
-	return md.ExpectedRevision()
-}
-
-// preconditionFromRevision resolves an ExpectedRevision metadata value to
-// the persistence.WritePrecondition it names (design.md D4): no declared
-// revision maps to Unconditional() (legacy compatibility, D8), 0 maps to
-// ExpectGenesis(), and any N > 0 maps to ExpectRevision(N).
-func preconditionFromRevision(revision uint64, hasRevision bool) persistence.WritePrecondition {
-	if !hasRevision {
-		return persistence.Unconditional()
-	}
-	if revision == 0 {
-		return persistence.ExpectGenesis()
-	}
-	return persistence.ExpectRevision(revision)
-}
-
 // shouldStayAliveAfterConflict implements design.md D10: after a failed
 // persist, the actor may keep running only when it can prove its own
 // in-memory state still matches the store. That is true exactly when err
@@ -819,7 +789,7 @@ func preconditionFromRevision(revision uint64, hasRevision bool) persistence.Wri
 // actual revision is unknown or disagrees with eventsCounter) means this
 // actor's view may already be stale relative to the store, so it must shut
 // down and let the supervisor rebuild it via recover().
-func (entity *EventSourcedActor) shouldStayAliveAfterConflict(err error) bool {
+func (entity *Actor) shouldStayAliveAfterConflict(err error) bool {
 	var conflictErr *persistence.ConflictError
 	if !errors.As(err, &conflictErr) {
 		return false
@@ -829,7 +799,7 @@ func (entity *EventSourcedActor) shouldStayAliveAfterConflict(err error) bool {
 }
 
 // sendErrorReply sends a [egopb.CommandReply] containing the given error.
-func (entity *EventSourcedActor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
+func (entity *Actor) sendErrorReply(ctx *goakt.ReceiveContext, err error) {
 	ctx.Response(&egopb.CommandReply{
 		Reply: &egopb.CommandReply_ErrorReply{
 			ErrorReply: &egopb.ErrorReply{
@@ -840,7 +810,7 @@ func (entity *EventSourcedActor) sendErrorReply(ctx *goakt.ReceiveContext, err e
 }
 
 // sendStateReply sends a [egopb.CommandReply] containing the current state.
-func (entity *EventSourcedActor) sendStateReply(ctx *goakt.ReceiveContext) {
+func (entity *Actor) sendStateReply(ctx *goakt.ReceiveContext) {
 	ctx.Response(&egopb.CommandReply{
 		Reply: &egopb.CommandReply_StateReply{
 			StateReply: &egopb.StateReply{
@@ -865,7 +835,7 @@ func (entity *EventSourcedActor) sendStateReply(ctx *goakt.ReceiveContext) {
 // mutated on confirmed batch writes (see handleBatchPersistResponse), so
 // getStateAndReply already returns a consistent value regardless of
 // batchThreshold's flush phase.
-func (entity *EventSourcedActor) handleGetStateCommand(ctx *goakt.ReceiveContext) {
+func (entity *Actor) handleGetStateCommand(ctx *goakt.ReceiveContext) {
 	if !entity.batchEnabled() && (entity.phase == phasePersisting || entity.phase == phaseDirectReplying) {
 		ctx.Stash()
 		return
@@ -883,7 +853,7 @@ func (entity *EventSourcedActor) handleGetStateCommand(ctx *goakt.ReceiveContext
 // full committed state. This mirrors processCommandAndReply's T4-A gate
 // exactly: require a resolved TenantContext and reject one that mismatches
 // this actor's already-seeded actorTenant.
-func (entity *EventSourcedActor) getStateAndReply(ctx *goakt.ReceiveContext) {
+func (entity *Actor) getStateAndReply(ctx *goakt.ReceiveContext) {
 	if entity.tenantAware {
 		tc, err := tenancy.Require(ctx.Context())
 		if err != nil {
@@ -907,7 +877,7 @@ func (entity *EventSourcedActor) getStateAndReply(ctx *goakt.ReceiveContext) {
 //
 // On persistence failure the actor replies with an error and shuts itself down
 // so the supervisor can restart it with clean state recovered from the store.
-func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContext, command Command) {
+func (entity *Actor) processCommandAndReply(ctx *goakt.ReceiveContext, command Command) {
 	goCtx := ctx.Context()
 	startTime := time.Now()
 
@@ -1012,8 +982,8 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 	// an earlier command on this actor).
 	entity.establishActorTenant(tc)
 
-	revision, hasRevision := expectedRevisionFromContext(goCtx)
-	precondition := preconditionFromRevision(revision, hasRevision)
+	revision, hasRevision := protocol.ExpectedRevisionFromContext(goCtx)
+	precondition := protocol.PreconditionFromRevision(revision, hasRevision)
 
 	entity.persistAsync(ctx, envelopes, pendingState, pendingCounter, commandTime, startTime, span, precondition)
 }
@@ -1024,7 +994,7 @@ func (entity *EventSourcedActor) processCommandAndReply(ctx *goakt.ReceiveContex
 // the async completion in replyDirect — records identically, regardless of
 // whether the command finished synchronously or after a persistAsync round
 // trip.
-func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trace.Span, startTime time.Time) {
+func (entity *Actor) endCommandSpan(goCtx context.Context, span trace.Span, startTime time.Time) {
 	if span != nil {
 		span.End()
 	}
@@ -1039,7 +1009,7 @@ func (entity *EventSourcedActor) endCommandSpan(goCtx context.Context, span trac
 // concurrently-persisting entity once the pool was exhausted (issue #64).
 // The originating command is stashed and redelivered by
 // handleDirectPersistResponse once the write completes.
-func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span, precondition persistence.WritePrecondition) {
+func (entity *Actor) persistAsync(ctx *goakt.ReceiveContext, envelopes []*egopb.Event, pendingState State, pendingCounter uint64, commandTime time.Time, startTime time.Time, span trace.Span, precondition persistence.WritePrecondition) {
 	writer := entity.eventsWriter
 	timeout := entity.persistTimeout
 	scope := entity.scope
@@ -1063,7 +1033,7 @@ func (entity *EventSourcedActor) persistAsync(ctx *goakt.ReceiveContext, envelop
 // handleDirectPersistResponse processes the result PipeTo delivers after the
 // eventsWriter completes a single (non-batched) command's write, mirroring
 // handleBatchPersistResponse for the batched path.
-func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
+func (entity *Actor) handleDirectPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
 	if entity.phase != phasePersisting {
 		return
 	}
@@ -1106,7 +1076,7 @@ func (entity *EventSourcedActor) handleDirectPersistResponse(ctx *goakt.ReceiveC
 // detail, and, on the error path, so the stash is drained before
 // ctx.Shutdown() tears the actor down. It is a no-op when nothing stashed
 // during the window.
-func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
+func (entity *Actor) replyDirect(ctx *goakt.ReceiveContext) {
 	entity.endCommandSpan(ctx.Context(), entity.directSpan, entity.directStartTime)
 	entity.directSpan = nil
 	entity.phase = phaseProcessing
@@ -1136,7 +1106,7 @@ func (entity *EventSourcedActor) replyDirect(ctx *goakt.ReceiveContext) {
 // value in legacy mode); it is serialized into each envelope by marshalEvent
 // (EGO-TENANT-002 Phase 2) but never used to mutate actor state here.
 // Returns the envelopes, pending state, pending counter, and command timestamp.
-func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []Event, tc tenancy.TenantContext, startState State, startCounter uint64) ([]*egopb.Event, State, uint64, time.Time, error) {
+func (entity *Actor) buildEnvelopes(goCtx context.Context, events []Event, tc tenancy.TenantContext, startState State, startCounter uint64) ([]*egopb.Event, State, uint64, time.Time, error) {
 	pendingState := startState
 	pendingCounter := startCounter
 	commandTime := time.Now()
@@ -1172,7 +1142,7 @@ func (entity *EventSourcedActor) buildEnvelopes(goCtx context.Context, events []
 // serialized onto the envelope's TenantMetadata field via
 // tenancy.MarshalMetadata (D9 carrier reuse, EGO-TENANT-002 Phase 2);
 // legacy mode writes no tenant metadata (D2).
-func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, tc tenancy.TenantContext, seqNr uint64, ts time.Time, shard uint64) (*egopb.Event, error) {
+func (entity *Actor) marshalEvent(ctx context.Context, event Event, tc tenancy.TenantContext, seqNr uint64, ts time.Time, shard uint64) (*egopb.Event, error) {
 	eventAny, _ := anypb.New(event)
 
 	var encKeyID string
@@ -1222,7 +1192,7 @@ func (entity *EventSourcedActor) marshalEvent(ctx context.Context, event Event, 
 // by Engine.SendCommand and validated by the pre-handler gate: it never
 // invokes a TenantResolver and is never the sole enforcement point for
 // fail-closed behavior.
-func (entity *EventSourcedActor) verifyTenantForPersist(goCtx context.Context) error {
+func (entity *Actor) verifyTenantForPersist(goCtx context.Context) error {
 	if !entity.tenantAware {
 		return nil
 	}
@@ -1238,7 +1208,7 @@ func (entity *EventSourcedActor) verifyTenantForPersist(goCtx context.Context) e
 // already-seeded actorTenant is a separate, explicit gate in
 // processCommandAndReply and processAndBatch (Phase 4), not a side effect
 // of establishing it here.
-func (entity *EventSourcedActor) establishActorTenant(tc tenancy.TenantContext) {
+func (entity *Actor) establishActorTenant(tc tenancy.TenantContext) {
 	if entity.tenantAware && entity.actorTenant == noTenantContext {
 		entity.actorTenant = tc
 	}
@@ -1252,7 +1222,7 @@ func (entity *EventSourcedActor) establishActorTenant(tc tenancy.TenantContext) 
 // against the value the first call seeded via tenancy.VerifyUnchanged,
 // surfacing ErrDenied when the snapshot and the latest event disagree on
 // tenant. It is a no-op in legacy mode (tenantAware == false).
-func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error {
+func (entity *Actor) seedActorTenant(tc tenancy.TenantContext) error {
 	if !entity.tenantAware {
 		return nil
 	}
@@ -1265,7 +1235,7 @@ func (entity *EventSourcedActor) seedActorTenant(tc tenancy.TenantContext) error
 
 // applyConfirmedState updates the actor state after the events store has
 // confirmed the write and records persistence metrics.
-func (entity *EventSourcedActor) applyConfirmedState(goCtx context.Context, state State, counter uint64, ts time.Time, numEvents int) {
+func (entity *Actor) applyConfirmedState(goCtx context.Context, state State, counter uint64, ts time.Time, numEvents int) {
 	entity.eventsCounter = counter
 	entity.currentState = state
 	entity.cachedStateAny, _ = anypb.New(state) // eagerly cache for the reply that follows
@@ -1280,7 +1250,7 @@ func (entity *EventSourcedActor) applyConfirmedState(goCtx context.Context, stat
 // so the snapshot writer forwards it to the janitor only after the snapshot is
 // confirmed persisted. This prevents the race where retention could delete old
 // data before the new snapshot is safely written.
-func (entity *EventSourcedActor) triggerSnapshotAndRetention(ctx *goakt.ReceiveContext) {
+func (entity *Actor) triggerSnapshotAndRetention(ctx *goakt.ReceiveContext) {
 	if entity.snapshotsWriter == nil || entity.snapshotInterval == 0 || entity.eventsCounter%entity.snapshotInterval != 0 {
 		return
 	}
@@ -1291,7 +1261,7 @@ func (entity *EventSourcedActor) triggerSnapshotAndRetention(ctx *goakt.ReceiveC
 // sends it to the snapshot writer child. If retention is enabled, the
 // retention request is bundled so cleanup occurs only after the snapshot
 // is confirmed persisted.
-func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
+func (entity *Actor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
 	req := &persistSnapshotRequest{
 		snapshot: entity.newSnapshotEnvelope(entity.currentStateAny()),
 		scope:    entity.scope,
@@ -1320,7 +1290,7 @@ func (entity *EventSourcedActor) snapshotAndRetain(ctx *goakt.ReceiveContext) {
 // Phase 2): a snapshot may be taken with no in-flight command context (e.g.
 // after an asynchronous batch flush), so it cannot rely on a per-command
 // TenantContext the way marshalEvent does.
-func (entity *EventSourcedActor) newSnapshotEnvelope(state *anypb.Any) *egopb.Snapshot {
+func (entity *Actor) newSnapshotEnvelope(state *anypb.Any) *egopb.Snapshot {
 	snapshot := &egopb.Snapshot{
 		PersistenceId:  entity.persistenceID,
 		SequenceNumber: entity.eventsCounter,
@@ -1336,13 +1306,13 @@ func (entity *EventSourcedActor) newSnapshotEnvelope(state *anypb.Any) *egopb.Sn
 }
 
 // batchEnabled reports whether event batching is active for this entity.
-func (entity *EventSourcedActor) batchEnabled() bool {
+func (entity *Actor) batchEnabled() bool {
 	return entity.batchThreshold > 0
 }
 
 // latestState returns the most recent state, which may be an unconfirmed
 // pending state from the current batch or the last committed state.
-func (entity *EventSourcedActor) latestState() State {
+func (entity *Actor) latestState() State {
 	if len(entity.batchEntries) > 0 {
 		return entity.batchState
 	}
@@ -1351,7 +1321,7 @@ func (entity *EventSourcedActor) latestState() State {
 
 // latestCounter returns the most recent sequence number, which may include
 // unconfirmed events from the current batch.
-func (entity *EventSourcedActor) latestCounter() uint64 {
+func (entity *Actor) latestCounter() uint64 {
 	if len(entity.batchEntries) > 0 {
 		return entity.batchCounter
 	}
@@ -1360,7 +1330,7 @@ func (entity *EventSourcedActor) latestCounter() uint64 {
 
 // handleCommandBatched dispatches an incoming command according to the
 // current batch processing phase.
-func (entity *EventSourcedActor) handleCommandBatched(ctx *goakt.ReceiveContext, command Command) {
+func (entity *Actor) handleCommandBatched(ctx *goakt.ReceiveContext, command Command) {
 	switch entity.phase {
 	case phaseProcessing:
 		entity.processAndBatch(ctx, command)
@@ -1376,7 +1346,7 @@ func (entity *EventSourcedActor) handleCommandBatched(ctx *goakt.ReceiveContext,
 // the batch buffer, stashes the command so its response channel is
 // preserved, and triggers a flush when the accumulated event count
 // reaches the batch threshold.
-func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, command Command) {
+func (entity *Actor) processAndBatch(ctx *goakt.ReceiveContext, command Command) {
 	goCtx := ctx.Context()
 	startTime := time.Now()
 
@@ -1451,7 +1421,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 	// once that flush's reply drains (replyFromBatch's surplus-message
 	// path). The store's CAS remains the sole authority over whether any
 	// given precondition actually holds.
-	revision, hasRevision := expectedRevisionFromContext(goCtx)
+	revision, hasRevision := protocol.ExpectedRevisionFromContext(goCtx)
 	if len(entity.batchEntries) > 0 && hasRevision && revision != counter {
 		if span != nil {
 			span.End()
@@ -1627,7 +1597,7 @@ func (entity *EventSourcedActor) processAndBatch(ctx *goakt.ReceiveContext, comm
 // asynchronously via PipeTo and transitions to phaseFlushing. The writer
 // is called through goakt.Ask inside a goroutine so the actor remains
 // responsive while the write is in flight.
-func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
+func (entity *Actor) flushBatch(ctx *goakt.ReceiveContext) {
 	entity.stopFlushTimer()
 
 	topic := protocol.EventsTopic
@@ -1652,7 +1622,7 @@ func (entity *EventSourcedActor) flushBatch(ctx *goakt.ReceiveContext) {
 // between ExpectGenesis (an empty store) and ExpectRevision(batchBase) —
 // mirroring preconditionFromRevision's D4 mapping, but anchored to the
 // batch's base rather than a single command's own declared revision.
-func (entity *EventSourcedActor) resolveBatchPrecondition() persistence.WritePrecondition {
+func (entity *Actor) resolveBatchPrecondition() persistence.WritePrecondition {
 	if !entity.batchHasPrecondition {
 		return persistence.Unconditional()
 	}
@@ -1665,7 +1635,7 @@ func (entity *EventSourcedActor) resolveBatchPrecondition() persistence.WritePre
 // handleBatchFlushTick is invoked when the flush window timer expires.
 // If the actor is still in phaseProcessing with a non-empty batch, the
 // batch is flushed immediately.
-func (entity *EventSourcedActor) handleBatchFlushTick(ctx *goakt.ReceiveContext) {
+func (entity *Actor) handleBatchFlushTick(ctx *goakt.ReceiveContext) {
 	entity.batchMu.Lock()
 	entity.flushTimer = nil
 	entity.batchMu.Unlock()
@@ -1686,7 +1656,7 @@ func (entity *EventSourcedActor) handleBatchFlushTick(ctx *goakt.ReceiveContext)
 // stashed commands are unstashed so callers are notified, and the actor
 // shuts down after all replies have been sent so the supervisor can restart
 // it with clean state.
-func (entity *EventSourcedActor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
+func (entity *Actor) handleBatchPersistResponse(ctx *goakt.ReceiveContext, resp *eventswriter.Response) {
 	if entity.phase != phaseFlushing {
 		return
 	}
@@ -1733,7 +1703,7 @@ func (entity *EventSourcedActor) handleBatchPersistResponse(ctx *goakt.ReceiveCo
 // If more messages were unstashed than there are pending replies (e.g. commands
 // that arrived during phaseFlushing), the surplus messages are processed as new
 // commands in a fresh batch cycle.
-func (entity *EventSourcedActor) replyFromBatch(ctx *goakt.ReceiveContext) {
+func (entity *Actor) replyFromBatch(ctx *goakt.ReceiveContext) {
 	if entity.remainingReplies <= 0 {
 		entity.phase = phaseProcessing
 		command, ok := ctx.Message().(Command)
@@ -1771,7 +1741,7 @@ func (entity *EventSourcedActor) replyFromBatch(ctx *goakt.ReceiveContext) {
 // crossedSnapshotBoundary reports whether the range
 // (previousCounter, entity.eventsCounter] contains at least one multiple
 // of snapshotInterval.
-func (entity *EventSourcedActor) crossedSnapshotBoundary(previousCounter uint64) bool {
+func (entity *Actor) crossedSnapshotBoundary(previousCounter uint64) bool {
 	if entity.snapshotsWriter == nil || entity.snapshotInterval == 0 {
 		return false
 	}
@@ -1780,7 +1750,7 @@ func (entity *EventSourcedActor) crossedSnapshotBoundary(previousCounter uint64)
 
 // startFlushTimer arms the batch flush timer if it is not already running.
 // When the timer fires, a batchFlushTick is delivered to the actor mailbox.
-func (entity *EventSourcedActor) startFlushTimer(ctx *goakt.ReceiveContext) {
+func (entity *Actor) startFlushTimer(ctx *goakt.ReceiveContext) {
 	entity.batchMu.Lock()
 	defer entity.batchMu.Unlock()
 	if entity.flushTimer != nil {
@@ -1795,7 +1765,7 @@ func (entity *EventSourcedActor) startFlushTimer(ctx *goakt.ReceiveContext) {
 // stopFlushTimer cancels a running flush timer, if any.
 // It is safe to call from both the actor's message-processing goroutine
 // and the shutdown goroutine (PostStop).
-func (entity *EventSourcedActor) stopFlushTimer() {
+func (entity *Actor) stopFlushTimer() {
 	entity.batchMu.Lock()
 	defer entity.batchMu.Unlock()
 	if entity.flushTimer != nil {
@@ -1808,7 +1778,7 @@ func (entity *EventSourcedActor) stopFlushTimer() {
 // a new batch cycle. The mutex prevents a data race between the
 // message-processing goroutine (replyFromBatch) and the shutdown
 // goroutine (PostStop).
-func (entity *EventSourcedActor) resetBatch() {
+func (entity *Actor) resetBatch() {
 	entity.batchMu.Lock()
 	defer entity.batchMu.Unlock()
 	entity.batchBuffer = nil

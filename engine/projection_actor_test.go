@@ -43,6 +43,7 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/pause"
 	mocksoffsetstore "github.com/getsyntegrity/ego/mocks/offsetstore"
@@ -558,7 +559,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 				extensions.NewProjectionExtension(map[string]*projection.Options{
 					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
 				}),
-				&mistypedExtension{id: extensions.EventAdaptersExtensionID}),
+				&enginetest.MistypedExtension{Name: extensions.EventAdaptersExtensionID}),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NotNil(t, actorSystem)
@@ -595,7 +596,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 				extensions.NewProjectionExtension(map[string]*projection.Options{
 					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
 				}),
-				&mistypedExtension{id: extensions.EventsStreamExtensionID}),
+				&enginetest.MistypedExtension{Name: extensions.EventsStreamExtensionID}),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NotNil(t, actorSystem)
@@ -632,7 +633,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 				extensions.NewProjectionExtension(map[string]*projection.Options{
 					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
 				}),
-				&mistypedExtension{id: extensions.EncryptorExtensionID}),
+				&enginetest.MistypedExtension{Name: extensions.EncryptorExtensionID}),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NotNil(t, actorSystem)
@@ -669,7 +670,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 				extensions.NewProjectionExtension(map[string]*projection.Options{
 					projectionName: {Handler: handler, BufferSize: 500, PullInterval: time.Second, Recovery: projection.NewRecovery()},
 				}),
-				&mistypedExtension{id: extensions.TelemetryExtensionID}),
+				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID}),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NotNil(t, actorSystem)

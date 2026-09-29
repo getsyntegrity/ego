@@ -94,7 +94,7 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 
 		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err)
-		assert.Zero(t, owner.invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
 	})
 
 	t.Run("DurableStateEntity", func(t *testing.T) {
@@ -171,7 +171,7 @@ func TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner(t *testing.T) {
 		loserCtx := context.WithValue(ctx, perCallerTenantKey{}, tenants[loser])
 		_, _, err := engine.SendCommand(loserCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
 		require.Error(t, err, "the losing tenant's command must be rejected")
-		assert.Zero(t, probes[0].invocationCount()+probes[1].invocationCount(), "a foreign command must never reach HandleCommand")
+		assert.Zero(t, probes[0].InvocationCount()+probes[1].InvocationCount(), "a foreign command must never reach HandleCommand")
 	}
 }
 

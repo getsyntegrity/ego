@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -49,7 +49,9 @@ import (
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
 	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
 	mockadapter "github.com/getsyntegrity/ego/mocks/eventadapter"
@@ -69,7 +71,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -82,7 +84,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -98,7 +100,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
@@ -178,7 +180,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -191,7 +193,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -207,7 +209,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		persistentActor := newEventSourcedActor()
+		persistentActor := New()
 		// spawn the actor
 		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
@@ -275,7 +277,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -286,7 +288,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -302,7 +304,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		persistentActor := newEventSourcedActor()
+		persistentActor := New()
 		// spawn the actor
 		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
@@ -340,7 +342,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -353,7 +355,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -369,7 +371,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		persistentActor := newEventSourcedActor()
+		persistentActor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -476,7 +478,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -489,7 +491,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -505,7 +507,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
@@ -607,7 +609,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -620,7 +622,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -636,7 +638,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NotNil(t, pid)
@@ -697,14 +699,14 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(assert.AnError)
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -720,7 +722,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior), goakt.WithStashing())
 		require.Error(t, err)
@@ -741,7 +743,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
@@ -749,7 +751,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -765,7 +767,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
@@ -786,7 +788,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		latestEvent := &egopb.Event{
 			PersistenceId:  persistenceID,
@@ -801,7 +803,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -817,7 +819,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
@@ -839,7 +841,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
@@ -873,7 +875,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -890,7 +892,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -939,7 +941,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -956,7 +958,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with telemetry extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -973,7 +975,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1026,7 +1028,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		err := eventStore.Connect(ctx)
@@ -1043,7 +1045,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with encryptor extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1060,7 +1062,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1114,7 +1116,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
@@ -1125,7 +1127,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1147,7 +1149,7 @@ func TestEventSourcedActor(t *testing.T) {
 		}
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor with behavior and entity config dependencies
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1197,7 +1199,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
@@ -1208,7 +1210,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1233,7 +1235,7 @@ func TestEventSourcedActor(t *testing.T) {
 		}
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor with behavior and entity config dependencies
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1289,7 +1291,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the event store
 		require.NoError(t, eventStore.Connect(ctx))
@@ -1314,7 +1316,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with event adapters extension
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1331,7 +1333,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1380,7 +1382,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
@@ -1400,7 +1402,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with encryption and snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1418,7 +1420,7 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor with behavior and entity config
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1458,7 +1460,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// start a NEW actor system with the same stores and encryption
 		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream2),
@@ -1475,8 +1477,8 @@ func TestEventSourcedActor(t *testing.T) {
 		pause.For(time.Second)
 
 		// spawn the actor again - should recover from encrypted snapshot and events
-		behavior2 := NewAccountEventSourcedBehavior(persistenceID)
-		actor2 := newEventSourcedActor()
+		behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+		actor2 := New()
 		pid2, err := actorSystem2.Spawn(ctx, behavior2.ID(), actor2, goakt.WithDependencies(behavior2, entityCfg), goakt.WithLongLived())
 		require.NoError(t, err)
 		require.NotNil(t, pid2)
@@ -1523,7 +1525,7 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, eventStore.Connect(ctx))
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		eventStream := eventstream.New()
 		keyStore := testkit.NewKeyStore()
@@ -1531,7 +1533,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// first actor system: send commands with encryption (no snapshot store)
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1541,7 +1543,7 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -1562,7 +1564,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// second actor system: recover from encrypted events (no snapshot)
 		eventStream2 := eventstream.New()
 		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream2),
@@ -1572,8 +1574,8 @@ func TestEventSourcedActor(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem2.Start(ctx))
 
-		behavior2 := NewAccountEventSourcedBehavior(persistenceID)
-		actor2 := newEventSourcedActor()
+		behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+		actor2 := New()
 		pid2, err := actorSystem2.Spawn(ctx, behavior2.ID(), actor2, goakt.WithDependencies(behavior2), goakt.WithLongLived())
 		require.NoError(t, err)
 		require.NotNil(t, pid2)
@@ -1610,7 +1612,7 @@ func TestEventSourcedActor(t *testing.T) {
 		// create a persistence id
 		persistenceID := uuid.NewString()
 		// create the persistence behavior
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		// connect the stores
 		require.NoError(t, eventStore.Connect(ctx))
@@ -1621,7 +1623,7 @@ func TestEventSourcedActor(t *testing.T) {
 
 		// create an actor system with snapshot store
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1645,7 +1647,7 @@ func TestEventSourcedActor(t *testing.T) {
 		}
 
 		// create the persistence actor using the behavior previously created
-		actor := newEventSourcedActor()
+		actor := New()
 		// spawn the actor with behavior and entity config dependencies
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1701,7 +1703,7 @@ func TestEventSourcedActor(t *testing.T) {
 }
 
 // TestEventSourcedActorTenancyGate exercises the T4-A pre-handler gate added
-// to EventSourcedActor: when the actor system carries the tenancy marker
+// to Actor: when the actor system carries the tenancy marker
 // (tenant-aware mode), HandleCommand must never run without a TenantContext
 // already attached to the incoming ctx. The gate reuses tenancy.Require — a
 // read-only check — and never calls a resolver itself, so these tests spawn
@@ -1716,14 +1718,14 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1733,7 +1735,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -1755,7 +1757,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		_, wantErr := tenancy.Require(context.Background())
 		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
 
-		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
+		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
 
 		scopeA, err := persistence.NewTenantScope("acme")
 		require.NoError(t, err)
@@ -1774,7 +1776,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -1790,7 +1792,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -1800,7 +1802,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 			goakt.WithLongLived(),
@@ -1821,7 +1823,7 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 		_, wantErr := tenancy.Require(context.Background())
 		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
 
-		assert.Zero(t, behavior.invocationCount(), "HandleCommand must never run without an attached TenantContext")
+		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
 
 		// Give any wrongly-scheduled flush timer time to fire, then confirm
 		// nothing was ever written: flushBatch's own context.Background()
@@ -1845,22 +1847,22 @@ func TestEventSourcedActorTenancyGate(t *testing.T) {
 // system: verifyTenantForPersist must be a no-op in legacy mode, must fail
 // closed via tenancy.Require when tenant-aware mode has no TenantContext
 // attached, and must succeed without touching a resolver (the actor struct
-// holds no resolver field at all — see the EventSourcedActor.tenantAware
+// holds no resolver field at all — see the Actor.tenantAware
 // doc comment) when one is already attached.
 func TestEventSourcedActorVerifyTenantForPersist(t *testing.T) {
 	t.Run("legacy mode is always a no-op", func(t *testing.T) {
-		entity := &EventSourcedActor{}
+		entity := &Actor{}
 		assert.NoError(t, entity.verifyTenantForPersist(context.Background()))
 	})
 
 	t.Run("tenant-aware mode fails closed when no TenantContext is attached", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true}
+		entity := &Actor{tenantAware: true}
 		err := entity.verifyTenantForPersist(context.Background())
 		assert.True(t, errors.Is(err, tenancy.ErrMissing))
 	})
 
 	t.Run("tenant-aware mode succeeds against an already-attached TenantContext", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true}
+		entity := &Actor{tenantAware: true}
 		tc, err := tenancy.NewTenantContext("acme")
 		require.NoError(t, err)
 		ctx, err := tenancy.Attach(context.Background(), tc)
@@ -1877,7 +1879,7 @@ func TestEventSourcedActorVerifyTenantForPersist(t *testing.T) {
 	// protection; it fails closed purely because tenancy.Require now
 	// rejects malformed content, and Attach never let one through.
 	t.Run("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(t *testing.T) {
-		entity := &EventSourcedActor{tenantAware: true}
+		entity := &Actor{tenantAware: true}
 
 		ctx, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
 		require.Error(t, attachErr)
@@ -1901,7 +1903,7 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
@@ -1918,7 +1920,7 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 	}
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -1928,7 +1930,7 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
@@ -2013,7 +2015,7 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
@@ -2025,7 +2027,7 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 	}
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -2035,7 +2037,7 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
@@ -2112,7 +2114,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
@@ -2127,7 +2129,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	}
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -2137,7 +2139,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
@@ -2170,7 +2172,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	// batchTenant == A) before tenant B's command is sent into the same
 	// open cycle.
 	pause.For(200 * time.Millisecond)
-	invocationsBeforeB := behavior.invocationCount()
+	invocationsBeforeB := behavior.InvocationCount()
 	require.EqualValues(t, 1, invocationsBeforeB, "tenant A's command must have already run HandleCommand once")
 
 	// Tenant B sends a command whose handler would produce zero events —
@@ -2193,7 +2195,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 	// Before the Blocker 3 fix, it did run (against tenant A's batchState)
 	// before the zero-event early-return path replied — this proves the
 	// gate now runs first.
-	assert.EqualValues(t, invocationsBeforeB, behavior.invocationCount(),
+	assert.EqualValues(t, invocationsBeforeB, behavior.InvocationCount(),
 		"HandleCommand must not execute for a cross-tenant command while a different tenant's batch is open, even if it would have produced zero events")
 
 	// Tenant A's in-flight batch must be untouched by B's rejected attempt:
@@ -2231,7 +2233,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 
 	eventStore := testkit.NewEventsStore()
 	persistenceID := uuid.NewString()
-	behavior := newTenancyProbeEventSourcedBehavior(persistenceID)
+	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
 	require.NoError(t, eventStore.Connect(ctx))
 
@@ -2243,7 +2245,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 	}
 
 	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(
 			extensions.NewEventsStore(eventStore),
 			extensions.NewEventsStream(eventStream),
@@ -2253,7 +2255,7 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, actorSystem.Start(ctx))
 
-	actor := newEventSourcedActor()
+	actor := New()
 	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
 		goakt.WithLongLived(),
@@ -2309,7 +2311,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2320,7 +2322,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		// spawn with no behavior dependency
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2338,21 +2340,21 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedSnapshotSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.SnapshotStoreExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -2367,21 +2369,21 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEventAdaptersSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.EventAdaptersExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.EventAdaptersExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -2396,21 +2398,21 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEncryptorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.EncryptorExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.EncryptorExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -2425,21 +2427,21 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := new(mocks.EventsStore)
 
 		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedTelemetrySystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-				&mistypedExtension{id: extensions.TelemetryExtensionID},
+				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID},
 			),
 			goakt.WithActorInitMaxRetries(1))
 		require.NoError(t, err)
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
-		assert.ErrorIs(t, err, ErrMissingRequiredExtensions)
+		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
 
 		eventStream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
@@ -2449,7 +2451,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		eventStore := new(mocks.EventsStore)
@@ -2460,7 +2462,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2471,7 +2473,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2486,7 +2488,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -2511,7 +2513,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-ciphertext"), "key-1").Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2523,7 +2525,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2540,7 +2542,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -2565,7 +2567,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-ciphertext"), "key-1").Return([]byte("not-valid-proto"), nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2577,7 +2579,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2594,7 +2596,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -2613,7 +2615,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2624,7 +2626,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2640,7 +2642,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -2664,7 +2666,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-cipher"), "key-1").Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2675,7 +2677,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2690,7 +2692,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -2714,7 +2716,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, []byte("fake-cipher"), "key-1").Return([]byte("not-valid-proto"), nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2725,7 +2727,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2740,7 +2742,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -2760,7 +2762,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		adapter.EXPECT().Adapt(mock.Anything, uint64(1)).Return(nil, assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2771,7 +2773,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2786,7 +2788,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -2802,7 +2804,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2812,7 +2814,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2843,10 +2845,10 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
 
 		// use a behavior that returns an error from HandleEvent
-		behavior := NewFailingHandleEventBehavior(persistenceID)
+		behavior := enginetest.NewFailingHandleEventBehavior(persistenceID)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2856,7 +2858,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.Error(t, err)
 		require.Nil(t, pid)
@@ -2871,7 +2873,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -2881,7 +2883,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2892,7 +2894,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -2921,7 +2923,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -2934,7 +2936,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError).Maybe()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -2947,7 +2949,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, actorSystem.Start(ctx))
 
 		entityCfg := &extensions.EntityConfig{SnapshotInterval: 1}
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -2982,7 +2984,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		eventStore := new(mocks.EventsStore)
@@ -2997,7 +2999,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(nil)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3014,7 +3016,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			DeleteEventsOnSnapshot: true,
 			EventsRetentionCount:   0,
 		}
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -3045,7 +3047,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		eventStore := new(mocks.EventsStore)
@@ -3060,7 +3062,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), persistenceID, uint64(2)).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3076,7 +3078,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			HasRetentionPolicy:        true,
 			DeleteSnapshotsOnSnapshot: true,
 		}
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		require.NotNil(t, pid)
@@ -3117,14 +3119,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
 		eventStream := eventstream.New()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3134,7 +3136,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
 			goakt.WithLongLived(), goakt.WithStashing())
@@ -3164,7 +3166,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		eventStore := new(mocks.EventsStore)
@@ -3173,7 +3175,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3183,7 +3185,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior),
 			goakt.WithLongLived(), goakt.WithStashing())
@@ -3211,47 +3213,6 @@ func (a *noopEventAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.Any, error)
 	return event, nil
 }
 
-// FailingHandleEventBehavior is a test behavior whose HandleEvent always returns an error.
-type FailingHandleEventBehavior struct {
-	id string
-}
-
-// NewFailingHandleEventBehavior creates a FailingHandleEventBehavior.
-func NewFailingHandleEventBehavior(id string) *FailingHandleEventBehavior {
-	return &FailingHandleEventBehavior{id: id}
-}
-
-func (f *FailingHandleEventBehavior) ID() string { return f.id }
-
-func (f *FailingHandleEventBehavior) InitialState() State {
-	return new(testpb.Account)
-}
-
-func (f *FailingHandleEventBehavior) HandleCommand(_ context.Context, command Command, _ State) ([]Event, error) {
-	switch command.(type) {
-	case *testpb.CreateAccount:
-		return []Event{&testpb.AccountCreated{AccountId: f.id, AccountBalance: 100}}, nil
-	}
-	return nil, nil
-}
-
-func (f *FailingHandleEventBehavior) HandleEvent(_ context.Context, _ Event, _ State) (State, error) {
-	return nil, assert.AnError
-}
-
-func (f *FailingHandleEventBehavior) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(&egopb.StateReply{PersistenceId: f.id})
-}
-
-func (f *FailingHandleEventBehavior) UnmarshalBinary(data []byte) error {
-	msg := new(egopb.StateReply)
-	if err := proto.Unmarshal(data, msg); err != nil {
-		return err
-	}
-	f.id = msg.GetPersistenceId()
-	return nil
-}
-
 // TestEventSourcedActorGetStateDuringPersist is the permanent regression
 // suite for the P1 read-after-write consistency bug: GetStateCommand must
 // never observe entity.currentState while a direct (non-batched) persist
@@ -3267,7 +3228,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		started := make(chan struct{})
@@ -3285,7 +3246,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 			Return(nil).Once()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3295,7 +3256,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -3372,7 +3333,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		started := make(chan struct{})
@@ -3391,7 +3352,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3401,7 +3362,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -3468,7 +3429,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 		eventStream := eventstream.New()
 
 		started := make(chan struct{})
@@ -3486,7 +3447,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 			Return(assert.AnError).Once()
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3496,7 +3457,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
@@ -3575,7 +3536,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -3587,7 +3548,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3599,7 +3560,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3647,7 +3608,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -3659,7 +3620,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3671,7 +3632,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3722,7 +3683,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -3734,7 +3695,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3746,7 +3707,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3776,7 +3737,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -3788,7 +3749,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3800,7 +3761,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3831,7 +3792,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -3845,7 +3806,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3858,7 +3819,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3899,7 +3860,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -3911,7 +3872,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -3923,7 +3884,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		require.NoError(t, err)
 		pause.For(time.Second)
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -3980,7 +3941,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
@@ -3995,7 +3956,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4005,7 +3966,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4029,7 +3990,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		ctx := context.TODO()
 
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		eventStore := new(mocks.EventsStore)
 		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
@@ -4047,7 +4008,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4058,7 +4019,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4083,7 +4044,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4098,7 +4059,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4109,7 +4070,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4135,7 +4096,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4150,7 +4111,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4161,7 +4122,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4191,7 +4152,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4206,7 +4167,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4217,7 +4178,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4244,7 +4205,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4259,7 +4220,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4270,7 +4231,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4297,7 +4258,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4308,7 +4269,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4318,7 +4279,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4348,7 +4309,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4360,7 +4321,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4370,7 +4331,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4402,7 +4363,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4420,7 +4381,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4432,7 +4393,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4458,7 +4419,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4473,7 +4434,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4484,7 +4445,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4538,7 +4499,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		eventStore := testkit.NewEventsStore()
 		snapshotStore := testkit.NewSnapshotStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 		require.NoError(t, snapshotStore.Connect(ctx))
@@ -4555,7 +4516,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4567,7 +4528,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4664,7 +4625,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4676,7 +4637,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4687,7 +4648,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4825,7 +4786,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4837,7 +4798,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4848,7 +4809,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -4945,7 +4906,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -4957,7 +4918,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -4968,7 +4929,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),
@@ -5064,7 +5025,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		eventStore := testkit.NewEventsStore()
 		persistenceID := uuid.NewString()
-		behavior := NewAccountEventSourcedBehavior(persistenceID)
+		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 		require.NoError(t, eventStore.Connect(ctx))
 
@@ -5079,7 +5040,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		}
 
 		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
@@ -5091,7 +5052,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		require.NoError(t, actorSystem.Start(ctx))
 
-		actor := newEventSourcedActor()
+		actor := New()
 		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
 			goakt.WithDependencies(behavior, entityCfg),
 			goakt.WithLongLived(),

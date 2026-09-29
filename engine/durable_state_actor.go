@@ -416,8 +416,8 @@ func (entity *DurableStateActor) processCommand(receiveContext *goakt.ReceiveCon
 	// (spec: "ExpectedRevision Is Read as a Write Precondition, Not Domain
 	// Input"). Mirrors EventSourcedActor.processCommandAndReply's equivalent
 	// extraction point (design.md D4/D8).
-	revision, hasRevision := expectedRevisionFromContext(ctx)
-	precondition := preconditionFromRevision(revision, hasRevision)
+	revision, hasRevision := protocol.ExpectedRevisionFromContext(ctx)
+	precondition := protocol.PreconditionFromRevision(revision, hasRevision)
 
 	if err := entity.commitState(ctx, newState, newVersion, time.Now(), candidateTenant, precondition); err != nil {
 		// D10 for DurableStateActor (no shutdown/restart path, unlike
@@ -732,3 +732,9 @@ func (entity *DurableStateActor) persistStateAndPublish(ctx context.Context) err
 	entity.eventsStream.Publish(protocol.StatesTopic, durableState)
 	return nil
 }
+
+// noTenantContext is the zero value of tenancy.TenantContext. Neither
+// tenancy.NewTenantContext nor tenancy.NewAdministrativeContext can ever
+// produce it (tenancy/tenant_context.go), so it safely marks "not yet
+// seeded" for an actor's tenant, distinct from any real resolved identity.
+var noTenantContext tenancy.TenantContext

@@ -810,7 +810,7 @@ func (engine *Engine) spawnEventSourced(ctx context.Context, behavior behaviorpo
 	}
 	sOptions = append(sOptions, goakt.WithDependencies(deps...))
 
-	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), newEventSourcedActor(), sOptions...)
+	pid, err := actorSystem.SpawnOn(ctx, behavior.ID(), new(EventSourcedActor), sOptions...)
 	if err != nil {
 		return resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err)
 	}

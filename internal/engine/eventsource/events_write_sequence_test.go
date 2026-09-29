@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
 import (
 	"context"
@@ -35,8 +35,10 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -111,7 +113,7 @@ func TestEventWriteObservableSequence(t *testing.T) {
 		stream := &sequenceEventsStream{Stream: eventstream.New(), seq: seq}
 
 		actorSystem, err := goakt.NewActorSystem("SequenceSystem",
-			goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 			goakt.WithExtensions(
 				extensions.NewEventsStore(store),
 				extensions.NewEventsStream(stream),
@@ -124,8 +126,8 @@ func TestEventWriteObservableSequence(t *testing.T) {
 			_ = base.Disconnect(ctx)
 		})
 
-		behavior := NewAccountEventSourcedBehavior(uuid.NewString())
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), newEventSourcedActor(),
+		behavior := enginetest.NewAccountEventSourcedBehavior(uuid.NewString())
+		pid, err := actorSystem.Spawn(ctx, behavior.ID(), New(),
 			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
 		require.NoError(t, err)
 		return seq, store, pid, actorSystem

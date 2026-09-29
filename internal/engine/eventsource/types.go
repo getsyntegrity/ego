@@ -20,46 +20,24 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package engine
+package eventsource
 
-import (
-	"context"
-	"math"
-	"math/rand/v2"
-	"time"
+import "google.golang.org/protobuf/proto"
+
+// Command, Event and State mirror the aliases the engine package exports for
+// the messages an event sourced behavior handles. They are all proto.Message.
+type (
+	Command = proto.Message
+	Event   = proto.Message
+	State   = proto.Message
 )
 
-const (
-	defaultMaxRetries = 3
-	retryBaseDelay    = 100 * time.Millisecond
-	retryMaxDelay     = 2 * time.Second
-)
-
-// retryWithBackoff retries op up to maxRetries times with exponential backoff
-// and jitter. Returns nil on the first successful attempt or the last error
-// after all attempts are exhausted. Respects context cancellation between
-// attempts.
-func retryWithBackoff(ctx context.Context, maxRetries int, op func() error) error {
-	var err error
-	for attempt := range maxRetries + 1 {
-		if err = op(); err == nil {
-			return nil
-		}
-
-		if attempt < maxRetries {
-			delay := time.Duration(math.Min(
-				float64(retryBaseDelay)*math.Pow(2, float64(attempt)),
-				float64(retryMaxDelay),
-			))
-			jitter := 0.5 + rand.Float64() //nolint:gosec // cryptographic randomness is not needed for backoff jitter
-			delay = time.Duration(float64(delay) * jitter)
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-		}
-	}
-	return err
+// retentionPolicy is the retention the actor applies after a snapshot. It is
+// the actor's private view of extensions.EntityConfig's retention fields; the
+// public engine.RetentionPolicy option is translated into that config before
+// the actor spawns.
+type retentionPolicy struct {
+	DeleteEventsOnSnapshot    bool
+	DeleteSnapshotsOnSnapshot bool
+	EventsRetentionCount      uint64
 }
