@@ -57,6 +57,9 @@ Assertions:
   `specs.Contain`, `specs.MatchError` (`errors.Is`), `specs.MatchErrorAs` (`errors.As`), composed with
   `specs.Not`, `specs.All`, `specs.Any`. There is no length matcher: use `ctx.Expect(len(xs)).ToEqual(3)`.
 - Each `ctx.Expect(...)` carries one assertion; write a new one per check.
+- A failed expectation stops its case, like testify's `require`: the rest of that `It` does not run, and the
+  other cases still do. Migrating testify's `assert` (which keeps going) therefore reports only the first
+  failure of a case; that is expected, not a lost check.
 
 Setup and teardown: `s.BeforeEach` / `s.AfterEach` per case. Nested `AfterEach` hooks run innermost scope
 first, last registered first within a scope. `ctx.T` is the case's `*testing.T`, so `ctx.T.TempDir()`,
