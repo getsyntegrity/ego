@@ -312,6 +312,17 @@ func replayEvents(t testing.TB, store persistence.EventsStore, scope persistence
 	return events
 }
 
+// panics reports whether fn panics.
+func panics(fn func()) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	fn()
+	return false
+}
+
 // adoptionAccountBehavior is a minimal engine.EventSourcedBehavior used only by
 // TestTenantAdopterEndToEndRecoveryThroughRealActor to prove a real,
 // tenant-bound EventSourcedActor recovers migrated data. It is not exported
@@ -1903,19 +1914,25 @@ func (f *testFence) counts() (acquired, released int) {
 }
 
 func TestNewTenantAdopterRequiresAFenceToWrite(t *testing.T) {
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(context.Background()))
+	specs.Describe(t, "NewTenantAdopter requires an adoption fence for any write-enabled configuration", func(s *specs.Spec) {
+		s.It("rejects writes and source deletion without a fence and lets a dry run go without one", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx.T)
 
-	_, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled())
-	require.ErrorIs(t, err, ErrAdoptionFenceRequired, "a write-enabled adoption must hold a fence")
+			// A write-enabled adoption must hold a fence.
+			_, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled())
+			ctx.Expect(err).To(specs.MatchError(ErrAdoptionFenceRequired))
 
-	_, err = NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion())
-	require.ErrorIs(t, err, ErrAdoptionFenceRequired, "source deletion must never rely on an informal quiescence promise")
+			// Source deletion never relies on an informal quiescence promise.
+			_, err = NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion())
+			ctx.Expect(err).To(specs.MatchError(ErrAdoptionFenceRequired))
 
-	dryRun, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store))
-	require.NoError(t, err, "a dry run reads only and needs no fence")
-	_, err = dryRun.Run(context.Background())
-	require.NoError(t, err)
+			// A dry run reads only and needs no fence.
+			dryRun, err := NewTenantAdopter(fixedAssignment(nil), WithEventsStore(store))
+			ctx.Expect(err).To(specs.BeNil())
+			_, err = dryRun.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+		})
+	})
 }
 
 // fencedSnapshotWriter simulates another writer of the target snapshot that
@@ -1960,33 +1977,30 @@ func (w *fencedSnapshotWriter) GetLatestSnapshot(ctx context.Context, scope pers
 // writer creates after the adopter found the target empty must never be
 // overwritten by the stale source snapshot.
 func TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	acme, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	base := testkit.NewSnapshotStore()
-	require.NoError(t, base.Connect(ctx))
+	specs.Describe(t, "a target snapshot another writer creates mid-run is never overwritten by the stale source snapshot", func(s *specs.Spec) {
+		s.It("keeps the other writer's snapshot", func(ctx *specs.Context) {
+			source := persistence.Unscoped()
+			target := tenantScope(ctx.T, "acme")
+			base := connectedSnapshotStore(ctx.T)
 
-	const id = "raced-target-snapshot"
-	require.NoError(t, base.WriteSnapshot(ctx, source, newLegacySnapshot(t, id, 4, 400)))
-	live := newLegacySnapshot(t, id, 4, 999)
-	live.TenantMetadata = tenancy.MarshalMetadata(acme)
+			const id = "raced-target-snapshot"
+			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 4, 400))
+			live := newLegacySnapshot(ctx.T, id, 4, 999)
+			live.TenantMetadata = tenancy.MarshalMetadata(tenantContextOf(ctx.T, "acme"))
 
-	fence := newTestFence()
-	writer := &fencedSnapshotWriter{SnapshotStore: base, fence: fence, target: target, payload: live, done: make(chan struct{})}
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithSnapshotStore(writer), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(fence))
-	require.NoError(t, err)
-	_, err = adopter.Run(ctx)
-	require.NoError(t, err)
-	<-writer.done
+			fence := newTestFence()
+			writer := &fencedSnapshotWriter{SnapshotStore: base, fence: fence, target: target, payload: live, done: make(chan struct{})}
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithSnapshotStore(writer), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(fence))
+			_, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			<-writer.done
 
-	final, err := base.GetLatestSnapshot(ctx, target, id)
-	require.NoError(t, err)
-	require.NotNil(t, final)
-	assert.True(t, proto.Equal(live, final), "the other writer's target snapshot must never be overwritten by the adopter")
+			final := latestSnapshot(ctx.T, base, target, id)
+			ctx.Expect(final).To(specs.Not(specs.BeNil()))
+			ctx.Expect(proto.Equal(live, final)).To(specs.BeTrue())
+		})
+	})
 }
 
 // raceTargetStateStore creates the target durable state between the
@@ -2012,31 +2026,30 @@ func (r *raceTargetStateStore) GetLatestState(ctx context.Context, scope persist
 }
 
 func TestTenantAdopterDurableStateTargetRaceIsStoppedByItsPrecondition(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	acme, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	base := testkit.NewDurableStore()
-	require.NoError(t, base.Connect(ctx))
+	specs.Describe(t, "a durable state created in the target mid-run is stopped by the write precondition", func(s *specs.Spec) {
+		s.It("fails the aggregate and keeps the racing writer's state", func(ctx *specs.Context) {
+			source := persistence.Unscoped()
+			target := tenantScope(ctx.T, "acme")
+			base := connectedStateStore(ctx.T)
 
-	const id = "raced-target-state"
-	require.NoError(t, base.WriteState(ctx, source, newLegacyDurableState(t, id, 3, 300), persistence.Unconditional()))
-	live := newLegacyDurableState(t, id, 1, 999)
-	live.TenantMetadata = tenancy.MarshalMetadata(acme)
+			const id = "raced-target-state"
+			seedState(ctx.T, base, source, newLegacyDurableState(ctx.T, id, 3, 300))
+			live := newLegacyDurableState(ctx.T, id, 1, 999)
+			live.TenantMetadata = tenancy.MarshalMetadata(tenantContextOf(ctx.T, "acme"))
 
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithStateStore(&raceTargetStateStore{StateStore: base, target: target, payload: live}),
-		WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Failed, "the raced target is not this adoption")
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithStateStore(&raceTargetStateStore{StateStore: base, target: target, payload: live}),
+				WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			// The raced target is not this adoption.
+			ctx.Expect(report.Failed).ToEqual(1)
 
-	final, err := base.GetLatestState(ctx, target, id)
-	require.NoError(t, err)
-	assert.True(t, proto.Equal(live, final), "the racing writer's durable state must never be overwritten")
+			// The racing writer's durable state must never be overwritten.
+			final := latestState(ctx.T, base, target, id)
+			ctx.Expect(proto.Equal(live, final)).To(specs.BeTrue())
+		})
+	})
 }
 
 // fencedSourceWriter appends a source event while the adopter verifies the
@@ -2075,33 +2088,32 @@ func (w *fencedSourceWriter) ReplayEvents(ctx context.Context, scope persistence
 }
 
 func TestTenantAdopterFencedSourceWriterCannotInterleaveWithDeletion(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	base := testkit.NewEventsStore()
-	require.NoError(t, base.Connect(ctx))
+	specs.Describe(t, "a fence-honoring source writer is held off until the source deletion completed", func(s *specs.Spec) {
+		s.It("lands the held-off write only after the deletion", func(ctx *specs.Context) {
+			source := persistence.Unscoped()
+			target := tenantScope(ctx.T, "acme")
+			base := connectedEventsStore(ctx.T)
 
-	const id = "fenced-source-writer"
-	require.NoError(t, base.WriteEvents(ctx, source, []*egopb.Event{
-		newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 2, 200),
-	}, persistence.Unconditional()))
+			const id = "fenced-source-writer"
+			seedEvents(ctx.T, base, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200))
 
-	fence := newTestFence()
-	writer := &fencedSourceWriter{EventsStore: base, fence: fence, source: source, target: target, late: newLegacyEvent(t, id, 3, 300), done: make(chan struct{})}
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-		WithEventsStore(writer), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
-	<-writer.done
+			fence := newTestFence()
+			writer := &fencedSourceWriter{EventsStore: base, fence: fence, source: source, target: target, late: newLegacyEvent(ctx.T, id, 3, 300), done: make(chan struct{})}
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(writer), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			<-writer.done
 
-	assert.Equal(t, 1, report.SourceDeleted, "the verified source is deleted while the writer is held off")
-	assert.Zero(t, report.Failed)
-	remaining, err := base.ReplayEvents(ctx, source, id, 1, 10, 10)
-	require.NoError(t, err)
-	require.Len(t, remaining, 1, "the held-off write lands only after the deletion completed")
-	assert.EqualValues(t, 3, remaining[0].GetSequenceNumber())
+			// The verified source is deleted while the writer is held off.
+			ctx.Expect(report.SourceDeleted).ToEqual(1)
+			ctx.Expect(report.Failed).ToEqual(0)
+			// The held-off write lands only after the deletion completed.
+			remaining := replayEvents(ctx.T, base, source, id, 1, 10, 10)
+			ctx.Expect(len(remaining)).ToEqual(1)
+			ctx.Expect(remaining[0].GetSequenceNumber()).ToEqual(uint64(3))
+		})
+	})
 }
 
 // panickingEventsStore panics on target writes, to prove the fence is
@@ -2119,85 +2131,86 @@ func (p *panickingEventsStore) WriteEvents(ctx context.Context, scope persistenc
 }
 
 func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
-	ctx := context.Background()
-	source := persistence.Unscoped()
-	target, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "every fence the adopter acquires is released on every exit path", func(s *specs.Spec) {
+		bg := context.Background()
+		source := persistence.Unscoped()
+		target := tenantScope(t, "acme")
 
-	seeded := func(t *testing.T, id string) *testkit.EventStore {
-		t.Helper()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, source, []*egopb.Event{newLegacyEvent(t, id, 1, 100)}, persistence.Unconditional()))
-		return store
-	}
-	run := func(t *testing.T, fence *testFence, store persistence.EventsStore, id string, runCtx context.Context) *AdoptionReport {
-		t.Helper()
-		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-			WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
-		require.NoError(t, err)
-		report, err := adopter.Run(runCtx)
-		require.NoError(t, err)
-		return report
-	}
-	requireBalanced := func(t *testing.T, fence *testFence, wantAcquired int) {
-		t.Helper()
-		acquired, released := fence.counts()
-		assert.Equal(t, wantAcquired, acquired)
-		assert.Equal(t, acquired, released, "every acquired fence must be released")
-	}
+		seeded := func(t testing.TB, id string) *testkit.EventStore {
+			t.Helper()
+			store := connectedEventsStore(t)
+			seedEvents(t, store, source, newLegacyEvent(t, id, 1, 100))
+			return store
+		}
+		run := func(t testing.TB, fence *testFence, store persistence.EventsStore, id string, runCtx context.Context) *AdoptionReport {
+			t.Helper()
+			adopter := newAdopter(t, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
+			report, err := adopter.Run(runCtx)
+			if err != nil {
+				t.Fatalf("adopter run %q: %v", id, err)
+			}
+			return report
+		}
+		expectBalanced := func(ctx *specs.Context, fence *testFence, wantAcquired int) {
+			acquired, released := fence.counts()
+			ctx.Expect(acquired).ToEqual(wantAcquired)
+			// Every acquired fence must be released.
+			ctx.Expect(released).ToEqual(acquired)
+		}
 
-	t.Run("success", func(t *testing.T) {
-		fence := newTestFence()
-		report := run(t, fence, seeded(t, "ok"), "ok", ctx)
-		assert.Equal(t, 1, report.SourceDeleted)
-		requireBalanced(t, fence, 2)
-	})
+		s.It("success", func(ctx *specs.Context) {
+			fence := newTestFence()
+			report := run(ctx.T, fence, seeded(ctx.T, "ok"), "ok", bg)
+			ctx.Expect(report.SourceDeleted).ToEqual(1)
+			expectBalanced(ctx, fence, 2)
+		})
 
-	t.Run("failed verification", func(t *testing.T) {
-		fence := newTestFence()
-		store := &corruptingEventsStore{EventsStore: seeded(t, "corrupt"), corruptScope: target, mangle: func(e *egopb.Event) { e.Event = nil }}
-		report := run(t, fence, store, "corrupt", ctx)
-		assert.Equal(t, 1, report.Failed)
-		assert.Zero(t, report.SourceDeleted)
-		requireBalanced(t, fence, 2)
-	})
+		s.It("failed verification", func(ctx *specs.Context) {
+			fence := newTestFence()
+			store := &corruptingEventsStore{EventsStore: seeded(ctx.T, "corrupt"), corruptScope: target, mangle: func(e *egopb.Event) { e.Event = nil }}
+			report := run(ctx.T, fence, store, "corrupt", bg)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(report.SourceDeleted).ToEqual(0)
+			expectBalanced(ctx, fence, 2)
+		})
 
-	t.Run("second fence unavailable", func(t *testing.T) {
-		fence := newTestFence()
-		fence.failOn = testFenceKey(target, "unavailable")
-		store := seeded(t, "unavailable")
-		report := run(t, fence, store, "unavailable", ctx)
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], errTestFenceUnavailable)
-		requireBalanced(t, fence, 1)
-		written, err := store.GetLatestEvent(ctx, target, "unavailable")
-		require.NoError(t, err)
-		assert.Nil(t, written, "nothing may be written without both fences")
-	})
+		s.It("second fence unavailable", func(ctx *specs.Context) {
+			fence := newTestFence()
+			fence.failOn = testFenceKey(target, "unavailable")
+			store := seeded(ctx.T, "unavailable")
+			report := run(ctx.T, fence, store, "unavailable", bg)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTestFenceUnavailable))
+			expectBalanced(ctx, fence, 1)
+			// Nothing may be written without both fences.
+			ctx.Expect(latestEvent(ctx.T, store, target, "unavailable")).To(specs.BeNil())
+		})
 
-	t.Run("cancelled while waiting for a fence", func(t *testing.T) {
-		fence := newTestFence()
-		hold, err := fence.Acquire(ctx, target, "waiting")
-		require.NoError(t, err)
-		defer hold()
-		store := seeded(t, "waiting")
-		waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer cancel()
-		report := run(t, fence, store, "waiting", waitCtx)
-		assert.Equal(t, 1, report.Failed)
-		require.Len(t, report.Failures, 1)
-		assert.ErrorIs(t, report.Failures[0], context.DeadlineExceeded)
-		acquired, released := fence.counts()
-		assert.Equal(t, acquired-1, released, "only the test's own hold may remain")
-	})
+		s.It("cancelled while waiting for a fence", func(ctx *specs.Context) {
+			fence := newTestFence()
+			hold, err := fence.Acquire(bg, target, "waiting")
+			ctx.Expect(err).To(specs.BeNil())
+			defer hold()
+			store := seeded(ctx.T, "waiting")
+			waitCtx, cancel := context.WithTimeout(bg, 100*time.Millisecond)
+			defer cancel()
+			report := run(ctx.T, fence, store, "waiting", waitCtx)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(context.DeadlineExceeded))
+			acquired, released := fence.counts()
+			// Only the test's own hold may remain.
+			ctx.Expect(released).ToEqual(acquired - 1)
+		})
 
-	t.Run("panic", func(t *testing.T) {
-		fence := newTestFence()
-		store := &panickingEventsStore{EventsStore: seeded(t, "panic"), target: target}
-		assert.Panics(t, func() { run(t, fence, store, "panic", ctx) })
-		requireBalanced(t, fence, 2)
+		s.It("panic", func(ctx *specs.Context) {
+			fence := newTestFence()
+			store := &panickingEventsStore{EventsStore: seeded(ctx.T, "panic"), target: target}
+			ctx.Expect(panics(func() { run(ctx.T, fence, store, "panic", bg) })).To(specs.BeTrue())
+			expectBalanced(ctx, fence, 2)
+		})
 	})
 }
 
@@ -2206,49 +2219,47 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 // whichever scope is the source, so two runs moving data in opposite
 // directions can never deadlock each other.
 func TestTenantAdopterAcquiresFencesInDeterministicOrder(t *testing.T) {
-	ctx := context.Background()
-	north, err := persistence.NewTenantScope("north")
-	require.NoError(t, err)
-	south, err := persistence.NewTenantScope("south")
-	require.NoError(t, err)
+	specs.Describe(t, "the two fences of an aggregate are taken in one global order whichever scope is the source", func(s *specs.Spec) {
+		s.It("uses the same lock order for opposite moves", func(ctx *specs.Context) {
+			north := tenantScope(ctx.T, "north")
+			south := tenantScope(ctx.T, "south")
 
-	orderFor := func(t *testing.T, from persistence.Scope, to tenancy.TenantID) []string {
-		t.Helper()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		fence := newTestFence()
-		adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{"shared": to}),
-			WithEventsStore(store), WithPersistenceIDs("shared"), WithSourceScope(from), WithWriteEnabled(), WithAdoptionFence(fence))
-		require.NoError(t, err)
-		_, err = adopter.Run(ctx)
-		require.NoError(t, err)
-		return fence.order
-	}
+			orderFor := func(from persistence.Scope, to tenancy.TenantID) []string {
+				store := connectedEventsStore(ctx.T)
+				fence := newTestFence()
+				adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{"shared": to}),
+					WithEventsStore(store), WithPersistenceIDs("shared"), WithSourceScope(from), WithWriteEnabled(), WithAdoptionFence(fence))
+				mustAdopt(ctx.T, adopter)
+				return fence.order
+			}
 
-	northToSouth := orderFor(t, north, "south")
-	southToNorth := orderFor(t, south, "north")
-	require.Len(t, northToSouth, 2)
-	assert.Equal(t, northToSouth, southToNorth, "the lock order must not depend on the direction of the move")
+			northToSouth := orderFor(north, "south")
+			southToNorth := orderFor(south, "north")
+			ctx.Expect(len(northToSouth)).ToEqual(2)
+			// The lock order must not depend on the direction of the move.
+			ctx.Expect(southToNorth).ToEqual(northToSouth)
+		})
+	})
 }
 
 func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
-	ctx := context.Background()
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "an adoption whose target scope equals its source scope fails before taking any fence", func(s *specs.Spec) {
+		s.It("reports errTargetIsSource and acquires no fence", func(ctx *specs.Context) {
+			acme := tenantScope(ctx.T, "acme")
+			store := connectedEventsStore(ctx.T)
 
-	fence := newTestFence()
-	adopter, err := NewTenantAdopter(fixedAssignment(map[string]tenancy.TenantID{"self": "acme"}),
-		WithEventsStore(store), WithPersistenceIDs("self"), WithSourceScope(acme), WithWriteEnabled(), WithAdoptionFence(fence))
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Failed)
-	require.Len(t, report.Failures, 1)
-	assert.ErrorIs(t, report.Failures[0], errTargetIsSource)
-	acquired, _ := fence.counts()
-	assert.Zero(t, acquired)
+			fence := newTestFence()
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{"self": "acme"}),
+				WithEventsStore(store), WithPersistenceIDs("self"), WithSourceScope(acme), WithWriteEnabled(), WithAdoptionFence(fence))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetIsSource))
+			acquired, _ := fence.counts()
+			ctx.Expect(acquired).ToEqual(0)
+		})
+	})
 }
 
 // scopedLegacyAccountEvent builds a legacy event in a tenant scope: an
