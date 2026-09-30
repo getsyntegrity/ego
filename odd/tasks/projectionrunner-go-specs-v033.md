@@ -57,8 +57,12 @@ it on a separate review. That work is the follow-up below.
       Evidence: `90b33e6`. There are 58 `--- PASS` before T2 and 58 after, with identical subtest names.
       `-count=5` is green. The constructor-guard and ping-failure pairs stay separate `It` blocks, because
       folding them needed per-row branches.
-- [ ] T5 Verify and deliver: `go vet`, `golangci-lint`, coverage not below 92.6%, push to
-      `test/205-migrate-projectionrunner`, update the PR description. Route: inline.
+- [x] T5 Verify and deliver: `go vet`, `golangci-lint`, coverage not below 92.6%, push to
+      `test/205-migrate-projectionrunner`, update the PR description. Route: inline. Evidence: the native
+      assessment (RDD off) returned `high`, so an independent verifier ran and returned PASS with nits: no
+      lost assertion, three production mutations caught, and `-count=3` green. Its one real nit, that
+      `committed()` accepted an observed store error, was fixed in the following commit. Pushed, and the
+      PR #236 description was updated.
 
 ## Follow-up spec (not in this document)
 
