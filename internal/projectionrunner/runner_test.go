@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -269,13 +270,22 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 				Do(func([]any) []any { retried.Inc(); return []any{nil, nil} })
 
 			handler := projection.NewDiscardHandler()
+			clk := newManualClock()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
-				WithPullInterval(time.Millisecond))
+				WithPullInterval(time.Minute), WithClock(clk))
 
 			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
 			runner.Run(bg, nil)
+			awaitTimer(ctx, clk)
 
-			// the failed pull is retried once its first backoff has elapsed
+			// the first pull fails and waits out its first backoff
+			clk.Advance(time.Minute)
+			awaitTimer(ctx, clk)
+			clk.Advance(time.Second)
+			awaitTimer(ctx, clk)
+
+			// the failed pull is retried on the next interval
+			clk.Advance(time.Minute)
 			ctx.Eventually(counter(retried), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
@@ -426,17 +436,23 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 				Do(func([]any) []any { pulls.Inc(); return []any{nil, errFailed} })
 
 			handler := projection.NewDiscardHandler()
+			clk := newManualClock()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
-				WithPullInterval(time.Millisecond))
+				WithPullInterval(time.Minute), WithClock(clk))
 
 			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
 			runner.Run(bg, nil)
+			awaitTimer(ctx, clk)
 
-			// wait for the first failed pull, then stop
+			// wait for the first failed pull to arm its backoff, then stop
+			clk.Advance(time.Minute)
 			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
+			awaitTimer(ctx, clk)
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
+			// the interrupted backoff leaves no timer behind
+			ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(0), poll...)
 		})
 	})
 }
@@ -872,9 +888,10 @@ func TestRunner(t *testing.T) {
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
-			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
-			// start the projection
-			err := runner.Start(bg)
+			clk := newManualClock()
+			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond), WithClock(clk))
+			// start the projection: the pings are retried on the manual clock
+			err := startOnClock(ctx, runner, clk)
 			ctx.Expect(err).To(haveMessage("failed to start the projection: fail ping"))
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -894,9 +911,10 @@ func TestRunner(t *testing.T) {
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
-			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
-			// start the projection
-			err := runner.Start(bg)
+			clk := newManualClock()
+			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond), WithClock(clk))
+			// start the projection: the pings are retried on the manual clock
+			err := startOnClock(ctx, runner, clk)
 			ctx.Expect(err).To(haveMessage("failed to start the projection: fail ping"))
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -1405,53 +1423,40 @@ func TestRunner(t *testing.T) {
 }
 
 func TestProjectionRunnerLagMetrics(t *testing.T) {
+	const interval = 10 * time.Second
+
 	specs.Describe(t, "the runner commits the offset of processed events while recording lag metrics", func(s *specs.Spec) {
 		s.It("lag resets to zero when projection is caught up", func(ctx *specs.Context) {
 			bg := context.TODO()
 			projectionName := "lag-test"
-			persistenceID := uuid.NewString()
 			shardNumber := uint64(3)
+			clk := newManualClock()
+			epoch := clk.Now()
 
-			journalStore := testkit2.NewEventsStore()
-			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
-			offsetStore := testkit2.NewOffsetStore()
-			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
+			// The shard is 2s behind when the runner reads it: the committed offset
+			// is 8s past the epoch and the clock reads 10s. The pass drains the
+			// shard, so the lag that was recorded while it was behind is reset.
+			timestamp := epoch.Add(9 * time.Second).UnixNano()
+			journalStore, offsetStore := seededShard(ctx, projectionName, shardNumber, epoch.Add(8*time.Second).UnixNano(), timestamp)
 
-			handler := projection.NewDiscardHandler()
-			meter := noopmetric.NewMeterProvider().Meter("test")
-			m := instrumentation.New(meter)
+			reader := sdkmetric.NewManualReader()
+			m := instrumentation.New(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 
-			event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
-			ctx.Expect(err).To(specs.BeNil())
-			timestamp := time.Now().Unix()
-
-			journals := []*egopb.Event{
-				{
-					PersistenceId:  persistenceID,
-					SequenceNumber: 1,
-					IsDeleted:      false,
-					Event:          event,
-					Timestamp:      timestamp,
-					Shard:          shardNumber,
-				},
-			}
-			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
-
-			runner := New(projectionName, handler, journalStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithMetrics(m))
+			runner := New(projectionName, projection.NewDiscardHandler(), journalStore, offsetStore,
+				WithPullInterval(interval), WithClock(clk), WithMetrics(m))
 
 			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
 			runner.Run(bg, nil)
+			awaitTimer(ctx, clk)
+			clk.Advance(interval)
 
-			// Wait for the runner to process the event; the caught-up ticks that follow
-			// only reset the lag gauges.
+			// Verify the offset was committed (projection processed the event).
 			projectionID := &egopb.ProjectionId{
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			// Verify the offset was committed (projection processed the event).
 			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(timestamp), poll...)
+			ctx.Eventually(lagOf(reader), specs.Equal(int64(0)), poll...)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
@@ -1461,41 +1466,26 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 		s.It("lag uses seconds-based offset and converts to milliseconds", func(ctx *specs.Context) {
 			bg := context.TODO()
 			projectionName := "lag-formula-test"
-			persistenceID := uuid.NewString()
 			shardNumber := uint64(5)
+			clk := newManualClock()
+			epoch := clk.Now()
 
-			journalStore := testkit2.NewEventsStore()
-			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
-			offsetStore := testkit2.NewOffsetStore()
-			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
+			// The committed offset is 8s past the epoch and the clock reads 10s when
+			// the runner pulls, so the lag is 2000ms. The event is 9s past the epoch.
+			pastTimestamp := epoch.Add(9 * time.Second).UnixNano()
+			journalStore, offsetStore := seededShard(ctx, projectionName, shardNumber, epoch.Add(8*time.Second).UnixNano(), pastTimestamp)
 
-			handler := projection.NewDiscardHandler()
-			meter := noopmetric.NewMeterProvider().Meter("test")
-			m := instrumentation.New(meter)
+			reader := sdkmetric.NewManualReader()
+			m := instrumentation.New(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 
-			// Write an event with a timestamp 2 seconds in the past.
-			pastTimestamp := time.Now().Unix() - 2
-			event, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 100})
-			ctx.Expect(err).To(specs.BeNil())
-
-			journals := []*egopb.Event{
-				{
-					PersistenceId:  persistenceID,
-					SequenceNumber: 1,
-					IsDeleted:      false,
-					Event:          event,
-					Timestamp:      pastTimestamp,
-					Shard:          shardNumber,
-				},
-			}
-			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
-
-			runner := New(projectionName, handler, journalStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithMetrics(m))
+			// a one-event buffer is full, so the lag stays recorded after the pass
+			runner := New(projectionName, projection.NewDiscardHandler(), journalStore, offsetStore,
+				WithPullInterval(interval), WithClock(clk), WithMetrics(m), WithMaxBufferSize(1))
 
 			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
 			runner.Run(bg, nil)
+			awaitTimer(ctx, clk)
+			clk.Advance(interval)
 
 			// Wait for the offset to be committed with the event's timestamp.
 			projectionID := &egopb.ProjectionId{
@@ -1503,6 +1493,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 				ShardNumber:    shardNumber,
 			}
 			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(pastTimestamp), poll...)
+			ctx.Eventually(lagOf(reader), specs.Equal(int64(2000)), poll...)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())

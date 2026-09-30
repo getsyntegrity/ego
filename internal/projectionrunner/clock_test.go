@@ -38,7 +38,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -80,6 +79,26 @@ func (m *manualClock) timers() []time.Duration {
 // awaitTimer waits until the runner has exactly one timer pending.
 func awaitTimer(ctx *specs.Context, clk *manualClock) {
 	ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(1), poll...)
+}
+
+// startOnClock runs Start in a task and drives its ping retries: it advances the
+// clock by the retry delay each time Start waits, then returns the error Start
+// failed with. Start is expected to exhaust its five attempts.
+func startOnClock(ctx *specs.Context, runner *Runner, clk *manualClock) error {
+	// A Start that never finishes would block the spec forever, since a task is
+	// never cancelled: ending the context on any exit unblocks it.
+	startCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan error, 1)
+	ctx.Go(func(*specs.Context) { started <- runner.Start(startCtx) })
+
+	for range 4 {
+		awaitTimer(ctx, clk)
+		clk.Advance(time.Second)
+	}
+
+	return awaitFailure(ctx, started)
 }
 
 // clockedStores stubs the two stores for a runner that never reaches a real
@@ -236,11 +255,11 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			runner.Run(bg, nil)
 			awaitTimer(ctx, clk)
 
-			// the first failure waits storeRetryDelay(1), then the next pull waits for the interval
+			// the first failure waits one second, then the next pull waits for the interval
 			clk.Advance(interval)
 			ctx.Eventually(counter(pulls), specs.Equal(int32(1)), poll...)
 			awaitTimer(ctx, clk)
-			clk.Advance(storeRetryDelay(1))
+			clk.Advance(time.Second)
 			awaitTimer(ctx, clk)
 
 			// the second consecutive failure waits twice as long
@@ -249,7 +268,7 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			awaitTimer(ctx, clk)
 
 			ctx.Expect(clk.timers()).To(specs.Equal([]time.Duration{
-				interval, storeRetryDelay(1), interval, storeRetryDelay(2),
+				interval, time.Second, interval, 2 * time.Second,
 			}))
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -267,15 +286,7 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			runner := New("clock-ping", projection.NewDiscardHandler(), eventsStoreMock{eventsCtrl}, offsetStoreMock{offsetCtrl},
 				WithClock(clk))
 
-			started := make(chan error, 1)
-			ctx.Go(func(*specs.Context) { started <- runner.Start(context.Background()) })
-
-			for range 4 {
-				awaitTimer(ctx, clk)
-				clk.Advance(time.Second)
-			}
-
-			ctx.Expect(awaitFailure(ctx, started)).To(haveMessage("failed to start the projection: fail ping"))
+			ctx.Expect(startOnClock(ctx, runner, clk)).To(haveMessage("failed to start the projection: fail ping"))
 			ctx.Expect(pings.Load()).To(specs.Equal(int32(5)))
 			ctx.Expect(clk.timers()).To(specs.Equal([]time.Duration{time.Second, time.Second, time.Second, time.Second}))
 		})
@@ -336,30 +347,6 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			offset, err := offsetStore.GetCurrentOffset(bg, projectionID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(offset.GetTimestamp()).To(specs.Equal(clk.Now().UnixMilli()))
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-
-		s.It("measures the lag against the time of the clock", func(ctx *specs.Context) {
-			bg := context.TODO()
-			const name, shard = "clock-lag", uint64(6)
-			clk := newManualClock()
-			epoch := clk.Now()
-			// the shard is committed up to 8s past the epoch and the clock reads 10s
-			eventsStore, offsetStore := seededShard(ctx, name, shard, epoch.Add(8*time.Second).UnixNano(), epoch.Add(9*time.Second).UnixNano())
-
-			reader := sdkmetric.NewManualReader()
-			metrics := instrumentation.New(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
-
-			// a one-event buffer is full, so the lag stays recorded after the pass
-			runner := New(name, projection.NewDiscardHandler(), eventsStore, offsetStore,
-				WithPullInterval(interval), WithClock(clk), WithMetrics(metrics), WithMaxBufferSize(1))
-			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
-			runner.Run(bg, nil)
-			awaitTimer(ctx, clk)
-
-			clk.Advance(interval)
-			ctx.Eventually(lagOf(reader), specs.Equal(int64(2000)), poll...)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
