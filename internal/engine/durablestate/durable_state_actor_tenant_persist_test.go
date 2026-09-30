@@ -30,10 +30,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -44,7 +44,6 @@ import (
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/internal/pause"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/tenancy"
@@ -131,6 +130,14 @@ func tenantContextFor(ctx *specs.Context, name tenancy.TenantID) tenancy.TenantC
 	tc, err := tenancy.NewTenantContext(name)
 	ctx.Expect(err).To(specs.BeNil())
 	return tc
+}
+
+// tenantScopeFor builds the named tenant's persistence scope for a spec,
+// failing the running case when the name is not a valid tenant.
+func tenantScopeFor(ctx *specs.Context, name tenancy.TenantID) persistence.Scope {
+	scope, err := persistence.NewTenantScope(name)
+	ctx.Expect(err).To(specs.BeNil())
+	return scope
 }
 
 // TestDurableStateActorRecoverFromStoreSeedsActorTenant covers tasks.md
@@ -398,192 +405,109 @@ func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.
 // persisted tenant metadata was invalid never reaches PostStop's persist at
 // all, because it never finishes PreStart.
 func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
-	ctx := context.TODO()
+	// The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("tenant-aware and never-seeded: PostStop does not persist", func(t *testing.T) {
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
+		s.It("tenant-aware and never-seeded: PostStop does not persist", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
+			scopeA := tenantScopeFor(ctx, "acme")
 
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, scopeA, behavior.ID()).Return(nil, nil)
+			// Ping and GetLatestState run once per PreStart attempt, and the
+			// actor system retries PreStart (WithActorInitMaxRetries), and
+			// Ping runs again in PostStop, so none of them has an exact count.
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			ctrl.Method("GetLatestState").Expect(mock.Any(), scopeA, behavior.ID()).Return(nil, nil).AtLeast(1)
+			// PostStop must not persist: a WriteState here fails the case.
+			ctrl.Method("WriteState").Expect(mock.Any(), mock.Any(), mock.Any(), mock.Any()).Never()
 
-		eventStream := eventstream.New()
+			rig := startActorRig(ctx, enginetest.NewStateStoreMock(ctrl), extensions.NewTenancyMarker())
+			rig.spawnForTenant(ctx, behavior, "acme")
+			pause.For(time.Second)
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
+			pause.For(time.Second)
+		})
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+		s.It("tenant-aware and seeded: PostStop writes with the established tenant", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			scopeA := tenantScopeFor(ctx, "acme")
 
-		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-		pause.For(time.Second)
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
 
-		// No WriteState expectation was ever registered on this mock: if
-		// PostStop had called persistStateAndPublish, the mock would have
-		// panicked on the unexpected call and failed this test.
-		durableStore.AssertExpectations(t)
-		durableStore.AssertNotCalled(t, "WriteState", mock.Anything, mock.Anything)
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
+			pause.For(time.Second)
 
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			ctxA, err := tenancy.Attach(bg, tenantA)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(isStateReply(ask(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}))).To(specs.BeTrue())
 
-	t.Run("tenant-aware and seeded: PostStop writes with the established tenant", func(t *testing.T) {
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
+			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
+			pause.For(time.Second)
 
-		durableStore := testkit.NewDurableStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-		require.NoError(t, durableStore.Connect(ctx))
+			latest, err := durableStore.GetLatestState(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetTenantMetadata()).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(latest.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tenantA)))
+		})
 
-		eventStream := eventstream.New()
+		s.It("legacy mode keeps the unconditional flush, even for a never-touched genesis actor", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			rig := startActorRig(ctx, durableStore)
+			rig.spawn(ctx, behavior)
+			pause.For(time.Second)
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
+			pause.For(time.Second)
 
-		ctxA, err := tenancy.Attach(ctx, tenantA)
-		require.NoError(t, err)
-		reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			latest, err := durableStore.GetLatestState(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			// legacy mode must flush on PostStop even without ever handling a command
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty())
+		})
 
-		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-		pause.For(time.Second)
+		s.It("an actor that fails recovery on invalid tenant metadata never reaches PostStop's persist", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
 
-		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		require.NotEmpty(t, latest.GetTenantMetadata())
-		assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantA)), latest.GetTenantMetadata())
+			stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			latestState := &egopb.DurableState{
+				PersistenceId:  persistenceID,
+				VersionNumber:  1,
+				ResultingState: stateAny,
+				Timestamp:      time.Now().UnixNano(),
+				// TenantMetadata deliberately absent: a non-genesis record on a
+				// tenant-aware actor must be refused, not silently recovered.
+			}
+			scopeA := tenantScopeFor(ctx, "acme")
 
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			// As above, PreStart is retried, so Ping and GetLatestState have
+			// no exact count.
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			ctrl.Method("GetLatestState").Expect(mock.Any(), scopeA, behavior.ID()).Return(latestState, nil).AtLeast(1)
+			// PostStop is never invoked for an actor whose PreStart never
+			// completed, so no WriteState may happen.
+			ctrl.Method("WriteState").Expect(mock.Any(), mock.Any(), mock.Any(), mock.Any()).Never()
 
-	t.Run("legacy mode keeps the unconditional flush, even for a never-touched genesis actor", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-		require.NoError(t, durableStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
-
-		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-		pause.For(time.Second)
-
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest, "legacy mode must flush on PostStop even without ever handling a command")
-		assert.Empty(t, latest.GetTenantMetadata())
-
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("an actor that fails recovery on invalid tenant metadata never reaches PostStop's persist", func(t *testing.T) {
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		latestState := &egopb.DurableState{
-			PersistenceId:  persistenceID,
-			VersionNumber:  1,
-			ResultingState: stateAny,
-			Timestamp:      time.Now().UnixNano(),
-			// TenantMetadata deliberately absent: a non-genesis record on a
-			// tenant-aware actor must be refused, not silently recovered.
-		}
-
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, scopeA, behavior.ID()).Return(latestState, nil)
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-		require.Error(t, err, "PreStart must fail closed on invalid persisted tenant metadata")
-		require.Nil(t, pid)
-		pause.For(time.Second)
-
-		// No WriteState expectation was ever registered: PostStop is never
-		// invoked for an actor whose PreStart never completed.
-		durableStore.AssertExpectations(t)
-		durableStore.AssertNotCalled(t, "WriteState", mock.Anything, mock.Anything)
-
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+			rig := startActorRig(ctx, enginetest.NewStateStoreMock(ctrl), extensions.NewTenancyMarker())
+			pid, err := rig.trySpawn(behavior, extensions.NewEntityTenantScope("acme"))
+			// PreStart must fail closed on invalid persisted tenant metadata
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(pid).To(specs.BeNil())
+			pause.For(time.Second)
+		})
 	})
 }
 
