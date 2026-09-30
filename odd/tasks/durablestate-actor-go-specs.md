@@ -40,21 +40,56 @@ Only the `*_test.go` files in `internal/engine/durablestate` change.
 
 ## Tasks
 
-- [ ] T1 Move the store-failure cases that can run without goakt (the `durable_state_actor_test.go`
+- [x] T1 Move the store-failure cases that can run without goakt (the `durable_state_actor_test.go`
       `:393`/`:437` cases and any others) to unit tests on `StateStoreMock`. Route: delegated writer.
-      Check: green, and a mutation in `recoverFromStore` error handling is caught.
-- [ ] T2 Move the remaining `mocks/persistence.StateStore` uses (`tenant_persist:409`, `:555`) to
-      `StateStoreMock`. Route: the same writer. Check: no `mocks/` import left in the package; green.
-- [ ] T3 Replace the 22 `pause.For` waits with `ctx.Eventually` or with an `Ask` that already
-      synchronizes. Route: the same writer. Check: green with `-count=5`, the package time drops, and a
-      mutation that skips persisting on the tenant path is caught.
-- [ ] T4 Record the list of component cases (the tests that still need goakt) in this document. Then verify
-      and deliver: run vet, lint, coverage, and the assessment (with an independent verifier if the result
-      is `high`), push, and open the stacked PR. Route: inline.
+      Evidence: `9299781`. RED: `recoverFromStore` swallowing the store error failed with an `errors.Is`
+      mismatch.
+- [x] T2 Move the remaining `mocks/persistence.StateStore` uses (`tenant_persist:409`, `:555`) to
+      `StateStoreMock`. Route: the same writer. Evidence: `689ff73`. No `ego/mocks` import is left.
+      - This found a latent bug in the old test: `AssertNotCalled("WriteState", Anything, Anything)` named
+        two arguments where the real call has four, so it always passed. It is now
+        `Expect(...).Never()`.
+      - RED: making `PostStop` always persist failed with a `forbidden call WriteState`.
+- [x] T3 Replace the 22 `pause.For` waits with `ctx.Eventually` or with an `Ask` that already
+      synchronizes. Route: the same writer. Evidence: `b31625e`. No `pause.For` is left.
+      - RED: skipping the tenant-aware persist failed within 5 s. The message showed the last value
+        observed: `expected <nil> to satisfy "is a persisted durable state"`.
+      - The package time went from 22.2 s to 0.05 s. The parent confirmed this uncached (0.048 s).
+- [x] T4 Record the component cases and deliver. Route: inline. Evidence:
+      - Subtest names: 50 `--- PASS` before, 52 after. No old name was lost. Two single-case tests gained
+        an `It` segment.
+      - Coverage stayed at 85.8%.
+      - vet, lint and gofmt are clean.
+      - The assessment returned `medium` with RDD off, so the writer's self-verification with mutations
+        stands.
 
-## Component cases (filled in by T4)
+## Component cases (they still start a real goakt actor system)
 
-_pending_
+These go to the component lane in the final reclassification in S3b:
+
+- `TestDurableStateActorPreStartExtensions` (1 case).
+- `TestDurableStateBehavior`, 6 cases:
+  - with state reply
+  - with error reply
+  - with state recovery from state store
+  - with telemetry extension
+  - with mismatched state types from HandleCommand
+  - with invalid version increment from HandleCommand
+- `TestDurableStateActorTenancyGate` (1).
+- `TestDurableStateActorTenancyWritePath`.
+- `TestDurableStateActorProcessCommandRejectsCrossTenant`.
+- `TestDurableStateActorPostStopTenantPersist`, all 4 cases.
+- `TestDurableStateActorGetStateCommandTenancyGate` (3).
+- `TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor`.
+- `TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis`, only its end-to-end case.
+
+Left as is, because they have no fixed waits and no generated mocks: `TestDurableStateBehavior`,
+`PreStartExtensions`, `TenancyGate` and `TenancyWritePath` are still `testing.T` with testify
+`require`/`assert`. Moving them to go-specs is mechanical and is not needed for the lane rule.
+
+No unit case covers `PreStart` propagating a `recoverFromStore` error, because `PreStart` takes a
+`*goakt.Context`. The component case "an actor that fails recovery on invalid tenant metadata never
+reaches PostStop's persist" covers that path.
 
 ## Progress
 
