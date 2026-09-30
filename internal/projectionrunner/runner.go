@@ -105,6 +105,11 @@ type Runner struct {
 	resetOffsetTo time.Time
 	ticker        *ticker.Ticker
 
+	// clock is the source of time for the pull loop, the retries, the store
+	// backoff and the offset timestamps. It is the real clock unless WithClock
+	// replaces it.
+	clock clock
+
 	// worker pool — initialised in Start, torn down in Stop.
 	workCh       chan shardItem // shard dispatch channel shared by all workers
 	workerErrCh  chan error     // first per-batch error reported by workers
@@ -205,6 +210,10 @@ func New(name string,
 
 	for _, opt := range opts {
 		opt.Apply(runner)
+	}
+
+	if runner.clock == nil {
+		runner.clock = realClock{}
 	}
 
 	runner.wgPool.New = func() any { return new(sync.WaitGroup) }
