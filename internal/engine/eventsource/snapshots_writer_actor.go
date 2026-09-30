@@ -153,7 +153,7 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 		snapshot = encrypted
 	}
 
-	if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
+	if err := retryWithBackoff(ctx.Context(), defaultBackoff(), defaultMaxRetries, func() error {
 		return a.snapshotStore.WriteSnapshot(ctx.Context(), req.scope, snapshot)
 	}); err != nil {
 		a.logger.ErrorContext(ctx.Context(), "failed to persist snapshot",

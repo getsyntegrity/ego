@@ -36,7 +36,7 @@ func TestRetryWithBackoff(t *testing.T) {
 	specs.Describe(t, "retryWithBackoff retries an operation with exponential backoff until it succeeds, runs out of attempts or the context ends", func(s *specs.Spec) {
 		s.It("succeeds on first attempt", func(ctx *specs.Context) {
 			var calls int32
-			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), defaultMaxRetries, func() error {
 				atomic.AddInt32(&calls, 1)
 				return nil
 			})
@@ -45,7 +45,7 @@ func TestRetryWithBackoff(t *testing.T) {
 		})
 		s.It("succeeds on second attempt", func(ctx *specs.Context) {
 			var calls int32
-			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), defaultMaxRetries, func() error {
 				n := atomic.AddInt32(&calls, 1)
 				if n < 2 {
 					return errors.New("transient")
@@ -58,7 +58,7 @@ func TestRetryWithBackoff(t *testing.T) {
 		s.It("succeeds on last attempt", func(ctx *specs.Context) {
 			maxRetries := 3
 			var calls int32
-			err := retryWithBackoff(context.Background(), maxRetries, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), maxRetries, func() error {
 				n := atomic.AddInt32(&calls, 1)
 				if int(n) <= maxRetries {
 					return errors.New("transient")
@@ -71,7 +71,7 @@ func TestRetryWithBackoff(t *testing.T) {
 		s.It("returns last error after all attempts exhausted", func(ctx *specs.Context) {
 			sentinel := errors.New("persistent failure")
 			var calls int32
-			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), defaultMaxRetries, func() error {
 				atomic.AddInt32(&calls, 1)
 				return sentinel
 			})
@@ -81,7 +81,7 @@ func TestRetryWithBackoff(t *testing.T) {
 		s.It("zero max retries executes exactly once", func(ctx *specs.Context) {
 			var calls int32
 			sentinel := errors.New("fail")
-			err := retryWithBackoff(context.Background(), 0, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), 0, func() error {
 				atomic.AddInt32(&calls, 1)
 				return sentinel
 			})
@@ -91,7 +91,7 @@ func TestRetryWithBackoff(t *testing.T) {
 		s.It("context cancelled before retry", func(ctx *specs.Context) {
 			cctx, cancel := context.WithCancel(context.Background())
 			var calls int32
-			err := retryWithBackoff(cctx, defaultMaxRetries, func() error {
+			err := retryWithBackoff(cctx, defaultBackoff(), defaultMaxRetries, func() error {
 				n := atomic.AddInt32(&calls, 1)
 				if n == 1 {
 					cancel()
@@ -106,7 +106,7 @@ func TestRetryWithBackoff(t *testing.T) {
 			defer cancel()
 
 			var calls int32
-			err := retryWithBackoff(cctx, 10, func() error {
+			err := retryWithBackoff(cctx, defaultBackoff(), 10, func() error {
 				atomic.AddInt32(&calls, 1)
 				return errors.New("transient")
 			})
@@ -119,9 +119,30 @@ func TestRetryWithBackoff(t *testing.T) {
 			}
 			ctx.Expect(outOfRange).To(specs.BeNil())
 		})
+		s.It("waits the exponential delay times the jitter between attempts", func(ctx *specs.Context) {
+			clk := newManualClock()
+			cctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			done := make(chan error, 1)
+			ctx.Go(func(*specs.Context) {
+				done <- retryWithBackoff(cctx, backoff{clock: clk, jitter: func() float64 { return 1.25 }}, 2, func() error {
+					return errors.New("fail")
+				})
+			})
+			for range 2 {
+				ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(1),
+					specs.WithTimeout(time.Second), specs.WithInterval(time.Millisecond))
+				clk.Advance(time.Second)
+			}
+			ctx.Eventually(func() any { return len(done) }, specs.Equal(1),
+				specs.WithTimeout(time.Second), specs.WithInterval(time.Millisecond))
+
+			ctx.Expect(clk.timers()).To(specs.Equal([]time.Duration{125 * time.Millisecond, 250 * time.Millisecond}))
+		})
 		s.It("backoff delays increase between attempts", func(ctx *specs.Context) {
 			timestamps := make([]time.Time, 0, 4)
-			err := retryWithBackoff(context.Background(), 2, func() error {
+			err := retryWithBackoff(context.Background(), defaultBackoff(), 2, func() error {
 				timestamps = append(timestamps, time.Now())
 				return errors.New("fail")
 			})
