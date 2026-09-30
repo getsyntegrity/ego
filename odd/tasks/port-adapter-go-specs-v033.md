@@ -59,15 +59,24 @@ Only the `*_test.go` files under `port/adapter/` and `port/adapter/adaptertest/`
 
 - [x] T1 Merge `origin/develop` (v0.3.3) and fix the websocket sums. Route: inline. Evidence: the merge
       commit, `go mod tidy` in `publisher/websocket`, and a clean build.
-- [ ] T2 `adapter_test.go`: `full` becomes `mock.Controller`, with better matchers and tables. Route:
-      delegated writer. Check: the package is green and a mutation of `Start` forwarding is caught.
-- [ ] T3 `adaptertest_test.go` and `implied_internal_test.go`: matcher-based helpers, tables and the
-      spy/controller for pure counters. Route: the same writer. Check: green, case count kept, and a harness
-      mutation (for example, AT-3 not calling Close twice) is caught.
-- [ ] T4 `assertion_sites_test.go` negative control: use `ContainTheSameElementsAs` instead of sort + Equal.
-      Route: the same writer. Check: green, and a site mutation is caught.
-- [ ] T5 Verify and deliver: vet, lint, coverage (`port/adapter` 95.0%, `adaptertest` 94.0%), `-count=5`,
+- [x] T2 `adapter_test.go`: `full` becomes `mock.Controller`, with better matchers and tables. Route:
+      delegated writer. Evidence: `e3ba2bc`. RED mutation: `StarterOf` returned nil, and the test failed
+      with `unmet expectation Start(any value) ... want 1, got 0`.
+- [x] T3 `adaptertest_test.go` and `implied_internal_test.go`: matcher-based helpers, tables and the
+      spy/controller for pure counters. Route: the same writer. Evidence: `1c6c981`. No `t.Fatalf` is left.
+      Two RED mutations were caught: AT-3 skipping its second Close, and AT-1 accepting an empty name. The
+      single-case `Capture_*Fails*` functions stay as they are, because a one-row table adds nothing. The
+      `owned.closed`/`calls` fields drive behavior, so they stay on the fake.
+- [x] T4 `assertion_sites_test.go` negative control: use `ContainTheSameElementsAs` instead of sort + Equal.
+      Route: the same writer. Evidence: `1d03a98`. The RED mutation dropped one detection rule, and the
+      failure lists the missing sites.
+- [x] T5 Verify and deliver: vet, lint, coverage (`port/adapter` 95.0%, `adaptertest` 94.0%), `-count=5`,
       the native assessment plus an independent verifier if `high`, then push and update the PR. Route: inline.
+      Evidence: 111 `--- PASS` before and after, with the names identical. Coverage 95.0% / 94.0% is
+      unchanged. `-count=5`, vet, lint and gofmt are clean, and so are `testkit`, `port` and
+      `publisher/websocket`. The assessment returned `medium` with RDD off, so the writer's self-verification
+      with mutations stands and no separate verifier was run. The parent spot check re-ran the package with
+      `-cover`.
 
 ## Follow-up spec (not in this document)
 
