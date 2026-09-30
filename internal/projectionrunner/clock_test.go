@@ -38,6 +38,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -77,8 +78,20 @@ func (m *manualClock) timers() []time.Duration {
 }
 
 // awaitTimer waits until the runner has exactly one timer pending.
+//
+// It assumes the runner arms one timer at a time, which holds between passes.
+// It breaks during a nudge pass: the pull timer stays armed while the pass
+// runs, so a store backoff or a handler retry inside that pass makes two
+// timers pending, and awaitTimer would then never see exactly one. A test that
+// waits inside a nudge pass must wait for the count it expects with
+// awaitTimers instead.
 func awaitTimer(ctx *specs.Context, clk *manualClock) {
-	ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(1), poll...)
+	awaitTimers(ctx, clk, 1)
+}
+
+// awaitTimers waits until the runner has exactly n timers pending.
+func awaitTimers(ctx *specs.Context, clk *manualClock, n int) {
+	ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(n), poll...)
 }
 
 // startOnClock runs Start in a task and drives its ping retries: it advances the
@@ -224,9 +237,9 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			runner.Run(bg, nil)
 			awaitTimer(ctx, clk)
 
-			// nothing is pulled until a whole interval has elapsed
+			// just short of an interval the timer is still armed and has not fired
 			clk.Advance(interval - time.Millisecond)
-			ctx.Expect(pulls.Load()).To(specs.Equal(int32(0)))
+			ctx.Expect(clk.Pending()).To(specs.Equal(1))
 
 			clk.Advance(time.Millisecond)
 			ctx.Eventually(counter(pulls), specs.Equal(int32(1)), poll...)
@@ -241,6 +254,35 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			// stopping the runner leaves no timer behind
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 			ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(0), poll...)
+		})
+
+		s.It("re-arms the interval timer after a pass triggered by a nudge", func(ctx *specs.Context) {
+			bg := context.TODO()
+			clk := newManualClock()
+			pulls := atomic.NewInt32(0)
+			eventsStore, offsetStore := clockedStores(ctx, pulls, func() []any { return []any{nil, nil} })
+			stream := eventstream.New()
+			runner := New("clock-nudge", projection.NewDiscardHandler(), eventsStore, offsetStore,
+				WithPullInterval(interval), WithClock(clk), WithEventsStream(stream, testEventsTopic))
+
+			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
+			runner.Run(bg, nil)
+			awaitTimer(ctx, clk)
+
+			// the clock never moves: the only thing that can trigger this pass is the nudge
+			stream.Publish(testEventsTopic, &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1})
+			ctx.Eventually(counter(pulls), specs.Equal(int32(1)), poll...)
+
+			// the pass ended and armed a fresh interval timer in place of the first one
+			ctx.Eventually(func() any { return len(clk.timers()) }, specs.Equal(2), poll...)
+			awaitTimer(ctx, clk)
+
+			// the re-armed timer drives the next pull
+			clk.Advance(interval)
+			ctx.Eventually(counter(pulls), specs.Equal(int32(2)), poll...)
+			ctx.Expect(clk.timers()[:2]).To(specs.Equal([]time.Duration{interval, interval}))
+
+			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
 
 		s.It("backs off on the clock after a failed store round trip", func(ctx *specs.Context) {

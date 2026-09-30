@@ -448,11 +448,13 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			clk.Advance(time.Minute)
 			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 			awaitTimer(ctx, clk)
+			// the backoff is armed and the clock never reaches it, so only Stop can end it
+			ctx.Expect(clk.timers()).To(specs.Equal([]time.Duration{time.Minute, time.Second}))
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 			// the interrupted backoff leaves no timer behind
-			ctx.Eventually(func() any { return clk.Pending() }, specs.Equal(0), poll...)
+			awaitTimers(ctx, clk, 0)
 		})
 	})
 }
