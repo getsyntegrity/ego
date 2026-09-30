@@ -229,8 +229,7 @@ func unrelated(v any) {
 				"sample/sample.go:switched",
 				"sample/sample.go:wrapped",
 			}
-			slices.Sort(got)
-			ctx.Expect(got).ToEqual(want)
+			ctx.Expect(got).To(specs.ContainTheSameElementsAs(want))
 		})
 	})
 }
