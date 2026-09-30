@@ -38,6 +38,7 @@ import (
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/ego/tenancy"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
@@ -130,8 +131,21 @@ func (r *actorRig) spawnForTenant(ctx *specs.Context, behavior durableBehavior, 
 	return r.spawn(ctx, behavior, extensions.NewEntityTenantScope(tenant))
 }
 
+// kill stops the named actor and waits until it reports itself stopped.
+// ActorSystem.Kill already returns after PostStop ran; the poll makes the
+// condition the next assertion relies on explicit.
+func (r *actorRig) kill(ctx *specs.Context, pid *goakt.PID, name string) {
+	ctx.Expect(r.system.Kill(context.Background(), name)).To(specs.BeNil())
+	waitStopped(ctx, pid)
+}
+
 func waitRunning(ctx *specs.Context, pid *goakt.PID) {
 	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeTrue(),
+		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+}
+
+func waitStopped(ctx *specs.Context, pid *goakt.PID) {
+	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeFalse(),
 		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 }
 
@@ -161,4 +175,32 @@ func ask(ctx *specs.Context, callCtx context.Context, pid *goakt.PID, msg proto.
 func isStateReply(reply *egopb.CommandReply) bool {
 	_, ok := reply.GetReply().(*egopb.CommandReply_StateReply)
 	return ok
+}
+
+// errorReplyMessage returns the message of an error reply, or false when reply
+// is not an error reply.
+func errorReplyMessage(reply *egopb.CommandReply) (string, bool) {
+	errReply, ok := reply.GetReply().(*egopb.CommandReply_ErrorReply)
+	if !ok {
+		return "", false
+	}
+	return errReply.ErrorReply.GetMessage(), true
+}
+
+// attachedTo returns a context carrying tc, as Engine.SendCommand attaches it
+// at the trust boundary.
+func attachedTo(ctx *specs.Context, tc tenancy.TenantContext) context.Context {
+	attached, err := tenancy.Attach(context.Background(), tc)
+	ctx.Expect(err).To(specs.BeNil())
+	return attached
+}
+
+// bePersisted matches the value latestState observes once the store holds a
+// durable record. A store error or a missing record does not match, and a
+// failing poll reports the last value it saw.
+func bePersisted() specs.Matcher {
+	return specs.Satisfy("is a persisted durable state", func(v any) bool {
+		state, ok := v.(*egopb.DurableState)
+		return ok && state != nil
+	})
 }

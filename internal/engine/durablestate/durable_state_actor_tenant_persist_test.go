@@ -33,8 +33,6 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -42,8 +40,6 @@ import (
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/tenancy"
@@ -259,65 +255,34 @@ func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
 // such identity check before PR2, only tenancy.Require's presence-only
 // proof (see TestDurableStateActorTenancyGate).
 func TestDurableStateActorProcessCommandRejectsCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a command from a tenant other than the established one before HandleCommand runs", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
 
-	durableStore := testkit.NewDurableStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-	require.NoError(t, durableStore.Connect(ctx))
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewDurableStateStore(durableStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// tenant A's first command must succeed and establish actorTenant
+			first := ask(ctx, attachedTo(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(isStateReply(first)).To(specs.BeTrue())
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// the rejection is carried in the CommandReply, not in the Ask error
+			second := ask(ctx, attachedTo(ctx, tenantB), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10})
+			message, isError := errorReplyMessage(second)
+			ctx.Expect(isError).To(specs.BeTrue())
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's first command must succeed and establish actorTenant")
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a cross-tenant command must be rejected before HandleCommand runs")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-	assert.EqualValues(t, 1, behavior.InvocationCount(), "HandleCommand must not run for the rejected cross-tenant command")
-
-	require.NoError(t, durableStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// the rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			ctx.Expect(message).ToEqual(tenancy.VerifyUnchanged(tenantA, tenantB).Error())
+			// HandleCommand must not run for the rejected cross-tenant command
+			ctx.Expect(behavior.InvocationCount()).ToEqual(1)
+		})
+	})
 }
 
 // TestDurableStateActorPersistStateAndPublishWritesTenantMetadata covers
@@ -424,11 +389,11 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 			ctrl.Method("WriteState").Expect(mock.Any(), mock.Any(), mock.Any(), mock.Any()).Never()
 
 			rig := startActorRig(ctx, enginetest.NewStateStoreMock(ctrl), extensions.NewTenancyMarker())
-			rig.spawnForTenant(ctx, behavior, "acme")
-			pause.For(time.Second)
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
-			pause.For(time.Second)
+			// Kill returns after PostStop ran, so the Never expectation above
+			// has seen every call PostStop makes by the time the case ends.
+			rig.kill(ctx, pid, behavior.ID())
 		})
 
 		s.It("tenant-aware and seeded: PostStop writes with the established tenant", func(ctx *specs.Context) {
@@ -441,18 +406,16 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 
 			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
 			pid := rig.spawnForTenant(ctx, behavior, "acme")
-			pause.For(time.Second)
 
-			ctxA, err := tenancy.Attach(bg, tenantA)
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(isStateReply(ask(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}))).To(specs.BeTrue())
+			reply := ask(ctx, attachedTo(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(isStateReply(reply)).To(specs.BeTrue())
 
-			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
-			pause.For(time.Second)
+			rig.kill(ctx, pid, behavior.ID())
 
+			ctx.Eventually(latestState(durableStore, scopeA, persistenceID), bePersisted(),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 			latest, err := durableStore.GetLatestState(bg, scopeA, persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 			ctx.Expect(latest.GetTenantMetadata()).To(specs.Not(specs.BeEmpty()))
 			ctx.Expect(latest.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tenantA)))
 		})
@@ -463,16 +426,15 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
 
 			rig := startActorRig(ctx, durableStore)
-			rig.spawn(ctx, behavior)
-			pause.For(time.Second)
+			pid := rig.spawn(ctx, behavior)
 
-			ctx.Expect(rig.system.Kill(bg, behavior.ID())).To(specs.BeNil())
-			pause.For(time.Second)
+			rig.kill(ctx, pid, behavior.ID())
 
+			// legacy mode must flush on PostStop even without ever handling a command
+			ctx.Eventually(latestState(durableStore, persistence.Unscoped(), persistenceID), bePersisted(),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 			latest, err := durableStore.GetLatestState(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
-			// legacy mode must flush on PostStop even without ever handling a command
-			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 			ctx.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty())
 		})
 
@@ -482,7 +444,7 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 
 			stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
 			ctx.Expect(err).To(specs.BeNil())
-			latestState := &egopb.DurableState{
+			recorded := &egopb.DurableState{
 				PersistenceId:  persistenceID,
 				VersionNumber:  1,
 				ResultingState: stateAny,
@@ -496,17 +458,18 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 			// no exact count.
 			ctrl := mock.NewController(ctx)
 			ctrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			ctrl.Method("GetLatestState").Expect(mock.Any(), scopeA, behavior.ID()).Return(latestState, nil).AtLeast(1)
+			ctrl.Method("GetLatestState").Expect(mock.Any(), scopeA, behavior.ID()).Return(recorded, nil).AtLeast(1)
 			// PostStop is never invoked for an actor whose PreStart never
 			// completed, so no WriteState may happen.
 			ctrl.Method("WriteState").Expect(mock.Any(), mock.Any(), mock.Any(), mock.Any()).Never()
 
 			rig := startActorRig(ctx, enginetest.NewStateStoreMock(ctrl), extensions.NewTenancyMarker())
+			// Spawn returns only after PreStart gave up, so there is nothing
+			// left to wait for: PreStart must fail closed on invalid persisted
+			// tenant metadata.
 			pid, err := rig.trySpawn(behavior, extensions.NewEntityTenantScope("acme"))
-			// PreStart must fail closed on invalid persisted tenant metadata
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(pid).To(specs.BeNil())
-			pause.For(time.Second)
 		})
 	})
 }
@@ -517,83 +480,58 @@ func TestDurableStateActorPostStopTenantPersist(t *testing.T) {
 // processCommand entirely — without this, a resolved tenant could read
 // another tenant's full committed durable state.
 func TestDurableStateActorGetStateCommandTenancyGate(t *testing.T) {
-	ctx := context.TODO()
+	// The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
 
-	durableStore := testkit.NewDurableStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-	require.NoError(t, durableStore.Connect(ctx))
+		// spawnBoundToAcme starts a tenant-aware actor bound to "acme" whose
+		// first command, from tenant A, has already succeeded.
+		spawnBoundToAcme := func(ctx *specs.Context) (pid *goakt.PID, tenantA, tenantB tenancy.TenantContext) {
+			durableStore := connectedDurableStore(ctx)
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(uuid.NewString())
 
-	eventStream := eventstream.New()
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid = rig.spawnForTenant(ctx, behavior, "acme")
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewDurableStateStore(durableStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			tenantA = tenantContextFor(ctx, "acme")
+			tenantB = tenantContextFor(ctx, "globex")
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// tenant A's command must succeed and establish actorTenant
+			first := ask(ctx, attachedTo(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(isStateReply(first)).To(specs.BeTrue())
+			return pid, tenantA, tenantB
+		}
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+		s.It("foreign tenant is rejected", func(ctx *specs.Context) {
+			pid, tenantA, tenantB := spawnBoundToAcme(ctx)
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's command must succeed and establish actorTenant")
+			// the rejection is carried in the CommandReply, not in the Ask error
+			reply := ask(ctx, attachedTo(ctx, tenantB), pid, &egopb.GetStateCommand{})
+			message, isError := errorReplyMessage(reply)
+			// GetStateCommand from a different tenant must be rejected, not return tenant A's state
+			ctx.Expect(isError).To(specs.BeTrue())
 
-	t.Run("foreign tenant is rejected", func(t *testing.T) {
-		ctxB, err := tenancy.Attach(ctx, tenantB)
-		require.NoError(t, err)
-		reply, err := goakt.Ask(ctxB, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "GetStateCommand from a different tenant must be rejected, not return tenant A's state")
+			// the rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			ctx.Expect(message).ToEqual(tenancy.VerifyUnchanged(tenantA, tenantB).Error())
+		})
 
-		wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-			"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
+		s.It("missing tenant context is rejected", func(ctx *specs.Context) {
+			pid, _, _ := spawnBoundToAcme(ctx)
+
+			reply := ask(ctx, bg, pid, &egopb.GetStateCommand{})
+			_, isError := errorReplyMessage(reply)
+			// GetStateCommand with no resolved tenant must be rejected on a tenant-aware actor
+			ctx.Expect(isError).To(specs.BeTrue())
+		})
+
+		s.It("matching tenant succeeds", func(ctx *specs.Context) {
+			pid, tenantA, _ := spawnBoundToAcme(ctx)
+
+			reply := ask(ctx, attachedTo(ctx, tenantA), pid, &egopb.GetStateCommand{})
+			ctx.Expect(isStateReply(reply)).To(specs.BeTrue())
+		})
 	})
-
-	t.Run("missing tenant context is rejected", func(t *testing.T) {
-		reply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "GetStateCommand with no resolved tenant must be rejected on a tenant-aware actor")
-	})
-
-	t.Run("matching tenant succeeds", func(t *testing.T) {
-		reply, err := goakt.Ask(ctxA, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-	})
-
-	require.NoError(t, durableStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
 }
 
 // TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor covers PR2
@@ -617,117 +555,79 @@ func TestDurableStateActorGetStateCommandTenancyGate(t *testing.T) {
 // before AND after the spawn-bound tenant's successful commit, and again
 // after a restart.
 func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
 
-	durableStore := testkit.NewDurableStore()
-	persistenceID := uuid.NewString()
-	behavior := newFlakyFirstCommandDurableStateBehavior(persistenceID)
-	require.NoError(t, durableStore.Connect(ctx))
+		s.It("keeps the spawn-bound tenant as owner across a failed first command, a retry and a restart", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := newFlakyFirstCommandDurableStateBehavior(persistenceID)
 
-	eventStream := eventstream.New()
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewDurableStateStore(durableStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			scopeA := tenantScopeFor(ctx, "acme")
+			ctxA := attachedTo(ctx, tenantA)
+			ctxB := attachedTo(ctx, tenantB)
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// tenant A's first command must fail HandleCommand; the failure is
+			// carried in the CommandReply, not in the Ask error
+			reply := ask(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 500})
+			_, isError := errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			ctx.Expect(behavior.callCount()).ToEqual(1)
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// a failed first command must never write a durable record
+			latest, err := durableStore.GetLatestState(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.BeNil())
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the failure is carried in the CommandReply")
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant A's first command must fail HandleCommand")
-	require.EqualValues(t, 1, behavior.callCount())
+			// Tenant B was never the spawn-bound tenant, so it is rejected here
+			// too: this actor was already bound to tenant A at spawn,
+			// independent of whether tenant A's own commands succeed.
+			reply = ask(ctx, ctxB, pid, &testpb.CreateAccount{AccountBalance: 700})
+			_, isError = errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			// a rejected cross-tenant command must never reach HandleCommand
+			ctx.Expect(behavior.callCount()).ToEqual(1)
 
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+			// the spawn-bound tenant retries and must still be able to claim
+			// the actor after its own earlier failed command
+			reply = ask(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 900})
+			ctx.Expect(isStateReply(reply)).To(specs.BeTrue())
+			ctx.Expect(behavior.callCount()).ToEqual(2)
 
-	latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	assert.Nil(t, latest, "a failed first command must never write a durable record")
+			// tenant B remains rejected once tenant A owns the actor
+			reply = ask(ctx, ctxB, pid, &testpb.CreateAccount{AccountBalance: 1100})
+			_, isError = errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			ctx.Expect(behavior.callCount()).ToEqual(2)
 
-	// Tenant B was never the spawn-bound tenant, so it is rejected here too
-	// — this actor was already bound to tenant A at spawn, independent of
-	// whether tenant A's own commands succeed.
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 700}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant B must be rejected: it was never the spawn-bound tenant")
-	require.EqualValues(t, 1, behavior.callCount(), "a rejected cross-tenant command must never reach HandleCommand")
+			// Restart: PostStop must persist tenant A's ownership (currentVersion >
+			// 0, established together with the committed state), and recovery must
+			// cross-check the recovered metadata against the restarted instance's
+			// own spawn-bound tenant (also A here).
+			rig.kill(ctx, pid, behavior.ID())
 
-	// The spawn-bound tenant (A) retries and succeeds.
-	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 900}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the spawn-bound tenant must still be able to claim the actor after its own earlier failed command")
-	require.EqualValues(t, 2, behavior.callCount())
+			// tenant A's committed state must survive PostStop
+			ctx.Eventually(latestState(durableStore, scopeA, persistenceID), bePersisted(),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			latest, err = durableStore.GetLatestState(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest.GetVersionNumber()).ToEqual(uint64(1))
+			ctx.Expect(latest.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tenantA)))
 
-	// Tenant B remains rejected after tenant A's successful commit too.
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 1100}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant B must still be rejected once tenant A owns the actor")
-	require.EqualValues(t, 2, behavior.callCount(), "a rejected cross-tenant command must never reach HandleCommand")
+			pid = rig.spawnForTenant(ctx, behavior, "acme")
 
-	// Restart: PostStop must persist tenant A's ownership (currentVersion >
-	// 0, established together with the committed state), and recovery must
-	// cross-check the recovered metadata against the restarted instance's
-	// own spawn-bound tenant (also A here).
-	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-	pause.For(time.Second)
-
-	latest, err = durableStore.GetLatestState(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest, "tenant A's committed state must survive PostStop")
-	assert.EqualValues(t, 1, latest.GetVersionNumber())
-	assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantA)), latest.GetTenantMetadata())
-
-	restarted := New()
-	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 1300}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant B must still be rejected after restart: recovery cross-checked tenant A as the owner")
-
-	require.NoError(t, durableStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// tenant B must still be rejected after restart: recovery
+			// cross-checked tenant A as the owner
+			reply = ask(ctx, ctxB, pid, &testpb.CreateAccount{AccountBalance: 1300})
+			_, isError = errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+		})
+	})
 }
 
 // TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis covers PR2
@@ -742,117 +642,91 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 // to claim the actor for whichever tenant sends it, and that ownership must
 // itself survive a further restart.
 func TestDurableStateActorRecoverFromStoreLegacyVersionZeroGenesis(t *testing.T) {
-	ctx := context.TODO()
-	persistenceID := uuid.NewString()
+	// The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
+		persistenceID := uuid.NewString()
 
-	// newLegacyRecord builds a fresh record each call — VersionNumber is
-	// mutated per-subtest below, and the underlying store keeps whatever
-	// pointer it is handed, so sharing one instance across subtests would
-	// let an earlier subtest's mutation leak into a later one.
-	newLegacyRecord := func(version uint64) *egopb.DurableState {
-		legacyStateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		return &egopb.DurableState{
-			PersistenceId:  persistenceID,
-			VersionNumber:  version,
-			ResultingState: legacyStateAny,
-			Timestamp:      time.Now().UnixNano(),
-			// TenantMetadata deliberately absent: this is exactly what a
-			// pre-tenancy PostStop used to persist unconditionally.
-		}
-	}
-
-	t.Run("recoverFromStore treats it as genesis, not a fail-closed rejection", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(0), persistence.Unconditional()))
-
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
+		// newLegacyRecord builds a fresh record each call: the underlying store
+		// keeps whatever pointer it is handed, so sharing one instance across
+		// cases would let an earlier case's mutation leak into a later one.
+		newLegacyRecord := func(ctx *specs.Context, version uint64) *egopb.DurableState {
+			legacyStateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			return &egopb.DurableState{
+				PersistenceId:  persistenceID,
+				VersionNumber:  version,
+				ResultingState: legacyStateAny,
+				Timestamp:      time.Now().UnixNano(),
+				// TenantMetadata deliberately absent: this is exactly what a
+				// pre-tenancy PostStop used to persist unconditionally.
+			}
 		}
 
-		require.NoError(t, entity.recoverFromStore(ctx))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
-		assert.EqualValues(t, 0, entity.currentVersion)
-		assert.Equal(t, entity.behavior.InitialState(), entity.currentState,
-			"the legacy payload must be discarded, not unmarshaled, at version 0")
-	})
+		s.It("recoverFromStore treats it as genesis, not a fail-closed rejection", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newLegacyRecord(ctx, 0), persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("a committed (version > 0) record still fails closed on missing metadata", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(1), persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recoverFromStore(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+			ctx.Expect(entity.currentVersion).ToEqual(uint64(0))
+			// the legacy payload must be discarded, not unmarshaled, at version 0
+			ctx.Expect(entity.currentState).ToEqual(entity.behavior.InitialState())
+		})
 
-		err := entity.recoverFromStore(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-	})
+		s.It("a committed (version > 0) record still fails closed on missing metadata", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newLegacyRecord(ctx, 1), persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("end-to-end: a full actor spawns clean off a legacy version-0 record and a command still claims it", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newLegacyRecord(0), persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		eventStream := eventstream.New()
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+		s.It("end-to-end: a full actor spawns clean off a legacy version-0 record and a command still claims it", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newLegacyRecord(ctx, 0), persistence.Unconditional())).To(specs.BeNil())
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-		require.NoError(t, err, "recovering a legacy version-0 record must not block Spawn/PreStart in tenant-aware mode")
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			// recovering a legacy version-0 record must not block Spawn/PreStart
+			// in tenant-aware mode
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		ctxA, err := tenancy.Attach(ctx, tenantA)
-		require.NoError(t, err)
-		reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-			"a genesis actor recovered from a legacy version-0 record must still accept its first command")
+			tenantA := tenantContextFor(ctx, "acme")
+			scopeA := tenantScopeFor(ctx, "acme")
 
-		require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-		pause.For(time.Second)
+			// a genesis actor recovered from a legacy version-0 record must
+			// still accept its first command
+			reply := ask(ctx, attachedTo(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(isStateReply(reply)).To(specs.BeTrue())
 
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
+			rig.kill(ctx, pid, behavior.ID())
 
-		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.EqualValues(t, 1, latest.GetVersionNumber())
-		assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantA)), latest.GetTenantMetadata(),
-			"the newly committed ownership must survive PostStop after recovering from legacy genesis")
-
-		require.NoError(t, durableStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+			// the newly committed ownership must survive PostStop after
+			// recovering from legacy genesis
+			ctx.Eventually(latestState(durableStore, scopeA, persistenceID), bePersisted(),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			latest, err := durableStore.GetLatestState(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest.GetVersionNumber()).ToEqual(uint64(1))
+			ctx.Expect(latest.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tenantA)))
+		})
 	})
 }
