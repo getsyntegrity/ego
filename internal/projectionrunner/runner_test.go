@@ -461,8 +461,11 @@ func offsetOf(store offsetReader, projectionID *egopb.ProjectionId) func() any {
 	}
 }
 
-// committed matches an offset that has been committed at all.
-func committed() specs.Matcher { return specs.Not(specs.BeNil()) }
+// committed matches an offset that has been committed at all. It projects on the
+// offset type, so an observed store error or a missing offset never matches.
+func committed() specs.Matcher {
+	return specs.Project("Offset", func(offset *egopb.Offset) bool { return offset != nil }, specs.BeTrue())
+}
 
 // committedAt matches a committed offset that holds value.
 func committedAt(value int64) specs.Matcher {
