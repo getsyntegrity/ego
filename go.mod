@@ -3,7 +3,6 @@ module github.com/getsyntegrity/ego
 go 1.26.0
 
 require (
-	github.com/flowchartsman/retry v1.2.0
 	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/google/uuid v1.6.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
@@ -33,6 +32,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
 	github.com/deckarep/golang-set/v2 v2.9.0 // indirect
+	github.com/flowchartsman/retry v1.2.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
