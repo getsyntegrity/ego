@@ -75,16 +75,18 @@ option exists for the tests.
 
 ## Tasks
 
-- [ ] T1 Add the `clock`/`timer` interfaces, the real clock, and `WithClock`. The default is set in `New`.
-      TDD: a failing test first shows `WithClock` sets the clock and that `New` defaults to the real clock.
-      Route: delegated writer.
-- [ ] T2 Route the five sites through the clock: the pull loop, the ping retry, the recovery retry, the
-      store backoff and `Now()`. TDD: a failing test first per site, driven by a manual clock, for example
-      "a store failure waits `storeRetryDelay(1)` before the next pull". Check: every existing test is green
-      and unchanged. Route: the same writer.
-- [ ] T3 Move the two ping-retry cases, the store-backoff cases and the lag-metric cases to the manual clock.
-      Check: the package time drops from about 16 s, and a mutation of the delay is caught. Route: the same
-      writer.
+- [x] T1 Add the `clock`/`timer` interfaces, the real clock, and `WithClock`. The default is set in `New`.
+      Route: delegated writer. Evidence: `72782b1`. RED was a compile failure (`undefined: clock`,
+      `undefined: WithClock`). GREEN: `TestWithClock`, 4 cases.
+- [x] T2 Route the five sites through the clock: the pull loop, the ping retry, the recovery retry, the
+      store backoff and `Now()`. Route: the same writer. Evidence: `b9e7a89` (`retry.go`/`retryOn`). RED:
+      six manual-clock tests timed out because no timer was ever armed. GREEN: all six pass, and they stayed
+      clean over 20 repeats.
+- [x] T3 Move the two ping-retry cases, the store-backoff cases and the lag-metric cases to the manual clock.
+      Route: the same writer. Evidence: `fcb9f73`. The package now takes 0.92 s instead of 16.7 s.
+      `--- PASS` goes from 58 to 76: the 58 existing cases plus 18 new ones. Coverage is 93.2%. Two
+      mutations were caught: changing the ping delay from 1 s to 2 s, and changing the `storeRetryDelay`
+      shift. A tidy follow-up in the parent, `chore(deps)`, makes `flowchartsman/retry` indirect.
 - [ ] T4 Verify and deliver: `go vet`, `golangci-lint`, coverage not below 93%, `-count=5`, the native
       assessment and, if `high`, an independent verifier. Then push and open the stacked PR. Route: inline
       (parent).
@@ -98,3 +100,11 @@ real interval, if the team wants the whole package off real time.
 
 - 2026-09-30: document created on branch `refactor/projectionrunner-clock-seam`, on top of `05bff67` (PR
   #236 head). Engram mirror: pending.
+- 2026-09-30: T1-T3 are done. This corrects the judgement call above: `flowchartsman/retry` is NOT constant
+  when initial == max. It waits `jitter(max/2) + initial`, which is about 1.5x to 2x the delay. `retryOn`
+  keeps the attempts, the defaults, the last-error return and the context behavior, and it drops the jitter
+  (a constant delay). The pull loop re-arms its timer after every pass, including a pass triggered by a
+  nudge. After a store failure, the next pull therefore comes at backoff + interval. The test-only
+  `go.opentelemetry.io/otel/sdk/metric` require was added to read the lag gauge.
+- The native assessment returned `high`, so an independent verifier is running. The PR opens as a draft
+  until it reports.
