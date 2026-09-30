@@ -60,16 +60,23 @@ Only the `*_test.go` files in the three packages change.
 ## Tasks
 
 - [x] T1 Merge `origin/develop` (v0.3.3) and refresh the websocket sums. Route: inline.
-- [ ] T2 `publishingtest`: replace the helpers with matchers, fold the offenders loops into quantified
-      matchers, and turn `OnlyUnreachableSkips` into a table. Route: delegated writer. Check: green, names
-      kept, and a harness mutation (PT-3 accepting a lost event) is caught.
-- [ ] T3 `port/runtime` (`double`, `errors`, `saga`, `spawn`): add the tables, better matchers and a
-      spec-reporting `spawn()`/`panics()`. Route: the same writer. Check: green, names kept, and a runtime
-      mutation is caught.
-- [ ] T4 `port/behavior`: `BeEmpty`/`HaveLen`. Route: the same writer. Check: green.
-- [ ] T5 Verify and deliver: vet, lint, coverage (`publishingtest` 87.0%, `port/runtime` 100%),
-      `-count=5`, `publisher/websocket` tests, the assessment (an independent verifier if `high`), then push
-      and update #230. Route: inline.
+- [x] T2 `publishingtest`: replace the helpers with matchers, fold the offenders loops into quantified
+      matchers, and turn `OnlyUnreachableSkips` into a table. Route: delegated writer. Evidence: `5ca981a`.
+- [x] T3 `port/runtime` (`double`, `errors`, `saga`, `spawn`): add the tables, better matchers and a
+      spec-reporting `spawn()`/`panics()`. Route: a writer. The first writer was stopped by the user partway
+      through T3, and a fresh writer resumed from its uncommitted `double_test.go` edits. Evidence:
+      `60e6634`. RED: changing the `ErrUndefinedEntityID` message in `errors.go` failed the sentinel row.
+      go-specs v0.3.3 has no panic matcher, so a local `panicWhenCalled()` matcher replaces `panics()`.
+- [x] T4 `port/behavior`: `BeEmpty`/`HaveLen`. Route: the same writer. Evidence: `404c39a`. RED is a fixture
+      mutation, because no production code is reachable from this test.
+- [x] T5 Verify and deliver. Route: inline. Evidence:
+      - **Case names.** The parent compared the sorted `--- PASS` names in a temporary worktree against both
+        `dff2086` (before the rework) and `5ca981a` (before T3): 102 and 102, identical.
+      - **Coverage.** 87.0% for `publishingtest` and 100% for `port/runtime`, both unchanged.
+      - **Tests and lint.** `-count=5`, vet, lint and gofmt are clean. `go test ./port/...` and
+        `publisher/websocket` pass.
+      - **Assessment.** The assessment returned `medium`, and RDD is off. The writer's self-verification
+        with mutations stands, so no separate verifier was run.
 
 ## Progress
 
