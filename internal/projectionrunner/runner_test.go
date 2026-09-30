@@ -31,11 +31,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/atomic"
@@ -48,10 +48,6 @@ import (
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
-	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
-	mockadapter "github.com/getsyntegrity/ego/mocks/eventadapter"
-	mocksoffsetstore "github.com/getsyntegrity/ego/mocks/offsetstore"
-	mockseventstore "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -162,18 +158,22 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			maxBufferSize := 10
 			resetOffsetTo := time.Now().UTC()
 
-			encryptor := new(mockencryption.Encryptor)
-			encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(nil, errFailed)
+			encryptorCtrl := mock.NewController(ctx)
+			encryptor := encryptorMock{encryptorCtrl}
+			encryptorCtrl.Method("Decrypt").Expect(mock.Any(), persistenceID, encryptedBytes, "key-1").Return(nil, errFailed).AtLeast(1)
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -189,10 +189,6 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitStopped(ctx.T, runner)
-
-			encryptor.AssertExpectations(ctx.T)
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -245,18 +241,22 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			// Return invalid bytes that cannot be unmarshalled as a proto message
 			invalidBytes := []byte("not-valid-proto")
 
-			encryptor := new(mockencryption.Encryptor)
-			encryptor.EXPECT().Decrypt(mock.Anything, persistenceID, encryptedBytes, "key-1").Return(invalidBytes, nil)
+			encryptorCtrl := mock.NewController(ctx)
+			encryptor := encryptorMock{encryptorCtrl}
+			encryptorCtrl.Method("Decrypt").Expect(mock.Any(), persistenceID, encryptedBytes, "key-1").Return(invalidBytes, nil).AtLeast(1)
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -272,10 +272,6 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitStopped(ctx.T, runner)
-
-			encryptor.AssertExpectations(ctx.T)
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -319,18 +315,22 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			maxBufferSize := 10
 			resetOffsetTo := time.Now().UTC()
 
-			adapter := new(mockadapter.EventAdapter)
-			adapter.EXPECT().Adapt(eventAny, uint64(1)).Return(nil, errFailed)
+			adapterCtrl := mock.NewController(ctx)
+			adapter := eventAdapterMock{adapterCtrl}
+			adapterCtrl.Method("Adapt").Expect(eventAny, uint64(1)).Return(nil, errFailed).AtLeast(1)
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -346,10 +346,6 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitStopped(ctx.T, runner)
-
-			adapter.AssertExpectations(ctx.T)
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -379,15 +375,18 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			bg := context.TODO()
 			projectionName := "db-writer"
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			// the first ShardOffsets round trip fails, subsequent ones succeed
 			retried := atomic.NewInt32(0)
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, errFailed).Once()
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, nil).Run(func(_ context.Context) { retried.Inc() })
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(nil, errFailed).Times(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
+				Do(func([]any) []any { retried.Inc(); return []any{nil, nil} })
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -398,9 +397,6 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 
 			// the failed pull is retried once its first backoff has elapsed
 			awaitCalls(ctx.T, retried, 1, "the failed pull to be retried")
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -441,14 +437,17 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
 			maxBufferSize := 10
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffset.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			// testHandler1 always fails and the default recovery policy is Fail
 			runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
@@ -469,9 +468,6 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			var internal *eventError
 			ctx.Expect(failure).To(specs.Not(specs.MatchErrorAs(&internal)))
 			ctx.Expect(len(failures)).ToEqual(0)
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -501,17 +497,19 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			nextOffset := timestamppb.New(time.Now().Add(time.Minute)).AsTime().UnixMilli()
 			maxBufferSize := 10
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, mock.AnythingOfType("*egopb.ProjectionId")).Return(&egopb.Offset{Value: offsetValue}, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), mock.Any()).Return(&egopb.Offset{Value: offsetValue}, nil).AtLeast(1)
 
 			// one shard fails its store round trip while the other returns an
 			// event the handler cannot process
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{storeShard: nextOffset, poisonShard: nextOffset}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, 0, errFailed)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, poisonShard, offsetValue, uint64(maxBufferSize)).Return(events, nextOffset, nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{storeShard: nextOffset, poisonShard: nextOffset}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, int64(0), errFailed).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), poisonShard, offsetValue, uint64(maxBufferSize)).Return(events, nextOffset, nil).AtLeast(1)
 
 			runner := New(projectionName, testHandler1{}, eventsStore, offsetStore,
 				WithPullInterval(time.Millisecond))
@@ -530,22 +528,22 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			ctx.Expect(errText(failure)).ToEqual("damn")
 			ctx.Expect(failure).To(specs.Not(specs.MatchError(errFailed)))
 
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
-
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
 		s.It("with persistent store error Stop interrupts the retry backoff", func(ctx *specs.Context) {
 			bg := context.TODO()
 			projectionName := "db-writer"
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			pulls := atomic.NewInt32(0)
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, errFailed).Run(func(_ context.Context) { pulls.Inc() })
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
+				Do(func([]any) []any { pulls.Inc(); return []any{nil, errFailed} })
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -972,15 +970,19 @@ func TestRunner(t *testing.T) {
 
 			maxBufferSize := 10
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
+			// the panicking handler must never get its offset committed
+			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.Any()).Never()
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).
-				Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffsetValue.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -994,10 +996,6 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitStopped(ctx.T, runner)
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
-			offsetStore.AssertNotCalled(ctx.T, "WriteOffset", mock.Anything, mock.AnythingOfType("*egopb.Offset"))
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -1074,15 +1072,15 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(offsetStore).To(specs.Not(specs.BeNil()))
 			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(errors.New("fail ping"))
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
 			ctx.Expect(errText(err)).ToEqual("failed to start the projection: fail ping")
-			eventsStore.AssertExpectations(ctx.T)
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1096,15 +1094,15 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(eventsStore).To(specs.Not(specs.BeNil()))
 			ctx.Expect(eventsStore.Connect(bg)).To(specs.BeNil())
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(errors.New("fail ping"))
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
 			ctx.Expect(errText(err)).ToEqual("failed to start the projection: fail ping")
-			offsetStore.AssertExpectations(ctx.T)
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1113,13 +1111,15 @@ func TestRunner(t *testing.T) {
 			handler := projection.NewDiscardHandler()
 			projectionName := "db-writer"
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			resetOffsetTo := time.Now().UTC()
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(bg, projectionName, resetOffsetTo.UnixMilli()).Return(errors.New("fail to reset offset"))
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(bg, projectionName, resetOffsetTo.UnixMilli()).Return(errors.New("fail to reset offset")).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1129,8 +1129,6 @@ func TestRunner(t *testing.T) {
 			// start the projection
 			err := runner.Start(bg)
 			ctx.Expect(errText(err)).ToEqual("failed to reset projection=db-writer: fail to reset offset")
-			offsetStore.AssertExpectations(ctx.T)
-			eventsStore.AssertExpectations(ctx.T)
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
 		s.It("when fail to write the offset the Runner retries and keeps running", func(ctx *specs.Context) {
@@ -1173,17 +1171,20 @@ func TestRunner(t *testing.T) {
 			resetOffsetTo := time.Now().UTC()
 
 			writes := atomic.NewInt32(0)
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
-			offsetStore.EXPECT().WriteOffset(mock.Anything, mock.AnythingOfType("*egopb.Offset")).Return(errFailed).
-				Run(func(_ context.Context, _ *egopb.Offset) { writes.Inc() })
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
+			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.Any()).AtLeast(1).
+				Do(func([]any) []any { writes.Inc(); return []any{errFailed} })
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffsetValue.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1199,9 +1200,6 @@ func TestRunner(t *testing.T) {
 
 			awaitCalls(ctx.T, writes, 1, "the failing offset write")
 
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
-
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -1214,14 +1212,17 @@ func TestRunner(t *testing.T) {
 			maxBufferSize := 10
 			resetOffsetTo := time.Now().UTC()
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
 
 			pulls := atomic.NewInt32(0)
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(nil, errFailed).Run(func(_ context.Context) { pulls.Inc() })
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
+				Do(func([]any) []any { pulls.Inc(); return []any{nil, errFailed} })
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1236,9 +1237,6 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitCalls(ctx.T, pulls, 1, "the failing shard offsets fetch")
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1261,15 +1259,17 @@ func TestRunner(t *testing.T) {
 			resetOffsetTo := time.Now().UTC()
 
 			reads := atomic.NewInt32(0)
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(nil, errFailed).
-				Run(func(_ context.Context, _ *egopb.ProjectionId) { reads.Inc() })
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).AtLeast(1).
+				Do(func([]any) []any { reads.Inc(); return []any{nil, errFailed} })
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1284,9 +1284,6 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitCalls(ctx.T, reads, 1, "the failing current offset read")
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1316,17 +1313,19 @@ func TestRunner(t *testing.T) {
 			maxBufferSize := 10
 			resetOffsetTo := time.Now().UTC()
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
 			fetches := atomic.NewInt32(0)
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(nil, 0, errFailed).
-				Run(func(_ context.Context, _ uint64, _ int64, _ uint64) { fetches.Inc() })
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).AtLeast(1).
+				Do(func([]any) []any { fetches.Inc(); return []any{nil, int64(0), errFailed} })
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1341,9 +1340,6 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitCalls(ctx.T, fetches, 1, "the failing shard events fetch")
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1689,17 +1685,20 @@ func TestRunner(t *testing.T) {
 			resetOffsetTo := time.Now().UTC()
 
 			writes := atomic.NewInt32(0)
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
-			offsetStore.EXPECT().ResetOffset(mock.Anything, projectionName, resetOffsetTo.UnixMilli()).Return(nil)
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(offset, nil)
-			offsetStore.EXPECT().WriteOffset(mock.Anything, mock.AnythingOfType("*egopb.Offset")).Return(nil).
-				Run(func(_ context.Context, _ *egopb.Offset) { writes.Inc() })
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
+			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.Any()).AtLeast(1).
+				Do(func([]any) []any { writes.Inc(); return []any{nil} })
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil)
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, offset.GetValue(), uint64(maxBufferSize)).Return(events, nextOffsetValue.AsTime().UnixMilli(), nil)
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
+				Return(events, nextOffsetValue.AsTime().UnixMilli(), nil).AtLeast(1)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
@@ -1714,9 +1713,6 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			awaitCalls(ctx.T, writes, 1, "the batch offset to be written")
-
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1923,29 +1919,31 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			writes := atomic.NewInt32(0)
 			pulls := atomic.NewInt32(0)
 
-			offsetStore := new(mocksoffsetstore.OffsetStore)
-			offsetStore.EXPECT().Ping(mock.Anything).Return(nil)
+			offsetCtrl := mock.NewController(ctx)
+			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			// the committed offset must be resolved from the store exactly once:
 			// afterwards the runner serves it from its in-memory cache.
-			offsetStore.EXPECT().GetCurrentOffset(mock.Anything, projectionID).Return(&egopb.Offset{
+			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(&egopb.Offset{
 				ShardNumber:    shardNumber,
 				ProjectionName: projectionName,
 				Value:          committedOffset,
-			}, nil).Once()
+			}, nil).Times(1)
 			// the whole batch of three events must commit exactly once, with the
 			// batch next offset.
-			offsetStore.EXPECT().WriteOffset(mock.Anything, mock.MatchedBy(func(offset *egopb.Offset) bool {
+			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.MatchT("the batch offset of the shard", func(offset *egopb.Offset) bool {
 				return offset.GetShardNumber() == shardNumber && offset.GetValue() == latestOffset
-			})).Return(nil).Run(func(_ context.Context, _ *egopb.Offset) { writes.Inc() }).Once()
+			})).Times(1).Do(func([]any) []any { writes.Inc(); return []any{nil} })
 
-			eventsStore := new(mockseventstore.EventsStore)
-			eventsStore.EXPECT().Ping(mock.Anything).Return(nil)
-			eventsStore.EXPECT().ShardOffsets(mock.Anything).Return(map[uint64]int64{shardNumber: latestOffset}, nil).
-				Run(func(_ context.Context) { pulls.Inc() })
+			eventsCtrl := mock.NewController(ctx)
+			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
+			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
+				Do(func([]any) []any { pulls.Inc(); return []any{map[uint64]int64{shardNumber: latestOffset}, nil} })
 			// once the shard is caught up (committed == latest), subsequent pulls
-			// must skip it entirely: a second fetch would violate Once().
-			eventsStore.EXPECT().GetShardEvents(mock.Anything, shardNumber, committedOffset, uint64(maxBufferSize)).
-				Return(events, latestOffset, nil).Once()
+			// must skip it entirely: a second fetch would violate Times(1).
+			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, committedOffset, uint64(maxBufferSize)).
+				Return(events, latestOffset, nil).Times(1)
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
@@ -1965,8 +1963,6 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			awaitCalls(ctx.T, pulls, pullsAtCommit+5, "five more pull passes after the commit")
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-			eventsStore.AssertExpectations(ctx.T)
-			offsetStore.AssertExpectations(ctx.T)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
