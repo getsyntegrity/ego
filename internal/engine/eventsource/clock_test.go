@@ -34,9 +34,15 @@ import (
 // code chose, not only that some timer fired. A test moves time with Advance
 // and waits for the code under test to arm its timer (Pending) before it does,
 // so an advance is never lost to a timer that does not exist yet.
+//
+// A clock made by newAutoClock instead advances by d the moment a timer for d
+// is armed, so the timer fires at once. Code that waits on the same goroutine
+// that runs the test then needs no second goroutine, and the test reads the
+// delays it chose from timers.
 type manualClock struct {
 	*specs.ManualClock
 
+	auto   bool
 	mu     sync.Mutex
 	delays []time.Duration
 }
@@ -45,13 +51,23 @@ var _ clock = (*manualClock)(nil)
 
 func newManualClock() *manualClock { return &manualClock{ManualClock: specs.NewManualClock()} }
 
+func newAutoClock() *manualClock {
+	c := newManualClock()
+	c.auto = true
+	return c
+}
+
 // NewTimer records d and arms a timer on the manual clock. The go-specs timer
 // already has the method set of the package timer.
 func (m *manualClock) NewTimer(d time.Duration) timer {
 	m.mu.Lock()
 	m.delays = append(m.delays, d)
 	m.mu.Unlock()
-	return m.ManualClock.NewTimer(d)
+	t := m.ManualClock.NewTimer(d)
+	if m.auto {
+		m.Advance(d)
+	}
+	return t
 }
 
 // timers returns the duration of every timer armed so far, in order.
