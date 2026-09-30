@@ -31,16 +31,22 @@ The adapters go into `internal/engine/enginetest`, next to the behaviors and pro
 
 - [x] T1 Merge `origin/develop` into #238's branch and push. Route: inline. Evidence: `go.mod` pins v0.3.3,
       `tidy` is clean, and both packages are green (225.6 s and 22.2 s).
-- [ ] T2 Add the backoff seam to `retryWithBackoff`, with the default preserved. Route: delegated writer.
-      Check: a RED test fails before the change, and then every existing caller and test is green.
-- [ ] T3 Move `retry_test.go` to the manual clock and a fixed jitter, removing the real-time assertions.
-      Route: the same writer. Check: the file runs in about 0 s, and a mutation of the delay formula is
-      caught.
-- [ ] T4 Add typed `mock.Controller` adapters for the five ports in `internal/engine/enginetest`. Route:
-      the same writer. Check: the compile-time interface checks pass, and there is one adapter test per
-      port (an unmet expectation fails, and a returned value flows through).
-- [ ] T5 Verify and deliver: vet, lint, `go test ./internal/engine/...`, the native assessment, and an
-      independent verifier if the result is `high`. Then push and open the stacked PR. Route: inline.
+- [x] T2 Add the backoff seam to `retryWithBackoff`, with the default preserved. Route: delegated writer.
+      Evidence: `246579d`, which adds `backoff{clock, jitter}` and `defaultBackoff()`, and updates the 3
+      callers. RED was a compile failure.
+- [x] T3 Move `retry_test.go` to the manual clock and a fixed jitter, removing the real-time assertions.
+      Route: the same writer. Evidence: `c5687d2`. The file went from 1.59 s with 8 cases to 0.01 s with
+      16 cases, and every original name is kept. Two mutations were caught: `2^(attempt+1)`, and a wait
+      after the last attempt.
+- [x] T4 Add typed `mock.Controller` adapters for the five ports in `internal/engine/enginetest`. Route:
+      the same writer. Evidence: `8c39f85`, which adds `EventsStoreMock` (10 methods), `SnapshotStoreMock`
+      (6), `StateStoreMock` (5), `EncryptorMock` (2) and `EventAdapterMock` (1), with 15 adapter specs. No
+      architecture rule restricts `enginetest` imports.
+- [x] T5 Verify and deliver. Route: inline. Evidence:
+      - `go test ./internal/engine/...` is green; eventsource takes 223.9 s, versus 225.6 s before.
+      - vet, lint and gofmt are clean, and `go build ./...` succeeds.
+      - The assessment returned `medium` with RDD off, so the writer's self-verification stands.
+      - The parent also read the production diff and confirmed the default behavior is equivalent.
 
 ## Progress
 
