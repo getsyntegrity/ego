@@ -38,7 +38,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -261,24 +260,34 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			clk := newManualClock()
 			pulls := atomic.NewInt32(0)
 			eventsStore, offsetStore := clockedStores(ctx, pulls, func() []any { return []any{nil, nil} })
-			stream := eventstream.New()
 			runner := New("clock-nudge", projection.NewDiscardHandler(), eventsStore, offsetStore,
-				WithPullInterval(interval), WithClock(clk), WithEventsStream(stream, testEventsTopic))
+				WithPullInterval(interval), WithClock(clk))
 
 			ctx.Expect(runner.Start(bg)).To(specs.BeNil())
 			runner.Run(bg, nil)
 			awaitTimer(ctx, clk)
 
-			// the clock never moves: the only thing that can trigger this pass is the nudge
-			stream.Publish(testEventsTopic, &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1})
-			ctx.Eventually(counter(pulls), specs.Equal(int32(1)), poll...)
+			// halfway through the interval the first timer is due in another half
+			clk.Advance(interval / 2)
+			ctx.Expect(pulls.Load()).To(specs.Equal(int32(0)))
 
-			// the pass ended and armed a fresh interval timer in place of the first one
+			// a nudge runs a pass now; it ends by replacing the first timer with a
+			// fresh one that is due a whole interval after the nudge
+			runner.requestPull()
+			ctx.Eventually(counter(pulls), specs.Equal(int32(1)), poll...)
 			ctx.Eventually(func() any { return len(clk.timers()) }, specs.Equal(2), poll...)
 			awaitTimer(ctx, clk)
 
-			// the re-armed timer drives the next pull
-			clk.Advance(interval)
+			// another half interval reaches the instant the first timer was due. Had
+			// it survived it would fire now, so no pull and one pending timer show it
+			// was replaced. The state is held for a while, not read once, since a
+			// late pull would otherwise be missed.
+			clk.Advance(interval / 2)
+			ctx.Consistently(func() any { return []int{int(pulls.Load()), clk.Pending(), len(clk.timers())} },
+				specs.Equal([]int{1, 1, 2}), specs.WithTimeout(300*time.Millisecond), specs.WithInterval(waitInterval))
+
+			// a whole interval after the nudge the fresh timer fires
+			clk.Advance(interval / 2)
 			ctx.Eventually(counter(pulls), specs.Equal(int32(2)), poll...)
 			ctx.Expect(clk.timers()[:2]).To(specs.Equal([]time.Duration{interval, interval}))
 

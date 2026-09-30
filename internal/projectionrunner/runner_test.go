@@ -450,6 +450,8 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			awaitTimer(ctx, clk)
 			// the backoff is armed and the clock never reaches it, so only Stop can end it
 			ctx.Expect(clk.timers()).To(specs.Equal([]time.Duration{time.Minute, time.Second}))
+			// Stop returns with the clock untouched, so it is the stop signal that
+			// cut the wait short, not the backoff timer firing
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
