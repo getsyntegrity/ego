@@ -60,11 +60,12 @@ func TestUnsupportedError(t *testing.T) {
 
 func TestSentinelMessagesAreKept(t *testing.T) {
 	specs.Describe(t, "The runtime sentinel errors keep their messages", func(s *specs.Spec) {
-		cases := []struct {
+		type sentinel struct {
 			name string
 			err  error
 			msg  string
-		}{
+		}
+		cases := []sentinel{
 			{"ErrEngineNotStarted", runtime.ErrEngineNotStarted, "eGo engine has not started"},
 			{"ErrUndefinedEntityID", runtime.ErrUndefinedEntityID, "eGo entity id is not defined"},
 			{"ErrDurableStateStoreRequired", runtime.ErrDurableStateStoreRequired, "durable state store is required"},
@@ -78,22 +79,17 @@ func TestSentinelMessagesAreKept(t *testing.T) {
 		}
 
 		s.It("covers ten distinct sentinels", func(ctx *specs.Context) {
-			ctx.Expect(len(cases)).ToEqual(10)
-			var duplicates []string
+			ctx.Expect(cases).To(specs.HaveLen(10))
 			for i, tc := range cases {
-				for _, other := range cases[:i] {
-					if errors.Is(tc.err, other.err) {
-						duplicates = append(duplicates, tc.name+" is the same error as "+other.name)
-					}
-				}
+				ctx.Expect(cases[:i]).To(specs.NoElement(specs.Satisfy(
+					"be the same error as "+tc.name,
+					func(other any) bool { return errors.Is(tc.err, other.(sentinel).err) },
+				)))
 			}
-			ctx.Expect(duplicates).To(specs.BeNil())
 		})
 
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				ctx.Expect(tc.err.Error()).ToEqual(tc.msg)
-			})
-		}
+		specs.Table(s, cases, func(tc sentinel) string { return tc.name }, func(ctx *specs.Context, tc sentinel) {
+			ctx.Expect(tc.err.Error()).ToEqual(tc.msg)
+		})
 	})
 }

@@ -239,26 +239,32 @@ type doubleKeyA struct{}
 
 type doubleKeyB struct{}
 
-// spawn goes through the capability a consumer would hold, runtime.Entities.
-func spawn(t testing.TB, entities runtime.Entities, id string, opts ...runtime.SpawnOption) {
-	t.Helper()
-	if err := entities.SpawnEventSourced(context.Background(), &counter{id: id}, opts...); err != nil {
-		t.Fatalf("spawn %q: %v", id, err)
-	}
+// spawn goes through the capability a consumer would hold, runtime.Entities,
+// and reports a failed spawn through the spec.
+func spawn(ctx *specs.Context, entities runtime.Entities, id string, opts ...runtime.SpawnOption) {
+	ctx.Expect(entities.SpawnEventSourced(context.Background(), &counter{id: id}, opts...)).To(specs.BeNil())
+}
+
+// protoEqual matches a proto.Message that proto.Equal reports equal to want.
+func protoEqual(want proto.Message) specs.Matcher {
+	return specs.Satisfy(fmt.Sprintf("be proto.Equal to %v", want), func(got any) bool {
+		m, ok := got.(proto.Message)
+		return ok && proto.Equal(want, m)
+	})
 }
 
 func TestDoubleSpawnResolvesDocumentedDefaults(t *testing.T) {
 	specs.Describe(t, "The double resolves the documented spawn defaults", func(s *specs.Spec) {
 		s.It("hosts an entity spawned without options with the documented default settings", func(ctx *specs.Context) {
 			d := newDouble()
-			spawn(ctx.T, d, "account-1")
+			spawn(ctx, d, "account-1")
 
 			settings := d.entities["account-1"].settings
 			ctx.Expect(settings.PassivateAfter()).ToEqual(time.Duration(0))
 			ctx.Expect(settings.Relocation()).To(specs.BeFalse())
 			ctx.Expect(settings.SupervisorDirective()).ToEqual(runtime.RestartDirective)
 			ctx.Expect(settings.Placement()).ToEqual(runtime.RoundRobin)
-			ctx.Expect(settings.Tenant() == "").To(specs.BeTrue())
+			ctx.Expect(settings.Tenant()).To(specs.BeZero())
 		})
 	})
 }
@@ -267,7 +273,7 @@ func TestDoubleSpawnAppliesOptionsInOrderAndSkipsNil(t *testing.T) {
 	specs.Describe(t, "The double applies spawn options in order and skips nil ones", func(s *specs.Spec) {
 		s.It("keeps the last placement, the supervisor directive and the adapter setting under its own key", func(ctx *specs.Context) {
 			d := newDouble()
-			spawn(ctx.T, d, "account-1",
+			spawn(ctx, d, "account-1",
 				runtime.WithPlacement(runtime.Random),
 				nil,
 				runtime.WithPlacement(runtime.Local),
@@ -295,18 +301,18 @@ func TestDoubleSendCommandRunsTheBehavior(t *testing.T) {
 	specs.Describe(t, "The double runs a command through the hosted behavior", func(s *specs.Spec) {
 		s.It("applies events, keeps the state on a no-event command and rejects a missing entity", func(ctx *specs.Context) {
 			d := newDouble()
-			spawn(ctx.T, d, "account-1")
+			spawn(ctx, d, "account-1")
 			var entities runtime.Entities = d
 			bg := context.Background()
 
 			state, revision, err := entities.SendCommand(bg, "account-1", wrapperspb.Int64(5), time.Second)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(proto.Equal(wrapperspb.Int64(5), state)).To(specs.BeTrue())
+			ctx.Expect(state).To(protoEqual(wrapperspb.Int64(5)))
 			ctx.Expect(revision).ToEqual(uint64(1))
 
 			state, revision, err = entities.SendCommand(bg, "account-1", wrapperspb.Int64(7), time.Second)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(proto.Equal(wrapperspb.Int64(12), state)).To(specs.BeTrue())
+			ctx.Expect(state).To(protoEqual(wrapperspb.Int64(12)))
 			ctx.Expect(revision).ToEqual(uint64(2))
 
 			// No event, no state update.
@@ -345,7 +351,7 @@ func TestDoubleUnsupportedOperations(t *testing.T) {
 
 		s.BeforeEach(func(ctx *specs.Context) {
 			d = newDouble()
-			spawn(ctx.T, d, "account-1")
+			spawn(ctx, d, "account-1")
 			_, _, err := d.SendCommand(bg, "account-1", wrapperspb.Int64(3), time.Second)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -354,10 +360,11 @@ func TestDoubleUnsupportedOperations(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 		})
 
-		cases := []struct {
-			operation string
-			call      func(c *specs.Context) error
-		}{
+		type operation struct {
+			name string
+			call func(c *specs.Context) error
+		}
+		specs.Table(s, []operation{
 			{"SpawnDurableState", func(*specs.Context) error { return entities.SpawnDurableState(bg, ledger{}) }},
 			{"EntityExists", func(c *specs.Context) error {
 				exists, err := entities.EntityExists(bg, "account-1")
@@ -395,29 +402,25 @@ func TestDoubleUnsupportedOperations(t *testing.T) {
 				c.Expect(subscriber).To(specs.BeNil())
 				return err
 			}},
-		}
+		}, func(op operation) string { return op.name }, func(ctx *specs.Context, op operation) {
+			before := maps.Clone(d.entities)
+			hosted := *d.entities["account-1"]
 
-		for _, tc := range cases {
-			s.It(tc.operation, func(ctx *specs.Context) {
-				before := maps.Clone(d.entities)
-				hosted := *d.entities["account-1"]
+			err := op.call(ctx)
 
-				err := tc.call(ctx)
+			ctx.Expect(err).To(specs.MatchError(runtime.ErrUnsupported))
+			ctx.Expect(err).To(specs.MatchError(errors.ErrUnsupported))
+			var unsupportedErr *runtime.UnsupportedError
+			ctx.Expect(err).To(specs.MatchErrorAs(&unsupportedErr))
+			ctx.Expect(unsupportedErr.Runtime).ToEqual(doubleRuntime)
+			ctx.Expect(unsupportedErr.Operation).ToEqual(op.name)
 
-				ctx.Expect(err).To(specs.MatchError(runtime.ErrUnsupported))
-				ctx.Expect(err).To(specs.MatchError(errors.ErrUnsupported))
-				var unsupportedErr *runtime.UnsupportedError
-				ctx.Expect(err).To(specs.MatchErrorAs(&unsupportedErr))
-				ctx.Expect(unsupportedErr.Runtime).ToEqual(doubleRuntime)
-				ctx.Expect(unsupportedErr.Operation).ToEqual(tc.operation)
-
-				// No entity was added or removed.
-				ctx.Expect(d.entities).ToEqual(before)
-				after := d.entities["account-1"]
-				// The hosted entity is unchanged.
-				ctx.Expect(after.revision).ToEqual(hosted.revision)
-				ctx.Expect(proto.Equal(hosted.state, after.state)).To(specs.BeTrue())
-			})
-		}
+			// No entity was added or removed.
+			ctx.Expect(d.entities).ToEqual(before)
+			after := d.entities["account-1"]
+			// The hosted entity is unchanged.
+			ctx.Expect(after.revision).ToEqual(hosted.revision)
+			ctx.Expect(after.state).To(protoEqual(hosted.state))
+		})
 	})
 }

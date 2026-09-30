@@ -32,15 +32,18 @@ import (
 	"github.com/getsyntegrity/ego/tenancy"
 )
 
-// panics reports whether fn panics.
-func panics(fn func()) (panicked bool) {
-	defer func() {
-		if recover() != nil {
-			panicked = true
+// panicWhenCalled matches a func() that panics when called. go-specs v0.3.3
+// has no panic matcher, so this one reports through the spec.
+func panicWhenCalled() specs.Matcher {
+	return specs.Satisfy("panic when called", func(got any) (panicked bool) {
+		fn, ok := got.(func())
+		if !ok {
+			return false
 		}
-	}()
-	fn()
-	return false
+		defer func() { panicked = recover() != nil }()
+		fn()
+		return false
+	})
 }
 
 func TestResolveSpawnOptionsDefaults(t *testing.T) {
@@ -53,7 +56,7 @@ func TestResolveSpawnOptionsDefaults(t *testing.T) {
 			ctx.Expect(settings.Relocation()).To(specs.BeFalse())
 			ctx.Expect(settings.SupervisorDirective()).ToEqual(runtime.RestartDirective)
 			ctx.Expect(settings.Placement()).ToEqual(runtime.RoundRobin)
-			ctx.Expect(settings.Tenant()).ToEqual(tenancy.TenantID(""))
+			ctx.Expect(settings.Tenant()).To(specs.BeZero())
 			_, ok := settings.AdapterSetting(keyA{})
 			ctx.Expect(ok).To(specs.BeFalse())
 		})
@@ -98,10 +101,9 @@ func TestResolveSpawnOptionsSkipsNilOption(t *testing.T) {
 	specs.Describe(t, "ResolveSpawnOptions skips a nil option", func(s *specs.Spec) {
 		s.It("does not panic and still applies the other options", func(ctx *specs.Context) {
 			var settings runtime.SpawnSettings
-			panicked := panics(func() {
+			ctx.Expect(func() {
 				settings = runtime.ResolveSpawnOptions(nil, runtime.WithPlacement(runtime.Local), nil)
-			})
-			ctx.Expect(panicked).To(specs.BeFalse())
+			}).To(specs.Not(panicWhenCalled()))
 			ctx.Expect(settings.Placement()).ToEqual(runtime.Local)
 		})
 	})
@@ -115,7 +117,7 @@ type embedded struct{ runtime.SpawnOption }
 func TestResolveSpawnOptionsNonNilWrapperOfNilOptionPanics(t *testing.T) {
 	specs.Describe(t, "ResolveSpawnOptions panics on a non-nil wrapper of a nil option", func(s *specs.Spec) {
 		s.It("panics", func(ctx *specs.Context) {
-			ctx.Expect(panics(func() { runtime.ResolveSpawnOptions(embedded{}) })).To(specs.BeTrue())
+			ctx.Expect(func() { runtime.ResolveSpawnOptions(embedded{}) }).To(panicWhenCalled())
 		})
 	})
 }
@@ -177,10 +179,9 @@ func TestAdapterSettingLookupWithNonComparableKeyIsAbsent(t *testing.T) {
 		s.It("does not panic and reports the key absent", func(ctx *specs.Context) {
 			settings := runtime.ResolveSpawnOptions(runtime.WithAdapterSetting(keyA{}, 1))
 			var ok bool
-			panicked := panics(func() {
+			ctx.Expect(func() {
 				_, ok = settings.AdapterSetting([]int{1})
-			})
-			ctx.Expect(panicked).To(specs.BeFalse())
+			}).To(specs.Not(panicWhenCalled()))
 			ctx.Expect(ok).To(specs.BeFalse())
 		})
 	})
@@ -188,21 +189,19 @@ func TestAdapterSettingLookupWithNonComparableKeyIsAbsent(t *testing.T) {
 
 func TestWithAdapterSettingPanicsAtBuildTime(t *testing.T) {
 	specs.Describe(t, "WithAdapterSetting panics at build time for a non-comparable key", func(s *specs.Spec) {
-		cases := []struct {
+		type badKey struct {
 			name string
 			key  any
-		}{
+		}
+		specs.Table(s, []badKey{
 			{"nil key", nil},
 			{"slice key", []int{1}},
 			{"map key", map[string]int{}},
 			{"func key", func() {}},
 			{"struct with slice", struct{ s []int }{}},
-		}
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				ctx.Expect(panics(func() { runtime.WithAdapterSetting(tc.key, 1) })).To(specs.BeTrue())
-			})
-		}
+		}, func(tc badKey) string { return tc.name }, func(ctx *specs.Context, tc badKey) {
+			ctx.Expect(func() { runtime.WithAdapterSetting(tc.key, 1) }).To(panicWhenCalled())
+		})
 	})
 }
 

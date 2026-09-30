@@ -32,22 +32,20 @@ import (
 
 func TestSagaStatusString(t *testing.T) {
 	specs.Describe(t, "SagaStatus.String names each status and reports unknown for any other value", func(s *specs.Spec) {
-		cases := []struct {
+		type reading struct {
 			name   string
 			status runtime.SagaStatus
 			want   string
-		}{
+		}
+		specs.Table(s, []reading{
 			{"SagaRunning", runtime.SagaRunning, "running"},
 			{"SagaCompleted", runtime.SagaCompleted, "completed"},
 			{"SagaCompensating", runtime.SagaCompensating, "compensating"},
 			{"SagaFailed", runtime.SagaFailed, "failed"},
 			{"an undefined value", runtime.SagaStatus(99), "unknown"},
-		}
-		for _, tc := range cases {
-			s.It(tc.name+" reads "+tc.want, func(ctx *specs.Context) {
-				ctx.Expect(tc.status.String()).ToEqual(tc.want)
-			})
-		}
+		}, func(tc reading) string { return tc.name + " reads " + tc.want }, func(ctx *specs.Context, tc reading) {
+			ctx.Expect(tc.status.String()).ToEqual(tc.want)
+		})
 	})
 }
 
