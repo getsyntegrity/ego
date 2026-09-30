@@ -49,14 +49,8 @@ func TestCapture_RealAdaptertestErrUnreachableSkips(t *testing.T) {
 				Received: func(context.Context, *testing.T, *egopb.Event) error { return nil },
 			}
 			results := captureEvents(ctx.T, target)
-			ctx.Expect(len(results)).ToEqual(3)
-			var offenders []string
-			for _, r := range results {
-				if r.Outcome != Skipped {
-					offenders = append(offenders, fmt.Sprintf("%s: outcome %s (%q), want skipped", r.Check, r.Outcome, r.Detail))
-				}
-			}
-			ctx.Expect(offenders).To(specs.BeNil())
+			ctx.Expect(results).To(specs.HaveLen(3))
+			ctx.Expect(results).To(specs.EveryElement(hasOutcome(Skipped)))
 		})
 	})
 }
