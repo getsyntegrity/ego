@@ -45,8 +45,14 @@ func runRetry(ctx *specs.Context, maxTries int, delay time.Duration, failures in
 	attempts := atomic.NewInt32(0)
 	done := make(chan error, 1)
 
+	// A retry that never finishes would block the spec until the test binary
+	// times out, since a task is never cancelled: ending the context on any exit
+	// lets a stuck retry fail within the poll timeout instead.
+	retryCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	ctx.Go(func(*specs.Context) {
-		done <- retryOn(context.Background(), clk, maxTries, delay, func(context.Context) error {
+		done <- retryOn(retryCtx, clk, maxTries, delay, func(context.Context) error {
 			if attempts.Inc() <= failures {
 				return errFailed
 			}
@@ -115,6 +121,7 @@ func TestRetryOn(t *testing.T) {
 		s.It("returns the last error when the context ends during a wait", func(ctx *specs.Context) {
 			clk := newManualClock()
 			cancelable, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			done := make(chan error, 1)
 
 			ctx.Go(func(*specs.Context) {
