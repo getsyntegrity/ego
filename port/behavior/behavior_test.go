@@ -115,7 +115,7 @@ func TestDomainOnlyBehaviorsRunThroughTheContracts(t *testing.T) {
 			ctx.Expect(es.ID()).ToEqual("es-1")
 			events, err := es.HandleCommand(bg, new(emptypb.Empty), es.InitialState())
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(len(events)).ToEqual(0)
+			ctx.Expect(events).To(specs.BeEmpty())
 			_, isEnvelope := es.(behavior.EventSourcedEnvelope)
 			ctx.Expect(isEnvelope).To(specs.BeTrue())
 
@@ -132,7 +132,7 @@ func TestDomainOnlyBehaviorsRunThroughTheContracts(t *testing.T) {
 			ctx.Expect(action.Complete).To(specs.BeTrue())
 			compensation, err := sg.Compensate(bg, sg.InitialState())
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(len(compensation)).ToEqual(1)
+			ctx.Expect(compensation).To(specs.HaveLen(1))
 			ctx.Expect(compensation[0].EntityID).ToEqual("account-1")
 		})
 	})
