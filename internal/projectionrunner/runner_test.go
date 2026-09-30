@@ -64,41 +64,32 @@ const (
 	waitInterval = 2 * time.Millisecond
 )
 
-// waitUntil polls cond every interval until it holds and fails the test with
-// what when timeout passes first. It never waits without a bound.
-func waitUntil(t testing.TB, timeout, interval time.Duration, cond func() bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for %s", timeout, what)
+// poll is the bound of every ctx.Eventually in this file. A wait that times out
+// reports the last value it observed.
+var poll = []specs.PollOption{specs.WithTimeout(waitTimeout), specs.WithInterval(waitInterval)}
+
+// isRunning observes whether the runner is still processing.
+func isRunning(runner *Runner) func() any {
+	return func() any { return runner.running.Load() }
+}
+
+// counter observes the current value of calls.
+func counter(calls *atomic.Int32) func() any {
+	return func() any { return calls.Load() }
+}
+
+// awaitFailure returns the next error the runner reported to its host. It
+// polls the channel without blocking so that a timeout reports what was seen.
+func awaitFailure(ctx *specs.Context, failures <-chan error) error {
+	var failure error
+	ctx.Eventually(func() any {
+		select {
+		case failure = <-failures:
+		default:
 		}
-		time.Sleep(interval)
-	}
-}
-
-// awaitStopped waits until the runner has stopped processing.
-func awaitStopped(t testing.TB, runner *Runner) {
-	t.Helper()
-	waitUntil(t, waitTimeout, waitInterval, func() bool { return !runner.running.Load() }, "the runner to stop")
-}
-
-// awaitCalls waits until calls holds at least want.
-func awaitCalls(t testing.TB, calls *atomic.Int32, want int32, what string) {
-	t.Helper()
-	waitUntil(t, waitTimeout, waitInterval, func() bool { return calls.Load() >= want }, what)
-}
-
-// awaitFailure returns the next error the runner reported to its host.
-func awaitFailure(t testing.TB, failures <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-failures:
-		return err
-	case <-time.After(waitTimeout):
-		t.Fatalf("timed out after %s waiting for the failure callback", waitTimeout)
-	}
-	return nil
+		return failure
+	}, specs.Not(specs.BeNil()), poll...)
+	return failure
 }
 
 // errText is err's message, or "" for nil, so a text expectation on a missing
@@ -188,7 +179,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 
 			runner.Run(bg, nil)
 
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -271,7 +262,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 
 			runner.Run(bg, nil)
 
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -345,7 +336,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 
 			runner.Run(bg, nil)
 
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -396,7 +387,7 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			runner.Run(bg, nil)
 
 			// the failed pull is retried once its first backoff has elapsed
-			awaitCalls(ctx.T, retried, 1, "the failed pull to be retried")
+			ctx.Eventually(counter(retried), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -459,11 +450,11 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			runner.Run(bg, func(err error) { failures <- err })
 
 			// the unprocessable event stops the processing loop permanently
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			// the host is notified once, with the handler's own error: the
 			// runner's internal classification never leaks to the host
-			failure := awaitFailure(ctx.T, failures)
+			failure := awaitFailure(ctx, failures)
 			ctx.Expect(errText(failure)).ToEqual("damn")
 			var internal *eventError
 			ctx.Expect(failure).To(specs.Not(specs.MatchErrorAs(&internal)))
@@ -521,10 +512,10 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 
 			// the unprocessable event outranks the store failure: the loop stops
 			// instead of retrying, since retrying cannot advance past the event
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			// the host is notified with the event error, never the store error
-			failure := awaitFailure(ctx.T, failures)
+			failure := awaitFailure(ctx, failures)
 			ctx.Expect(errText(failure)).ToEqual("damn")
 			ctx.Expect(failure).To(specs.Not(specs.MatchError(errFailed)))
 
@@ -553,7 +544,7 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			runner.Run(bg, nil)
 
 			// wait for the first failed pull, then stop
-			awaitCalls(ctx.T, pulls, 1, "the first failed pull")
+			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
@@ -566,28 +557,27 @@ type offsetReader interface {
 	GetCurrentOffset(ctx context.Context, projectionID *egopb.ProjectionId) (*egopb.Offset, error)
 }
 
-// awaitOffset waits until the committed offset of projectionID satisfies ok and
-// returns it.
-func awaitOffset(t testing.TB, store offsetReader, projectionID *egopb.ProjectionId, ok func(*egopb.Offset) bool, what string) *egopb.Offset {
-	t.Helper()
-	var got *egopb.Offset
-	waitUntil(t, waitTimeout, waitInterval, func() bool {
+// offsetOf observes the committed offset of projectionID. A store failure is
+// observed as the error itself, so the poll reports it instead of hiding it.
+func offsetOf(store offsetReader, projectionID *egopb.ProjectionId) func() any {
+	return func() any {
 		offset, err := store.GetCurrentOffset(context.TODO(), projectionID)
 		if err != nil {
-			t.Fatalf("reading the committed offset: %v", err)
+			return err
 		}
-		got = offset
-		return ok(offset)
-	}, what)
-	return got
+		if offset == nil {
+			return nil
+		}
+		return offset
+	}
 }
 
-// committed reports whether an offset has been committed at all.
-func committed(offset *egopb.Offset) bool { return offset != nil }
+// committed matches an offset that has been committed at all.
+func committed() specs.Matcher { return specs.Not(specs.BeNil()) }
 
-// committedAt reports whether the committed offset holds value.
-func committedAt(value int64) func(*egopb.Offset) bool {
-	return func(offset *egopb.Offset) bool { return offset != nil && offset.GetValue() == value }
+// committedAt matches a committed offset that holds value.
+func committedAt(value int64) specs.Matcher {
+	return specs.Project("Value", func(offset *egopb.Offset) int64 { return offset.GetValue() }, specs.Equal(value))
 }
 
 // pullCountingEventsStore counts the ShardOffsets round trips, one per pull pass.
@@ -665,9 +655,7 @@ func TestRunner(t *testing.T) {
 			}
 
 			// the projection is eventually consistent: wait for the offset of the last event
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(journals[9].GetTimestamp()), "the offset of the last event to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
-			ctx.Expect(actual.GetValue()).ToEqual(journals[9].GetTimestamp())
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(journals[9].GetTimestamp()), poll...)
 
 			// free resources
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
@@ -724,7 +712,7 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
 			// here due to the default recovery strategy the projection is stopped
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 			// free resources
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
@@ -786,7 +774,7 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
 			// the projection stops once the retries are exhausted
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
 			// free resources
@@ -854,8 +842,7 @@ func TestRunner(t *testing.T) {
 			}
 
 			// the batch offset is committed once every event was handled or skipped
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(timestamp.AsTime().Unix()), "the batch offset to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(timestamp.AsTime().Unix()), poll...)
 			ctx.Expect(handler.counter.Load()).ToEqual(int32(5))
 
 			// free resource
@@ -923,8 +910,7 @@ func TestRunner(t *testing.T) {
 			}
 
 			// the batch offset is committed once every event was handled or skipped
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(timestamp.AsTime().Unix()), "the batch offset to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(timestamp.AsTime().Unix()), poll...)
 			ctx.Expect(handler.counter.Load()).ToEqual(int32(5))
 
 			// free resource
@@ -995,7 +981,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitStopped(ctx.T, runner)
+			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -1198,7 +1184,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitCalls(ctx.T, writes, 1, "the failing offset write")
+			ctx.Eventually(counter(writes), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1236,7 +1222,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitCalls(ctx.T, pulls, 1, "the failing shard offsets fetch")
+			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1283,7 +1269,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitCalls(ctx.T, reads, 1, "the failing current offset read")
+			ctx.Eventually(counter(reads), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1339,7 +1325,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitCalls(ctx.T, fetches, 1, "the failing shard events fetch")
+			ctx.Eventually(counter(fetches), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1399,8 +1385,7 @@ func TestRunner(t *testing.T) {
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committed, "the offset of the decrypted event to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committed(), poll...)
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
@@ -1447,8 +1432,7 @@ func TestRunner(t *testing.T) {
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committed, "the offset of the adapted event to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committed(), poll...)
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
@@ -1497,8 +1481,7 @@ func TestRunner(t *testing.T) {
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committed, "the offset of the measured event to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committed(), poll...)
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
@@ -1548,8 +1531,7 @@ func TestRunner(t *testing.T) {
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committed, "the offset of the skipped event to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committed(), poll...)
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
@@ -1595,7 +1577,7 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			// the failing dead letter handler is reached and its error is only logged
-			awaitCalls(ctx.T, &dlh.calls, 1, "the dead letter handler to be called")
+			ctx.Eventually(counter(&dlh.calls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
@@ -1639,7 +1621,7 @@ func TestRunner(t *testing.T) {
 			runner.Run(bg, nil)
 
 			// the runner keeps pulling with the starting offset configured
-			awaitCalls(ctx.T, &journalStore.pulls, 3, "the runner to pull three times")
+			ctx.Eventually(counter(&journalStore.pulls), specs.BeGreaterThanOrEqual(int32(3)), poll...)
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
@@ -1712,7 +1694,7 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			awaitCalls(ctx.T, writes, 1, "the batch offset to be written")
+			ctx.Eventually(counter(writes), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -1768,9 +1750,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 				ShardNumber:    shardNumber,
 			}
 			// Verify the offset was committed (projection processed the event).
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(timestamp), "the event offset to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
-			ctx.Expect(actual.GetValue()).ToEqual(timestamp)
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(timestamp), poll...)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
@@ -1821,9 +1801,7 @@ func TestProjectionRunnerLagMetrics(t *testing.T) {
 				ProjectionName: projectionName,
 				ShardNumber:    shardNumber,
 			}
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(pastTimestamp), "the event offset to be committed")
-			ctx.Expect(actual).To(specs.Not(specs.BeNil()))
-			ctx.Expect(actual.GetValue()).ToEqual(pastTimestamp)
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(pastTimestamp), poll...)
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
@@ -1958,9 +1936,9 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			// once the batch is committed, several more pull intervals must elapse;
 			// the Once() expectations above prove none of them re-fetched the
 			// caught-up shard.
-			awaitCalls(ctx.T, writes, 1, "the batch offset to be committed")
+			ctx.Eventually(counter(writes), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 			pullsAtCommit := pulls.Load()
-			awaitCalls(ctx.T, pulls, pullsAtCommit+5, "five more pull passes after the commit")
+			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(pullsAtCommit+5), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -2018,8 +1996,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			}
 			// all five events were processed from a single nudge even though the
 			// buffer only holds two: the full-buffer re-poll drained the backlog.
-			actual := awaitOffset(ctx.T, offsetStore, projectionID, committedAt(journals[count-1].GetTimestamp()), "the backlog to be drained")
-			ctx.Expect(actual.GetValue()).ToEqual(journals[count-1].GetTimestamp())
+			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(journals[count-1].GetTimestamp()), poll...)
 
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
