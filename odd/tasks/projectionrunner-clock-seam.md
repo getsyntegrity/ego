@@ -87,9 +87,13 @@ option exists for the tests.
       `--- PASS` goes from 58 to 76: the 58 existing cases plus 18 new ones. Coverage is 93.2%. Two
       mutations were caught: changing the ping delay from 1 s to 2 s, and changing the `storeRetryDelay`
       shift. A tidy follow-up in the parent, `chore(deps)`, makes `flowchartsman/retry` indirect.
-- [ ] T4 Verify and deliver: `go vet`, `golangci-lint`, coverage not below 93%, `-count=5`, the native
+- [x] T4 Verify and deliver: `go vet`, `golangci-lint`, coverage not below 93%, `-count=5`, the native
       assessment and, if `high`, an independent verifier. Then push and open the stacked PR. Route: inline
-      (parent).
+      (parent). Evidence: the assessment was `high`. The independent verifier returned PASS with nits, and
+      an external review agreed on its points. Both found one real test gap: nothing checked that a nudge
+      re-arms the interval. That gap and four minor items were fixed in a single scoped correction,
+      `b3dd05b` and `1e6b9bf`. Each fix has a mutation proof. Final numbers: 77 `--- PASS`, 0.93 s,
+      coverage 93.5%, `-count=5` green, vet/lint/gofmt clean. PR #243 is stacked on #236.
 
 ## Follow-up spec (not in this document)
 
@@ -108,3 +112,11 @@ real interval, if the team wants the whole package off real time.
   `go.opentelemetry.io/otel/sdk/metric` require was added to read the lag gauge.
 - The native assessment returned `high`, so an independent verifier is running. The PR opens as a draft
   until it reports.
+- 2026-09-30: The review surfaced three more changes with the default clock, now declared in the PR:
+  - A handler that returns `retry.Stop(err)` no longer cuts the recovery retries short. We accepted this
+    rather than keep importing the library to detect its unexported `terminalError`.
+  - `RetryDelay <= 0` now waits a flat 200 ms. The library waited about 0.6 to 1.2 s.
+  - After a store failure, the next pull waits backoff + interval. It used to be backoff + up to one
+    interval.
+
+  The PR description and release note were updated, and the PR was marked ready.
