@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/flowchartsman/retry v1.2.0
-	github.com/getsyntegrity/go-specs v0.3.1
+	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/google/uuid v1.6.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/stretchr/testify v1.12.1
