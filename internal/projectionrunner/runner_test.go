@@ -92,186 +92,63 @@ func awaitFailure(ctx *specs.Context, failures <-chan error) error {
 	return failure
 }
 
-// errText is err's message, or "" for nil, so a text expectation on a missing
-// error fails on the expectation instead of panicking.
-func errText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
+// haveMessage matches an error whose text is want. A nil error fails the
+// matcher with a message instead of panicking.
+func haveMessage(want string) specs.Matcher {
+	return specs.Project("message", func(err error) string { return err.Error() }, specs.Equal(want))
+}
+
+// unprocessableFixture is the pull the store stubs answer in every
+// ErrorPaths row: one event, in its plain and its encrypted form.
+type unprocessableFixture struct {
+	persistenceID string
+	cipher        []byte
+	plain         []*egopb.Event
+	encrypted     []*egopb.Event
+}
+
+// unprocessableCase is one way an event can fail inside processEnvelope. arrange
+// picks the events the store returns and the options that make them fail.
+type unprocessableCase struct {
+	name    string
+	arrange func(ctx *specs.Context, fx unprocessableFixture) ([]*egopb.Event, []Option)
+}
+
+// decrypting is an encryptor whose Decrypt of the fixture cipher answers
+// plaintext and err.
+func decrypting(ctx *specs.Context, fx unprocessableFixture, plaintext []byte, err error) encryptorMock {
+	ctrl := mock.NewController(ctx)
+	ctrl.Method("Decrypt").Expect(mock.Any(), fx.persistenceID, fx.cipher, "key-1").Return(plaintext, err).AtLeast(1)
+	return encryptorMock{ctrl}
 }
 
 func TestProjectionRunnerErrorPaths(t *testing.T) {
 	specs.Describe(t, "the runner stops when an event cannot be processed in processEnvelope", func(s *specs.Spec) {
-		s.It("with decrypt failure in processEnvelope stops the runner", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-			shardNumber := uint64(9)
-			timestamp := timestamppb.Now()
-
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shardNumber,
-			}
-
-			offset := &egopb.Offset{
-				ShardNumber:    shardNumber,
-				ProjectionName: projectionName,
-				Value:          timestamp.AsTime().Unix(),
-				Timestamp:      0,
-			}
-
-			// Build a valid anypb payload
-			eventProto := &testpb.AccountCredited{}
-			eventAny, err := anypb.New(eventProto)
-			ctx.Expect(err).To(specs.BeNil())
-
-			// Mark event as encrypted so the decrypt path is triggered
-			encryptedBytes := []byte("cipher")
-			events := []*egopb.Event{
-				{
-					PersistenceId:  persistenceID,
-					SequenceNumber: 1,
-					IsDeleted:      false,
-					Event: &anypb.Any{
-						TypeUrl: eventAny.GetTypeUrl(),
-						Value:   encryptedBytes,
-					},
-					Timestamp:       timestamp.AsTime().Unix(),
-					Shard:           shardNumber,
-					IsEncrypted:     true,
-					EncryptionKeyId: "key-1",
+		specs.Table(s, []unprocessableCase{
+			{
+				name: "with decrypt failure in processEnvelope stops the runner",
+				arrange: func(ctx *specs.Context, fx unprocessableFixture) ([]*egopb.Event, []Option) {
+					return fx.encrypted, []Option{WithEncryptor(decrypting(ctx, fx, nil, errFailed))}
 				},
-			}
-
-			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-			maxBufferSize := 10
-			resetOffsetTo := time.Now().UTC()
-
-			encryptorCtrl := mock.NewController(ctx)
-			encryptor := encryptorMock{encryptorCtrl}
-			encryptorCtrl.Method("Decrypt").Expect(mock.Any(), persistenceID, encryptedBytes, "key-1").Return(nil, errFailed).AtLeast(1)
-
-			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
-			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
-
-			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
-			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
-			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
-				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
-
-			handler := projection.NewDiscardHandler()
-			runner := New(projectionName, handler, eventsStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithEncryptor(encryptor),
-			)
-			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
-
-			err = runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			runner.Run(bg, nil)
-
-			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
-
-			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("with unmarshal failure after decrypt in processEnvelope stops the runner", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-			shardNumber := uint64(9)
-			timestamp := timestamppb.Now()
-
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shardNumber,
-			}
-
-			offset := &egopb.Offset{
-				ShardNumber:    shardNumber,
-				ProjectionName: projectionName,
-				Value:          timestamp.AsTime().Unix(),
-				Timestamp:      0,
-			}
-
-			eventProto := &testpb.AccountCredited{}
-			eventAny, err := anypb.New(eventProto)
-			ctx.Expect(err).To(specs.BeNil())
-
-			encryptedBytes := []byte("cipher")
-			events := []*egopb.Event{
-				{
-					PersistenceId:  persistenceID,
-					SequenceNumber: 1,
-					IsDeleted:      false,
-					Event: &anypb.Any{
-						TypeUrl: eventAny.GetTypeUrl(),
-						Value:   encryptedBytes,
-					},
-					Timestamp:       timestamp.AsTime().Unix(),
-					Shard:           shardNumber,
-					IsEncrypted:     true,
-					EncryptionKeyId: "key-1",
+			},
+			{
+				name: "with unmarshal failure after decrypt in processEnvelope stops the runner",
+				arrange: func(ctx *specs.Context, fx unprocessableFixture) ([]*egopb.Event, []Option) {
+					// bytes that cannot be unmarshalled as a proto message
+					return fx.encrypted, []Option{WithEncryptor(decrypting(ctx, fx, []byte("not-valid-proto"), nil))}
 				},
-			}
-
-			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
-			maxBufferSize := 10
-			resetOffsetTo := time.Now().UTC()
-
-			// Return invalid bytes that cannot be unmarshalled as a proto message
-			invalidBytes := []byte("not-valid-proto")
-
-			encryptorCtrl := mock.NewController(ctx)
-			encryptor := encryptorMock{encryptorCtrl}
-			encryptorCtrl.Method("Decrypt").Expect(mock.Any(), persistenceID, encryptedBytes, "key-1").Return(invalidBytes, nil).AtLeast(1)
-
-			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
-			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
-
-			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
-			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
-			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
-				Return(events, nextOffset.AsTime().UnixMilli(), nil).AtLeast(1)
-
-			handler := projection.NewDiscardHandler()
-			runner := New(projectionName, handler, eventsStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithEncryptor(encryptor),
-			)
-			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
-
-			err = runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			runner.Run(bg, nil)
-
-			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
-
-			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("with event adapter chain failure in processEnvelope stops the runner", func(ctx *specs.Context) {
+			},
+			{
+				name: "with event adapter chain failure in processEnvelope stops the runner",
+				arrange: func(ctx *specs.Context, fx unprocessableFixture) ([]*egopb.Event, []Option) {
+					adapterCtrl := mock.NewController(ctx)
+					adapterCtrl.Method("Adapt").Expect(fx.plain[0].GetEvent(), uint64(1)).Return(nil, errFailed).AtLeast(1)
+					return fx.plain, []Option{WithEventAdapters([]eventadapter.EventAdapter{eventAdapterMock{adapterCtrl}})}
+				},
+			},
+		}, func(c unprocessableCase) string { return c.name }, func(ctx *specs.Context, c unprocessableCase) {
 			bg := context.TODO()
 			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
 			shardNumber := uint64(9)
 			timestamp := timestamppb.Now()
 
@@ -287,13 +164,15 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 				Timestamp:      0,
 			}
 
-			eventProto := &testpb.AccountCredited{}
-			eventAny, err := anypb.New(eventProto)
+			// A valid payload; the encrypted form marks the event as encrypted so
+			// the decrypt path is triggered.
+			eventAny, err := anypb.New(&testpb.AccountCredited{})
 			ctx.Expect(err).To(specs.BeNil())
 
-			events := []*egopb.Event{
+			fx := unprocessableFixture{persistenceID: uuid.NewString(), cipher: []byte("cipher")}
+			fx.plain = []*egopb.Event{
 				{
-					PersistenceId:  persistenceID,
+					PersistenceId:  fx.persistenceID,
 					SequenceNumber: 1,
 					IsDeleted:      false,
 					Event:          eventAny,
@@ -301,14 +180,26 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 					Shard:          shardNumber,
 				},
 			}
+			fx.encrypted = []*egopb.Event{
+				{
+					PersistenceId:  fx.persistenceID,
+					SequenceNumber: 1,
+					IsDeleted:      false,
+					Event: &anypb.Any{
+						TypeUrl: eventAny.GetTypeUrl(),
+						Value:   fx.cipher,
+					},
+					Timestamp:       timestamp.AsTime().Unix(),
+					Shard:           shardNumber,
+					IsEncrypted:     true,
+					EncryptionKeyId: "key-1",
+				},
+			}
+			events, opts := c.arrange(ctx, fx)
 
 			nextOffset := timestamppb.New(time.Now().Add(time.Minute))
 			maxBufferSize := 10
 			resetOffsetTo := time.Now().UTC()
-
-			adapterCtrl := mock.NewController(ctx)
-			adapter := eventAdapterMock{adapterCtrl}
-			adapterCtrl.Method("Adapt").Expect(eventAny, uint64(1)).Return(nil, errFailed).AtLeast(1)
 
 			offsetCtrl := mock.NewController(ctx)
 			offsetStore := offsetStoreMock{offsetCtrl}
@@ -325,9 +216,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 
 			handler := projection.NewDiscardHandler()
 			runner := New(projectionName, handler, eventsStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithEventAdapters([]eventadapter.EventAdapter{adapter}),
-			)
+				append([]Option{WithPullInterval(time.Millisecond)}, opts...)...)
 			runner.resetOffsetTo = resetOffsetTo
 			runner.maxBufferSize = maxBufferSize
 
@@ -455,10 +344,10 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			// the host is notified once, with the handler's own error: the
 			// runner's internal classification never leaks to the host
 			failure := awaitFailure(ctx, failures)
-			ctx.Expect(errText(failure)).ToEqual("damn")
+			ctx.Expect(failure).To(haveMessage("damn"))
 			var internal *eventError
 			ctx.Expect(failure).To(specs.Not(specs.MatchErrorAs(&internal)))
-			ctx.Expect(len(failures)).ToEqual(0)
+			ctx.Expect(failures).To(specs.BeEmpty())
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -516,7 +405,7 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 
 			// the host is notified with the event error, never the store error
 			failure := awaitFailure(ctx, failures)
-			ctx.Expect(errText(failure)).ToEqual("damn")
+			ctx.Expect(failure).To(haveMessage("damn"))
 			ctx.Expect(failure).To(specs.Not(specs.MatchError(errFailed)))
 
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
@@ -591,6 +480,39 @@ func (x *pullCountingEventsStore) ShardOffsets(ctx context.Context) (map[uint64]
 	return x.EventStore.ShardOffsets(ctx)
 }
 
+// handlerFailureCase is a recovery strategy under which a permanently failing
+// handler stops the projection.
+type handlerFailureCase struct {
+	name string
+	opts []Option
+}
+
+// skipCase is a recovery policy that skips the events the handler fails on.
+type skipCase struct {
+	name   string
+	policy projection.RecoveryPolicy
+	shard  uint64
+}
+
+// retryFixture is the pull the store stubs answer in every row of the "retries
+// and keeps running" table.
+type retryFixture struct {
+	shardNumber   uint64
+	maxBufferSize int
+	projectionID  *egopb.ProjectionId
+	offset        *egopb.Offset
+	events        []*egopb.Event
+	nextOffset    int64
+}
+
+// retryCase is a store round trip that fails while the runner keeps running.
+// arrange declares the stubs past Ping and ResetOffset, which every row shares,
+// and calls must count the failing round trips.
+type retryCase struct {
+	name    string
+	arrange func(fx retryFixture, offsets, events *mock.Controller, calls *atomic.Int32)
+}
+
 func TestRunner(t *testing.T) {
 	specs.Describe(t, "a Runner starts, projects persisted events under each recovery policy and stops", func(s *specs.Spec) {
 		s.It("with happy path", func(ctx *specs.Context) {
@@ -662,92 +584,41 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
-		s.It("with failed handler with fail strategy", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-
-			// set up the event store
-			journalStore := testkit2.NewEventsStore()
-			ctx.Expect(journalStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
-
-			// set up the offset store
-			offsetStore := testkit2.NewOffsetStore()
-			ctx.Expect(offsetStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
-
-			// set up the projection
-			// create a underlying that return successfully
-			handler := &testHandler1{}
-
-			runner := New(projectionName, handler, journalStore, offsetStore, WithPullInterval(time.Millisecond))
-			// start the projection
-			err := runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			// run the projection
-			runner.Run(bg, nil)
-
-			// persist some events
-			event, err := anypb.New(&testpb.AccountCredited{})
-			ctx.Expect(err).To(specs.BeNil())
-
-			count := 10
-			timestamp := timestamppb.Now()
-			journals := make([]*egopb.Event, count)
-			for i := 0; i < count; i++ {
-				seqNr := i + 1
-				journals[i] = &egopb.Event{
-					PersistenceId:  persistenceID,
-					SequenceNumber: uint64(seqNr),
-					IsDeleted:      false,
-					Event:          event,
-
-					Timestamp: timestamp.AsTime().Unix(),
-				}
-			}
-
-			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
-			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-
-			// here due to the default recovery strategy the projection is stopped
-			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
-			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
-			// free resources
-			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
-			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("with failed handler and retry_fail strategy", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-
-			// set up the event store
-			journalStore := testkit2.NewEventsStore()
-			ctx.Expect(journalStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
-
-			// set up the offset store
-			offsetStore := testkit2.NewOffsetStore()
-			ctx.Expect(offsetStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
-
-			// set up the projection
-			// create a underlying that return successfully
-			handler := &testHandler1{}
-
-			runner := New(projectionName, handler, journalStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithRecoveryStrategy(projection.NewRecovery(
+		specs.Table(s, []handlerFailureCase{
+			{name: "with failed handler with fail strategy"},
+			{
+				name: "with failed handler and retry_fail strategy",
+				opts: []Option{WithRecoveryStrategy(projection.NewRecovery(
 					projection.WithRecoveryPolicy(projection.RetryAndFail),
 					projection.WithRetries(2),
-					projection.WithRetryDelay(100*time.Millisecond))))
+					projection.WithRetryDelay(100*time.Millisecond)))},
+			},
+		}, func(c handlerFailureCase) string { return c.name }, func(ctx *specs.Context, c handlerFailureCase) {
+			bg := context.TODO()
+			projectionName := "db-writer"
+			persistenceID := uuid.NewString()
+
+			// set up the event store
+			journalStore := testkit2.NewEventsStore()
+			ctx.Expect(journalStore).To(specs.Not(specs.BeNil()))
+			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
+
+			// set up the offset store
+			offsetStore := testkit2.NewOffsetStore()
+			ctx.Expect(offsetStore).To(specs.Not(specs.BeNil()))
+			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
+
+			// set up the projection
+			// create a underlying that always fails
+			handler := &testHandler1{}
+
+			runner := New(projectionName, handler, journalStore, offsetStore,
+				append([]Option{WithPullInterval(time.Millisecond)}, c.opts...)...)
 
 			// start the projection
 			err := runner.Start(bg)
 			ctx.Expect(err).To(specs.BeNil())
+
 			// run the projection
 			runner.Run(bg, nil)
 
@@ -773,7 +644,8 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
-			// the projection stops once the retries are exhausted
+			// the projection stops: at once under the default Fail policy, once
+			// the retries are exhausted under RetryAndFail
 			ctx.Eventually(isRunning(runner), specs.BeFalse(), poll...)
 			ctx.Expect(runner.running.Load()).To(specs.BeFalse())
 
@@ -782,11 +654,13 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
-		s.It("with failed handler and skip strategy", func(ctx *specs.Context) {
+		specs.Table(s, []skipCase{
+			{name: "with failed handler and skip strategy", policy: projection.Skip, shard: 8},
+			{name: "with failed handler and skip retry strategy", policy: projection.RetryAndSkip, shard: 7},
+		}, func(c skipCase) string { return c.name }, func(ctx *specs.Context, c skipCase) {
 			bg := context.TODO()
 			projectionName := "db-writer"
 			persistenceID := uuid.NewString()
-			shard := uint64(8)
 
 			// set up the event store
 			journalStore := testkit2.NewEventsStore()
@@ -799,13 +673,13 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
 
 			// set up the projection
-			// create a underlying that return successfully
+			// create a underlying that fails on the even revisions
 			handler := &testHandler2{counter: atomic.NewInt32(0)}
 
 			runner := New(projectionName, handler, journalStore, offsetStore,
 				WithPullInterval(time.Millisecond),
 				WithRecoveryStrategy(projection.NewRecovery(
-					projection.WithRecoveryPolicy(projection.Skip),
+					projection.WithRecoveryPolicy(c.policy),
 					projection.WithRetries(2),
 					projection.WithRetryDelay(100*time.Millisecond))))
 			// start the projection
@@ -829,7 +703,7 @@ func TestRunner(t *testing.T) {
 					Event:          event,
 
 					Timestamp: timestamp.AsTime().Unix(),
-					Shard:     shard,
+					Shard:     c.shard,
 				}
 			}
 
@@ -838,75 +712,7 @@ func TestRunner(t *testing.T) {
 
 			projectionID := &egopb.ProjectionId{
 				ProjectionName: projectionName,
-				ShardNumber:    shard,
-			}
-
-			// the batch offset is committed once every event was handled or skipped
-			ctx.Eventually(offsetOf(offsetStore, projectionID), committedAt(timestamp.AsTime().Unix()), poll...)
-			ctx.Expect(handler.counter.Load()).ToEqual(int32(5))
-
-			// free resource
-			ctx.Expect(journalStore.Disconnect(bg)).To(specs.BeNil())
-			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("with failed handler and skip retry strategy", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-			shard := uint64(7)
-
-			// set up the event store
-			journalStore := testkit2.NewEventsStore()
-			ctx.Expect(journalStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(journalStore.Connect(bg)).To(specs.BeNil())
-
-			// set up the offset store
-			offsetStore := testkit2.NewOffsetStore()
-			ctx.Expect(offsetStore).To(specs.Not(specs.BeNil()))
-			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
-
-			// set up the projection
-			// create a underlying that return successfully
-			handler := &testHandler2{counter: atomic.NewInt32(0)}
-
-			runner := New(projectionName, handler, journalStore, offsetStore,
-				WithPullInterval(time.Millisecond),
-				WithRecoveryStrategy(projection.NewRecovery(
-					projection.WithRecoveryPolicy(projection.RetryAndSkip),
-					projection.WithRetries(2),
-					projection.WithRetryDelay(100*time.Millisecond))))
-			// start the projection
-			err := runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-			// run the projection
-			runner.Run(bg, nil)
-			// persist some events
-			event, err := anypb.New(&testpb.AccountCredited{})
-			ctx.Expect(err).To(specs.BeNil())
-
-			count := 10
-			timestamp := timestamppb.Now()
-			journals := make([]*egopb.Event, count)
-			for i := range count {
-				seqNr := i + 1
-				journals[i] = &egopb.Event{
-					PersistenceId:  persistenceID,
-					SequenceNumber: uint64(seqNr),
-					IsDeleted:      false,
-					Event:          event,
-
-					Timestamp: timestamp.AsTime().Unix(),
-					Shard:     shard,
-				}
-			}
-
-			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
-			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shard,
+				ShardNumber:    c.shard,
 			}
 
 			// the batch offset is committed once every event was handled or skipped
@@ -1000,7 +806,7 @@ func TestRunner(t *testing.T) {
 			runner := New(projectionName, handler, nil, offsetStore, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
-			ctx.Expect(errText(err)).ToEqual("events store is not defined")
+			ctx.Expect(err).To(haveMessage("events store is not defined"))
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1017,7 +823,7 @@ func TestRunner(t *testing.T) {
 			runner := New(projectionName, handler, eventsStore, nil, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
-			ctx.Expect(errText(err)).ToEqual("offsets store is not defined")
+			ctx.Expect(err).To(haveMessage("offsets store is not defined"))
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1066,7 +872,7 @@ func TestRunner(t *testing.T) {
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
-			ctx.Expect(errText(err)).ToEqual("failed to start the projection: fail ping")
+			ctx.Expect(err).To(haveMessage("failed to start the projection: fail ping"))
 			ctx.Expect(offsetStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1088,7 +894,7 @@ func TestRunner(t *testing.T) {
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 			// start the projection
 			err := runner.Start(bg)
-			ctx.Expect(errText(err)).ToEqual("failed to start the projection: fail ping")
+			ctx.Expect(err).To(haveMessage("failed to start the projection: fail ping"))
 			ctx.Expect(eventsStore.Disconnect(bg)).To(specs.BeNil())
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
@@ -1114,68 +920,100 @@ func TestRunner(t *testing.T) {
 
 			// start the projection
 			err := runner.Start(bg)
-			ctx.Expect(errText(err)).ToEqual("failed to reset projection=db-writer: fail to reset offset")
+			ctx.Expect(err).To(haveMessage("failed to reset projection=db-writer: fail to reset offset"))
 			ctx.Expect(runner.Stop()).To(specs.BeNil())
 		})
-		s.It("when fail to write the offset the Runner retries and keeps running", func(ctx *specs.Context) {
+		specs.Table(s, []retryCase{
+			{
+				name: "when fail to write the offset the Runner retries and keeps running",
+				arrange: func(fx retryFixture, offsets, events *mock.Controller, calls *atomic.Int32) {
+					offsets.Method("GetCurrentOffset").Expect(mock.Any(), fx.projectionID).Return(fx.offset, nil).AtLeast(1)
+					offsets.Method("WriteOffset").Expect(mock.Any(), mock.Any()).AtLeast(1).
+						Do(func([]any) []any { calls.Inc(); return []any{errFailed} })
+					events.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{fx.shardNumber: fx.nextOffset}, nil).AtLeast(1)
+					events.Method("GetShardEvents").Expect(mock.Any(), fx.shardNumber, fx.offset.GetValue(), uint64(fx.maxBufferSize)).
+						Return(fx.events, fx.nextOffset, nil).AtLeast(1)
+				},
+			},
+			{
+				name: "when fail to fetch shard numbers the Runner retries and keeps running",
+				arrange: func(_ retryFixture, _, events *mock.Controller, calls *atomic.Int32) {
+					events.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
+						Do(func([]any) []any { calls.Inc(); return []any{nil, errFailed} })
+				},
+			},
+			{
+				name: "when fail to get current offset the Runner retries and keeps running",
+				arrange: func(fx retryFixture, offsets, events *mock.Controller, calls *atomic.Int32) {
+					offsets.Method("GetCurrentOffset").Expect(mock.Any(), fx.projectionID).AtLeast(1).
+						Do(func([]any) []any { calls.Inc(); return []any{nil, errFailed} })
+					events.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{fx.shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
+				},
+			},
+			{
+				name: "when fail to get shard events the Runner retries and keeps running",
+				arrange: func(fx retryFixture, offsets, events *mock.Controller, calls *atomic.Int32) {
+					offsets.Method("GetCurrentOffset").Expect(mock.Any(), fx.projectionID).Return(fx.offset, nil).AtLeast(1)
+					events.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{fx.shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
+					events.Method("GetShardEvents").Expect(mock.Any(), fx.shardNumber, fx.offset.GetValue(), uint64(fx.maxBufferSize)).AtLeast(1).
+						Do(func([]any) []any { calls.Inc(); return []any{nil, int64(0), errFailed} })
+				},
+			},
+		}, func(c retryCase) string { return c.name }, func(ctx *specs.Context, c retryCase) {
 			bg := context.TODO()
 			projectionName := "db-writer"
-			persistenceID := uuid.NewString()
-			shardNumber := uint64(9)
-			timestamp := timestamppb.Now()
 			handler := projection.NewDiscardHandler()
-
-			// create the projection id
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shardNumber,
-			}
-
-			offset := &egopb.Offset{
-				ShardNumber:    shardNumber,
-				ProjectionName: projectionName,
-				Value:          timestamp.AsTime().Unix(),
-				Timestamp:      0,
-			}
+			timestamp := timestamppb.Now()
 
 			event, err := anypb.New(&testpb.AccountCredited{})
 			ctx.Expect(err).To(specs.BeNil())
-			nextOffsetValue := timestamppb.New(time.Now().Add(time.Minute))
-			events := []*egopb.Event{
-				{
-					PersistenceId:  persistenceID,
-					SequenceNumber: 1,
-					IsDeleted:      false,
-					Event:          event,
 
-					Timestamp: timestamp.AsTime().Unix(),
-					Shard:     shardNumber,
+			shardNumber := uint64(9)
+			fx := retryFixture{
+				shardNumber:   shardNumber,
+				maxBufferSize: 10,
+				projectionID: &egopb.ProjectionId{
+					ProjectionName: projectionName,
+					ShardNumber:    shardNumber,
 				},
-			}
+				offset: &egopb.Offset{
+					ShardNumber:    shardNumber,
+					ProjectionName: projectionName,
+					Value:          timestamp.AsTime().Unix(),
+					Timestamp:      0,
+				},
+				events: []*egopb.Event{
+					{
+						PersistenceId:  uuid.NewString(),
+						SequenceNumber: 1,
+						IsDeleted:      false,
+						Event:          event,
 
-			maxBufferSize := 10
+						Timestamp: timestamp.AsTime().Unix(),
+						Shard:     shardNumber,
+					},
+				},
+				nextOffset: timestamppb.New(time.Now().Add(time.Minute)).AsTime().UnixMilli(),
+			}
 			resetOffsetTo := time.Now().UTC()
 
-			writes := atomic.NewInt32(0)
+			// the stubs every row shares; the row adds the failing round trip
 			offsetCtrl := mock.NewController(ctx)
 			offsetStore := offsetStoreMock{offsetCtrl}
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
-			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.Any()).AtLeast(1).
-				Do(func([]any) []any { writes.Inc(); return []any{errFailed} })
 
 			eventsCtrl := mock.NewController(ctx)
 			eventsStore := eventsStoreMock{eventsCtrl}
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
-			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
-				Return(events, nextOffsetValue.AsTime().UnixMilli(), nil).AtLeast(1)
+
+			failures := atomic.NewInt32(0)
+			c.arrange(fx, offsetCtrl, eventsCtrl, failures)
 
 			// create an instance of the projection
 			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
 			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
+			runner.maxBufferSize = fx.maxBufferSize
 
 			// start the projection
 			err = runner.Start(bg)
@@ -1184,148 +1022,8 @@ func TestRunner(t *testing.T) {
 			// run the projection
 			runner.Run(bg, nil)
 
-			ctx.Eventually(counter(writes), specs.BeGreaterThanOrEqual(int32(1)), poll...)
-
-			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("when fail to fetch shard numbers the Runner retries and keeps running", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			handler := projection.NewDiscardHandler()
-
-			maxBufferSize := 10
-			resetOffsetTo := time.Now().UTC()
-
-			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
-			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-
-			pulls := atomic.NewInt32(0)
-			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
-			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
-				Do(func([]any) []any { pulls.Inc(); return []any{nil, errFailed} })
-
-			// create an instance of the projection
-			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
-			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
-
-			// start the projection
-			err := runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			// run the projection
-			runner.Run(bg, nil)
-
-			ctx.Eventually(counter(pulls), specs.BeGreaterThanOrEqual(int32(1)), poll...)
-
-			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("when fail to get current offset the Runner retries and keeps running", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-			shardNumber := uint64(9)
-
-			handler := projection.NewDiscardHandler()
-
-			// create the projection id
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shardNumber,
-			}
-
-			maxBufferSize := 10
-			resetOffsetTo := time.Now().UTC()
-
-			reads := atomic.NewInt32(0)
-			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
-			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).AtLeast(1).
-				Do(func([]any) []any { reads.Inc(); return []any{nil, errFailed} })
-
-			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
-			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
-
-			// create an instance of the projection
-			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
-			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
-
-			// start the projection
-			err := runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			// run the projection
-			runner.Run(bg, nil)
-
-			ctx.Eventually(counter(reads), specs.BeGreaterThanOrEqual(int32(1)), poll...)
-
-			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
-
-			ctx.Expect(runner.Stop()).To(specs.BeNil())
-		})
-		s.It("when fail to get shard events the Runner retries and keeps running", func(ctx *specs.Context) {
-			bg := context.TODO()
-			projectionName := "db-writer"
-
-			shardNumber := uint64(9)
-			timestamp := timestamppb.Now()
-			handler := projection.NewDiscardHandler()
-
-			// create the projection id
-			projectionID := &egopb.ProjectionId{
-				ProjectionName: projectionName,
-				ShardNumber:    shardNumber,
-			}
-
-			offset := &egopb.Offset{
-				ShardNumber:    shardNumber,
-				ProjectionName: projectionName,
-				Value:          timestamp.AsTime().Unix(),
-				Timestamp:      0,
-			}
-
-			maxBufferSize := 10
-			resetOffsetTo := time.Now().UTC()
-
-			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
-			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
-			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
-
-			fetches := atomic.NewInt32(0)
-			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
-			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
-			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: time.Now().UnixMilli()}, nil).AtLeast(1)
-			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).AtLeast(1).
-				Do(func([]any) []any { fetches.Inc(); return []any{nil, int64(0), errFailed} })
-
-			// create an instance of the projection
-			runner := New(projectionName, handler, eventsStore, offsetStore, WithPullInterval(time.Millisecond))
-			runner.resetOffsetTo = resetOffsetTo
-			runner.maxBufferSize = maxBufferSize
-
-			// start the projection
-			err := runner.Start(bg)
-			ctx.Expect(err).To(specs.BeNil())
-
-			// run the projection
-			runner.Run(bg, nil)
-
-			ctx.Eventually(counter(fetches), specs.BeGreaterThanOrEqual(int32(1)), poll...)
+			// the failing round trip is reached and retried in place
+			ctx.Eventually(counter(failures), specs.BeGreaterThanOrEqual(int32(1)), poll...)
 
 			ctx.Expect(runner.running.Load()).To(specs.BeTrue())
 
@@ -2009,20 +1707,26 @@ func TestRunnerPullEfficiency(t *testing.T) {
 // Default logger
 // -----------------------------------------------------------------------------
 
-func TestProjectionRunnerDefaultLogger(t *testing.T) {
-	specs.Describe(t, "a Runner is silent unless it is given a logger", func(s *specs.Spec) {
-		s.It("no withLogger option yields the discard logger", func(ctx *specs.Context) {
-			runner := New("projection-name", testHandler1{}, nil, nil)
-			ctx.Expect(runner.logger).To(specs.Not(specs.BeNil()))
-			// A runner is always handed the actor system's logger by the
-			// projection actor; the construction default must stay silent.
-			ctx.Expect(runner.logger == discardLogger).To(specs.BeTrue())
-		})
+// loggerCase is how a runner is built and the logger it must end up with.
+type loggerCase struct {
+	name string
+	opts []Option
+	want kitlog.Logger
+}
 
-		s.It("withLogger overrides the default", func(ctx *specs.Context) {
-			custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
-			runner := New("projection-name", testHandler1{}, nil, nil, WithLogger(custom))
-			ctx.Expect(runner.logger == custom).To(specs.BeTrue())
+func TestProjectionRunnerDefaultLogger(t *testing.T) {
+	custom := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
+
+	specs.Describe(t, "a Runner is silent unless it is given a logger", func(s *specs.Spec) {
+		// A runner is always handed the actor system's logger by the projection
+		// actor; the construction default must stay silent.
+		specs.Table(s, []loggerCase{
+			{name: "no withLogger option yields the discard logger", want: discardLogger},
+			{name: "withLogger overrides the default", opts: []Option{WithLogger(custom)}, want: custom},
+		}, func(c loggerCase) string { return c.name }, func(ctx *specs.Context, c loggerCase) {
+			runner := New("projection-name", testHandler1{}, nil, nil, c.opts...)
+			ctx.Expect(runner.logger).To(specs.Not(specs.BeNil()))
+			ctx.Expect(runner.logger == c.want).To(specs.BeTrue())
 		})
 	})
 }
