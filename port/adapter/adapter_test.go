@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/port/adapter"
@@ -36,26 +37,19 @@ import (
 // undeclared implements none of the optional interfaces.
 type undeclared struct{}
 
-// full implements Describer, Starter and Pinger with pointer receivers, so
-// a typed-nil *full implements all three by method set.
-type full struct {
-	desc     adapter.Descriptor
-	started  int
-	pinged   int
-	startErr error
+// full is a go-specs mock adapter for Describer, Starter and Pinger: each
+// method forwards to the controller, and the case declares what it expects.
+// It uses pointer receivers, so a typed-nil *full implements all three by
+// method set.
+type full struct{ c *mock.Controller }
+
+func (f *full) Describe() adapter.Descriptor {
+	return mock.Value[adapter.Descriptor](f.c.Method("Describe").Call(), 0)
 }
 
-func (f *full) Describe() adapter.Descriptor { return f.desc }
+func (f *full) Start(ctx context.Context) error { return f.c.Method("Start").Call(ctx).Err(0) }
 
-func (f *full) Start(context.Context) error {
-	f.started++
-	return f.startErr
-}
-
-func (f *full) Ping(context.Context) error {
-	f.pinged++
-	return nil
-}
+func (f *full) Ping(ctx context.Context) error { return f.c.Method("Ping").Call(ctx).Err(0) }
 
 // pingOnly implements Pinger with a value receiver, like a store that has
 // only the mandatory readiness probe.
@@ -66,30 +60,29 @@ func (pingOnly) Ping(context.Context) error { return nil }
 // Spec scenario "an undeclared value": each accessor returns its zero value
 // and false, and nothing panics.
 func TestAccessors_UndeclaredValueReturnsZeroAndFalse(t *testing.T) {
+	type undeclaredCase struct {
+		name string
+		v    any
+	}
 	specs.Describe(t, "the accessors report an undeclared value as absent", func(s *specs.Spec) {
-		for _, tc := range []struct {
-			name string
-			v    any
-		}{
+		specs.Table(s, []undeclaredCase{
 			{"struct", undeclared{}},
 			{"pointer", &undeclared{}},
 			{"untyped nil", nil},
 			{"string", "not an adapter"},
-		} {
-			s.It(tc.name, func(ctx *specs.Context) {
-				d, ok := adapter.Describe(tc.v)
-				ctx.Expect(ok).To(specs.BeFalse())
-				ctx.Expect(isZeroDescriptor(d)).To(specs.BeTrue())
+		}, func(c undeclaredCase) string { return c.name }, func(ctx *specs.Context, c undeclaredCase) {
+			d, ok := adapter.Describe(c.v)
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(d).To(specs.BeZero())
 
-				st, ok := adapter.StarterOf(tc.v)
-				ctx.Expect(ok).To(specs.BeFalse())
-				ctx.Expect(st == nil).To(specs.BeTrue())
+			st, ok := adapter.StarterOf(c.v)
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(st).To(specs.BeNil())
 
-				p, ok := adapter.PingerOf(tc.v)
-				ctx.Expect(ok).To(specs.BeFalse())
-				ctx.Expect(p == nil).To(specs.BeTrue())
-			})
-		}
+			p, ok := adapter.PingerOf(c.v)
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(p).To(specs.BeNil())
+		})
 	})
 }
 
@@ -101,26 +94,29 @@ func TestAccessors_ImplementingValueIsReturned(t *testing.T) {
 				Name:         "fake",
 				Capabilities: []adapter.Capability{adapter.CapStart, adapter.CapReady},
 			}
-			f := &full{desc: want, startErr: errors.New("dial failed")}
+			startErr := errors.New("dial failed")
+			ctrl := mock.NewController(ctx) // verifies every expectation when the case ends
+			ctrl.Method("Describe").Expect().Times(1).Return(want)
+			ctrl.Method("Start").Expect(mock.Any()).Times(1).Return(startErr)
+			ctrl.Method("Ping").Expect(mock.Any()).Times(1).Return(nil)
+			f := &full{ctrl}
 
 			d, ok := adapter.Describe(f)
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(d.Name).ToEqual(want.Name)
-			ctx.Expect(len(d.Ports)).ToEqual(1)
+			ctx.Expect(d.Ports).To(specs.HaveLen(1))
 			ctx.Expect(d.Ports[0]).ToEqual(want.Ports[0])
-			ctx.Expect(len(d.Capabilities)).ToEqual(2)
+			ctx.Expect(d.Capabilities).To(specs.HaveLen(2))
 
 			st, ok := adapter.StarterOf(f)
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(st == nil).To(specs.BeFalse())
-			ctx.Expect(st.Start(context.Background())).To(specs.MatchError(f.startErr))
-			ctx.Expect(f.started).ToEqual(1)
+			ctx.Expect(st).To(specs.Not(specs.BeNil()))
+			ctx.Expect(st.Start(context.Background())).To(specs.MatchError(startErr))
 
 			p, ok := adapter.PingerOf(f)
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(p == nil).To(specs.BeFalse())
+			ctx.Expect(p).To(specs.Not(specs.BeNil()))
 			ctx.Expect(p.Ping(context.Background())).To(specs.BeNil())
-			ctx.Expect(f.pinged).ToEqual(1)
 		})
 	})
 }
@@ -152,46 +148,60 @@ func TestAccessors_TypedNilIsTreatedAsAbsent(t *testing.T) {
 			var f *full
 			d, ok := adapter.Describe(f)
 			ctx.Expect(ok).To(specs.BeFalse())
-			ctx.Expect(isZeroDescriptor(d)).To(specs.BeTrue())
+			ctx.Expect(d).To(specs.BeZero())
 
 			st, ok := adapter.StarterOf(f)
 			ctx.Expect(ok).To(specs.BeFalse())
-			ctx.Expect(st == nil).To(specs.BeTrue())
+			ctx.Expect(st).To(specs.BeNil())
 
 			p, ok := adapter.PingerOf(f)
 			ctx.Expect(ok).To(specs.BeFalse())
-			ctx.Expect(p == nil).To(specs.BeTrue())
+			ctx.Expect(p).To(specs.BeNil())
 		})
 	})
 }
 
 func TestDescriptor_DeclaresAndServes(t *testing.T) {
+	// probe asks one question of the shared descriptor and states the answer.
+	type probe struct {
+		name string
+		ask  func(adapter.Descriptor) bool
+		want bool
+	}
+	declares := func(c adapter.Capability, want bool) probe {
+		verb := "declares"
+		if !want {
+			verb = "does not declare"
+		}
+		return probe{fmt.Sprintf("%s %q", verb, c), func(d adapter.Descriptor) bool { return d.Declares(c) }, want}
+	}
+	serves := func(p adapter.Port, want bool) probe {
+		verb := "serves"
+		if !want {
+			verb = "does not serve"
+		}
+		return probe{fmt.Sprintf("%s %q", verb, p), func(d adapter.Descriptor) bool { return d.Serves(p) }, want}
+	}
 	specs.Describe(t, "a Descriptor declares its capabilities and serves its ports", func(s *specs.Spec) {
 		d := adapter.Descriptor{
 			Ports:        []adapter.Port{"persistence.EventsStore", "persistence.SnapshotStore"},
 			Name:         "postgres",
 			Capabilities: []adapter.Capability{adapter.CapReady, "tenancy.fixed-tenant"},
 		}
-		for _, c := range []adapter.Capability{adapter.CapReady, "tenancy.fixed-tenant"} {
-			s.It(fmt.Sprintf("declares %q", c), func(ctx *specs.Context) {
-				ctx.Expect(d.Declares(c)).To(specs.BeTrue())
-			})
-		}
-		for _, c := range []adapter.Capability{adapter.CapStart, "", "tenancy"} {
-			s.It(fmt.Sprintf("does not declare %q", c), func(ctx *specs.Context) {
-				ctx.Expect(d.Declares(c)).To(specs.BeFalse())
-			})
-		}
-		for _, p := range []adapter.Port{"persistence.EventsStore", "persistence.SnapshotStore"} {
-			s.It(fmt.Sprintf("serves %q", p), func(ctx *specs.Context) {
-				ctx.Expect(d.Serves(p)).To(specs.BeTrue())
-			})
-		}
-		for _, p := range []adapter.Port{"persistence.StateStore", "", "persistence"} {
-			s.It(fmt.Sprintf("does not serve %q", p), func(ctx *specs.Context) {
-				ctx.Expect(d.Serves(p)).To(specs.BeFalse())
-			})
-		}
+		specs.Table(s, []probe{
+			declares(adapter.CapReady, true),
+			declares("tenancy.fixed-tenant", true),
+			declares(adapter.CapStart, false),
+			declares("", false),
+			declares("tenancy", false),
+			serves("persistence.EventsStore", true),
+			serves("persistence.SnapshotStore", true),
+			serves("persistence.StateStore", false),
+			serves("", false),
+			serves("persistence", false),
+		}, func(p probe) string { return p.name }, func(ctx *specs.Context, p probe) {
+			ctx.Expect(p.ask(d)).To(specs.Equal(p.want))
+		})
 
 		s.It("the zero Descriptor declares and serves nothing", func(ctx *specs.Context) {
 			var zero adapter.Descriptor
@@ -210,8 +220,4 @@ func TestLifecycleCapabilities(t *testing.T) {
 			ctx.Expect(adapter.CapReady).ToEqual(adapter.Capability("adapter.ready"))
 		})
 	})
-}
-
-func isZeroDescriptor(d adapter.Descriptor) bool {
-	return d.Name == "" && d.Ports == nil && d.Capabilities == nil
 }
