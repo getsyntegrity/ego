@@ -24,15 +24,12 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
@@ -51,80 +48,80 @@ import (
 // with a nil error, so the engine checks the returned actor's own spawn
 // binding (its EntityTenantScope dependency) after Spawn returns.
 
-func newRespawnTestEngine(t *testing.T) *Engine {
-	t.Helper()
-	ctx := context.Background()
-	eventsStore := testkit.NewEventsStore()
-	require.NoError(t, eventsStore.Connect(ctx))
+func newRespawnTestEngine(ctx *specs.Context) *Engine {
+	bg := context.Background()
+	eventsStore := newConnectedEventsStoreG3(ctx)
 	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() {
-		_ = eventsStore.Disconnect(ctx)
-		_ = stateStore.Disconnect(ctx)
-	})
+	ctx.Expect(stateStore.Connect(bg)).To(specs.BeNil())
+	ctx.Cleanup(func() { _ = stateStore.Disconnect(bg) })
 
-	engine := newTestEngine(t, "Respawn", eventsStore,
+	engine := newSpecsEngineG3(ctx, "Respawn", eventsStore,
 		WithTenantResolver(perCallerTenantResolver{}),
 		WithStateStore(stateStore))
-	require.NoError(t, engine.Start(ctx))
+	ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 	return engine
 }
 
-func requireSpawnTenantMismatch(t *testing.T, err error) {
-	t.Helper()
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrSpawnTenantMismatch)
-	assert.ErrorIs(t, err, tenancy.ErrDenied)
+func expectSpawnTenantMismatch(ctx *specs.Context, err error) {
+	ctx.Helper()
+	ctx.Expect(err).To(specs.MatchError(ErrSpawnTenantMismatch))
+	ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+	// the tenancy mismatch must be recoverable via errors.As
 	var tenancyErr *tenancy.Error
-	assert.True(t, errors.As(err, &tenancyErr), "the tenancy mismatch must be recoverable via errors.As")
+	ctx.Expect(err).To(specs.MatchErrorAs(&tenancyErr))
 }
 
 func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
-	ctx := context.Background()
-	acme := WithTenant(tenancy.TenantID("acme"))
-	globex := WithTenant(tenancy.TenantID("globex"))
-	globexCtx := context.WithValue(ctx, perCallerTenantKey{}, "globex")
+	specs.Describe(t, "respawning a live id under another tenant is rejected", func(s *specs.Spec) {
+		bg := context.Background()
+		acme := WithTenant(tenancy.TenantID("acme"))
+		globex := WithTenant(tenancy.TenantID("globex"))
+		globexCtx := context.WithValue(bg, perCallerTenantKey{}, "globex")
 
-	t.Run("EventSourced entity", func(t *testing.T) {
-		engine := newRespawnTestEngine(t)
-		id := uuid.NewString()
-		owner := newTenancyProbeEventSourcedBehavior(id)
-		require.NoError(t, engine.Entity(ctx, owner, acme), "a new actor with a valid tenant spawns")
-		require.NoError(t, engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(id), acme), "a same-tenant respawn is idempotent")
+		s.It("EventSourced entity", func(ctx *specs.Context) {
+			engine := newRespawnTestEngine(ctx)
+			id := uuid.NewString()
+			owner := newTenancyProbeEventSourcedBehavior(id)
+			// a new actor with a valid tenant spawns
+			ctx.Expect(engine.Entity(bg, owner, acme)).To(specs.BeNil())
+			// a same-tenant respawn is idempotent
+			ctx.Expect(engine.Entity(bg, newTenancyProbeEventSourcedBehavior(id), acme)).To(specs.BeNil())
 
-		requireSpawnTenantMismatch(t, engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(id), globex))
+			expectSpawnTenantMismatch(ctx, engine.Entity(bg, newTenancyProbeEventSourcedBehavior(id), globex))
 
-		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-		require.Error(t, err)
-		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
-	})
+			_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			// a foreign command must never reach HandleCommand
+			ctx.Expect(owner.InvocationCount()).To(specs.BeZero())
+		})
 
-	t.Run("DurableStateEntity", func(t *testing.T) {
-		engine := newRespawnTestEngine(t)
-		id := uuid.NewString()
-		owner := newTenancyProbeDurableStateBehavior(id)
-		require.NoError(t, engine.DurableStateEntity(ctx, owner, acme))
-		require.NoError(t, engine.DurableStateEntity(ctx, newTenancyProbeDurableStateBehavior(id), acme))
+		s.It("DurableStateEntity", func(ctx *specs.Context) {
+			engine := newRespawnTestEngine(ctx)
+			id := uuid.NewString()
+			owner := newTenancyProbeDurableStateBehavior(id)
+			ctx.Expect(engine.DurableStateEntity(bg, owner, acme)).To(specs.BeNil())
+			ctx.Expect(engine.DurableStateEntity(bg, newTenancyProbeDurableStateBehavior(id), acme)).To(specs.BeNil())
 
-		requireSpawnTenantMismatch(t, engine.DurableStateEntity(ctx, newTenancyProbeDurableStateBehavior(id), globex))
+			expectSpawnTenantMismatch(ctx, engine.DurableStateEntity(bg, newTenancyProbeDurableStateBehavior(id), globex))
 
-		_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-		require.Error(t, err)
-		assert.Zero(t, owner.InvocationCount(), "a foreign command must never reach HandleCommand")
-	})
+			_, _, err := engine.SendCommand(globexCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(owner.InvocationCount()).To(specs.BeZero())
+		})
 
-	t.Run("Saga", func(t *testing.T) {
-		engine := newRespawnTestEngine(t)
-		id := "saga-" + uuid.NewString()
-		saga := func() *enginetest.CallbackSagaBehavior {
-			return &enginetest.CallbackSagaBehavior{SagaID: id, HandleEventFn: func(context.Context, Event, State) (*SagaAction, error) {
-				return &SagaAction{}, nil
-			}}
-		}
-		require.NoError(t, engine.Saga(ctx, saga(), 0, acme))
-		require.NoError(t, engine.Saga(ctx, saga(), 0, acme))
+		s.It("Saga", func(ctx *specs.Context) {
+			engine := newRespawnTestEngine(ctx)
+			id := "saga-" + uuid.NewString()
+			saga := func() *enginetest.CallbackSagaBehavior {
+				return &enginetest.CallbackSagaBehavior{SagaID: id, HandleEventFn: func(context.Context, Event, State) (*SagaAction, error) {
+					return &SagaAction{}, nil
+				}}
+			}
+			ctx.Expect(engine.Saga(bg, saga(), 0, acme)).To(specs.BeNil())
+			ctx.Expect(engine.Saga(bg, saga(), 0, acme)).To(specs.BeNil())
 
-		requireSpawnTenantMismatch(t, engine.Saga(ctx, saga(), 0, globex))
+			expectSpawnTenantMismatch(ctx, engine.Saga(bg, saga(), 0, globex))
+		})
 	})
 }
 
@@ -133,64 +130,74 @@ func TestEngineRespawnUnderAnotherTenantIsRejected(t *testing.T) {
 // the other must be rejected, and no command from the losing tenant may
 // reach HandleCommand.
 func TestEngineConcurrentCrossTenantSpawnHasExactlyOneWinner(t *testing.T) {
-	ctx := context.Background()
-	engine := newRespawnTestEngine(t)
-	tenants := []string{"acme", "globex"}
+	specs.Describe(t, "two concurrent spawns of one id under different tenants", func(s *specs.Spec) {
+		s.It("have exactly one winner and the loser's commands never reach HandleCommand", func(ctx *specs.Context) {
+			bg := context.Background()
+			engine := newRespawnTestEngine(ctx)
+			tenants := []string{"acme", "globex"}
 
-	for range 20 {
-		id := uuid.NewString()
-		probes := []*tenancyProbeEventSourcedBehavior{newTenancyProbeEventSourcedBehavior(id), newTenancyProbeEventSourcedBehavior(id)}
-		errs := make([]error, len(tenants))
+			for range 20 {
+				id := uuid.NewString()
+				probes := []*tenancyProbeEventSourcedBehavior{newTenancyProbeEventSourcedBehavior(id), newTenancyProbeEventSourcedBehavior(id)}
+				errs := make([]error, len(tenants))
 
-		var ready, done sync.WaitGroup
-		start := make(chan struct{})
-		for i, tenant := range tenants {
-			ready.Add(1)
-			done.Add(1)
-			go func() {
-				defer done.Done()
-				ready.Done()
-				<-start
-				errs[i] = engine.Entity(ctx, probes[i], WithTenant(tenancy.TenantID(tenant)))
-			}()
-		}
-		ready.Wait()
-		close(start)
-		done.Wait()
+				var ready, done sync.WaitGroup
+				start := make(chan struct{})
+				for i, tenant := range tenants {
+					ready.Add(1)
+					done.Add(1)
+					go func() {
+						defer done.Done()
+						ready.Done()
+						<-start
+						errs[i] = engine.Entity(bg, probes[i], WithTenant(tenancy.TenantID(tenant)))
+					}()
+				}
+				ready.Wait()
+				close(start)
+				done.Wait()
 
-		winners := 0
-		loser := -1
-		for i, err := range errs {
-			if err == nil {
-				winners++
-				continue
+				winners := 0
+				loser := -1
+				for i, err := range errs {
+					if err == nil {
+						winners++
+						continue
+					}
+					expectSpawnTenantMismatch(ctx, err)
+					loser = i
+				}
+				// exactly one tenant must win the spawn race
+				ctx.Expect(winners).To(specs.Equal(1))
+
+				loserCtx := context.WithValue(bg, perCallerTenantKey{}, tenants[loser])
+				_, _, err := engine.SendCommand(loserCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
+				// the losing tenant's command must be rejected
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				// a foreign command must never reach HandleCommand
+				ctx.Expect(probes[0].InvocationCount() + probes[1].InvocationCount()).To(specs.BeZero())
 			}
-			requireSpawnTenantMismatch(t, err)
-			loser = i
-		}
-		require.Equal(t, 1, winners, "exactly one tenant must win the spawn race: %v", errs)
-
-		loserCtx := context.WithValue(ctx, perCallerTenantKey{}, tenants[loser])
-		_, _, err := engine.SendCommand(loserCtx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-		require.Error(t, err, "the losing tenant's command must be rejected")
-		assert.Zero(t, probes[0].InvocationCount()+probes[1].InvocationCount(), "a foreign command must never reach HandleCommand")
-	}
+		})
+	})
 }
 
 func TestEngineRespawnInLegacyModeIsUnchanged(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "respawning a live id without a resolver", func(s *specs.Spec) {
+		s.It("stays a no-op success and ignores WithTenant", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := newConnectedEventsStoreG3(ctx)
 
-	engine := newTestEngine(t, "RespawnLegacy", store)
-	require.NoError(t, engine.Start(ctx))
+			engine := newSpecsEngineG3(ctx, "RespawnLegacy", store)
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	id := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id)))
-	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id)), "legacy respawn of a live id stays a no-op success")
-	// WithTenant is ignored in legacy mode, exactly as before.
-	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme"))))
+			id := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, NewAccountEventSourcedBehavior(id))).To(specs.BeNil())
+			// legacy respawn of a live id stays a no-op success
+			ctx.Expect(engine.Entity(bg, NewAccountEventSourcedBehavior(id))).To(specs.BeNil())
+			// WithTenant is ignored in legacy mode, exactly as before.
+			ctx.Expect(engine.Entity(bg, NewAccountEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
+		})
+	})
 }
 
 // TestClassifyTenantBinding pins how the engine maps the owning actor's
@@ -223,12 +230,16 @@ func TestClassifyTenantBinding(t *testing.T) {
 // never be sent as a command, so a caller cannot probe which tenant owns an
 // entity id.
 func TestDispatchRejectsTenantBindingQuery(t *testing.T) {
-	ctx := context.Background()
-	engine := newRespawnTestEngine(t)
-	id := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme"))))
+	specs.Describe(t, "the tenant binding query", func(s *specs.Spec) {
+		s.It("is never accepted as a command", func(ctx *specs.Context) {
+			bg := context.Background()
+			engine := newRespawnTestEngine(ctx)
+			id := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, newTenancyProbeEventSourcedBehavior(id), WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	globexCtx := context.WithValue(ctx, perCallerTenantKey{}, "globex")
-	_, _, err := engine.SendCommand(globexCtx, id, &egopb.TenantBindingQuery{TenantId: "acme"}, time.Minute)
-	require.ErrorIs(t, err, ErrNotACommand)
+			globexCtx := context.WithValue(bg, perCallerTenantKey{}, "globex")
+			_, _, err := engine.SendCommand(globexCtx, id, &egopb.TenantBindingQuery{TenantId: "acme"}, time.Minute)
+			ctx.Expect(err).To(specs.MatchError(ErrNotACommand))
+		})
+	})
 }

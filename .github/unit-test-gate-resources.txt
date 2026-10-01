@@ -18,6 +18,7 @@ engine/option_test.go | starts a real in-process goakt actor system (component t
 engine/projection_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 engine/publisher_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 engine/specs_helpers_g2_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/specs_helpers_g3_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 engine/tenancy_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
 example/cluster/stores_postgres_test.go | Postgres-backed example tests, skipped unless EGO_EXAMPLE_POSTGRES_DSN is set
 internal/engine/durablestate/durable_state_actor_rig_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)

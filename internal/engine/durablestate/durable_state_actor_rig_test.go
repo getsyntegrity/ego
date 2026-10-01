@@ -24,16 +24,19 @@ package durablestate
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
+	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
@@ -71,6 +74,7 @@ type actorRig struct {
 func startActorRig(ctx *specs.Context, store persistence.StateStore, extra ...extension.Extension) *actorRig {
 	bg := context.Background()
 	stream := eventstream.New()
+	guardian := newGuardianStartedHandler()
 
 	exts := append([]extension.Extension{
 		extensions.NewDurableStateStore(store),
@@ -78,7 +82,7 @@ func startActorRig(ctx *specs.Context, store persistence.StateStore, extra ...ex
 	}, extra...)
 
 	system, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
+		goakt.WithLogger(goaktlog.New(kitlog.New(kitlog.Config{Sink: guardian}))),
 		goakt.WithExtensions(exts...),
 		goakt.WithActorInitMaxRetries(3))
 	ctx.Expect(err).To(specs.BeNil())
@@ -90,7 +94,56 @@ func startActorRig(ctx *specs.Context, store persistence.StateStore, extra ...ex
 			ctx.Errorf("stopping the actor system: %v", stopErr)
 		}
 	})
+	guardian.await(ctx)
 	return &actorRig{system: system, stream: stream}
+}
+
+// guardianStartedHandler is the logging sink of a rig's actor system. It lets
+// the rig wait until the system's user guardian has handled its PostStart
+// message. goakt (v4.5.4) delivers PostStart to the guardian asynchronously and
+// the guardian reads the logger that message installs when it handles a
+// Terminated message, so an actor that stops before the guardian is up (a
+// restart or a kill right after the system starts) panics the guardian with a
+// nil dereference. The root guardian then shuts the whole system down, and a
+// restarting actor fails PreStart with "EgoStatesStoreExtension is not
+// registered". The guardian logs "started successfully" only after installing
+// the logger, so that record is the observable signal that it is safe to stop
+// actors. Everything is dropped, as with enginetest.DiscardLogger.
+type guardianStartedHandler struct {
+	once    sync.Once
+	started chan struct{}
+}
+
+func newGuardianStartedHandler() *guardianStartedHandler {
+	return &guardianStartedHandler{started: make(chan struct{})}
+}
+
+func (h *guardianStartedHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelInfo
+}
+
+func (h *guardianStartedHandler) Handle(_ context.Context, record slog.Record) error {
+	if strings.Contains(record.Message, "GoAktUserGuardian started successfully") {
+		h.once.Do(func() { close(h.started) })
+	}
+	return nil
+}
+
+func (h *guardianStartedHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *guardianStartedHandler) WithGroup(string) slog.Handler { return h }
+
+// await fails the case unless the user guardian reports itself started within
+// pollTimeout.
+func (h *guardianStartedHandler) await(ctx *specs.Context) {
+	ctx.Eventually(func() any {
+		select {
+		case <-h.started:
+			return true
+		default:
+			return false
+		}
+	}, specs.BeTrue(), specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 }
 
 // connectedDurableStore returns an in-memory testkit store that is connected
