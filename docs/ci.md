@@ -24,7 +24,7 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 | `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
 | `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
 | `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `inttest`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds and vets each one and tests all of them except `inttest`, which is only built and vetted here (`go vet` compiles its test files). Its tests need Docker and run in the `inttest` job. |
-| `inttest` | Runs the integration tests of the `inttest` module on real containers (see "Integration tests" below). It runs on every push to `develop`, every pull request to `main`, manual runs, and every pull request to `develop` with a Go-relevant change (the `go` output of `plan`). A docs-only pull request skips it, and `ci-ok` accepts that. |
+| `inttest` | Runs the integration tests of the `inttest` module on real containers (see "Integration tests" below). It runs on every push to `develop` (each merge), on the `develop` to `main` release pull request and on manual runs. Feature and hotfix pull requests never run it; `ci-ok` accepts the skip. Because the release pull request requires `ci-ok`, `main` never receives a release with a red integration run. A hotfix reaches `main` without it and is covered when its `main` to `develop` sync pull request is merged and `develop` is pushed. |
 | `unit-gate` | The unit-test rules in `docs/testing/go-specs.md` (no testify, no generated mocks, go-specs, no real resources in unit tests), plus the rule that nothing under `inttest/` skips, pends or focuses a test. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
 | `api` | Compares the public API with `apidiff`. Against `develop` it only warns. Against the latest tag (pull requests to `main`) it fails when the API breaks and the release is not labelled `release:major`. |
@@ -92,12 +92,11 @@ For a new system (Kafka, NATS or Pulsar are the planned ones), add a package `in
 
 The `inttest` job runs in these cases:
 
-- on every push to `develop`, so the result of a merge is tested;
-- on every pull request to `main`;
-- on `workflow_dispatch`;
-- on every pull request to `develop` whose `plan` job reports a Go-relevant change (`needs.plan.outputs.go == 'true'`: any file except Markdown, `CHANGELOG/`, `OWNERS` and the issue templates). The same output gates the unit tests, so there is no second path list to keep in sync.
+- on every push to `develop`, so the result of each merge is tested;
+- on the `develop` to `main` release pull request. It is the integration gate of `main`: the release pull request requires `ci-ok`, so a red integration run blocks the release;
+- on `workflow_dispatch`.
 
-A pull request that only changes documentation skips the job, and `ci-ok` accepts a skipped job. The job has no `services:` section: `ubuntu-latest` already has Docker and the tests start what they need.
+Feature pull requests to `develop` and `hotfix/*` pull requests to `main` never run it, so the everyday pull request stays fast. A breaking change from a feature branch shows up on the push to `develop` that follows its merge, and is caught at the latest by the next release pull request. A hotfix reaches `main` without the job. The `main` to `develop` sync pull request that the pipeline opens after the release brings it back to `develop`, and the push that merges that pull request runs the job. `ci-ok` accepts the skipped job. The job has no `services:` section: `ubuntu-latest` already has Docker and the tests start what they need.
 
 ## The release note block
 

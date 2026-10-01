@@ -12,8 +12,8 @@
 #   modules     -> build, vet and test of every nested module (benchmark, example, persistence/postgres,
 #                  publishers, compat); inttest is only built and vetted here, its tests run in the inttest job
 #   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
-#                  every push to develop, every PR to main, workflow_dispatch, and every PR to develop
-#                  with a Go-relevant change (the same "go" output of plan that gates the tests)
+#                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
+#                  never on feature or hotfix PRs
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -293,15 +293,16 @@ jobs:
   # Integration tests: the inttest module starts its own containers with Testcontainers (Docker is already
   # on ubuntu-latest), so there are no services: and no DSN variables. A missing Docker fails the job, a test
   # under inttest/ never skips (the no-skip rule of unit-gate). It runs on every push to develop (the result
-  # of the merge), on every PR to main, on manual runs, and on a PR to develop whenever plan reports a
-  # Go-relevant change; a docs-only PR skips it, and ci-ok accepts that.
+  # of each merge), on the develop -> main release PR (the gate that keeps main from receiving a red
+  # integration run, through ci-ok) and on manual runs. Feature and hotfix PRs never run it; a hotfix is
+  # covered once its main -> develop sync PR is merged and develop is pushed. ci-ok accepts "skipped".
   inttest:
     needs: plan
     if: >-
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-        (github.base_ref == 'main' || needs.plan.outputs.go == 'true'))
+        github.base_ref == 'main' && github.head_ref == 'develop')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

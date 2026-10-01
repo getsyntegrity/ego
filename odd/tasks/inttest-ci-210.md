@@ -111,3 +111,7 @@ Checks: `cd inttest && go vet ./... && go test -count=1 -json ./...` gives 24 to
 ## Next step
 
 Review and merge, in order: #279 (A), #280 (B), #281 (C). After that, the housekeeping waits for the user's confirmation: close #278 without merging, delete `ci/integration-workflow`, and comment on #210.
+
+### Trigger decision (user, 2026-10-01)
+
+The user decided that integration tests never run on feature or hotfix pull requests. The `inttest` job now runs on every push to `develop` (each merge), on the `develop` to `main` release pull request (the gate of `main`, through `ci-ok`) and on `workflow_dispatch`. The rejected alternative was running it only on push to `develop`: that leaves no gate, so a release could reach `main` while `develop` is red. The last run where this PR itself executed the job is https://github.com/getsyntegrity/ego/actions/runs/36925097941. After this change a feature PR skips the job by design.
