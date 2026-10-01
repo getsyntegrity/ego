@@ -34,7 +34,7 @@ func TestNewPrincipal(t *testing.T) {
 	specs.Describe(t, "NewPrincipal builds an opaque identity reference", func(s *specs.Spec) {
 		s.It("id required", func(ctx *specs.Context) {
 			_, err := command.NewPrincipal("")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidPrincipal))
 		})
 
 		s.It("id only, kind absent", func(ctx *specs.Context) {

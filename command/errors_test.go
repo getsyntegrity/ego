@@ -34,11 +34,12 @@ import (
 
 func TestErrorClassification(t *testing.T) {
 	specs.Describe(t, "NewError classifies an error as exactly one outcome sentinel", func(s *specs.Spec) {
-		cases := []struct {
+		type classification struct {
 			name     string
 			sentinel error
 			other    []error
-		}{
+		}
+		cases := []classification{
 			{
 				name:     "rejected",
 				sentinel: command.ErrRejected,
@@ -61,16 +62,14 @@ func TestErrorClassification(t *testing.T) {
 			},
 		}
 
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				err := command.NewError(tc.sentinel, "boom", nil)
-				ctx.Expect(err).To(specs.Not(specs.BeNil()))
-				ctx.Expect(err).To(specs.MatchError(tc.sentinel))
-				for _, o := range tc.other {
-					ctx.Expect(err).To(specs.Not(specs.MatchError(o)))
-				}
-			})
-		}
+		specs.Table(s, cases, func(tc classification) string { return tc.name }, func(ctx *specs.Context, tc classification) {
+			err := command.NewError(tc.sentinel, "boom", nil)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tc.sentinel))
+			for _, o := range tc.other {
+				ctx.Expect(err).To(specs.Not(specs.MatchError(o)))
+			}
+		})
 	})
 }
 

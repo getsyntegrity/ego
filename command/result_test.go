@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -40,6 +41,15 @@ func mustMetadata(ctx *specs.Context) command.Metadata {
 	md, err := command.NewMetadata(op)
 	ctx.Expect(err).To(specs.BeNil())
 	return md
+}
+
+// equalProto matches a proto.Message that proto.Equal reports equal to want. ToEqual would compare the
+// internal state of the generated struct, and its failure would print that state instead of the fields.
+func equalProto(want proto.Message) specs.Matcher {
+	return specs.Satisfy("proto-equal to "+prototext.Format(want), func(a any) bool {
+		got, ok := a.(proto.Message)
+		return ok && proto.Equal(want, got)
+	})
 }
 
 func TestOutcomeZeroValueInvalid(t *testing.T) {
@@ -99,25 +109,16 @@ func TestOutcomeKindsMutuallyExclusive(t *testing.T) {
 		}
 
 		// One case per kind, named by its string, so a duplicated value says which kind collided.
-		for _, k := range kinds {
-			s.It(k.String(), func(ctx *specs.Context) {
-				sharing := 0
-				for _, other := range kinds {
-					if other == k {
-						sharing++
-					}
-				}
-				ctx.Expect(sharing).ToEqual(1)
-			})
-		}
+		specs.Table(s, kinds, command.Outcome.String, func(ctx *specs.Context, k command.Outcome) {
+			ctx.Expect(kinds).To(specs.ExactlyNElements(1, specs.Equal(k)))
+		})
 
 		s.It("all kinds together are six distinct values", func(ctx *specs.Context) {
-			seen := map[command.Outcome]bool{}
+			seen := map[command.Outcome]struct{}{}
 			for _, k := range kinds {
-				ctx.Expect(seen[k]).To(specs.BeFalse())
-				seen[k] = true
+				seen[k] = struct{}{}
 			}
-			ctx.Expect(len(seen)).ToEqual(6)
+			ctx.Expect(seen).To(specs.HaveLen(6))
 		})
 	})
 }
@@ -146,7 +147,7 @@ func TestNewSuccessWithState(t *testing.T) {
 
 			got, ok := r.State()
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(proto.Equal(state, got)).To(specs.BeTrue())
+			ctx.Expect(got).To(equalProto(state))
 
 			ctx.Expect(r.Err()).To(specs.BeNil())
 		})

@@ -23,6 +23,7 @@
 package command_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -38,36 +39,21 @@ func TestNewOperationID(t *testing.T) {
 			ctx.Expect(op).ToEqual(command.OperationID("order-123"))
 		})
 
-		s.It("empty rejected", func(ctx *specs.Context) {
-			_, err := command.NewOperationID("")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-		})
-
-		s.It("not valid UTF-8 rejected", func(ctx *specs.Context) {
-			_, err := command.NewOperationID(string([]byte{0xff, 0xfe}))
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-		})
-
-		s.It("leading or trailing whitespace rejected", func(ctx *specs.Context) {
-			_, err := command.NewOperationID(" order-123")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-
-			_, err = command.NewOperationID("order-123 ")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-		})
-
-		s.It("control rune rejected", func(ctx *specs.Context) {
-			_, err := command.NewOperationID("order-123\n")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-		})
-
-		s.It("exceeds max length rejected", func(ctx *specs.Context) {
-			long := make([]byte, 129)
-			for i := range long {
-				long[i] = 'a'
+		type rejection struct {
+			name   string
+			inputs []string
+		}
+		specs.Table(s, []rejection{
+			{name: "empty rejected", inputs: []string{""}},
+			{name: "not valid UTF-8 rejected", inputs: []string{string([]byte{0xff, 0xfe})}},
+			{name: "leading or trailing whitespace rejected", inputs: []string{" order-123", "order-123 "}},
+			{name: "control rune rejected", inputs: []string{"order-123\n"}},
+			{name: "exceeds max length rejected", inputs: []string{strings.Repeat("a", 129)}},
+		}, func(r rejection) string { return r.name }, func(ctx *specs.Context, r rejection) {
+			for _, in := range r.inputs {
+				_, err := command.NewOperationID(in)
+				ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
 			}
-			_, err := command.NewOperationID(string(long))
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 		})
 
 		s.It("interior whitespace accepted", func(ctx *specs.Context) {
@@ -83,11 +69,11 @@ func TestGenerateOperationID(t *testing.T) {
 		s.It("returns non-empty ids that differ and pass NewOperationID validation", func(ctx *specs.Context) {
 			op1, err := command.GenerateOperationID()
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(string(op1) == "").To(specs.BeFalse())
+			ctx.Expect(string(op1)).To(specs.Not(specs.BeEmpty()))
 
 			op2, err := command.GenerateOperationID()
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(string(op2) == "").To(specs.BeFalse())
+			ctx.Expect(string(op2)).To(specs.Not(specs.BeEmpty()))
 
 			ctx.Expect(op1).To(specs.NotEqual(op2))
 
@@ -113,7 +99,7 @@ func TestGenerateOperationIDUniqueness(t *testing.T) {
 				}
 				seen[op] = struct{}{}
 			}
-			ctx.Expect(duplicates).To(specs.BeNil())
+			ctx.Expect(duplicates).To(specs.BeEmpty())
 		})
 	})
 }
