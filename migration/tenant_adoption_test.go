@@ -194,7 +194,7 @@ func connectedEventsStore(t testing.TB) *testkit.EventStore {
 	return store
 }
 
-func connectedSnapshotStore(t testing.TB) *testkit.SnapshotStore {
+func connectedSnapshotStoreTB(t testing.TB) *testkit.SnapshotStore {
 	t.Helper()
 	store := testkit.NewSnapshotStore()
 	if err := store.Connect(context.Background()); err != nil {
@@ -399,7 +399,7 @@ func TestTenantAdopterDryRunWritesNothing(t *testing.T) {
 		s.It("counts the copy without writing to any store", func(ctx *specs.Context) {
 			bg := context.Background()
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			stateStore := connectedStateStore(ctx.T)
 
 			const id = "dry-run-1"
@@ -441,7 +441,7 @@ func TestTenantAdopterRealRunCopiesAndKeepsSource(t *testing.T) {
 		s.It("copies events, snapshot and state and leaves the source intact", func(ctx *specs.Context) {
 			bg := context.Background()
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			stateStore := connectedStateStore(ctx.T)
 
 			const id = "real-run-1"
@@ -492,7 +492,7 @@ func TestTenantAdopterStampsTargetTenantMetadata(t *testing.T) {
 		s.It("stamps the event, the snapshot and the durable state", func(ctx *specs.Context) {
 			bg := context.Background()
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			stateStore := connectedStateStore(ctx.T)
 
 			const id = "stamp-1"
@@ -955,7 +955,7 @@ func TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite(t *testing.T) {
 	specs.Describe(t, "snapshot verification catches a corrupted state payload behind a matching sequence number", func(s *specs.Spec) {
 		s.It("fails the aggregate, names its id and keeps the source snapshot", func(ctx *specs.Context) {
 			bg := context.Background()
-			base := connectedSnapshotStore(ctx.T)
+			base := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "corrupt-snapshot-1"
 			source := persistence.Unscoped()
@@ -1171,7 +1171,7 @@ func TestTenantAdopterSourceDeletingReRunIsIdempotent(t *testing.T) {
 		s.It("reports the emptied source as already migrated and writes nothing", func(ctx *specs.Context) {
 			bg := context.Background()
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "delete-rerun-1"
 			source := persistence.Unscoped()
@@ -1222,7 +1222,7 @@ func TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent(t *testing.T) {
 	specs.Describe(t, "a snapshot-only re-run after source deletion is already present, not a failure", func(s *specs.Spec) {
 		s.It("reports the aggregate as already present", func(ctx *specs.Context) {
 			bg := context.Background()
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "snapshot-rerun-1"
 			source := persistence.Unscoped()
@@ -1286,7 +1286,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 		})
 
 		s.It("target snapshot without tenant metadata fails closed", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "untagged-target-snapshot"
 			seedSnapshot(ctx.T, snapshotStore, target, newLegacySnapshot(ctx.T, id, 1, 100))
 
@@ -1298,7 +1298,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 		})
 
 		s.It("unrelated target owned by the assigned tenant is not proof of adoption", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "owned-target-snapshot"
 			snap := newLegacySnapshot(ctx.T, id, 1, 100)
 			snap.TenantMetadata = tenancy.MarshalMetadata(acme)
@@ -1328,7 +1328,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 
 		s.It("neither source nor target is a missing-source failure", func(ctx *specs.Context) {
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 
 			report := run(ctx.T, eventsStore, snapshotStore, "nowhere")
 			ctx.Expect(report.Failed).ToEqual(1)
@@ -1387,7 +1387,7 @@ func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
 		source := persistence.Unscoped()
 
 		s.It("snapshot", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "later-snapshot"
 			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 5, 500))
 			unrelated := newLegacySnapshot(ctx.T, id, 6, 999)
@@ -1438,7 +1438,7 @@ func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
 		source := persistence.Unscoped()
 
 		s.It("snapshot with a different payload at the same position fails", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "same-seq-snapshot"
 			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 5, 500))
 			different := newLegacySnapshot(ctx.T, id, 5, 999)
@@ -1470,7 +1470,7 @@ func TestTenantAdopterSamePositionTargetClassification(t *testing.T) {
 		})
 
 		s.It("exact snapshot and durable state records are already present", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			stateStore := connectedStateStore(ctx.T)
 			const id = "exact-records"
 			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 5, 500))
@@ -1510,7 +1510,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		}
 
 		s.It("a record altered after adoption no longer matches its receipt", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "tampered-receipt"
 			adoptAndDelete(ctx, snapshotStore, id)
 
@@ -1529,7 +1529,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		})
 
 		s.It("a receipt for a different source scope is not proof", func(ctx *specs.Context) {
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "other-source-scope"
 			adoptAndDelete(ctx, snapshotStore, id)
 
@@ -1676,7 +1676,7 @@ func TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites(t *tes
 	specs.Describe(t, "a snapshot written to the source while it is deleted is never reported as deleted", func(s *specs.Spec) {
 		s.It("fails the aggregate and keeps the newer snapshot", func(ctx *specs.Context) {
 			source := persistence.Unscoped()
-			base := connectedSnapshotStore(ctx.T)
+			base := connectedSnapshotStoreTB(ctx.T)
 			const id = "racing-snapshot"
 			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 2, 200))
 
@@ -1708,7 +1708,7 @@ func TestTenantAdopterDeletesSourceOfVerifiedExistingTarget(t *testing.T) {
 		s.It("deletes the source and reports nothing as copied", func(ctx *specs.Context) {
 			source := persistence.Unscoped()
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "copy-then-delete"
 			seedEvents(ctx.T, eventsStore, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200))
@@ -1769,7 +1769,7 @@ func TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot(t *testing.T
 		s.It("fails the aggregate and keeps the replacement", func(ctx *specs.Context) {
 			source := persistence.Unscoped()
 			target := tenantScope(ctx.T, "acme")
-			base := connectedSnapshotStore(ctx.T)
+			base := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "replaced-snapshot"
 			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 4, 400))
@@ -1983,7 +1983,7 @@ func TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot(t *testi
 		s.It("keeps the other writer's snapshot", func(ctx *specs.Context) {
 			source := persistence.Unscoped()
 			target := tenantScope(ctx.T, "acme")
-			base := connectedSnapshotStore(ctx.T)
+			base := connectedSnapshotStoreTB(ctx.T)
 
 			const id = "raced-target-snapshot"
 			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 4, 400))
@@ -2354,7 +2354,7 @@ func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
 			{name: "another tenant's metadata", metadata: tenancy.MarshalMetadata(globex), wantErr: tenancy.ErrDenied},
 		}, func(tc tableCase) string { return tc.name }, func(ctx *specs.Context, tc tableCase) {
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "unprovable"
 			seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx, id, 100, tc.metadata))
 
@@ -2433,7 +2433,7 @@ func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T)
 		})
 
 		s.It("snapshot recreated at the same sequence", func(ctx *specs.Context) {
-			base := connectedSnapshotStore(ctx.T)
+			base := connectedSnapshotStoreTB(ctx.T)
 			const id = "recreated-snapshot"
 			seedSnapshot(ctx.T, base, source, newLegacySnapshot(ctx.T, id, 3, 300))
 
@@ -2636,7 +2636,7 @@ func TestTenantAdopterCountsSideEffectsOfAFailedAggregate(t *testing.T) {
 			target := tenantScope(ctx.T, "acme")
 
 			eventsStore := connectedEventsStore(ctx.T)
-			snapshotStore := connectedSnapshotStore(ctx.T)
+			snapshotStore := connectedSnapshotStoreTB(ctx.T)
 			const id = "partial-side-effects"
 			seedEvents(ctx.T, eventsStore, source, newLegacyEvent(ctx.T, id, 1, 100))
 			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 1, 100))
