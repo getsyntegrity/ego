@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
@@ -1620,36 +1621,35 @@ func TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites(t *testi
 		source := persistence.Unscoped()
 		target := tenantScope(t, "acme")
 
-		for _, tc := range []struct {
+		type tableCase struct {
 			name         string
 			onTargetRead bool
 			wantSource   int
-		}{
+		}
+		specs.Table(s, []tableCase{
 			{name: "a write after verification but before deletion prevents the deletion", onTargetRead: true, wantSource: 3},
 			{name: "a write racing the deletion is detected and not reported as success", onTargetRead: false, wantSource: 1},
-		} {
-			s.It(tc.name, func(ctx *specs.Context) {
-				base := connectedEventsStore(ctx.T)
-				id := "racing-" + uuid.NewString()
-				seedEvents(ctx.T, base, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200))
+		}, func(tc tableCase) string { return tc.name }, func(ctx *specs.Context, tc tableCase) {
+			base := connectedEventsStore(ctx.T)
+			id := "racing-" + uuid.NewString()
+			seedEvents(ctx.T, base, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 2, 200))
 
-				store := &racingEventsStore{EventsStore: base, source: source, target: target,
-					late: newLegacyEvent(ctx.T, id, 3, 300), onTargetRead: tc.onTargetRead}
-				adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
-					WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
+			store := &racingEventsStore{EventsStore: base, source: source, target: target,
+				late: newLegacyEvent(ctx.T, id, 3, 300), onTargetRead: tc.onTargetRead}
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+				WithEventsStore(store), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
 
-				report, err := adopter.Run(context.Background())
-				ctx.Expect(err).To(specs.BeNil())
-				// A source that changed during the run is not reported as deleted.
-				ctx.Expect(report.SourceDeleted).ToEqual(0)
-				ctx.Expect(report.Failed).ToEqual(1)
-				ctx.Expect(report.Failures).To(specs.HaveLen(1))
-				ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
+			report, err := adopter.Run(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
+			// A source that changed during the run is not reported as deleted.
+			ctx.Expect(report.SourceDeleted).ToEqual(0)
+			ctx.Expect(report.Failed).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
+			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
 
-				// The event written during the run still exists in the source.
-				ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 10, 10)).To(specs.HaveLen(tc.wantSource))
-			})
-		}
+			// The event written during the run still exists in the source.
+			ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 10, 10)).To(specs.HaveLen(tc.wantSource))
+		})
 	})
 }
 
@@ -1840,22 +1840,22 @@ func TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent(t *testing.T) {
 }
 
 // testFence is an AdoptionFence for tests: one blocking lock per (scope,
-// persistence id), with counters, the order locks were taken in, and
-// optional failure injection. A writer in a test that honors the fence
+// persistence id), with mock.Spy recorders for every acquire and release
+// (which also give the order locks were taken in), and optional failure
+// injection. A writer in a test that honors the fence
 // calls Acquire exactly like the adopter does.
 type testFence struct {
 	mu       sync.Mutex
 	locks    map[string]chan struct{}
-	acquired int
-	released int
-	order    []string
+	acquires *mock.Spy
+	releases *mock.Spy
 	failOn   string
 }
 
 var errTestFenceUnavailable = errors.New("test fence: unavailable")
 
 func newTestFence() *testFence {
-	return &testFence{locks: make(map[string]chan struct{})}
+	return &testFence{locks: make(map[string]chan struct{}), acquires: mock.NewSpy(), releases: mock.NewSpy()}
 }
 
 func testFenceKey(scope persistence.Scope, persistenceID string) string {
@@ -1887,17 +1887,12 @@ func (f *testFence) Acquire(ctx context.Context, scope persistence.Scope, persis
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	f.mu.Lock()
-	f.acquired++
-	f.order = append(f.order, key)
-	f.mu.Unlock()
+	f.acquires.Call(key)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			<-ch
-			f.mu.Lock()
-			f.released++
-			f.mu.Unlock()
+			f.releases.Call(key)
 		})
 	}, nil
 }
@@ -1907,9 +1902,17 @@ func (f *testFence) isHeld(scope persistence.Scope, persistenceID string) bool {
 }
 
 func (f *testFence) counts() (acquired, released int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.acquired, f.released
+	return f.acquires.CallCount(), f.releases.CallCount()
+}
+
+// order returns the keys of the acquired fences, in the order they were taken.
+func (f *testFence) order() []string {
+	calls := f.acquires.Calls()
+	keys := make([]string, len(calls))
+	for i, c := range calls {
+		keys[i], _ = c.Args[0].(string)
+	}
+	return keys
 }
 
 func TestNewTenantAdopterRequiresAFenceToWrite(t *testing.T) {
@@ -2190,7 +2193,8 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			defer hold()
 			store := seeded(ctx.T, "waiting")
-			waitCtx, cancel := context.WithTimeout(bg, 100*time.Millisecond)
+			// The deadline has already passed, so the wait ends at once instead of after a real delay.
+			waitCtx, cancel := context.WithDeadline(bg, time.Now().Add(-time.Second))
 			defer cancel()
 			report := run(ctx, fence, store, "waiting", waitCtx)
 			ctx.Expect(report.Failed).ToEqual(1)
@@ -2226,7 +2230,7 @@ func TestTenantAdopterAcquiresFencesInDeterministicOrder(t *testing.T) {
 				adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{"shared": to}),
 					WithEventsStore(store), WithPersistenceIDs("shared"), WithSourceScope(from), WithWriteEnabled(), WithAdoptionFence(fence))
 				mustAdopt(ctx.T, adopter)
-				return fence.order
+				return fence.order()
 			}
 
 			northToSouth := orderFor(north, "south")
@@ -2252,8 +2256,7 @@ func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetIsSource))
-			acquired, _ := fence.counts()
-			ctx.Expect(acquired).ToEqual(0)
+			ctx.Expect(fence.acquires.WasCalled()).To(specs.BeFalse())
 		})
 	})
 }
@@ -2341,28 +2344,27 @@ func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
 		acme := tenantScope(t, "acme")
 		globex := tenantContextOf(t, "globex")
 
-		for _, tc := range []struct {
+		type tableCase struct {
 			name     string
 			metadata map[string]string
 			wantErr  error
-		}{
+		}
+		specs.Table(s, []tableCase{
 			{name: "missing tenant metadata", metadata: nil, wantErr: tenancy.ErrInvalid},
 			{name: "another tenant's metadata", metadata: tenancy.MarshalMetadata(globex), wantErr: tenancy.ErrDenied},
-		} {
-			s.It(tc.name, func(ctx *specs.Context) {
-				eventsStore := connectedEventsStore(ctx.T)
-				snapshotStore := connectedSnapshotStore(ctx.T)
-				const id = "unprovable"
-				seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx, id, 100, tc.metadata))
+		}, func(tc tableCase) string { return tc.name }, func(ctx *specs.Context, tc tableCase) {
+			eventsStore := connectedEventsStore(ctx.T)
+			snapshotStore := connectedSnapshotStore(ctx.T)
+			const id = "unprovable"
+			seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx, id, 100, tc.metadata))
 
-				migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
-				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(migrator.Run(bg)).To(specs.MatchError(tc.wantErr))
+			migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(migrator.Run(bg)).To(specs.MatchError(tc.wantErr))
 
-				// No snapshot may be written without proven tenant metadata.
-				ctx.Expect(latestSnapshot(ctx.T, snapshotStore, acme, id)).To(specs.BeNil())
-			})
-		}
+			// No snapshot may be written without proven tenant metadata.
+			ctx.Expect(latestSnapshot(ctx.T, snapshotStore, acme, id)).To(specs.BeNil())
+		})
 	})
 }
 
