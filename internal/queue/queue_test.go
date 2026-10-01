@@ -22,43 +22,47 @@
 
 package queue
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
+)
 
 func TestQueueDequeueEmpty(t *testing.T) {
-	q := NewQueue()
-	if q.Dequeue() != nil {
-		t.Fatalf("dequeue empty queue returns non-nil")
-	}
+	specs.Describe(t, "Dequeue on an empty queue returns nothing", func(s *specs.Spec) {
+		s.It("returns nil", func(ctx *specs.Context) {
+			q := NewQueue()
+			ctx.Expect(q.Dequeue()).To(specs.BeNil())
+		})
+	})
 }
 
 func TestQueueLength(t *testing.T) {
-	q := NewQueue()
-	if q.Length() != 0 {
-		t.Fatalf("empty queue has non-zero length")
-	}
+	specs.Describe(t, "Length tracks the number of queued items", func(s *specs.Spec) {
+		s.It("is zero when new, grows on enqueue and shrinks on dequeue", func(ctx *specs.Context) {
+			q := NewQueue()
+			ctx.Expect(q.Length()).ToEqual(uint64(0))
 
-	q.Enqueue(1)
-	if q.Length() != 1 {
-		t.Fatalf("count of enqueue wrong, want %d, got %d.", 1, q.Length())
-	}
+			q.Enqueue(1)
+			ctx.Expect(q.Length()).ToEqual(uint64(1))
 
-	q.Dequeue()
-	if q.Length() != 0 {
-		t.Fatalf("count of dequeue wrong, want %d, got %d", 0, q.Length())
-	}
+			q.Dequeue()
+			ctx.Expect(q.Length()).ToEqual(uint64(0))
+		})
+	})
 }
 
 func TestQueueIsEmpty(t *testing.T) {
-	q := NewQueue()
-	if !q.IsEmpty() {
-		t.Fatalf("new queue should be empty")
-	}
-	q.Enqueue(1)
-	if q.IsEmpty() {
-		t.Fatalf("queue with item should not be empty")
-	}
-	q.Dequeue()
-	if !q.IsEmpty() {
-		t.Fatalf("queue after dequeue should be empty")
-	}
+	specs.Describe(t, "IsEmpty reports whether the queue holds items", func(s *specs.Spec) {
+		s.It("is true when new, false after enqueue and true again after dequeue", func(ctx *specs.Context) {
+			q := NewQueue()
+			ctx.Expect(q.IsEmpty()).To(specs.BeTrue())
+
+			q.Enqueue(1)
+			ctx.Expect(q.IsEmpty()).To(specs.BeFalse())
+
+			q.Dequeue()
+			ctx.Expect(q.IsEmpty()).To(specs.BeTrue())
+		})
+	})
 }
