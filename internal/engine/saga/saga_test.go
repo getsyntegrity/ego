@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -45,12 +45,38 @@ import (
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
+
+// sagaStoreMock stands in for persistence.EventsStore in the cases that drive
+// PreStart and persistence failures. It forwards only the methods those cases
+// reach to a go-specs controller; any other method panics on the nil embedded
+// interface, so an unexpected call is loud.
+type sagaStoreMock struct {
+	persistence.EventsStore
+	c *mock.Controller
+}
+
+func (m sagaStoreMock) Ping(ctx context.Context) error {
+	return m.c.Method("Ping").Call(ctx).Err(0)
+}
+
+func (m sagaStoreMock) GetLatestEvent(ctx context.Context, scope persistence.Scope, id string) (*egopb.Event, error) {
+	r := m.c.Method("GetLatestEvent").Call(ctx, scope, id)
+	return mock.Value[*egopb.Event](r, 0), r.Err(1)
+}
+
+func (m sagaStoreMock) ReplayEvents(ctx context.Context, scope persistence.Scope, id string, from, to, limit uint64) ([]*egopb.Event, error) {
+	r := m.c.Method("ReplayEvents").Call(ctx, scope, id, from, to, limit)
+	return mock.Value[[]*egopb.Event](r, 0), r.Err(1)
+}
+
+func (m sagaStoreMock) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+	return m.c.Method("WriteEvents").Call(ctx, scope, events, precondition).Err(0)
+}
 
 func TestSagaStatus_String(t *testing.T) {
 	specs.Describe(t, "SagaStatus.String names each lifecycle status", func(s *specs.Spec) {
@@ -75,9 +101,11 @@ func TestSagaActor(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		// A saga with no behavior fails before it touches the store.
+		ctrl.Method("Ping").Expect(mock.Any()).Never()
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Never()
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -104,8 +132,9 @@ func TestSagaActor(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(assert.AnError)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -136,9 +165,10 @@ func TestSagaActor(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, assert.AnError)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -174,10 +204,11 @@ func TestSagaActor(t *testing.T) {
 			SequenceNumber: 3,
 		}
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(3), uint64(3)).Return(nil, assert.AnError)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		ctrl.Method("ReplayEvents").Expect(mock.Any(), persistence.Unscoped(), sagaID, uint64(1), uint64(3), uint64(3)).Return(nil, assert.AnError)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -216,10 +247,11 @@ func TestSagaActor(t *testing.T) {
 		}
 		latestEvent := &egopb.Event{PersistenceId: sagaID, SequenceNumber: 1}
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{badEvent}, nil)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		ctrl.Method("ReplayEvents").Expect(mock.Any(), persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{badEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -259,10 +291,11 @@ func TestSagaActor(t *testing.T) {
 		}
 		latestEvent := &egopb.Event{PersistenceId: sagaID, SequenceNumber: 1}
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{replayedEvent}, nil)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		ctrl.Method("ReplayEvents").Expect(mock.Any(), persistence.Unscoped(), sagaID, uint64(1), uint64(1), uint64(1)).Return([]*egopb.Event{replayedEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -307,10 +340,11 @@ func TestSagaActor(t *testing.T) {
 		}
 		latestEvent := &egopb.Event{PersistenceId: sagaID, SequenceNumber: 2}
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), sagaID, uint64(1), uint64(2), uint64(2)).Return([]*egopb.Event{replayedEvent}, nil)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(latestEvent, nil)
+		ctrl.Method("ReplayEvents").Expect(mock.Any(), persistence.Unscoped(), sagaID, uint64(1), uint64(2), uint64(2)).Return([]*egopb.Event{replayedEvent}, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -350,7 +384,6 @@ func TestSagaActor(t *testing.T) {
 			t.Fatal("ApplyEvent was not called during recovery")
 		}
 
-		eventStore.AssertExpectations(t)
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
@@ -972,9 +1005,10 @@ func TestSagaActor(t *testing.T) {
 		ctx := context.TODO()
 		sagaID := uuid.NewString()
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -1041,17 +1075,19 @@ func TestSagaActor(t *testing.T) {
 		sagaID := uuid.NewString()
 
 		writeEventsCalled := make(chan struct{}, 1)
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), sagaID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(context.Context, persistence.Scope, []*egopb.Event, persistence.WritePrecondition) {
+		ctrl := mock.NewController(t)
+		eventStore := sagaStoreMock{c: ctrl}
+		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
+		ctrl.Method("WriteEvents").Expect(mock.Any(), persistence.Unscoped(), mock.Any(), mock.Any()).
+			Do(func([]any) []any {
 				select {
 				case writeEventsCalled <- struct{}{}:
 				default:
 				}
+				return []any{assert.AnError}
 			}).
-			Return(assert.AnError)
+			AnyTimes()
 
 		stream := eventstream.New()
 		defer stream.Close()
@@ -1092,7 +1128,6 @@ func TestSagaActor(t *testing.T) {
 		}
 
 		require.True(t, pid.IsRunning())
-		eventStore.AssertExpectations(t)
 
 		stream.Close()
 		require.NoError(t, actorSystem.Stop(ctx))
