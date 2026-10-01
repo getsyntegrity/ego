@@ -27,444 +27,202 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	goakt "github.com/tochemey/goakt/v4/actor"
+	"github.com/tochemey/goakt/v4/extension"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 )
 
+// janitorSentinelID names the request every retention case sends last. The
+// janitor handles its mailbox in order, so once the sentinel's deletes reach
+// the stores the case's own request has been handled completely, including its
+// retries. That is what lets a case assert that something was skipped without
+// sleeping to give a skipped delete time to show up.
+const janitorSentinelID = "sentinel"
+
+// retentionCase is one applyRetentionRequest and the deletes the janitor must
+// issue for it. Deletes are listed by the sequence number they delete up to.
+type retentionCase struct {
+	name string
+	req  applyRetentionRequest
+	// withSnapshotStore registers a snapshot store extension.
+	withSnapshotStore bool
+	eventDeletes      []uint64
+	snapshotDeletes   []uint64
+	// eventsErr and snapshotsErr make every attempt of the matching delete fail,
+	// so the janitor retries it until the attempts run out.
+	eventsErr    error
+	snapshotsErr error
+}
+
+// sentinelCalls counts the calls the janitor made on method for the sentinel request.
+func sentinelCalls(ctrl *mock.Controller, method string) int {
+	count := 0
+	for _, call := range ctrl.Method(method).Calls() {
+		if call.Args[2] == janitorSentinelID {
+			count++
+		}
+	}
+	return count
+}
+
+// expectDeletes declares the deletes of one persistence ID on method. A failing
+// delete is attempted once more than the retry budget before the janitor gives up.
+func expectDeletes(ctrl *mock.Controller, method, persistenceID string, upTo []uint64, failure error) {
+	attempts := 1
+	if failure != nil {
+		attempts = defaultMaxRetries + 1
+	}
+	for _, n := range upTo {
+		ctrl.Method(method).
+			Expect(mock.Any(), persistence.Unscoped(), persistenceID, n).
+			Times(attempts).Return(failure)
+	}
+}
+
 func TestEventsJanitorActor(t *testing.T) {
-	t.Run("deletes events on snapshot with no retention count", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "eventsJanitorActor deletes old events and snapshots per the retention request and survives a failing store", func(s *specs.Spec) {
+		specs.Table(s, []retentionCase{
+			{
+				name:         "deletes events on snapshot with no retention count",
+				req:          applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteEventsOnSnapshot: true},
+				eventDeletes: []uint64{10},
+			},
+			{
+				// eventsCounter=10, retentionCount=3 => deleteUpTo = 10-3 = 7
+				name:         "deletes events with retention count",
+				req:          applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteEventsOnSnapshot: true, eventsRetentionCount: 3},
+				eventDeletes: []uint64{7},
+			},
+			{
+				// eventsCounter=2, retentionCount=5 => deleteUpTo=0, no delete call
+				name: "skips event deletion when retention count exceeds counter",
+				req:  applyRetentionRequest{eventsCounter: 2, snapshotInterval: 5, deleteEventsOnSnapshot: true, eventsRetentionCount: 5},
+			},
+			{
+				// eventsCounter=10, snapshotInterval=5 => previousSnapshotSeqNr = 10-5 = 5
+				name:              "deletes snapshots on snapshot",
+				req:               applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteSnapshotsOnSnapshot: true},
+				withSnapshotStore: true,
+				snapshotDeletes:   []uint64{5},
+			},
+			{
+				// eventsCounter=5, snapshotInterval=5 => 5 > 5 is false, skip
+				name:              "skips snapshot deletion when counter does not exceed interval",
+				req:               applyRetentionRequest{eventsCounter: 5, snapshotInterval: 5, deleteSnapshotsOnSnapshot: true},
+				withSnapshotStore: true,
+			},
+			{
+				name:         "logs error and continues when event deletion fails after retries",
+				req:          applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteEventsOnSnapshot: true},
+				eventDeletes: []uint64{10},
+				eventsErr:    errEventsStoreDown,
+			},
+			{
+				name:              "logs error and continues when snapshot deletion fails after retries",
+				req:               applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteSnapshotsOnSnapshot: true},
+				withSnapshotStore: true,
+				snapshotDeletes:   []uint64{5},
+				snapshotsErr:      errEventsStoreDown,
+			},
+			{
+				name:              "handles both event and snapshot deletion together",
+				req:               applyRetentionRequest{eventsCounter: 10, snapshotInterval: 5, deleteEventsOnSnapshot: true, deleteSnapshotsOnSnapshot: true},
+				withSnapshotStore: true,
+				eventDeletes:      []uint64{10},
+				snapshotDeletes:   []uint64{5},
+			},
+		}, func(c retentionCase) string { return c.name }, func(ctx *specs.Context, c retentionCase) {
+			ctrl := mock.NewController(ctx)
+			eventStore := enginetest.NewEventsStoreMock(ctrl)
+			pingAnyTimes(ctrl)
+			expectDeletes(ctrl, "DeleteEvents", "entity-1", c.eventDeletes, c.eventsErr)
+			expectDeletes(ctrl, "DeleteEvents", janitorSentinelID, []uint64{1}, nil)
 
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			eventStream := newClosingEventStream(ctx)
+			exts := []extension.Extension{
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			}
+			var snapshotCtrl *mock.Controller
+			if c.withSnapshotStore {
+				snapshotCtrl = mock.NewController(ctx)
+				snapshotStore := enginetest.NewSnapshotStoreMock(snapshotCtrl)
+				snapshotCtrl.Method("Ping").Expect(mock.Any()).AnyTimes().Return(nil)
+				expectDeletes(snapshotCtrl, "DeleteSnapshots", "entity-1", c.snapshotDeletes, c.snapshotsErr)
+				expectDeletes(snapshotCtrl, "DeleteSnapshots", janitorSentinelID, []uint64{1}, nil)
+				exts = append(exts, extensions.NewSnapshotStore(snapshotStore))
+			}
+			system := startEventsSystem(ctx, "TestRetentionSystem", 1, exts...)
 
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+			pid, err := system.Spawn(context.Background(), "retention-test", newEventsJanitorActor())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
 
-		pause.For(time.Second)
+			req := c.req
+			req.scope = persistence.Unscoped()
+			req.persistenceID = "entity-1"
+			ctx.Expect(goakt.Tell(context.Background(), pid, &req)).To(specs.BeNil())
 
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                  persistence.Unscoped(),
-			persistenceID:          "entity-1",
-			eventsCounter:          10,
-			snapshotInterval:       5,
-			deleteEventsOnSnapshot: true,
+			sentinel := applyRetentionRequest{
+				scope:                     persistence.Unscoped(),
+				persistenceID:             janitorSentinelID,
+				eventsCounter:             1,
+				deleteEventsOnSnapshot:    true,
+				deleteSnapshotsOnSnapshot: true,
+			}
+			ctx.Expect(goakt.Tell(context.Background(), pid, &sentinel)).To(specs.BeNil())
+			waitForSentinel(ctx, ctrl, "DeleteEvents")
+			if snapshotCtrl != nil {
+				waitForSentinel(ctx, snapshotCtrl, "DeleteSnapshots")
+			}
+
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
 		})
-		require.NoError(t, err)
 
-		pause.For(time.Second)
-
-		assert.True(t, pid.IsRunning())
-		eventStore.AssertExpectations(t)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("deletes events with retention count", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		// eventsCounter=10, retentionCount=3 => deleteUpTo = 10-3 = 7
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(7)).Return(nil)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+		s.It("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(ctx *specs.Context) {
+			ctrl := mock.NewController(ctx)
+			eventStore := enginetest.NewEventsStoreMock(ctrl)
+			pingAnyTimes(ctrl)
+			eventStream := newClosingEventStream(ctx)
+			system := startEventsSystem(ctx, "TestJanitorMistypedSnapshotSystem", 1,
 				extensions.NewEventsStore(eventStore),
 				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID})
 
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                  persistence.Unscoped(),
-			persistenceID:          "entity-1",
-			eventsCounter:          10,
-			snapshotInterval:       5,
-			deleteEventsOnSnapshot: true,
-			eventsRetentionCount:   3,
+			pid, err := system.Spawn(context.Background(), "retention-mistyped-snapshot", newEventsJanitorActor())
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrMissingRequiredExtensions))
+			ctx.Expect(pid).To(specs.BeNil())
 		})
-		require.NoError(t, err)
 
-		pause.For(time.Second)
+		s.It("marks unhandled messages as unhandled", func(ctx *specs.Context) {
+			ctrl := mock.NewController(ctx)
+			eventStore := enginetest.NewEventsStoreMock(ctrl)
+			pingAnyTimes(ctrl)
+			eventStream := newClosingEventStream(ctx)
+			system := startEventsSystem(ctx, "TestRetentionSystem", 1,
+				extensions.NewEventsStore(eventStore), extensions.NewEventsStream(eventStream))
 
-		assert.True(t, pid.IsRunning())
-		eventStore.AssertExpectations(t)
+			pid, err := system.Spawn(context.Background(), "retention-test", newEventsJanitorActor())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("skips event deletion when retention count exceeds counter", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		// eventsCounter=2, retentionCount=5 => deleteUpTo=0, no delete call
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                  persistence.Unscoped(),
-			persistenceID:          "entity-1",
-			eventsCounter:          2,
-			snapshotInterval:       5,
-			deleteEventsOnSnapshot: true,
-			eventsRetentionCount:   5,
+			reply, err := goakt.Ask(context.Background(), pid, &egopb.NoReply{}, 500*time.Millisecond)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(reply).To(specs.BeNil())
 		})
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		assert.True(t, pid.IsRunning())
-		eventStore.AssertNotCalled(t, "DeleteEvents", mock.Anything, mock.Anything, mock.Anything)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
 	})
-
-	t.Run("deletes snapshots on snapshot", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		// eventsCounter=10, snapshotInterval=5 => previousSnapshotSeqNr = 10-5 = 5
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                     persistence.Unscoped(),
-			persistenceID:             "entity-1",
-			eventsCounter:             10,
-			snapshotInterval:          5,
-			deleteSnapshotsOnSnapshot: true,
-		})
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		assert.True(t, pid.IsRunning())
-		snapshotStore.AssertExpectations(t)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("skips snapshot deletion when counter does not exceed interval", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// eventsCounter=5, snapshotInterval=5 => 5 > 5 is false, skip
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                     persistence.Unscoped(),
-			persistenceID:             "entity-1",
-			eventsCounter:             5,
-			snapshotInterval:          5,
-			deleteSnapshotsOnSnapshot: true,
-		})
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		assert.True(t, pid.IsRunning())
-		snapshotStore.AssertNotCalled(t, "DeleteSnapshots", mock.Anything, mock.Anything, mock.Anything)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("logs error and continues when event deletion fails after retries", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(assert.AnError)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                  persistence.Unscoped(),
-			persistenceID:          "entity-1",
-			eventsCounter:          10,
-			snapshotInterval:       5,
-			deleteEventsOnSnapshot: true,
-		})
-		require.NoError(t, err)
-
-		pause.For(3 * time.Second)
-
-		assert.True(t, pid.IsRunning())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("logs error and continues when snapshot deletion fails after retries", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(assert.AnError)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                     persistence.Unscoped(),
-			persistenceID:             "entity-1",
-			eventsCounter:             10,
-			snapshotInterval:          5,
-			deleteSnapshotsOnSnapshot: true,
-		})
-		require.NoError(t, err)
-
-		pause.For(3 * time.Second)
-
-		assert.True(t, pid.IsRunning())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("handles both event and snapshot deletion together", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe().Maybe()
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), "entity-1", uint64(10)).Return(nil)
-
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), "entity-1", uint64(5)).Return(nil)
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, &applyRetentionRequest{
-			scope:                     persistence.Unscoped(),
-			persistenceID:             "entity-1",
-			eventsCounter:             10,
-			snapshotInterval:          5,
-			deleteEventsOnSnapshot:    true,
-			deleteSnapshotsOnSnapshot: true,
-		})
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		assert.True(t, pid.IsRunning())
-		eventStore.AssertExpectations(t)
-		snapshotStore.AssertExpectations(t)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestJanitorMistypedSnapshotSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-mistyped-snapshot", newEventsJanitorActor())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("marks unhandled messages as unhandled", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestRetentionSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "retention-test", newEventsJanitorActor())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &egopb.NoReply{}, 5*time.Second)
-		require.Error(t, err)
-		assert.Nil(t, reply)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+}
+
+// waitForSentinel waits until the janitor has issued the sentinel's delete on
+// method. A failing delete retries with the production backoff, which is real
+// time of about a second, so the wait is bounded generously.
+func waitForSentinel(ctx *specs.Context, ctrl *mock.Controller, method string) {
+	ctx.Eventually(func() any { return sentinelCalls(ctrl, method) }, specs.Equal(1),
+		specs.WithTimeout(10*time.Second), specs.WithInterval(10*time.Millisecond))
 }
