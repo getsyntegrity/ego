@@ -24,9 +24,11 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 | `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
 | `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
 | `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds, vets and tests each one. |
+| `integration` | Calls the reusable workflow `integration.yml`, which runs the tests that need a real resource and proves they ran. It runs on every pull request to `main`, and on pull requests to `develop` only when integration code or its tooling changed. See "Integration tests" below. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
 | `api` | Compares the public API with `apidiff`. Against `develop` it only warns. Against the latest tag (pull requests to `main`) it fails when the API breaks and the release is not labelled `release:major`. |
 | `vuln` | `govulncheck`. It fails only when the code calls a vulnerable function. |
+| `unit-gate` | The unit-test rules of #204 over every Go file (no testify, no generated mocks, go-specs, no real resources in unit tests), plus the cheap static checks of the integration manifest, so a stale or unlisted integration test fails every pull request. |
 | `ci-ok` | Passes when every job above succeeded or was legitimately skipped. This is the single required status check. |
 
 The race detector is not used anywhere in this pipeline. The Go version comes from `.go-version` in every job, through the `go-setup` composite action, so nothing pins it by hand. `TEST_SHARDS`, `COVERAGE_MIN` and `TESTFLAGS` are set at the top of `ci.yml`; coverage is only reported for now (`COVERAGE_MIN` is `0`).
@@ -79,8 +81,73 @@ With no tag yet, the first release from `develop` is `v0.1.0`. The module path i
 
 Releases never run in parallel (`concurrency: release`, without cancellation).
 
+## Integration tests
+
+A test that needs a real resource, such as a database, does not belong to the unit lane (see [`testing/go-specs.md`](testing/go-specs.md)). The first example is `example/cluster/stores_postgres_test.go`: its `TestPostgresEventStore_*` tests call `t.Skip` when `EGO_EXAMPLE_POSTGRES_DSN` is unset. In a plain `go test` that is reported as `ok`, so a test that never ran looks exactly like one that passed. The integration lane exists to run those tests for real, and to fail when one of them does not.
+
+The lane is `.github/workflows/integration.yml`. It starts a `postgres:17-alpine` service, sets `EGO_EXAMPLE_POSTGRES_DSN` to `postgres://postgres:pg@localhost:5432/postgres?sslmode=disable`, and for each module and package in the manifest runs `go test -json -tags integration -run '^(TestA|TestB)$'`. The `-tags integration` flag is already there so that moving a test behind `//go:build integration` later needs no workflow change. The JSON output, a Markdown summary and the gate's verdict are uploaded as the `integration-report` artifact, and the summary is also shown on the run page.
+
+### When it runs
+
+- On every pull request to `main`, through the `integration` job of `ci.yml`, so `main` cannot receive a change without a green gate.
+- On a pull request to `develop` only when it touches `publisher/`, `example/cluster/`, `persistence/`, `compose/`, `test/compat/`, a `*integration*_test.go` file, the manifest, the gate tool or the workflow itself. The `plan` job computes this with a second `paths-filter` step.
+- On push to `main` and on demand (`workflow_dispatch`) when the workflow is run by itself.
+- Never on push to `develop`, and never in an ordinary feature build that touches none of those paths.
+
+The `integration` job is listed in the `needs` of `ci-ok`. A skipped job is accepted there, so branch protection does not change and a pull request that legitimately skips the lane is not blocked.
+
+### The manifest
+
+`.github/integration-suites.txt` lists every top-level test the lane must execute, one per line:
+
+```
+# module-dir | package-dir | TestName
+example/cluster | . | TestPostgresEventStore_Conformance
+```
+
+`module-dir` is the directory of the Go module that holds the test (`.` is the root module), `package-dir` is the package directory inside that module, and `TestName` is a top-level test function. Subtests are covered by their parent. Blank lines and lines starting with `#` are ignored. The unit is the test and not the package on purpose: a package entry would accept a package in which half of the tests skip.
+
+### What the gate rejects
+
+The gate is `.github/scripts/integrationgate`, built like `unitgate`. It exits with 1 and names the test when:
+
+- a listed test has no result in the `go test -json` output (it never ran), or its package failed to build or panicked;
+- a listed test was skipped (usually an unset DSN) or failed;
+- a listed test is no longer declared in the `_test.go` files of its package (a stale entry, for example after a rename);
+- a top-level test in a file built with `//go:build integration` is not listed (an orphan). This stops a test that moves behind the tag from running nowhere;
+- the manifest is malformed (wrong number of fields, a name that is not `TestXxx`, a directory that leaves the repository) or lists the same suite twice.
+
+The static checks (parse, stale, orphan) also run in the `unit-gate` job on every pull request, with `go run ./.github/scripts/integrationgate -check-manifest`, so they do not wait for a pull request that happens to run the lane.
+
+### Adding a suite
+
+1. Write the test with go-specs as usual. If it needs a resource other than the Postgres service, add the service and its environment variable to `integration.yml`.
+2. Add one line per top-level test to `.github/integration-suites.txt`.
+3. Run `go run ./.github/scripts/integrationgate -check-manifest` and fix what it reports.
+4. If the test file lives in a new package of a module, nothing else changes: the workflow reads the packages from the manifest with `integrationgate -plan`.
+
+### Running it locally
+
+```sh
+docker run -d --rm --name ego-pg -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:17-alpine
+export EGO_EXAMPLE_POSTGRES_DSN="postgres://postgres:pg@localhost:55432/postgres?sslmode=disable"
+
+mkdir -p /tmp/integration
+n=0
+while IFS=$'\t' read -r module dir run; do
+  n=$((n + 1))
+  (cd "$module" && go test -json -count=1 -tags integration -run "$run" "./$dir") > "/tmp/integration/test-$n.json"
+done < <(go run ./.github/scripts/integrationgate -plan)
+
+go run ./.github/scripts/integrationgate -summary /tmp/integration/summary.md /tmp/integration/test-*.json
+docker stop ego-pg
+```
+
+Unset the DSN and run the same commands to see the gate fail with a skipped test for each suite. `go test ./.github/scripts/integrationgate` runs the gate's own tests; they use an in-memory file tree and touch no database.
+
 ## Other workflows
 
+- `integration.yml` is the integration lane described above. It is called by `ci.yml`, and it also runs by itself on push to `main` and on demand.
 - `security.yml` runs CodeQL and a strict `govulncheck` on pushes to `develop`, on a nightly schedule and on demand. It warns; it does not block pull requests.
 - `go-sdk-update.yml` is manual. Run it from the Actions tab with a Go version (or `latest`). It runs `.github/scripts/go-sdk-update.sh`, which rewrites `.go-version` and the `toolchain` line of every `go.mod`, and opens a pull request to `develop`. Tick `raise_min` only when the minimum Go version for consumers should also move.
 - `.github/dependabot.yml` opens weekly Go dependency pull requests (root and every nested module) and monthly GitHub Actions updates, all against `develop` and labelled `kind/deps`.

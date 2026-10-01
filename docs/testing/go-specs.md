@@ -25,6 +25,8 @@ cluster (#201). It also rules out real time used as synchronization: no `time.Sl
 When the code under test depends on one of those, replace the dependency with a go-specs mock (next section).
 A test that genuinely needs the real resource is not a unit test. It belongs to the component or integration
 lane, and `unit-migration.md` lists it as out of phase.
+The integration lane and the manifest of tests it must execute are described in
+[`docs/ci.md`](../ci.md#integration-tests).
 
 In-memory implementations that already live in the repository, such as the `testkit` stores, are not
 external resources. A test may use one when what it checks is the behavior on top of the store and not the
