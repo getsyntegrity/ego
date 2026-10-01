@@ -225,6 +225,36 @@ rows follow the same rule. List the old and new names of the cases a migration P
 The top-level `Test` name never changes, so CI's per-test sharding (`.github/scripts/test-matrix.sh`) is
 unaffected.
 
+## The unit-test gate
+
+CI runs `go run ./.github/scripts/unitgate` in the `unit-gate` job (#204). It reads every `.go` file of every
+module, nested ones included, and fails on:
+
+1. an import of `github.com/stretchr/testify/...`, in a test or a non-test file;
+2. an import of the generated `github.com/getsyntegrity/ego/mocks/...` packages from outside `mocks/`;
+3. a `*_test.go` file that declares `func TestXxx(t *testing.T)` and never calls `specs.Describe`. Fuzz
+   targets, benchmarks and `TestMain` do not count as tests here;
+4. a test file that calls something outside the process: `sql.Open`, `net.Dial*`, `net.Listen*`,
+   `exec.Command*`, `httptest.NewServer*`, a real goakt `actor.NewActorSystem`, `os.Create` in a file with no
+   `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file.
+
+Two plain-text lists hold the exceptions, one `path | note` per line, and the note is required:
+
+- `.github/unit-test-gate-resources.txt` is permanent. It lists the test files that are legitimately outside
+  the unit lane (architecture tests that run `go list`, the loopback websocket server, the Postgres-gated
+  example tests, the real actor-system tests), each with its reason. Add a line only with a reason a reviewer
+  can argue with.
+- `.github/unit-test-gate-pending.txt` is temporary. It lists the files that still break rules 1 to 3 while the
+  pull request named on the line migrates them. A listed file that no longer violates is reported as a
+  **warning** in the job log (stale entry), because migration PRs merge in parallel and a hard failure would turn
+  `develop` red after each one; the PR that migrates a file should still delete its lines. A stale line in the
+  resources list warns the same way. `-strict` turns every stale entry into an error: CI switches it on when the
+  pending list is empty, and the file is then deleted. A new violation that is not listed always fails.
+
+The gate's own tests are in `.github/scripts/unitgate` and use an in-memory file tree, so they touch no disk.
+Run it locally with `go test ./.github/scripts/unitgate && go run ./.github/scripts/unitgate` (add `-strict` to
+see stale entries as errors).
+
 ## Pilot validation (#203)
 
 Recorded on `develop` `0de4249` for `internal/engine/protocol.TestPreconditionFromRevisionMapsPerD4`, go1.26.6,
