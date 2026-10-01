@@ -38,6 +38,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -116,7 +117,7 @@ func startOnClock(ctx *specs.Context, runner *Runner, clk *manualClock) error {
 // clockedStores stubs the two stores for a runner that never reaches a real
 // shard: both answer Ping, and ShardOffsets answers shardOffsets and counts
 // its calls in pulls.
-func clockedStores(ctx *specs.Context, pulls *atomic.Int32, shardOffsets func() []any) (eventsStoreMock, offsetStoreMock) {
+func clockedStores(ctx *specs.Context, pulls *atomic.Int32, shardOffsets func() []any) (*enginetest.EventsStoreMock, *enginetest.OffsetStoreMock) {
 	offsetCtrl := mock.NewController(ctx)
 	offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
@@ -125,7 +126,7 @@ func clockedStores(ctx *specs.Context, pulls *atomic.Int32, shardOffsets func() 
 	eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
 		Do(func([]any) []any { pulls.Inc(); return shardOffsets() })
 
-	return eventsStoreMock{eventsCtrl}, offsetStoreMock{offsetCtrl}
+	return enginetest.NewEventsStoreMock(eventsCtrl), enginetest.NewOffsetStoreMock(offsetCtrl)
 }
 
 // seededShard is a shard holding one event, written to testkit stores. The
@@ -334,7 +335,7 @@ func TestRunnerOnAManualClock(t *testing.T) {
 			offsetCtrl := mock.NewController(ctx)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
-			runner := New("clock-ping", projection.NewDiscardHandler(), eventsStoreMock{eventsCtrl}, offsetStoreMock{offsetCtrl},
+			runner := New("clock-ping", projection.NewDiscardHandler(), enginetest.NewEventsStoreMock(eventsCtrl), enginetest.NewOffsetStoreMock(offsetCtrl),
 				WithClock(clk))
 
 			ctx.Expect(startOnClock(ctx, runner, clk)).To(haveMessage("failed to start the projection: fail ping"))

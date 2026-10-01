@@ -31,6 +31,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -63,7 +64,7 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 			// call to it (Ping, GetLatestEvent, WriteEvents, ...) is reported as an
 			// unexpected call, and spawnTenantScope must reject before the actor is
 			// ever created, let alone reaches a store.
-			store := eventsStoreMock{mock.NewController(ctx)}
+			store := enginetest.NewEventsStoreMock(mock.NewController(ctx))
 
 			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
@@ -86,7 +87,7 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 
 		s.It("DurableStateEntity refuses to spawn and touches no store", func(ctx *specs.Context) {
 			store := connectedEventsStore(ctx)
-			durableStore := stateStoreMock{mock.NewController(ctx)}
+			durableStore := enginetest.NewStateStoreMock(mock.NewController(ctx))
 
 			engine := newSpecsEngine(ctx, "Sample", store,
 				WithTenantResolver(&stubTenantResolver{id: "acme"}),

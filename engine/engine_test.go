@@ -1683,7 +1683,7 @@ func TestEngineAddEventPublishersGuards(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", store, WithLogger(DiscardLogger))
 			// not started; no expectation is declared, so any publisher call fails the case
-			pub := eventPublisherMock{mock.NewController(ctx)}
+			pub := enginetest.NewEventPublisherMock(mock.NewController(ctx))
 
 			ctx.Expect(engine.AddEventPublishers(pub)).To(specs.MatchError(ErrEngineNotStarted))
 		})
@@ -1702,7 +1702,7 @@ func TestEngineAddStatePublishersGuards(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", store, WithLogger(DiscardLogger))
 			// not started; no expectation is declared, so any publisher call fails the case
-			pub := statePublisherMock{mock.NewController(ctx)}
+			pub := enginetest.NewStatePublisherMock(mock.NewController(ctx))
 
 			ctx.Expect(engine.AddStatePublishers(pub)).To(specs.MatchError(ErrEngineNotStarted))
 		})
@@ -1734,7 +1734,7 @@ func TestEngineAddEventPublishers(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", store, WithLogger(DiscardLogger))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddEventPublishers(eventPublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddEventPublishers(enginetest.NewEventPublisherMock(ctrl))).To(specs.BeNil())
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
@@ -1765,12 +1765,12 @@ func TestEnginePublisherIdleCPU(t *testing.T) {
 			eventCtrl := mock.NewController(t)
 			eventCtrl.Method("ID").Expect().Return("eGo.test.EventPublisher").AnyTimes()
 			eventCtrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
-			eventPub := eventPublisherMock{eventCtrl}
+			eventPub := enginetest.NewEventPublisherMock(eventCtrl)
 
 			stateCtrl := mock.NewController(t)
 			stateCtrl.Method("ID").Expect().Return("eGo.test.StatePublisher").AnyTimes()
 			stateCtrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
-			statePub := statePublisherMock{stateCtrl}
+			statePub := enginetest.NewStatePublisherMock(stateCtrl)
 
 			engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
 			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
@@ -1823,7 +1823,7 @@ func TestEngineAddStatePublishers(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddStatePublishers(statePublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddStatePublishers(enginetest.NewStatePublisherMock(ctrl))).To(specs.BeNil())
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
@@ -1859,7 +1859,7 @@ func TestEngineStopReturnsEventPublisherCloseError(t *testing.T) {
 			engine, err := NewEngine(sys, cfg)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddEventPublishers(eventPublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddEventPublishers(enginetest.NewEventPublisherMock(ctrl))).To(specs.BeNil())
 
 			ctx.Expect(engine.Stop(bg)).To(specs.MatchError(closeErr))
 		})
@@ -1890,7 +1890,7 @@ func TestEngineStopReturnsStatePublisherCloseError(t *testing.T) {
 			engine, err := NewEngine(sys, cfg)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddStatePublishers(statePublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddStatePublishers(enginetest.NewStatePublisherMock(ctrl))).To(specs.BeNil())
 
 			ctx.Expect(engine.Stop(bg)).To(specs.MatchError(closeErr))
 		})
@@ -1915,7 +1915,7 @@ func TestEngineEventPublisherKeepsGoingOnPublishError(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", store, WithLogger(DiscardLogger))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddEventPublishers(eventPublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddEventPublishers(enginetest.NewEventPublisherMock(ctrl))).To(specs.BeNil())
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
@@ -1947,7 +1947,7 @@ func TestEngineStatePublisherKeepsGoingOnPublishError(t *testing.T) {
 
 			engine := newTestEngine(ctx.T, "Sample", nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
-			ctx.Expect(engine.AddStatePublishers(statePublisherMock{ctrl})).To(specs.BeNil())
+			ctx.Expect(engine.AddStatePublishers(enginetest.NewStatePublisherMock(ctrl))).To(specs.BeNil())
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
@@ -2370,7 +2370,7 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 				Expect(mock.Any(), persistence.Unscoped(), "pid-1").
 				Return(nil, errors.New("boom"))
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, nil, nil)
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), nil, nil)
 			err := engine.EraseEntity(bg, "pid-1", true)
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to get latest event for erasure"))
@@ -2385,7 +2385,7 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 				Expect(mock.Any(), persistence.Unscoped(), "pid-2", uint64(5)).
 				Return(errors.New("delete fail"))
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, nil, nil)
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), nil, nil)
 			err := engine.EraseEntity(bg, "pid-2", true)
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to delete events for erasure"))
@@ -2403,7 +2403,7 @@ func TestEngineEraseEntityStoreErrors(t *testing.T) {
 				Expect(mock.Any(), persistence.Unscoped(), "pid-3", uint64(7)).
 				Return(errors.New("snap fail"))
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, snapshotStoreMock{ctrl}, nil)
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), enginetest.NewSnapshotStoreMock(ctrl), nil)
 			err := engine.EraseEntity(bg, "pid-3", true)
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to delete snapshots for erasure"))
@@ -2422,7 +2422,7 @@ func TestEngineProjectionLagStoreErrors(t *testing.T) {
 			ctrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64(nil), errors.New("shards down"))
 			// no GetCurrentOffset expectation: the offset store must not be read once the shards failed
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, nil, offsetStoreMock{ctrl})
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), nil, enginetest.NewOffsetStoreMock(ctrl))
 			lags, err := engine.ProjectionLag(bg, "any")
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to fetch shard offsets"))
@@ -2436,7 +2436,7 @@ func TestEngineProjectionLagStoreErrors(t *testing.T) {
 				Expect(mock.Any(), mock.MatchT("a projection id", func(id *egopb.ProjectionId) bool { return id != nil })).
 				Return(nil, errors.New("offset down"))
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, nil, offsetStoreMock{ctrl})
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), nil, enginetest.NewOffsetStoreMock(ctrl))
 			lags, err := engine.ProjectionLag(bg, "any")
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(engRestErrText(err)).To(specs.Contain("failed to get offset for shard"))
@@ -2457,7 +2457,7 @@ func TestEngineProjectionLagComputation(t *testing.T) {
 				Expect(mock.Any(), mock.MatchT("a projection id", func(id *egopb.ProjectionId) bool { return id != nil })).
 				Return(&egopb.Offset{Value: 500}, nil)
 
-			engine := synthEngineWithStores(eventsStoreMock{ctrl}, nil, offsetStoreMock{ctrl})
+			engine := synthEngineWithStores(enginetest.NewEventsStoreMock(ctrl), nil, enginetest.NewOffsetStoreMock(ctrl))
 			lags, err := engine.ProjectionLag(context.Background(), "any")
 			ctx.Expect(err).To(specs.BeNil())
 			specs.ExpectT(ctx, lags[7]).ToEqual(time.Duration(1000))
@@ -2562,7 +2562,7 @@ func TestEngineRebuildProjectionResetOffsetError(t *testing.T) {
 			ctrl := mock.NewController(t)
 			ctrl.Method("ResetOffset").Expect(mock.Any(), name, mock.Any()).Return(errors.New("reset boom"))
 			engine.mutex.Lock()
-			engine.offsetStore = offsetStoreMock{ctrl}
+			engine.offsetStore = enginetest.NewOffsetStoreMock(ctrl)
 			engine.mutex.Unlock()
 
 			err := engine.RebuildProjection(ctx, name, ZeroTime)
@@ -2623,7 +2623,7 @@ func TestEngineRebuildProjectionRestartError(t *testing.T) {
 				})
 
 			engine.mutex.Lock()
-			engine.offsetStore = offsetStoreMock{ctrl}
+			engine.offsetStore = enginetest.NewOffsetStoreMock(ctrl)
 			engine.mutex.Unlock()
 
 			err = engine.RebuildProjection(ctx, name, ZeroTime)

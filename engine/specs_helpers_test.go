@@ -27,12 +27,14 @@ import (
 	"errors"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
@@ -49,6 +51,12 @@ const waitTimeout = 10 * time.Second
 // errAnyFailure is the error the publisher tests make a mock return when the
 // value does not matter, only that it is a failure.
 var errAnyFailure = errors.New("an error for testing")
+
+// Argument matchers that stand for "any non-nil message of this type".
+var (
+	anEvent = mock.MatchT("an event", func(e *egopb.Event) bool { return e != nil })
+	aState  = mock.MatchT("a durable state", func(s *egopb.DurableState) bool { return s != nil })
+)
 
 // panicValue runs fn and returns what it panicked with, or nil when it did not
 // panic. Expect(panicValue(fn)).To(specs.BeNil()) is the go-specs counterpart
