@@ -33,32 +33,51 @@ import (
 	"github.com/getsyntegrity/ego/tenancy"
 )
 
-func mustOperationID(t testing.TB, s string) command.OperationID {
-	t.Helper()
+// mustOperationID, mustTenantContext and mustMetadata build fixtures through the spec: a failed
+// precondition is reported by the matcher, like any other expectation, and stops the case.
+func mustOperationID(ctx *specs.Context, s string) command.OperationID {
 	op, err := command.NewOperationID(s)
-	if err != nil {
-		t.Fatalf("operation id %q must be valid: %v", s, err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return op
 }
 
-func mustTenantContext(t testing.TB, id string) tenancy.TenantContext {
-	t.Helper()
+func mustTenantContext(ctx *specs.Context, id string) tenancy.TenantContext {
 	tenantID, err := tenancy.NewTenantID(id)
-	if err != nil {
-		t.Fatalf("tenant id %q must be valid: %v", id, err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	tc, err := tenancy.NewTenantContext(tenantID)
-	if err != nil {
-		t.Fatalf("tenant context for %q must be valid: %v", id, err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return tc
+}
+
+// beTime matches a time.Time that is the same instant as want. Unlike ToEqual it ignores the
+// location and the monotonic reading, and its failure prints both instants.
+func beTime(want time.Time) specs.Matcher {
+	return specs.Satisfy("the instant "+want.Format(time.RFC3339Nano), func(a any) bool {
+		got, ok := a.(time.Time)
+		return ok && got.Equal(want)
+	})
+}
+
+// beTimeBetween matches a time.Time within [lo, hi], both inclusive.
+func beTimeBetween(lo, hi time.Time) specs.Matcher {
+	return specs.Satisfy("an instant between "+lo.Format(time.RFC3339Nano)+" and "+hi.Format(time.RFC3339Nano), func(a any) bool {
+		got, ok := a.(time.Time)
+		return ok && !got.Before(lo) && !got.After(hi)
+	})
+}
+
+// beTimeBefore matches a time.Time strictly before limit.
+func beTimeBefore(limit time.Time) specs.Matcher {
+	return specs.Satisfy("an instant before "+limit.Format(time.RFC3339Nano), func(a any) bool {
+		got, ok := a.(time.Time)
+		return ok && got.Before(limit)
+	})
 }
 
 func TestNewMetadataRoot(t *testing.T) {
 	specs.Describe(t, "NewMetadata builds root metadata", func(s *specs.Spec) {
 		s.It("uses the operation id as correlation id and has no causation", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
@@ -74,7 +93,7 @@ func TestNewMetadataRoot(t *testing.T) {
 func TestNewMetadataWithCorrelationID(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors WithCorrelationID", func(s *specs.Spec) {
 		s.It("uses the supplied correlation id", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			corr := command.CorrelationID("flow-42")
 
 			md, err := command.NewMetadata(op, command.WithCorrelationID(corr))
@@ -87,8 +106,8 @@ func TestNewMetadataWithCorrelationID(t *testing.T) {
 func TestNewMetadataWithTenant(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors WithTenant", func(s *specs.Spec) {
 		s.It("exposes the supplied tenant context", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
-			tc := mustTenantContext(ctx.T, "acme")
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "acme")
 
 			md, err := command.NewMetadata(op, command.WithTenant(tc))
 			ctx.Expect(err).To(specs.BeNil())
@@ -103,7 +122,7 @@ func TestNewMetadataWithTenant(t *testing.T) {
 func TestNewMetadataWithoutTenant(t *testing.T) {
 	specs.Describe(t, "NewMetadata without WithTenant", func(s *specs.Spec) {
 		s.It("reports no tenant", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
@@ -117,7 +136,7 @@ func TestNewMetadataWithoutTenant(t *testing.T) {
 func TestNewMetadataWithPrincipal(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors WithPrincipal", func(s *specs.Spec) {
 		s.It("exposes the supplied principal", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			p, err := command.NewPrincipal("user-1", command.WithPrincipalKind("user"))
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -135,14 +154,13 @@ func TestNewMetadataWithTimestampDefault(t *testing.T) {
 	specs.Describe(t, "NewMetadata timestamps metadata with the current time by default", func(s *specs.Spec) {
 		s.It("falls between the time before and after construction", func(ctx *specs.Context) {
 			before := time.Now().UTC()
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 			after := time.Now().UTC()
 
-			ctx.Expect(md.Timestamp().Before(before)).To(specs.BeFalse())
-			ctx.Expect(md.Timestamp().After(after)).To(specs.BeFalse())
+			ctx.Expect(md.Timestamp()).To(beTimeBetween(before, after))
 		})
 	})
 }
@@ -150,12 +168,12 @@ func TestNewMetadataWithTimestampDefault(t *testing.T) {
 func TestNewMetadataWithTimestampOverride(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors WithTimestamp", func(s *specs.Spec) {
 		s.It("uses the supplied timestamp", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 			md, err := command.NewMetadata(op, command.WithTimestamp(ts))
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(ts.Equal(md.Timestamp())).To(specs.BeTrue())
+			ctx.Expect(md.Timestamp()).To(beTime(ts))
 		})
 	})
 }
@@ -163,7 +181,7 @@ func TestNewMetadataWithTimestampOverride(t *testing.T) {
 func TestNewMetadataWithDeadline(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors WithDeadline", func(s *specs.Spec) {
 		s.It("exposes the supplied deadline", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			deadline := time.Now().Add(time.Hour)
 
 			md, err := command.NewMetadata(op, command.WithDeadline(deadline))
@@ -171,7 +189,7 @@ func TestNewMetadataWithDeadline(t *testing.T) {
 
 			got, ok := md.Deadline()
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(deadline.Equal(got)).To(specs.BeTrue())
+			ctx.Expect(got).To(beTime(deadline))
 		})
 	})
 }
@@ -179,7 +197,7 @@ func TestNewMetadataWithDeadline(t *testing.T) {
 func TestNewMetadataWithoutDeadline(t *testing.T) {
 	specs.Describe(t, "NewMetadata without WithDeadline", func(s *specs.Spec) {
 		s.It("reports no deadline", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
@@ -198,7 +216,7 @@ func TestNewMetadataWithoutDeadline(t *testing.T) {
 func TestMetadataElapsedDeadlineIsRecognized(t *testing.T) {
 	specs.Describe(t, "an already-elapsed deadline is recognizable by plain time comparison", func(s *specs.Spec) {
 		s.It("reports a deadline before the timestamp", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 			deadline := ts.Add(-time.Hour)
 
@@ -207,7 +225,7 @@ func TestMetadataElapsedDeadlineIsRecognized(t *testing.T) {
 
 			got, ok := md.Deadline()
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(got.Before(md.Timestamp())).To(specs.BeTrue())
+			ctx.Expect(got).To(beTimeBefore(md.Timestamp()))
 		})
 	})
 }
@@ -215,7 +233,7 @@ func TestMetadataElapsedDeadlineIsRecognized(t *testing.T) {
 func TestNewMetadataCustomDefensiveCopy(t *testing.T) {
 	specs.Describe(t, "Metadata.Custom returns a defensive copy", func(s *specs.Spec) {
 		s.It("keeps the stored values when the returned map is mutated", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op, command.WithCustom("region", "us-east"))
 			ctx.Expect(err).To(specs.BeNil())
@@ -236,7 +254,7 @@ func TestNewMetadataCustomDefensiveCopy(t *testing.T) {
 func TestNewMetadataCustomValue(t *testing.T) {
 	specs.Describe(t, "Metadata.CustomValue looks up custom metadata by key", func(s *specs.Spec) {
 		s.It("returns a stored value and reports a missing key as absent", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op, command.WithCustom("region", "us-east"))
 			ctx.Expect(err).To(specs.BeNil())
@@ -254,7 +272,7 @@ func TestNewMetadataCustomValue(t *testing.T) {
 func TestNewMetadataWithCustomRejectsReservedPrefix(t *testing.T) {
 	specs.Describe(t, "WithCustom rejects the reserved ego. prefix", func(s *specs.Spec) {
 		s.It("fails with ErrReservedKey for an ego.tenant key", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			_, err := command.NewMetadata(op, command.WithCustom("ego.tenant.id", "x"))
 			ctx.Expect(err).To(specs.MatchError(command.ErrReservedKey))
@@ -271,7 +289,7 @@ func TestNewMetadataWithCustomRejectsCanonicalKey(t *testing.T) {
 		}
 		for _, key := range canonical {
 			s.It(key, func(ctx *specs.Context) {
-				op := mustOperationID(ctx.T, "op-1")
+				op := mustOperationID(ctx, "op-1")
 
 				_, err := command.NewMetadata(op, command.WithCustom(key, "x"))
 				ctx.Expect(err).To(specs.MatchError(command.ErrReservedKey))
@@ -283,10 +301,10 @@ func TestNewMetadataWithCustomRejectsCanonicalKey(t *testing.T) {
 func TestNewMetadataWithCustomRejectsInvalidValue(t *testing.T) {
 	specs.Describe(t, "WithCustom rejects an invalid value", func(s *specs.Spec) {
 		s.It("fails for a value longer than the limit", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			_, err := command.NewMetadata(op, command.WithCustom("region", strings.Repeat("a", 1025)))
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
 		})
 	})
 }
@@ -294,7 +312,7 @@ func TestNewMetadataWithCustomRejectsInvalidValue(t *testing.T) {
 func TestNewMetadataWithCustomAcceptsValidKeyValue(t *testing.T) {
 	specs.Describe(t, "WithCustom accepts a valid key and value", func(s *specs.Spec) {
 		s.It("stores the pair", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op, command.WithCustom("region", "us-east"))
 			ctx.Expect(err).To(specs.BeNil())
@@ -309,11 +327,11 @@ func TestNewMetadataWithCustomAcceptsValidKeyValue(t *testing.T) {
 func TestMetadataDeriveInheritsCorrelationAndChainsCausation(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive inherits correlation and chains causation", func(s *specs.Spec) {
 		s.It("keeps the correlation id and sets the parent operation as causation", func(ctx *specs.Context) {
-			parentOp := mustOperationID(ctx.T, "op-1")
+			parentOp := mustOperationID(ctx, "op-1")
 			parent, err := command.NewMetadata(parentOp)
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			child, err := parent.Derive(childOp)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -330,7 +348,7 @@ func TestMetadataDeriveInheritsCorrelationAndChainsCausation(t *testing.T) {
 func TestMetadataDeriveRejectsSameOperationID(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive rejects reusing the parent operation id", func(s *specs.Spec) {
 		s.It("fails with ErrSameOperationID", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			parent, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -343,13 +361,13 @@ func TestMetadataDeriveRejectsSameOperationID(t *testing.T) {
 func TestMetadataDeriveTenantMustNotChange(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive does not allow changing the tenant", func(s *specs.Spec) {
 		s.It("fails with tenancy.ErrDenied for a different tenant", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
-			tc := mustTenantContext(ctx.T, "acme")
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "acme")
 			parent, err := command.NewMetadata(op, command.WithTenant(tc))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
-			otherTenant := mustTenantContext(ctx.T, "other")
+			childOp := mustOperationID(ctx, "op-2")
+			otherTenant := mustTenantContext(ctx, "other")
 
 			_, err = parent.Derive(childOp, command.WithTenant(otherTenant))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
@@ -360,12 +378,12 @@ func TestMetadataDeriveTenantMustNotChange(t *testing.T) {
 func TestMetadataDeriveTenantInheritedWhenUnspecified(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive inherits the tenant when none is specified", func(s *specs.Spec) {
 		s.It("gives the child the parent tenant", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
-			tc := mustTenantContext(ctx.T, "acme")
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "acme")
 			parent, err := command.NewMetadata(op, command.WithTenant(tc))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			child, err := parent.Derive(childOp)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -379,19 +397,19 @@ func TestMetadataDeriveTenantInheritedWhenUnspecified(t *testing.T) {
 func TestMetadataDeriveDeadlineMayOnlyShorten(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive lets a deadline only shorten", func(s *specs.Spec) {
 		s.It("accepts a shorter deadline and rejects a longer one", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			deadline := time.Now().Add(time.Hour)
 			parent, err := command.NewMetadata(op, command.WithDeadline(deadline))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 
 			shorter := deadline.Add(-time.Minute)
 			child, err := parent.Derive(childOp, command.WithDeadline(shorter))
 			ctx.Expect(err).To(specs.BeNil())
 			got, ok := child.Deadline()
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(shorter.Equal(got)).To(specs.BeTrue())
+			ctx.Expect(got).To(beTime(shorter))
 
 			longer := deadline.Add(time.Minute)
 			_, err = parent.Derive(childOp, command.WithDeadline(longer))
@@ -403,17 +421,17 @@ func TestMetadataDeriveDeadlineMayOnlyShorten(t *testing.T) {
 func TestMetadataDeriveCustomNotInherited(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive does not inherit custom metadata", func(s *specs.Spec) {
 		s.It("gives the child no custom values", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			parent, err := command.NewMetadata(op, command.WithCustom("region", "us-east"))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			child, err := parent.Derive(childOp)
 			ctx.Expect(err).To(specs.BeNil())
 
 			_, ok := child.CustomValue("region")
 			ctx.Expect(ok).To(specs.BeFalse())
-			ctx.Expect(len(child.Custom())).ToEqual(0)
+			ctx.Expect(child.Custom()).To(specs.BeEmpty())
 		})
 	})
 }
@@ -421,7 +439,7 @@ func TestMetadataDeriveCustomNotInherited(t *testing.T) {
 func TestNewMetadataWithoutExpectedRevision(t *testing.T) {
 	specs.Describe(t, "NewMetadata without WithExpectedRevision", func(s *specs.Spec) {
 		s.It("reports no expected revision", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
@@ -435,7 +453,7 @@ func TestNewMetadataWithoutExpectedRevision(t *testing.T) {
 func TestNewMetadataWithExpectedRevisionZeroIsGenesisNotAbsence(t *testing.T) {
 	specs.Describe(t, "WithExpectedRevision(0) means genesis, not absence", func(s *specs.Spec) {
 		s.It("reports a present expected revision of zero", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op, command.WithExpectedRevision(0))
 			ctx.Expect(err).To(specs.BeNil())
@@ -450,7 +468,7 @@ func TestNewMetadataWithExpectedRevisionZeroIsGenesisNotAbsence(t *testing.T) {
 func TestNewMetadataWithExpectedRevisionPositive(t *testing.T) {
 	specs.Describe(t, "NewMetadata honors a positive WithExpectedRevision", func(s *specs.Spec) {
 		s.It("exposes the supplied expected revision", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 
 			md, err := command.NewMetadata(op, command.WithExpectedRevision(42))
 			ctx.Expect(err).To(specs.BeNil())
@@ -465,11 +483,11 @@ func TestNewMetadataWithExpectedRevisionPositive(t *testing.T) {
 func TestMetadataDeriveDoesNotInheritExpectedRevision(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive does not inherit the expected revision", func(s *specs.Spec) {
 		s.It("gives the child no expected revision", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			parent, err := command.NewMetadata(op, command.WithExpectedRevision(5))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			child, err := parent.Derive(childOp)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -482,13 +500,13 @@ func TestMetadataDeriveDoesNotInheritExpectedRevision(t *testing.T) {
 func TestMetadataDerivePrincipalInheritedUnlessOverridden(t *testing.T) {
 	specs.Describe(t, "Metadata.Derive inherits the principal unless overridden", func(s *specs.Spec) {
 		s.It("keeps the parent principal by default and takes an override when given", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			p, err := command.NewPrincipal("user-1")
 			ctx.Expect(err).To(specs.BeNil())
 			parent, err := command.NewMetadata(op, command.WithPrincipal(p))
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			child, err := parent.Derive(childOp)
 			ctx.Expect(err).To(specs.BeNil())
 

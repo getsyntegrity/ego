@@ -41,7 +41,7 @@ func carrierHas(c command.Carrier, key string) bool {
 func TestMarshalMetadataUsesCanonicalKeys(t *testing.T) {
 	specs.Describe(t, "MarshalMetadata writes root metadata under the canonical ego.cmd keys", func(s *specs.Spec) {
 		s.It("writes the required keys and omits the optional ones", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -60,11 +60,11 @@ func TestMarshalMetadataUsesCanonicalKeys(t *testing.T) {
 func TestCarrierRoundTripPreservesIdentity(t *testing.T) {
 	specs.Describe(t, "a carrier round trip preserves operation, correlation and causation identity", func(s *specs.Spec) {
 		s.It("restores the identity of a derived child", func(ctx *specs.Context) {
-			root := mustOperationID(ctx.T, "op-root")
+			root := mustOperationID(ctx, "op-root")
 			rootMD, err := command.NewMetadata(root)
 			ctx.Expect(err).To(specs.BeNil())
 
-			child := mustOperationID(ctx.T, "op-child")
+			child := mustOperationID(ctx, "op-child")
 			childMD, err := rootMD.Derive(child)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -87,7 +87,7 @@ func TestCarrierRoundTripPreservesIdentity(t *testing.T) {
 func TestCarrierRoundTripOptionalFieldsAbsent(t *testing.T) {
 	specs.Describe(t, "a carrier round trip keeps absent optional fields absent", func(s *specs.Spec) {
 		s.It("reports causation, tenant, principal, deadline and custom values as absent", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -111,8 +111,8 @@ func TestCarrierRoundTripOptionalFieldsAbsent(t *testing.T) {
 func TestCarrierRoundTripOptionalFieldsPresent(t *testing.T) {
 	specs.Describe(t, "a carrier round trip preserves present optional fields", func(s *specs.Spec) {
 		s.It("restores tenant, principal, deadline and custom value", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
-			tc := mustTenantContext(ctx.T, "tenant-1")
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "tenant-1")
 			principal, err := command.NewPrincipal("user-1", command.WithPrincipalKind("service-account"))
 			ctx.Expect(err).To(specs.BeNil())
 			deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Nanosecond)
@@ -167,7 +167,7 @@ func TestUnmarshalMetadataRejectsMissingOperationID(t *testing.T) {
 func TestUnmarshalMetadataRejectsReservedBareKey(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects a bare canonical key used as custom metadata", func(s *specs.Spec) {
 		s.It("fails with ErrReservedKey", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -183,7 +183,7 @@ func TestUnmarshalMetadataRejectsReservedBareKey(t *testing.T) {
 func TestUnmarshalMetadataRejectsInvalidCustomValue(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects an invalid custom value", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidMetadata for a value with a NUL byte", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -199,7 +199,7 @@ func TestUnmarshalMetadataRejectsInvalidCustomValue(t *testing.T) {
 func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata tolerates unknown ego.cmd keys from a newer writer", func(s *specs.Spec) {
 		s.It("drops the unknown key without adding custom metadata", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -225,7 +225,7 @@ func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
 func TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects keys in an unrecognized ego namespace", func(s *specs.Spec) {
 		s.It("fails with ErrReservedKey for an ego.idem key", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -241,7 +241,7 @@ func TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace(t *testing.T) {
 func TestCarrierRoundTripExpectedRevisionPresent(t *testing.T) {
 	specs.Describe(t, "a carrier round trip preserves a present expected revision", func(s *specs.Spec) {
 		s.It("writes the revision as a decimal string and restores it", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op, command.WithExpectedRevision(7))
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -261,7 +261,7 @@ func TestCarrierRoundTripExpectedRevisionPresent(t *testing.T) {
 func TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent(t *testing.T) {
 	specs.Describe(t, "a carrier round trip keeps an absent expected revision absent", func(s *specs.Spec) {
 		s.It("writes no key and restores no revision", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -280,7 +280,7 @@ func TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent(t *testing.T) {
 func TestUnmarshalMetadataRejectsMalformedExpectedRevision(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects a malformed expected revision", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidMetadata for a non-numeric value", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -296,7 +296,7 @@ func TestUnmarshalMetadataRejectsMalformedExpectedRevision(t *testing.T) {
 func TestUnmarshalMetadataRejectsNegativeExpectedRevision(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects a negative expected revision", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidMetadata for -1", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -312,7 +312,7 @@ func TestUnmarshalMetadataRejectsNegativeExpectedRevision(t *testing.T) {
 func TestUnmarshalMetadataRejectsExpectedRevisionOverflow(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects an expected revision beyond uint64", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidMetadata for math.MaxUint64 + 1", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -329,7 +329,7 @@ func TestUnmarshalMetadataRejectsExpectedRevisionOverflow(t *testing.T) {
 func TestCarrierRoundTripExpectedRevisionMaxUint64(t *testing.T) {
 	specs.Describe(t, "a carrier round trip preserves the largest expected revision", func(s *specs.Spec) {
 		s.It("writes and restores math.MaxUint64", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op, command.WithExpectedRevision(math.MaxUint64))
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -349,8 +349,8 @@ func TestCarrierRoundTripExpectedRevisionMaxUint64(t *testing.T) {
 func TestCarrierDelegatesTenantSerializationToTenancyPackage(t *testing.T) {
 	specs.Describe(t, "MarshalMetadata delegates tenant serialization to the tenancy package", func(s *specs.Spec) {
 		s.It("writes the tenancy scope and id keys", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
-			tc := mustTenantContext(ctx.T, "tenant-1")
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "tenant-1")
 			md, err := command.NewMetadata(op, command.WithTenant(tc))
 			ctx.Expect(err).To(specs.BeNil())
 

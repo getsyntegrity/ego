@@ -41,8 +41,8 @@ import (
 func TestIntegrationMetadataEnvelopeResultCarrier(t *testing.T) {
 	specs.Describe(t, "metadata, envelope, carrier and result compose as one contract", func(s *specs.Spec) {
 		s.It("derives a child, crosses a carrier boundary and builds a result from the reconstructed metadata", func(ctx *specs.Context) {
-			rootOp := mustOperationID(ctx.T, "op-root")
-			tc := mustTenantContext(ctx.T, "tenant-1")
+			rootOp := mustOperationID(ctx, "op-root")
+			tc := mustTenantContext(ctx, "tenant-1")
 			principal, err := command.NewPrincipal("user-1", command.WithPrincipalKind("service-account"))
 			ctx.Expect(err).To(specs.BeNil())
 			deadline := time.Now().UTC().Add(time.Hour)
@@ -61,7 +61,7 @@ func TestIntegrationMetadataEnvelopeResultCarrier(t *testing.T) {
 
 			// A saga step derives a child operation from the root envelope.
 			// Custom metadata is not inherited (D7), so it is re-supplied here.
-			childOp := mustOperationID(ctx.T, "op-child")
+			childOp := mustOperationID(ctx, "op-child")
 			childPayload := timestamppb.New(time.Unix(2, 0))
 			childEnvelope, err := rootEnvelope.Derive(childPayload, childOp, command.WithCustom("region", "us-east-1"))
 			ctx.Expect(err).To(specs.BeNil())
@@ -125,7 +125,7 @@ func TestIntegrationMetadataEnvelopeResultCarrier(t *testing.T) {
 func TestIntegrationRejectedResultCarriesReconstructedMetadata(t *testing.T) {
 	specs.Describe(t, "a rejected result composes with metadata reconstructed from a carrier", func(s *specs.Spec) {
 		s.It("classifies as ErrRejected and keeps the operation id", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 

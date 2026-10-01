@@ -37,7 +37,7 @@ import (
 func TestNewEnvelope(t *testing.T) {
 	specs.Describe(t, "NewEnvelope wraps a payload with its metadata", func(s *specs.Spec) {
 		s.It("exposes the payload and the metadata it was built with", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -54,7 +54,7 @@ func TestNewEnvelope(t *testing.T) {
 func TestNewEnvelopeRejectsNilPayload(t *testing.T) {
 	specs.Describe(t, "NewEnvelope rejects a nil payload", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidEnvelope", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -67,7 +67,7 @@ func TestNewEnvelopeRejectsNilPayload(t *testing.T) {
 func TestPayloadAsTypedExtraction(t *testing.T) {
 	specs.Describe(t, "PayloadAs extracts the payload as a concrete type", func(s *specs.Spec) {
 		s.It("returns the payload for its own type and reports a different type as absent", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -88,7 +88,7 @@ func TestPayloadAsTypedExtraction(t *testing.T) {
 func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
 	specs.Describe(t, "Envelope.Derive delegates to Metadata.Derive", func(s *specs.Spec) {
 		s.It("carries the new payload, the inherited correlation and the parent as causation", func(ctx *specs.Context) {
-			parentOp := mustOperationID(ctx.T, "op-1")
+			parentOp := mustOperationID(ctx, "op-1")
 			parentMD, err := command.NewMetadata(parentOp)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -96,7 +96,7 @@ func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
 			parentEnv, err := command.NewEnvelope(parentPayload, parentMD)
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			childPayload := timestamppb.New(time.Unix(300, 0))
 			childEnv, err := parentEnv.Derive(childPayload, childOp)
 			ctx.Expect(err).To(specs.BeNil())
@@ -115,7 +115,7 @@ func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
 func TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip(t *testing.T) {
 	specs.Describe(t, "an absent expected revision survives an envelope carrier round trip", func(s *specs.Spec) {
 		s.It("writes no key and rebuilds an envelope with no expected revision", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -141,7 +141,7 @@ func TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip(t *testing.T) {
 func TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField(t *testing.T) {
 	specs.Describe(t, "an envelope without an expected revision marshals exactly as before the field existed", func(s *specs.Spec) {
 		s.It("writes only the three required carrier keys", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			ts := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 			md, err := command.NewMetadata(op, command.WithTimestamp(ts))
@@ -164,7 +164,7 @@ func TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField(t *testing.T) {
 func TestEnvelopeDeriveRejectsNilPayload(t *testing.T) {
 	specs.Describe(t, "Envelope.Derive rejects a nil payload", func(s *specs.Spec) {
 		s.It("fails with ErrInvalidEnvelope", func(ctx *specs.Context) {
-			op := mustOperationID(ctx.T, "op-1")
+			op := mustOperationID(ctx, "op-1")
 			md, err := command.NewMetadata(op)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -172,7 +172,7 @@ func TestEnvelopeDeriveRejectsNilPayload(t *testing.T) {
 			env, err := command.NewEnvelope(payload, md)
 			ctx.Expect(err).To(specs.BeNil())
 
-			childOp := mustOperationID(ctx.T, "op-2")
+			childOp := mustOperationID(ctx, "op-2")
 			_, err = env.Derive(nil, childOp)
 			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidEnvelope))
 		})
