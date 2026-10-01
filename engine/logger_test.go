@@ -24,10 +24,12 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 	"github.com/stretchr/testify/assert"
@@ -75,52 +77,67 @@ func newSinkLogger(level kitlog.Level) (kitlog.Logger, *recordSink) {
 }
 
 func TestResolveLogger(t *testing.T) {
-	t.Run("nil falls back to the default", func(t *testing.T) {
-		assert.Same(t, DefaultLogger(), ResolveLogger(nil))
-	})
+	specs.Describe(t, "ResolveLogger picks the logger the engine will use", func(s *specs.Spec) {
+		s.It("nil falls back to the default", func(ctx *specs.Context) {
+			ctx.Expect(ResolveLogger(nil)).To(beTheSamePointer(DefaultLogger()))
+		})
 
-	t.Run("typed nil falls back to the default", func(t *testing.T) {
-		var typedNil *kitlogtest.MockLogger
-		assert.Same(t, DefaultLogger(), ResolveLogger(typedNil))
-	})
+		s.It("typed nil falls back to the default", func(ctx *specs.Context) {
+			var typedNil *kitlogtest.MockLogger
+			ctx.Expect(ResolveLogger(typedNil)).To(beTheSamePointer(DefaultLogger()))
+		})
 
-	t.Run("a usable logger is returned as-is", func(t *testing.T) {
-		logger := kitlogtest.NewMockLogger()
-		assert.Same(t, logger, ResolveLogger(logger))
+		s.It("a usable logger is returned as-is", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			ctx.Expect(ResolveLogger(logger)).To(beTheSamePointer(logger))
+		})
 	})
 }
 
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
-	assert.Same(t, kitlog.L(), DefaultLogger())
+	specs.Describe(t, "DefaultLogger follows the kit-logger global", func(s *specs.Spec) {
+		s.It("is the global logger, and tracks a global installed later", func(ctx *specs.Context) {
+			ctx.Expect(DefaultLogger()).To(beTheSamePointer(kitlog.L()))
 
-	// An application that installs its own global before configuring eGo
-	// gets the engine's records through it without passing WithLogger.
-	previous := kitlog.L()
-	t.Cleanup(func() { kitlog.SetGlobal(previous) })
+			// An application that installs its own global before configuring eGo
+			// gets the engine's records through it without passing WithLogger.
+			previous := kitlog.L()
+			ctx.Cleanup(func() { kitlog.SetGlobal(previous) })
 
-	custom := kitlogtest.NewMockLogger()
-	kitlog.SetGlobal(custom)
-	assert.Same(t, custom, DefaultLogger())
-	assert.Same(t, custom, NewConfig(nil).logger)
+			custom := kitlogtest.NewMockLogger()
+			kitlog.SetGlobal(custom)
+			ctx.Expect(DefaultLogger()).To(beTheSamePointer(custom))
+			ctx.Expect(NewConfig(nil).logger).To(beTheSamePointer(custom))
+		})
+	})
 }
 
 func TestDiscardLoggerDisablesEveryLevel(t *testing.T) {
-	adapter := newLoggerAdapter(DiscardLogger)
+	specs.Describe(t, "a GoAkt adapter over DiscardLogger", func(s *specs.Spec) {
+		s.It("has no log level", func(ctx *specs.Context) {
+			ctx.Expect(newLoggerAdapter(DiscardLogger).LogLevel()).To(specs.Equal(log.InvalidLevel))
+		})
 
-	assert.Equal(t, log.InvalidLevel, adapter.LogLevel())
-	for _, level := range []log.Level{
-		log.DebugLevel, log.InfoLevel, log.WarningLevel,
-		log.ErrorLevel, log.FatalLevel, log.PanicLevel,
-	} {
-		assert.False(t, adapter.Enabled(level), "level %v must be disabled", level)
-	}
+		specs.Table(s, []log.Level{
+			log.DebugLevel, log.InfoLevel, log.WarningLevel,
+			log.ErrorLevel, log.FatalLevel, log.PanicLevel,
+		}, func(level log.Level) string {
+			return fmt.Sprintf("disables level %v", level)
+		}, func(ctx *specs.Context, level log.Level) {
+			ctx.Expect(newLoggerAdapter(DiscardLogger).Enabled(level)).To(specs.BeFalse())
+		})
 
-	// Emitting through a discarding logger must be a no-op, never a panic.
-	require.NotPanics(t, func() {
-		adapter.Info("dropped")
-		adapter.Errorf("dropped %d", 1)
-		adapter.With("k", "v").Warn("dropped")
-		DiscardLogger.Error("dropped", "k", "v")
+		s.It("drops records without panicking", func(ctx *specs.Context) {
+			adapter := newLoggerAdapter(DiscardLogger)
+
+			// Emitting through a discarding logger must be a no-op, never a panic.
+			ctx.Expect(panicValue(func() {
+				adapter.Info("dropped")
+				adapter.Errorf("dropped %d", 1)
+				adapter.With("k", "v").Warn("dropped")
+				DiscardLogger.Error("dropped", "k", "v")
+			})).To(specs.BeNil())
+		})
 	})
 }
 
