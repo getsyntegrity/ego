@@ -23,7 +23,9 @@
 package engine
 
 import (
+	"context"
 	"reflect"
+	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
 )
@@ -46,4 +48,17 @@ func panicValue(fn func()) (recovered any) {
 	defer func() { recovered = recover() }()
 	fn()
 	return nil
+}
+
+// waitTimeout bounds every ctx.Eventually poll on a real actor system. It is a
+// ceiling, not a delay: a poll returns as soon as its condition holds.
+const waitTimeout = 10 * time.Second
+
+// projectionRunning returns a poll function reporting whether the named
+// projection is running. A lookup error counts as not running yet.
+func projectionRunning(ctx context.Context, engine *Engine, name string) func() any {
+	return func() any {
+		running, err := engine.IsProjectionRunning(ctx, name)
+		return err == nil && running
+	}
 }

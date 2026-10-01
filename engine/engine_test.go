@@ -764,35 +764,40 @@ func TestEngineHotPathGuards(t *testing.T) {
 // TestEngineProjection covers basic projection registration in single-node
 // mode (no cluster, projection runs as a regular long-lived actor).
 func TestEngineProjection(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a projection registered in single-node mode runs as a regular actor", func(s *specs.Spec) {
+		s.It("is running once started", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "Sample", store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("discard", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "Sample", store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("discard", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
+			require.NoError(t, engine.Start(ctx))
 
-	require.NoError(t, engine.StartProjection(ctx, "discard"))
-	pause.For(500 * time.Millisecond)
+			require.NoError(t, engine.StartProjection(ctx, "discard"))
+			sc.Eventually(projectionRunning(ctx, engine, "discard"), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	running, err := engine.IsProjectionRunning(ctx, "discard")
-	require.NoError(t, err)
-	require.True(t, running)
+			running, err := engine.IsProjectionRunning(ctx, "discard")
+			require.NoError(t, err)
+			require.True(t, running)
 
-	require.NoError(t, engine.StopProjection(ctx, "discard"))
-	require.NoError(t, engine.Stop(ctx))
+			require.NoError(t, engine.StopProjection(ctx, "discard"))
+			require.NoError(t, engine.Stop(ctx))
+		})
+	})
 }
 
 // TestEngineStartProjectionNotRegistered verifies that StartProjection fails fast
@@ -839,54 +844,60 @@ func (x *countingProjectionHandler) Handle(_ context.Context, _ string, _ *anypb
 // TestEngineProjectionsOwnHandlers verifies that projections registered under
 // different names each run with their own handler.
 func TestEngineProjectionsOwnHandlers(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "each projection runs with its own handler", func(s *specs.Spec) {
+		s.It("feeds an event to every handler", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	accountsHandler := new(countingProjectionHandler)
-	auditHandler := new(countingProjectionHandler)
+			accountsHandler := new(countingProjectionHandler)
+			auditHandler := new(countingProjectionHandler)
 
-	engine := newTestEngine(t, "Sample", store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("accounts", &projection.Options{
-			Handler:      accountsHandler,
-			BufferSize:   100,
-			PullInterval: 100 * time.Millisecond,
-		}),
-		WithProjection("audit", &projection.Options{
-			Handler:      auditHandler,
-			BufferSize:   100,
-			PullInterval: 100 * time.Millisecond,
-		}),
-	)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine := newTestEngine(t, "Sample", store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("accounts", &projection.Options{
+					Handler:      accountsHandler,
+					BufferSize:   100,
+					PullInterval: 100 * time.Millisecond,
+				}),
+				WithProjection("audit", &projection.Options{
+					Handler:      auditHandler,
+					BufferSize:   100,
+					PullInterval: 100 * time.Millisecond,
+				}),
+			)
+			require.NoError(t, engine.Start(ctx))
+			t.Cleanup(func() { _ = engine.Stop(ctx) })
 
-	require.NoError(t, engine.StartProjection(ctx, "accounts"))
-	require.NoError(t, engine.StartProjection(ctx, "audit"))
-	pause.For(500 * time.Millisecond)
+			require.NoError(t, engine.StartProjection(ctx, "accounts"))
+			require.NoError(t, engine.StartProjection(ctx, "audit"))
+			sc.Eventually(projectionRunning(ctx, engine, "accounts"), specs.BeTrue(), specs.WithTimeout(waitTimeout))
+			sc.Eventually(projectionRunning(ctx, engine, "audit"), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	event, err := anypb.New(&testpb.AccountCredited{})
-	require.NoError(t, err)
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{{
-		PersistenceId:  uuid.NewString(),
-		SequenceNumber: 1,
-		Event:          event,
-		Timestamp:      time.Now().Unix(),
-		Shard:          3,
-	}}, persistence.Unconditional()))
+			event, err := anypb.New(&testpb.AccountCredited{})
+			require.NoError(t, err)
+			require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{{
+				PersistenceId:  uuid.NewString(),
+				SequenceNumber: 1,
+				Event:          event,
+				Timestamp:      time.Now().Unix(),
+				Shard:          3,
+			}}, persistence.Unconditional()))
 
-	// Both projections poll independently; each must observe the event
-	// through its own handler.
-	require.Eventually(t, func() bool {
-		return accountsHandler.counter.Load() == 1 && auditHandler.counter.Load() == 1
-	}, 5*time.Second, 100*time.Millisecond)
+			// Both projections poll independently; each must observe the event
+			// through its own handler.
+			require.Eventually(t, func() bool {
+				return accountsHandler.counter.Load() == 1 && auditHandler.counter.Load() == 1
+			}, 5*time.Second, 100*time.Millisecond)
+		})
+	})
 }
 
 // TestEngineClusterMode runs a single-node cluster end-to-end to exercise the
@@ -894,90 +905,95 @@ func TestEngineProjectionsOwnHandlers(t *testing.T) {
 // engine.ClusterKinds() registration. It builds the goakt actor system manually
 // to demonstrate the cluster-mode bootstrap.
 func TestEngineClusterMode(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+	specs.Describe(t, "a single-node cluster runs projections as singletons and serves entities", func(s *specs.Spec) {
+		s.It("starts both projections and an entity", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	ports := dynaport.Get(3)
-	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
-	host := "127.0.0.1"
+			ports := dynaport.Get(3)
+			gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+			host := "127.0.0.1"
 
-	provider := &mockClusterProvider{
-		id:    "test",
-		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
-	}
+			provider := &mockClusterProvider{
+				id:    "test",
+				peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+			}
 
-	clusterCfg := goakt.NewClusterConfig().
-		WithDiscovery(provider).
-		WithDiscoveryPort(gossipPort).
-		WithPeersPort(clusterPort).
-		WithMinimumPeersQuorum(1).
-		WithReplicaCount(1).
-		WithPartitionCount(4).
-		WithKinds(ClusterKinds()...)
+			clusterCfg := goakt.NewClusterConfig().
+				WithDiscovery(provider).
+				WithDiscoveryPort(gossipPort).
+				WithPeersPort(clusterPort).
+				WithMinimumPeersQuorum(1).
+				WithReplicaCount(1).
+				WithPartitionCount(4).
+				WithKinds(ClusterKinds()...)
 
-	cfg := NewConfig(store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("discard", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-		WithProjection("discard-too", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
+			cfg := NewConfig(store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("discard", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+				WithProjection("discard-too", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
 
-	goaktOpts := append(cfg.GoaktOptions(),
-		goakt.WithCluster(clusterCfg),
-		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
-	)
+			goaktOpts := append(cfg.GoaktOptions(),
+				goakt.WithCluster(clusterCfg),
+				goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+			)
 
-	sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(ctx) })
+			sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+			require.NoError(t, err)
+			require.NoError(t, sys.Start(ctx))
+			t.Cleanup(func() { _ = sys.Stop(ctx) })
 
-	// wait briefly for the single-node cluster to advertise itself
-	pause.For(time.Second)
-	require.True(t, sys.InCluster())
+			// the single-node cluster advertises itself shortly after Start
+			sc.Eventually(func() any { return sys.InCluster() }, specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine, err := NewEngine(sys, cfg)
+			require.NoError(t, err)
+			require.NoError(t, engine.Start(ctx))
+			t.Cleanup(func() { _ = engine.Stop(ctx) })
 
-	// Singleton uniqueness is keyed by actor name (goakt >= v4.4.1), so every
-	// registered projection gets its own singleton. Before that goakt release
-	// the kind-keyed reservation made the second StartProjection a silent
-	// no-op.
-	require.NoError(t, engine.StartProjection(ctx, "discard"))
-	require.NoError(t, engine.StartProjection(ctx, "discard-too"))
-	pause.For(time.Second)
+			// Singleton uniqueness is keyed by actor name (goakt >= v4.4.1), so every
+			// registered projection gets its own singleton. Before that goakt release
+			// the kind-keyed reservation made the second StartProjection a silent
+			// no-op.
+			require.NoError(t, engine.StartProjection(ctx, "discard"))
+			require.NoError(t, engine.StartProjection(ctx, "discard-too"))
+			sc.Eventually(projectionRunning(ctx, engine, "discard"), specs.BeTrue(), specs.WithTimeout(waitTimeout))
+			sc.Eventually(projectionRunning(ctx, engine, "discard-too"), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	for _, name := range []string{"discard", "discard-too"} {
-		running, err := engine.IsProjectionRunning(ctx, name)
-		require.NoError(t, err)
-		require.True(t, running, "projection %s should be running as a cluster singleton", name)
-	}
+			for _, name := range []string{"discard", "discard-too"} {
+				running, err := engine.IsProjectionRunning(ctx, name)
+				require.NoError(t, err)
+				require.True(t, running, "projection %s should be running as a cluster singleton", name)
+			}
 
-	// entity flow in cluster mode
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
-	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
-		AccountBalance: 100,
-	}, time.Minute)
-	require.NoError(t, err)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 100, acct.GetAccountBalance())
+			// entity flow in cluster mode
+			entityID := uuid.NewString()
+			require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+				AccountBalance: 100,
+			}, time.Minute)
+			require.NoError(t, err)
+			acct, ok := state.(*testpb.Account)
+			require.True(t, ok)
+			assert.EqualValues(t, 100, acct.GetAccountBalance())
+		})
+	})
 }
 
 // TestEngineMultiNodeRemoteEntitySpawn is a regression test for remote entity
@@ -1471,57 +1487,70 @@ func TestEngineProjectionLagHappyPath(t *testing.T) {
 // RebuildProjection: it stops the running projection, resets its offset, and
 // restarts it.
 func TestEngineRebuildProjectionSuccess(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "RebuildProjection stops, resets and restarts a running projection", func(s *specs.Spec) {
+		s.It("leaves the projection running again", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "Sample", store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("rebuild-target", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "Sample", store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("rebuild-target", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
+			require.NoError(t, engine.Start(ctx))
 
-	const name = "rebuild-target"
-	require.NoError(t, engine.StartProjection(ctx, name))
-	pause.For(300 * time.Millisecond)
+			const name = "rebuild-target"
+			require.NoError(t, engine.StartProjection(ctx, name))
+			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
-	pause.For(300 * time.Millisecond)
+			require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
+			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	running, err := engine.IsProjectionRunning(ctx, name)
-	require.NoError(t, err)
-	require.True(t, running, "projection should be running again after rebuild")
+			running, err := engine.IsProjectionRunning(ctx, name)
+			require.NoError(t, err)
+			require.True(t, running, "projection should be running again after rebuild")
+		})
+	})
 }
 
 // TestEngineSagaHappyPath registers a saga via Engine.Saga and then queries
 // its status via Engine.SagaStatus, covering the success branches of both.
 func TestEngineSagaHappyPath(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a saga registered through Engine.Saga reports its status", func(s *specs.Spec) {
+		s.It("answers SagaStatus for the registered saga", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
+			require.NoError(t, engine.Start(ctx))
 
-	sagaID := "saga-" + uuid.NewString()
-	require.NoError(t, engine.Saga(ctx, &testSagaBehavior{sagaID: sagaID}, 0))
-	pause.For(300 * time.Millisecond)
+			sagaID := "saga-" + uuid.NewString()
+			require.NoError(t, engine.Saga(ctx, &testSagaBehavior{sagaID: sagaID}, 0))
+			sc.Eventually(func() any {
+				_, err := engine.SagaStatus(ctx, sagaID, time.Second)
+				return err
+			}, specs.BeNil(), specs.WithTimeout(waitTimeout))
 
-	info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
-	require.NoError(t, err)
-	require.NotNil(t, info)
-	assert.Equal(t, sagaID, info.ID)
+			info, err := engine.SagaStatus(ctx, sagaID, time.Minute)
+			require.NoError(t, err)
+			require.NotNil(t, info)
+			assert.Equal(t, sagaID, info.ID)
+		})
+	})
 }
 
 // ensure proto and context imports are not flagged when subtests vary.
@@ -2336,41 +2365,46 @@ func TestEngineRebuildProjectionRemoveError(t *testing.T) {
 // added so StopProjection succeeds, then the engine's offset store is
 // swapped for a mock that fails on ResetOffset.
 func TestEngineRebuildProjectionResetOffsetError(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "RebuildProjection reports an offset reset failure", func(s *specs.Spec) {
+		s.It("wraps the ResetOffset error", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "Sample", store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("rebuild-reset-error", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "Sample", store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("rebuild-reset-error", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
+			require.NoError(t, engine.Start(ctx))
 
-	const name = "rebuild-reset-error"
-	require.NoError(t, engine.StartProjection(ctx, name))
-	pause.For(200 * time.Millisecond)
+			const name = "rebuild-reset-error"
+			require.NoError(t, engine.StartProjection(ctx, name))
+			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	// Swap the offset store for one that fails on ResetOffset so the
-	// rebuild path takes the ResetOffset-error branch.
-	ctrl := mock.NewController(t)
-	ctrl.Method("ResetOffset").Expect(mock.Any(), name, mock.Any()).Return(errors.New("reset boom"))
-	engine.mutex.Lock()
-	engine.offsetStore = offsetStoreMock{ctrl}
-	engine.mutex.Unlock()
+			// Swap the offset store for one that fails on ResetOffset so the
+			// rebuild path takes the ResetOffset-error branch.
+			ctrl := mock.NewController(t)
+			ctrl.Method("ResetOffset").Expect(mock.Any(), name, mock.Any()).Return(errors.New("reset boom"))
+			engine.mutex.Lock()
+			engine.offsetStore = offsetStoreMock{ctrl}
+			engine.mutex.Unlock()
 
-	err := engine.RebuildProjection(ctx, name, ZeroTime)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to reset offset")
+			err := engine.RebuildProjection(ctx, name, ZeroTime)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "failed to reset offset")
+		})
+	})
 }
 
 // TestEngineRebuildProjectionRestartError covers the
@@ -2379,54 +2413,59 @@ func TestEngineRebuildProjectionResetOffsetError(t *testing.T) {
 // that fails because the actor system is stopped from inside the offset
 // store mock just before the restart runs.
 func TestEngineRebuildProjectionRestartError(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "RebuildProjection reports a restart failure", func(s *specs.Spec) {
+		s.It("wraps the StartProjection error", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	cfg := NewConfig(store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("rebuild-restart-error", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
-	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
+			cfg := NewConfig(store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("rebuild-restart-error", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
+			sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
+			require.NoError(t, err)
+			require.NoError(t, sys.Start(ctx))
 
-	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
+			engine, err := NewEngine(sys, cfg)
+			require.NoError(t, err)
+			require.NoError(t, engine.Start(ctx))
 
-	const name = "rebuild-restart-error"
-	require.NoError(t, engine.StartProjection(ctx, name))
-	pause.For(200 * time.Millisecond)
+			const name = "rebuild-restart-error"
+			require.NoError(t, engine.StartProjection(ctx, name))
+			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	// Inject a mock offset store whose ResetOffset stops the actor system
-	// in-place. The subsequent StartProjection call inside RebuildProjection
-	// will then see a not-running actor system and fail.
-	ctrl := mock.NewController(t)
-	ctrl.Method("ResetOffset").
-		Expect(mock.Any(), name, mock.Any()).
-		Do(func([]any) []any {
-			_ = sys.Stop(ctx)
-			return []any{nil}
+			// Inject a mock offset store whose ResetOffset stops the actor system
+			// in-place. The subsequent StartProjection call inside RebuildProjection
+			// will then see a not-running actor system and fail.
+			ctrl := mock.NewController(t)
+			ctrl.Method("ResetOffset").
+				Expect(mock.Any(), name, mock.Any()).
+				Do(func([]any) []any {
+					_ = sys.Stop(ctx)
+					return []any{nil}
+				})
+
+			engine.mutex.Lock()
+			engine.offsetStore = offsetStoreMock{ctrl}
+			engine.mutex.Unlock()
+
+			err = engine.RebuildProjection(ctx, name, ZeroTime)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "failed to restart projection")
 		})
-
-	engine.mutex.Lock()
-	engine.offsetStore = offsetStoreMock{ctrl}
-	engine.mutex.Unlock()
-
-	err = engine.RebuildProjection(ctx, name, ZeroTime)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to restart projection")
+	})
 }
 
 // TestEngineClusterModeStartProjectionAlreadyExists exercises the cluster
@@ -2434,68 +2473,72 @@ func TestEngineRebuildProjectionRestartError(t *testing.T) {
 // projection name is a clean no-op: SpawnSingleton is idempotent when the
 // name is already bound to the same singleton, so no error surfaces.
 func TestEngineClusterModeStartProjectionAlreadyExists(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
-	offsetStore := testkit.NewOffsetStore()
-	require.NoError(t, offsetStore.Connect(ctx))
-	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+	specs.Describe(t, "starting a projection twice in cluster mode is a no-op", func(s *specs.Spec) {
+		s.It("takes the ErrSingletonAlreadyExists branch", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			require.NoError(t, store.Connect(ctx))
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			offsetStore := testkit.NewOffsetStore()
+			require.NoError(t, offsetStore.Connect(ctx))
+			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-	ports := dynaport.Get(3)
-	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
-	host := "127.0.0.1"
+			ports := dynaport.Get(3)
+			gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+			host := "127.0.0.1"
 
-	provider := &mockClusterProvider{
-		id:    "test",
-		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
-	}
+			provider := &mockClusterProvider{
+				id:    "test",
+				peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+			}
 
-	clusterCfg := goakt.NewClusterConfig().
-		WithDiscovery(provider).
-		WithDiscoveryPort(gossipPort).
-		WithPeersPort(clusterPort).
-		WithMinimumPeersQuorum(1).
-		WithReplicaCount(1).
-		WithPartitionCount(4).
-		WithKinds(ClusterKinds()...)
+			clusterCfg := goakt.NewClusterConfig().
+				WithDiscovery(provider).
+				WithDiscoveryPort(gossipPort).
+				WithPeersPort(clusterPort).
+				WithMinimumPeersQuorum(1).
+				WithReplicaCount(1).
+				WithPartitionCount(4).
+				WithKinds(ClusterKinds()...)
 
-	cfg := NewConfig(store,
-		WithLogger(DiscardLogger),
-		WithOffsetStore(offsetStore),
-		WithProjection("discard-once", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   100,
-			PullInterval: time.Second,
-		}),
-	)
+			cfg := NewConfig(store,
+				WithLogger(DiscardLogger),
+				WithOffsetStore(offsetStore),
+				WithProjection("discard-once", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   100,
+					PullInterval: time.Second,
+				}),
+			)
 
-	goaktOpts := append(cfg.GoaktOptions(),
-		goakt.WithCluster(clusterCfg),
-		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
-	)
+			goaktOpts := append(cfg.GoaktOptions(),
+				goakt.WithCluster(clusterCfg),
+				goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+			)
 
-	sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(ctx) })
+			sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+			require.NoError(t, err)
+			require.NoError(t, sys.Start(ctx))
+			t.Cleanup(func() { _ = sys.Stop(ctx) })
 
-	pause.For(time.Second)
-	require.True(t, sys.InCluster())
+			sc.Eventually(func() any { return sys.InCluster() }, specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine, err := NewEngine(sys, cfg)
+			require.NoError(t, err)
+			require.NoError(t, engine.Start(ctx))
+			t.Cleanup(func() { _ = engine.Stop(ctx) })
 
-	const name = "discard-once"
-	require.NoError(t, engine.StartProjection(ctx, name))
-	pause.For(time.Second)
+			const name = "discard-once"
+			require.NoError(t, engine.StartProjection(ctx, name))
+			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	// Re-registering must take the ErrSingletonAlreadyExists branch and
-	// silently return nil rather than erroring.
-	require.NoError(t, engine.StartProjection(ctx, name),
-		"second StartProjection on the same name must be a clean no-op via ErrSingletonAlreadyExists")
+			// Re-registering must take the ErrSingletonAlreadyExists branch and
+			// silently return nil rather than erroring.
+			require.NoError(t, engine.StartProjection(ctx, name),
+				"second StartProjection on the same name must be a clean no-op via ErrSingletonAlreadyExists")
+		})
+	})
 }
 
 // TestEngineProjectionLagWithEvents drives ProjectionLag through the path
