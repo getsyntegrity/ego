@@ -27,16 +27,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
 // administrativeScopeKey marks a ctx that administrativeScopeResolver
@@ -67,76 +65,76 @@ func (administrativeScopeResolver) Resolve(ctx context.Context) (tenancy.TenantC
 // cannot declare a spawn, cannot command a tenant-bound entity, and cannot
 // scope an erasure.
 func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
-	ctx := context.Background()
-	adminCtx := context.WithValue(ctx, administrativeScopeKey{}, true)
+	specs.Describe(t, "an administrative TenantContext is never an aggregate's tenant scope", func(s *specs.Spec) {
+		bg := context.Background()
+		adminCtx := context.WithValue(bg, administrativeScopeKey{}, true)
 
-	t.Run("an administrative-only resolver cannot bind a spawn", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		s.It("an administrative-only resolver cannot bind a spawn", func(ctx *specs.Context) {
+			store := newConnectedEventsStoreG3(ctx)
 
-		engine := newTestEngine(t, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
-		require.NoError(t, engine.Start(ctx))
-		t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		err := engine.Entity(adminCtx, newTenancyProbeEventSourcedBehavior(uuid.NewString()))
-		require.ErrorIs(t, err, ErrSpawnTenantUndetermined)
-	})
+			err := engine.Entity(adminCtx, newTenancyProbeEventSourcedBehavior(uuid.NewString()))
+			ctx.Expect(err).To(specs.MatchError(ErrSpawnTenantUndetermined))
+		})
 
-	t.Run("an administrative command is rejected by a tenant-bound entity", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		s.It("an administrative command is rejected by a tenant-bound entity", func(ctx *specs.Context) {
+			store := newConnectedEventsStoreG3(ctx)
 
-		engine := newTestEngine(t, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
-		require.NoError(t, engine.Start(ctx))
-		t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		entityID := uuid.NewString()
-		probe := newTenancyProbeEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
+			ctx.Expect(engine.Entity(bg, probe, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-		_, _, err := engine.SendCommand(adminCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-		require.Error(t, err)
-		assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run under an administrative scope")
+			_, _, err := engine.SendCommand(adminCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			// HandleCommand must never run under an administrative scope
+			ctx.Expect(probe.InvocationCount()).To(specs.BeZero())
 
-		acme, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := store.GetLatestEvent(ctx, acme, entityID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "nothing may be persisted under the entity's tenant")
-	})
+			acme, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			latest, err := store.GetLatestEvent(bg, acme, entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			// nothing may be persisted under the entity's tenant
+			ctx.Expect(latest).To(specs.BeNil())
+		})
 
-	t.Run("an administrative erasure is denied and erases nothing", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		s.It("an administrative erasure is denied and erases nothing", func(ctx *specs.Context) {
+			store := newConnectedEventsStoreG3(ctx)
 
-		persistenceID := uuid.NewString()
-		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		acme, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		for _, scope := range []persistence.Scope{persistence.Unscoped(), acme} {
-			require.NoError(t, store.WriteEvents(ctx, scope, []*egopb.Event{{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				Event:          eventAny,
-				Timestamp:      time.Now().UnixNano(),
-			}}, persistence.Unconditional()))
-		}
+			persistenceID := uuid.NewString()
+			eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			acme, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			scopes := []persistence.Scope{persistence.Unscoped(), acme}
+			for _, scope := range scopes {
+				ctx.Expect(store.WriteEvents(bg, scope, []*egopb.Event{{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					Event:          eventAny,
+					Timestamp:      time.Now().UnixNano(),
+				}}, persistence.Unconditional())).To(specs.BeNil())
+			}
 
-		engine := newTestEngine(t, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
-		require.NoError(t, engine.Start(ctx))
-		t.Cleanup(func() { _ = engine.Stop(ctx) })
+			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		err = engine.EraseEntity(adminCtx, persistenceID, true)
-		require.ErrorIs(t, err, tenancy.ErrDenied)
+			ctx.Expect(engine.EraseEntity(adminCtx, persistenceID, true)).To(specs.MatchError(tenancy.ErrDenied))
 
-		for _, scope := range []persistence.Scope{persistence.Unscoped(), acme} {
-			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-			require.NoError(t, err)
-			assert.NotNil(t, latest, "an administrative erasure must not touch %s", scope)
-		}
+			// an administrative erasure must not touch any scope
+			var erased []string
+			for _, scope := range scopes {
+				latest, err := store.GetLatestEvent(bg, scope, persistenceID)
+				ctx.Expect(err).To(specs.BeNil())
+				if latest == nil {
+					erased = append(erased, scope.String())
+				}
+			}
+			ctx.Expect(erased).To(specs.BeEmpty())
+		})
 	})
 }
