@@ -101,9 +101,9 @@ mutation proof, release note describing the changed message layout).
 
 The coordinator approved option 2 (the user later added: nothing may keep
 testify). This PR covers `testkit/scenario.go`, `internal/engine/enginetest/failing_behavior.go`
-and the two `example/cluster` test files. `persistence/conformance` is NOT touched:
-it is the breaking change above and is done on `feat/conformance-without-testify`
-by another writer (named follow-up `conformance-testify-major`).
+and the two `example/cluster` test files. `persistence/conformance` is NOT touched here:
+it was the breaking change above and landed separately in #262
+(named follow-up `conformance-testify-major`, done).
 
 Rules kept: fatal stays fatal (testify's `require` was `Errorf` then `FailNow`;
 the new `failNow` helper does exactly that), non-fatal stays `Errorf`. No exported
@@ -133,14 +133,10 @@ Message layout that users of `testkit` see now (testify printed `Error Trace`,
   Commit: `a579cd8`.
 - [x] T2 enginetest: `assert.AnError` becomes the package sentinel `ErrHandleEvent`
   (internal package; no caller compared the error). Commit: `febf8bc`.
-- [x] T3 example/cluster tests (separate Go module, own go.mod): `stores_test.go`
-  and `stores_postgres_test.go` use new local helpers in `check_test.go` (`mustX` is
-  fatal, `expectX` is non-fatal). `go.mod` no longer requires testify directly.
-  The Postgres tests need a live database and were only compiled and vetted here;
-  the offline tests in `stores_test.go` run. RED: mutating `stores.go` to return
-  `ErrInvalidPrecondition` made `TestPostgresEventStore_WriteEvents_InvalidScope`
-  fail with `error persistence: write precondition is not valid is not persistence:
-  scope is not valid`; reverted. Commit: see PR.
+- [x] T3 example/cluster tests: superseded. #260 moved them to go-specs on develop,
+  so this PR takes develop's versions and only runs `go mod tidy` there (testify
+  disappears from `example/cluster/go.mod`). My earlier stdlib-helper migration was dropped.
+- [x] T4 `go mod tidy` in `benchmark` and `example/cluster` (CI `tidy` job).
 
 ## Progress
 
