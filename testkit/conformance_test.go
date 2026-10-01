@@ -98,63 +98,72 @@ var wantStoreAdapterOutcomes = map[string]adaptertest.Outcome{
 	"AT-5":                              adaptertest.Passed,
 }
 
+// outcomeLine renders one harness result as "check: outcome", adding the
+// detail when the check failed, so a spec failure prints each offender with
+// the reason it gives.
+func outcomeLine(r adaptertest.Result) string {
+	line := fmt.Sprintf("%s: %v", r.Check, r.Outcome)
+	if r.Outcome == adaptertest.Failed {
+		line += ": " + r.Detail
+	}
+	return line
+}
+
 func TestStoresAdapterConformance(t *testing.T) {
-	cases := []struct {
+	type row struct {
 		name string
 		port adapter.Port
 		new  func() any
-	}{
+	}
+	rows := []row{
 		{"EventStore", persistence.PortEventsStore, func() any { return NewEventsStore() }},
 		{"DurableStore", persistence.PortStateStore, func() any { return NewDurableStore() }},
 		{"OffsetStore", offsetstore.PortOffsetStore, func() any { return NewOffsetStore() }},
 	}
-	specs.Describe(t, "the in-memory stores pass the adapter lifecycle checks as Borrowed adapters", func(s *specs.Spec) {
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				results := adaptertest.Run(ctx.T, adaptertest.Target{
-					Port:      tc.port,
-					Ownership: adaptertest.Borrowed,
-					New:       func(*testing.T) (any, error) { return tc.new(), nil },
-				})
-				ctx.Expect(len(results)).ToEqual(len(wantStoreAdapterOutcomes))
 
-				// Collect the checks that are unknown or ended in another
-				// outcome, so a failure prints each offender with its detail.
-				var offenders []string
-				for _, r := range results {
-					want, known := wantStoreAdapterOutcomes[r.Check]
-					switch {
-					case !known:
-						offenders = append(offenders, fmt.Sprintf("%s: unexpected check", r.Check))
-					case want != r.Outcome:
-						offenders = append(offenders, fmt.Sprintf("%s: got %v, want %v: %s", r.Check, r.Outcome, want, r.Detail))
-					}
-				}
-				ctx.Expect(offenders).To(specs.BeNil())
+	var wantLines []string
+	for check, outcome := range wantStoreAdapterOutcomes {
+		wantLines = append(wantLines, fmt.Sprintf("%s: %v", check, outcome))
+	}
+
+	specs.Describe(t, "the in-memory stores pass the adapter lifecycle checks as Borrowed adapters", func(s *specs.Spec) {
+		specs.Table(s, rows, func(r row) string { return r.name }, func(ctx *specs.Context, r row) {
+			results := adaptertest.Run(ctx.T, adaptertest.Target{
+				Port:      r.port,
+				Ownership: adaptertest.Borrowed,
+				New:       func(*testing.T) (any, error) { return r.new(), nil },
 			})
-		}
+
+			// Every expected check ran once, with the expected outcome, and no
+			// other check ran.
+			lines := make([]string, 0, len(results))
+			for _, res := range results {
+				lines = append(lines, outcomeLine(res))
+			}
+			ctx.Expect(lines).To(specs.ContainTheSameElementsAs(wantLines))
+		})
 	})
 }
 
 // The descriptors declare no capability: CapReady is implied by the store
 // ports, and the stores have no Start.
 func TestStoreDescriptors(t *testing.T) {
-	cases := map[string]struct {
+	type row struct {
+		name  string
 		value any
 		port  adapter.Port
-	}{
-		"EventStore":   {NewEventsStore(), persistence.PortEventsStore},
-		"DurableStore": {NewDurableStore(), persistence.PortStateStore},
-		"OffsetStore":  {NewOffsetStore(), offsetstore.PortOffsetStore},
+	}
+	rows := []row{
+		{"EventStore", NewEventsStore(), persistence.PortEventsStore},
+		{"DurableStore", NewDurableStore(), persistence.PortStateStore},
+		{"OffsetStore", NewOffsetStore(), offsetstore.PortOffsetStore},
 	}
 	specs.Describe(t, "each store declares its port and the testkit-memory name in its descriptor", func(s *specs.Spec) {
-		for name, tc := range cases {
-			s.It(name, func(ctx *specs.Context) {
-				d, ok := adapter.Describe(tc.value)
-				ctx.Expect(ok).To(specs.BeTrue())
-				ctx.Expect(d).ToEqual(adapter.Descriptor{Ports: []adapter.Port{tc.port}, Name: "testkit-memory"})
-			})
-		}
+		specs.Table(s, rows, func(r row) string { return r.name }, func(ctx *specs.Context, r row) {
+			d, ok := adapter.Describe(r.value)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(d).ToEqual(adapter.Descriptor{Ports: []adapter.Port{r.port}, Name: "testkit-memory"})
+		})
 	})
 }
 
@@ -202,16 +211,12 @@ func TestConformanceCatchesNonIsolatingStore(t *testing.T) {
 // boolean.
 func assertSuiteDetectedNonIsolation(ctx *specs.Context, results []conformance.CheckResult) {
 	ctx.T.Helper()
-	ctx.Expect(len(results) > 0).To(specs.BeTrue())
+	ctx.Expect(results).To(specs.Not(specs.BeEmpty()))
 
-	var failed []string
 	for _, r := range results {
 		ctx.T.Logf("check %-65s failed=%v errors=%v", r.Name, r.Failed, r.Errors)
-		if r.Failed {
-			failed = append(failed, r.Name)
-		}
 	}
-	ctx.Expect(failed).To(specs.Not(specs.BeNil()))
+	ctx.Expect(results).To(specs.AnyElement(specs.Project("failed", func(r conformance.CheckResult) bool { return r.Failed }, specs.BeTrue())))
 }
 
 // ---------------------------------------------------------------------------
