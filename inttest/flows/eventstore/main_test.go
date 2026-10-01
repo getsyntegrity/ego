@@ -36,7 +36,8 @@ var shared *pginfra.Postgres
 
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
-// run exists so the container is terminated by a defer even when m.Run panics, before os.Exit ends the process.
+// run exists so Terminate is deferred before os.Exit; if a test panics, the process dies without running it and
+// the Testcontainers reaper (Ryuk) removes the container.
 func run(m *testing.M) int {
 	ctx := context.Background()
 	pg, err := pginfra.StartPostgres(ctx)
