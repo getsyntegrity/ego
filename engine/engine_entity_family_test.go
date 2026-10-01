@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,12 +184,16 @@ func TestWithEntityFamilies_UnknownBitsAreIgnored(t *testing.T) {
 }
 
 func TestEntityFamily_String(t *testing.T) {
-	assert.Equal(t, "EventSourced", EventSourcedFamily.String())
-	assert.Equal(t, "DurableState", DurableStateFamily.String())
-	assert.Equal(t, "Saga", SagaFamily.String())
-	assert.Equal(t, "EventSourced|Saga", (EventSourcedFamily | SagaFamily).String())
-	assert.Equal(t, "EntityFamily(0)", EntityFamily(0).String())
-	assert.Equal(t, "EntityFamily(8)", EntityFamily(8).String())
+	specs.Describe(t, "EntityFamily.String names the declared families", func(s *specs.Spec) {
+		s.It("renders one name per family, a union with a pipe and an unknown value by number", func(ctx *specs.Context) {
+			ctx.Expect(EventSourcedFamily.String()).ToEqual("EventSourced")
+			ctx.Expect(DurableStateFamily.String()).ToEqual("DurableState")
+			ctx.Expect(SagaFamily.String()).ToEqual("Saga")
+			ctx.Expect((EventSourcedFamily | SagaFamily).String()).ToEqual("EventSourced|Saga")
+			ctx.Expect(EntityFamily(0).String()).ToEqual("EntityFamily(0)")
+			ctx.Expect(EntityFamily(8).String()).ToEqual("EntityFamily(8)")
+		})
+	})
 }
 
 // closeCountingStream records Close calls on an otherwise real stream.
@@ -226,16 +231,22 @@ func TestWithEventStream_UsesTheGivenStream(t *testing.T) {
 // TestWithEventStream_NilKeepsTheDefault ignores a nil or typed-nil stream,
 // so NewConfig's own stream stays in place.
 func TestWithEventStream_NilKeepsTheDefault(t *testing.T) {
-	for name, stream := range map[string]eventstream.Stream{
-		"nil":       nil,
-		"typed nil": (*eventstream.EventsStream)(nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			cfg := NewConfig(nil, WithEventStream(stream))
-			require.NotNil(t, cfg.eventStream)
-			def, isDefault := cfg.eventStream.(*eventstream.EventsStream)
-			assert.True(t, isDefault)
-			assert.NotNil(t, def, "the default stream must be kept, not replaced by a typed nil")
-		})
-	}
+	specs.Describe(t, "WithEventStream ignores a nil or typed-nil stream and keeps NewConfig's own", func(s *specs.Spec) {
+		for _, tc := range []struct {
+			name   string
+			stream eventstream.Stream
+		}{
+			{"nil", nil},
+			{"typed nil", (*eventstream.EventsStream)(nil)},
+		} {
+			s.It("keeps the default stream for a "+tc.name+" stream", func(ctx *specs.Context) {
+				cfg := NewConfig(nil, WithEventStream(tc.stream))
+				ctx.Expect(cfg.eventStream != nil).To(specs.BeTrue())
+				def, isDefault := cfg.eventStream.(*eventstream.EventsStream)
+				ctx.Expect(isDefault).To(specs.BeTrue())
+				// the default stream must be kept, not replaced by a typed nil
+				ctx.Expect(def != nil).To(specs.BeTrue())
+			})
+		}
+	})
 }

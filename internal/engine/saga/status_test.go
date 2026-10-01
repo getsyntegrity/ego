@@ -25,7 +25,7 @@ package saga
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/egopb"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
@@ -34,12 +34,17 @@ import (
 // TestSagaStatusWireRoundTrip pins the runtimeport.SagaStatus <-> SagaLifecycleStatus
 // mapping the saga actor and Engine.SagaStatus share (#153).
 func TestSagaStatusWireRoundTrip(t *testing.T) {
-	for _, status := range []runtimeport.SagaStatus{runtimeport.SagaRunning, runtimeport.SagaCompleted, runtimeport.SagaCompensating, runtimeport.SagaFailed} {
-		t.Run(status.String(), func(t *testing.T) {
-			wire := StatusToProto(status)
-			assert.NotEqual(t, egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE, wire, "the saga actor must always report a status")
-			assert.Equal(t, status, StatusFromProto(wire))
+	specs.Describe(t, "saga status survives the wire round trip", func(s *specs.Spec) {
+		specs.Table(s, []runtimeport.SagaStatus{runtimeport.SagaRunning, runtimeport.SagaCompleted, runtimeport.SagaCompensating, runtimeport.SagaFailed},
+			func(status runtimeport.SagaStatus) string { return status.String() },
+			func(ctx *specs.Context, status runtimeport.SagaStatus) {
+				wire := StatusToProto(status)
+				// the saga actor must always report a status
+				ctx.Expect(wire).To(specs.NotEqual(egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE))
+				ctx.Expect(StatusFromProto(wire)).ToEqual(status)
+			})
+		s.It("an unknown wire value reads as running", func(ctx *specs.Context) {
+			ctx.Expect(StatusFromProto(egopb.SagaLifecycleStatus(99))).ToEqual(runtimeport.SagaRunning)
 		})
-	}
-	assert.Equal(t, runtimeport.SagaRunning, StatusFromProto(egopb.SagaLifecycleStatus(99)), "an unknown wire value reads as runtimeport.SagaRunning")
+	})
 }

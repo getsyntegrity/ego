@@ -28,11 +28,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	mockpersistence "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -61,7 +61,8 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 	ctx := context.Background()
 
 	t.Run("Entity refuses to spawn and touches no store", func(t *testing.T) {
-		store := mockpersistence.NewEventsStore(t)
+		// A controller with no expectation: any store call fails the case.
+		store := eventsStoreMock{mock.NewController(t)}
 
 		engine := newTestEngine(t, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
 		require.NoError(t, engine.Start(ctx))
@@ -80,12 +81,9 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 		require.Zero(t, probe.InvocationCount(), "HandleCommand must never run: the entity was never spawned")
 
 		// No expectation was registered on this mock at all, so ANY call to
-		// it (Ping, GetLatestEvent, WriteEvents, ...) would already fail the
-		// test via testify's unexpected-call panic; these are an explicit,
-		// named assertion of that guarantee rather than an accident of test
-		// ordering. spawnTenantScope must reject before the actor is ever
-		// created, let alone reaches a store.
-		store.AssertExpectations(t)
+		// it (Ping, GetLatestEvent, WriteEvents, ...) is reported as an
+		// unexpected call by the go-specs controller. spawnTenantScope must
+		// reject before the actor is ever created, let alone reaches a store.
 
 		require.NoError(t, engine.Stop(ctx))
 	})
@@ -95,7 +93,7 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 		require.NoError(t, store.Connect(ctx))
 		t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-		durableStore := mockpersistence.NewStateStore(t)
+		durableStore := stateStoreMock{mock.NewController(t)}
 
 		engine := newTestEngine(t, "Sample", store,
 			WithTenantResolver(&stubTenantResolver{id: "acme"}),
@@ -112,8 +110,6 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 		exists, existsErr := engine.EntityExists(ctx, entityID)
 		require.NoError(t, existsErr)
 		require.False(t, exists)
-
-		durableStore.AssertExpectations(t)
 
 		require.NoError(t, engine.Stop(ctx))
 	})

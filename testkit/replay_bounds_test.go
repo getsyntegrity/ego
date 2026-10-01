@@ -27,7 +27,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
@@ -42,18 +42,21 @@ import (
 // result) is caught here, and an event above the 32-bit int range is still
 // returned.
 func TestEventStoreReplayEventsAcceptsTheMigrationReplayBounds(t *testing.T) {
-	ctx := context.Background()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.ReplayEvents with the migration replay bounds", func(s *specs.Spec) {
+		bg := context.Background()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	high := uint64(math.MaxInt32) + 1
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{
-		{PersistenceId: "bounds", SequenceNumber: 1},
-		{PersistenceId: "bounds", SequenceNumber: high},
-	}, persistence.Unconditional()))
+		s.It("returns every event, including one above the 32-bit int range", func(ctx *specs.Context) {
+			high := uint64(math.MaxInt32) + 1
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{
+				{PersistenceId: "bounds", SequenceNumber: 1},
+				{PersistenceId: "bounds", SequenceNumber: high},
+			}, persistence.Unconditional())).To(specs.BeNil())
 
-	events, err := store.ReplayEvents(ctx, persistence.Unscoped(), "bounds", 1, math.MaxUint64, uint64(math.MaxInt))
-	require.NoError(t, err)
-	require.Len(t, events, 2)
-	require.Equal(t, high, events[1].GetSequenceNumber())
+			events, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "bounds", 1, math.MaxUint64, uint64(math.MaxInt))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(events).To(specs.HaveLen(2))
+			ctx.Expect(events[1]).To(sequenceNumber[*egopb.Event](high))
+		})
+	})
 }
