@@ -27,10 +27,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
@@ -71,13 +71,11 @@ func (c *capture) all() []capturedRecord {
 	return append([]capturedRecord(nil), c.records...)
 }
 
-// last returns the most recent record and fails the case when none arrived.
-func (c *capture) last(t testing.TB) capturedRecord {
-	t.Helper()
+// last returns the most recent record. The case fails through the spec, not
+// through t.Fatalf, when no record reached the backend.
+func (c *capture) last(ctx *specs.Context) capturedRecord {
 	records := c.all()
-	if len(records) == 0 {
-		t.Fatalf("no record reached the backend")
-	}
+	ctx.Expect(records).To(specs.Not(specs.BeEmpty()))
 	return records[len(records)-1]
 }
 
@@ -95,13 +93,57 @@ func newCaptureLogger(level kitlog.Level) (kitlog.Logger, *capture) {
 
 type ctxKey struct{}
 
-// stringerSpy records whether fmt ever asked for its string form. It proves
-// that a printf-style call skipped formatting when the level was disabled.
-type stringerSpy struct{ called bool }
+// stringerMock is a fmt.Stringer backed by a mock controller. A case declares
+// how often fmt may ask for the string form, so it can prove that a
+// printf-style call skipped formatting when the level was disabled.
+type stringerMock struct{ c *mock.Controller }
 
-func (s *stringerSpy) String() string {
-	s.called = true
-	return "formatted"
+func (m stringerMock) String() string {
+	return mock.Value[string](m.c.Method("String").Call(), 0)
+}
+
+// newStringer returns a stringer whose String call is expected exactly times
+// times; the controller verifies the count when the case ends.
+func newStringer(ctx *specs.Context, times int) stringerMock {
+	ctrl := mock.NewController(ctx)
+	ctrl.Method("String").Expect().Times(times).Return("formatted")
+	return stringerMock{ctrl}
+}
+
+// managedBackend is a kit-logger with an explicit lifecycle whose Flush and
+// Shutdown are forwarded to a mock controller. The embedded logger is a real
+// discarding one, so the adapter's constructor works as it does in production.
+type managedBackend struct {
+	kitlog.Logger
+	c *mock.Controller
+}
+
+func (m managedBackend) Flush(ctx context.Context) error {
+	return m.c.Method("Flush").Call(ctx).Err(0)
+}
+
+func (m managedBackend) Shutdown(ctx context.Context) error {
+	return m.c.Method("Shutdown").Call(ctx).Err(0)
+}
+
+func newManagedBackend(ctx *specs.Context) (managedBackend, *mock.Controller) {
+	ctrl := mock.NewController(ctx)
+	discard := kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
+	return managedBackend{Logger: discard, c: ctrl}, ctrl
+}
+
+// beTheSameInstance matches a value that is the very instance want. ToEqual
+// compares deeply, so it would also accept a distinct but equal value.
+func beTheSameInstance(want any) specs.Matcher {
+	return specs.Satisfy("be the same instance", func(got any) bool { return got == want })
+}
+
+// beAnAdapter matches a logger that is eGo's *adapter.
+func beAnAdapter() specs.Matcher {
+	return specs.Satisfy("be an *adapter", func(got any) bool {
+		_, ok := got.(*adapter)
+		return ok
+	})
 }
 
 // panicked reports whether fn panics.
@@ -117,18 +159,25 @@ type field struct {
 	val any
 }
 
+type levelCase struct {
+	name       string
+	level      slog.Level
+	call       func(a *adapter)
+	msg        string
+	wants      []field
+	carriesCtx bool
+}
+
+type stringerCase struct {
+	name string
+	call func(a *adapter, s fmt.Stringer)
+}
+
 func TestLoggerAdapterRoutesEveryLevel(t *testing.T) {
 	specs.Describe(t, "the adapter routes every GoAkt logging method to the matching backend level", func(s *specs.Spec) {
 		carried := context.WithValue(context.Background(), ctxKey{}, "carried")
 
-		tests := []struct {
-			name       string
-			level      slog.Level
-			call       func(a *adapter)
-			msg        string
-			wants      []field
-			carriesCtx bool
-		}{
+		tests := []levelCase{
 			{"Debug", slog.LevelDebug, func(a *adapter) { a.Debug("msg", "k", "v") }, "msg", []field{{"k", "v"}}, false},
 			{"Debugf", slog.LevelDebug, func(a *adapter) { a.Debugf("n=%d", 1) }, "n=1", nil, false},
 			{"DebugContext", slog.LevelDebug, func(a *adapter) { a.DebugContext(carried, "msg", "k", "v") }, "msg", []field{{"k", "v"}}, true},
@@ -147,23 +196,21 @@ func TestLoggerAdapterRoutesEveryLevel(t *testing.T) {
 			{"ErrorfContext", slog.LevelError, func(a *adapter) { a.ErrorfContext(carried, "n=%d", 1) }, "n=1", nil, true},
 		}
 
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				logger, sink := newCaptureLogger(kitlog.LevelDebug)
-				tt.call(newAdapter(logger))
+		specs.Table(s, tests, func(tt levelCase) string { return tt.name }, func(ctx *specs.Context, tt levelCase) {
+			logger, sink := newCaptureLogger(kitlog.LevelDebug)
+			tt.call(newAdapter(logger))
 
-				got := sink.last(ctx.T)
-				ctx.Expect(got.level).ToEqual(tt.level)
-				ctx.Expect(got.msg).ToEqual(tt.msg)
-				for _, f := range tt.wants {
-					ctx.Expect(got.attrs[f.key]).ToEqual(f.val)
-				}
-				if tt.carriesCtx {
-					// The caller's context must reach the backend verbatim.
-					ctx.Expect(got.ctx.Value(ctxKey{})).ToEqual("carried")
-				}
-			})
-		}
+			got := sink.last(ctx)
+			ctx.Expect(got.level).ToEqual(tt.level)
+			ctx.Expect(got.msg).ToEqual(tt.msg)
+			for _, f := range tt.wants {
+				ctx.Expect(got.attrs).To(specs.HavePair(f.key, f.val))
+			}
+			if tt.carriesCtx {
+				// The caller's context must reach the backend verbatim.
+				ctx.Expect(got.ctx.Value(ctxKey{})).ToEqual("carried")
+			}
+		})
 	})
 }
 
@@ -172,7 +219,7 @@ func TestLoggerAdapterNonStringFirstArgumentBecomesTheMessage(t *testing.T) {
 		s.It("uses the error text as the message", func(ctx *specs.Context) {
 			logger, sink := newCaptureLogger(kitlog.LevelDebug)
 			newAdapter(logger).Error(errors.New("boom"))
-			ctx.Expect(sink.last(ctx.T).msg).ToEqual("boom")
+			ctx.Expect(sink.last(ctx).msg).ToEqual("boom")
 		})
 	})
 }
@@ -191,38 +238,31 @@ func TestLoggerAdapterFormattedMethodsSkipFormattingWhenDisabled(t *testing.T) {
 			a = newAdapter(logger)
 		})
 
-		calls := []struct {
-			name string
-			call func(a *adapter, spy *stringerSpy)
-		}{
-			{"Debugf", func(a *adapter, spy *stringerSpy) { a.Debugf("%s", spy) }},
-			{"DebugfContext", func(a *adapter, spy *stringerSpy) { a.DebugfContext(context.Background(), "%s", spy) }},
-			{"Infof", func(a *adapter, spy *stringerSpy) { a.Infof("%s", spy) }},
-			{"InfofContext", func(a *adapter, spy *stringerSpy) { a.InfofContext(context.Background(), "%s", spy) }},
-			{"Warnf", func(a *adapter, spy *stringerSpy) { a.Warnf("%s", spy) }},
-			{"WarnfContext", func(a *adapter, spy *stringerSpy) { a.WarnfContext(context.Background(), "%s", spy) }},
-		}
-		for _, c := range calls {
-			// A disabled record must not be formatted.
-			s.It(c.name, func(ctx *specs.Context) {
-				spy := &stringerSpy{}
-				c.call(a, spy)
-				ctx.Expect(spy.called).To(specs.BeFalse())
-			})
+		calls := []stringerCase{
+			{"Debugf", func(a *adapter, s fmt.Stringer) { a.Debugf("%s", s) }},
+			{"DebugfContext", func(a *adapter, s fmt.Stringer) { a.DebugfContext(context.Background(), "%s", s) }},
+			{"Infof", func(a *adapter, s fmt.Stringer) { a.Infof("%s", s) }},
+			{"InfofContext", func(a *adapter, s fmt.Stringer) { a.InfofContext(context.Background(), "%s", s) }},
+			{"Warnf", func(a *adapter, s fmt.Stringer) { a.Warnf("%s", s) }},
+			{"WarnfContext", func(a *adapter, s fmt.Stringer) { a.WarnfContext(context.Background(), "%s", s) }},
 		}
 
+		// A disabled record must not be formatted: the stringer expects no call.
+		specs.Table(s, calls, func(c stringerCase) string { return c.name }, func(ctx *specs.Context, c stringerCase) {
+			c.call(a, newStringer(ctx, 0))
+		})
+
 		s.It("drops every disabled record", func(ctx *specs.Context) {
+			stringer := newStringer(ctx, 0)
 			for _, c := range calls {
-				c.call(a, &stringerSpy{})
+				c.call(a, stringer)
 			}
-			ctx.Expect(len(sink.all())).ToEqual(0)
+			ctx.Expect(sink.all()).To(specs.BeEmpty())
 		})
 
 		s.It("formats and emits an enabled level", func(ctx *specs.Context) {
-			spy := &stringerSpy{}
-			a.Errorf("%s", spy)
-			ctx.Expect(spy.called).To(specs.BeTrue())
-			ctx.Expect(sink.last(ctx.T).msg).ToEqual("formatted")
+			a.Errorf("%s", newStringer(ctx, 1))
+			ctx.Expect(sink.last(ctx).msg).ToEqual("formatted")
 		})
 	})
 }
@@ -234,29 +274,27 @@ func TestLoggerAdapterWithBuildsTheChildInTheBackend(t *testing.T) {
 			parent := newAdapter(logger)
 
 			child := parent.With("subsystem", "engine")
-			_, isAdapter := child.(*adapter)
-			ctx.Expect(isAdapter).To(specs.BeTrue())
-			ctx.Expect(child == log.Logger(parent)).To(specs.BeFalse())
+			ctx.Expect(child).To(beAnAdapter())
+			ctx.Expect(child).To(specs.Not(beTheSameInstance(log.Logger(parent))))
 
 			child.Info("child record", "k", "v")
-			got := sink.last(ctx.T)
-			ctx.Expect(got.attrs["subsystem"]).ToEqual("engine")
-			ctx.Expect(got.attrs["k"]).ToEqual("v")
+			got := sink.last(ctx)
+			ctx.Expect(got.attrs).To(specs.HavePair("subsystem", "engine"))
+			ctx.Expect(got.attrs).To(specs.HavePair("k", "v"))
 
 			parent.Info("parent record")
-			_, hasSubsystem := sink.last(ctx.T).attrs["subsystem"]
 			// The parent must not inherit the child's fields.
-			ctx.Expect(hasSubsystem).To(specs.BeFalse())
+			ctx.Expect(sink.last(ctx).attrs).To(specs.Not(specs.HaveKey("subsystem")))
 
 			grandchild := child.With("entity_id", "42")
 			grandchild.Info("grandchild record")
-			got = sink.last(ctx.T)
+			got = sink.last(ctx)
 			// Chained With calls accumulate.
-			ctx.Expect(got.attrs["subsystem"]).ToEqual("engine")
-			ctx.Expect(got.attrs["entity_id"]).ToEqual("42")
+			ctx.Expect(got.attrs).To(specs.HavePair("subsystem", "engine"))
+			ctx.Expect(got.attrs).To(specs.HavePair("entity_id", "42"))
 
 			// With without fields returns the same adapter.
-			ctx.Expect(parent.With() == log.Logger(parent)).To(specs.BeTrue())
+			ctx.Expect(parent.With()).To(beTheSameInstance(log.Logger(parent)))
 		})
 	})
 }
@@ -321,10 +359,11 @@ func TestDiscardingBackendDisablesEveryLevel(t *testing.T) {
 
 func TestGoaktToSlogLevel(t *testing.T) {
 	specs.Describe(t, "goaktToSlogLevel maps GoAkt levels to slog levels", func(s *specs.Spec) {
-		tests := []struct {
+		type levelMapping struct {
 			in   log.Level
 			want slog.Level
-		}{
+		}
+		tests := []levelMapping{
 			{log.DebugLevel, slog.LevelDebug},
 			{log.InfoLevel, slog.LevelInfo},
 			{log.WarningLevel, slog.LevelWarn},
@@ -333,11 +372,10 @@ func TestGoaktToSlogLevel(t *testing.T) {
 			{log.PanicLevel, slog.LevelError + 8},
 			{log.InvalidLevel, slog.LevelInfo},
 		}
-		for _, tt := range tests {
-			s.It(fmt.Sprintf("level %v", tt.in), func(ctx *specs.Context) {
+		specs.Table(s, tests, func(tt levelMapping) string { return fmt.Sprintf("level %v", tt.in) },
+			func(ctx *specs.Context, tt levelMapping) {
 				ctx.Expect(goaktToSlogLevel(tt.in)).ToEqual(tt.want)
 			})
-		}
 
 		s.It("is strictly monotonic in severity", func(ctx *specs.Context) {
 			// LogLevel probes levels in verbosity order and stops at the first
@@ -358,42 +396,44 @@ func TestGoaktToSlogLevel(t *testing.T) {
 
 func TestGoaktArgsToMsg(t *testing.T) {
 	specs.Describe(t, "goaktArgsToMsg splits GoAkt arguments into a message and fields", func(s *specs.Spec) {
-		tests := []struct {
+		type argsCase struct {
 			name       string
 			args       []any
 			wantMsg    string
 			wantFields []any
-		}{
+		}
+		tests := []argsCase{
 			{"no args", nil, "", nil},
 			{"string only", []any{"hello"}, "hello", nil},
 			{"string with fields", []any{"hello", "k", "v"}, "hello", []any{"k", "v"}},
 			{"non-string first arg", []any{42}, "42", nil},
 			{"error first arg", []any{errors.New("boom"), "k", "v"}, "boom", []any{"k", "v"}},
 		}
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				msg, fields := goaktArgsToMsg(tt.args)
-				ctx.Expect(msg).ToEqual(tt.wantMsg)
-				ctx.Expect(fields).ToEqual(tt.wantFields)
-			})
-		}
+		specs.Table(s, tests, func(tt argsCase) string { return tt.name }, func(ctx *specs.Context, tt argsCase) {
+			msg, fields := goaktArgsToMsg(tt.args)
+			ctx.Expect(msg).ToEqual(tt.wantMsg)
+			ctx.Expect(fields).ToEqual(tt.wantFields)
+		})
 	})
 }
 
 func TestLoggerAdapterFlush(t *testing.T) {
 	specs.Describe(t, "Flush drains the backend without shutting it down", func(s *specs.Spec) {
 		s.It("forwards to a managed backend", func(ctx *specs.Context) {
-			mock := kitlogtest.NewMockLogger()
-			ctx.Expect(newAdapter(mock).Flush()).To(specs.BeNil())
-			ctx.Expect(mock.FlushCalls()).ToEqual(1)
+			backend, ctrl := newManagedBackend(ctx)
+			ctrl.Method("Flush").Expect(mock.Any()).Times(1).Return(nil)
 			// GoAkt's flush must never shut the application's logger down.
-			ctx.Expect(mock.ShutdownCalls()).ToEqual(0)
+			ctrl.Method("Shutdown").Expect(mock.Any()).Never()
+
+			ctx.Expect(newAdapter(backend).Flush()).To(specs.BeNil())
 		})
 
 		s.It("reports the backend's error", func(ctx *specs.Context) {
-			mock := kitlogtest.NewMockLogger()
-			mock.FlushErr = errors.New("flush failed")
-			ctx.Expect(newAdapter(mock).Flush()).To(specs.MatchError(mock.FlushErr))
+			backend, ctrl := newManagedBackend(ctx)
+			flushErr := errors.New("flush failed")
+			ctrl.Method("Flush").Expect(mock.Any()).Times(1).Return(flushErr)
+
+			ctx.Expect(newAdapter(backend).Flush()).To(specs.MatchError(flushErr))
 		})
 
 		s.It("a real logger without a buffer flushes immediately", func(ctx *specs.Context) {
@@ -411,7 +451,7 @@ func TestLoggerAdapterStdLogger(t *testing.T) {
 			ctx.Expect(std).To(specs.Not(specs.BeNil()))
 
 			std.Println("from the standard library")
-			got := sink.last(ctx.T)
+			got := sink.last(ctx)
 			ctx.Expect(got.level).ToEqual(slog.LevelInfo)
 			ctx.Expect(got.msg).ToEqual("from the standard library")
 		})
@@ -420,24 +460,23 @@ func TestLoggerAdapterStdLogger(t *testing.T) {
 
 func TestLoggerWriterTrimsLineEndings(t *testing.T) {
 	specs.Describe(t, "loggerWriter trims the line ending before emitting", func(s *specs.Spec) {
-		tests := []struct {
+		type lineCase struct {
 			name string
 			in   string
 			want string
-		}{
+		}
+		tests := []lineCase{
 			{"newline", "line\n", "line"},
 			{"crlf", "line\r\n", "line"},
 			{"none", "line", "line"},
 		}
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				logger, sink := newCaptureLogger(kitlog.LevelInfo)
-				n, err := (&loggerWriter{inner: logger}).Write([]byte(tt.in))
-				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(n).ToEqual(len(tt.in))
-				ctx.Expect(sink.last(ctx.T).msg).ToEqual(tt.want)
-			})
-		}
+		specs.Table(s, tests, func(tt lineCase) string { return tt.name }, func(ctx *specs.Context, tt lineCase) {
+			logger, sink := newCaptureLogger(kitlog.LevelInfo)
+			n, err := (&loggerWriter{inner: logger}).Write([]byte(tt.in))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(n).ToEqual(len(tt.in))
+			ctx.Expect(sink.last(ctx).msg).ToEqual(tt.want)
+		})
 	})
 }
 
@@ -446,13 +485,12 @@ func TestNewWrapsTheBackendInAnAdapter(t *testing.T) {
 		s.It("returns an adapter that emits through the backend", func(ctx *specs.Context) {
 			logger, sink := newCaptureLogger(kitlog.LevelInfo)
 			wrapped := New(logger)
-			_, isAdapter := wrapped.(*adapter)
-			ctx.Expect(isAdapter).To(specs.BeTrue())
+			ctx.Expect(wrapped).To(beAnAdapter())
 
 			wrapped.Info("through New", "k", "v")
-			got := sink.last(ctx.T)
+			got := sink.last(ctx)
 			ctx.Expect(got.msg).ToEqual("through New")
-			ctx.Expect(got.attrs["k"]).ToEqual("v")
+			ctx.Expect(got.attrs).To(specs.HavePair("k", "v"))
 		})
 	})
 }
@@ -461,18 +499,18 @@ func TestBackend(t *testing.T) {
 	specs.Describe(t, "Backend recovers the kit-logger behind a GoAkt logger", func(s *specs.Spec) {
 		s.It("recovers the backend behind eGo's adapter", func(ctx *specs.Context) {
 			logger, _ := newCaptureLogger(kitlog.LevelInfo)
-			ctx.Expect(Backend(New(logger)) == logger).To(specs.BeTrue())
+			ctx.Expect(Backend(New(logger))).To(beTheSameInstance(logger))
 		})
 
 		s.It("recovers the backend behind a child adapter", func(ctx *specs.Context) {
 			logger, sink := newCaptureLogger(kitlog.LevelInfo)
 			child := newAdapter(logger).With("subsystem", "engine")
 			Backend(child).Info("through the child")
-			ctx.Expect(sink.last(ctx.T).attrs["subsystem"]).ToEqual("engine")
+			ctx.Expect(sink.last(ctx).attrs).To(specs.HavePair("subsystem", "engine"))
 		})
 
 		s.It("falls back to the default for a foreign GoAkt logger", func(ctx *specs.Context) {
-			ctx.Expect(logging.DefaultLogger() == Backend(log.DiscardLogger)).To(specs.BeTrue())
+			ctx.Expect(Backend(log.DiscardLogger)).To(beTheSameInstance(logging.DefaultLogger()))
 		})
 	})
 }
@@ -519,25 +557,24 @@ func TestLoggerAdapterAttributesRecordsToTheGoaktCallSite(t *testing.T) {
 			a = newAdapter(logger)
 		})
 
-		calls := []struct {
+		type callCase struct {
 			name string
 			call func()
-		}{
+		}
+		calls := []callCase{
 			{"Info", func() { a.Info("msg") }},
 			{"Infof", func() { a.Infof("msg %d", 1) }},
 			{"ErrorContext", func() { a.ErrorContext(context.Background(), "msg") }},
 			{"With", func() { a.With("k", "v").Warn("msg") }},
 		}
-		for _, c := range calls {
-			s.It(c.name, func(ctx *specs.Context) {
-				c.call()
-				file, function := sourceOf(sink.last(ctx.T))
-				// The record must name the caller of the adapter.
-				ctx.Expect(strings.HasSuffix(file, "adapter_test.go")).To(specs.BeTrue())
-				// The adapter must never be the attributed frame.
-				ctx.Expect(strings.Contains(function, "(*adapter)")).To(specs.BeFalse())
-			})
-		}
+		specs.Table(s, calls, func(c callCase) string { return c.name }, func(ctx *specs.Context, c callCase) {
+			c.call()
+			file, function := sourceOf(sink.last(ctx))
+			// The record must name the caller of the adapter.
+			ctx.Expect(file).To(specs.EndWith("adapter_test.go"))
+			// The adapter must never be the attributed frame.
+			ctx.Expect(function).To(specs.Not(specs.Contain("(*adapter)")))
+		})
 	})
 }
 
@@ -549,9 +586,9 @@ func TestBackendAttributesRecordsToItsDirectCaller(t *testing.T) {
 			// eGo's own actors call the recovered backend directly, so no frame must
 			// be skipped for them: a skip would blame whoever called the actor.
 			Backend(newAdapter(logger)).Error("msg")
-			file, function := sourceOf(sink.last(ctx.T))
-			ctx.Expect(strings.HasSuffix(file, "adapter_test.go")).To(specs.BeTrue())
-			ctx.Expect(strings.Contains(function, "TestBackendAttributesRecordsToItsDirectCaller")).To(specs.BeTrue())
+			file, function := sourceOf(sink.last(ctx))
+			ctx.Expect(file).To(specs.EndWith("adapter_test.go"))
+			ctx.Expect(function).To(specs.Contain("TestBackendAttributesRecordsToItsDirectCaller"))
 		})
 	})
 }
