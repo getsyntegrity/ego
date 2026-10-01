@@ -85,8 +85,8 @@ github.com/flowchartsman/retry v1.2.0 h1:qDhlw6RNufXz6RGr+IiYimFpMMkt77SUSHY5tgF
 github.com/flowchartsman/retry v1.2.0/go.mod h1:+sfx8OgCCiAr3t5jh2Gk+T0fRTI+k52edaYxURQxY64=
 github.com/fxamacker/cbor/v2 v2.9.3 h1:oQBnFATpNdY8gJHTndDDv5Xl4QqNaz51G5LLEPhng3Q=
 github.com/fxamacker/cbor/v2 v2.9.3/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/getsyntegrity/go-specs v0.3.1 h1:TbWw7dppqRvLRaSkQfQ4oIMTUsJi2aOR7ZLO7WKHrRA=
-github.com/getsyntegrity/go-specs v0.3.1/go.mod h1:aCL4z/2SIwyuC4f4VxIU2EuycJMt+K7tSc/I0C7oqGI=
+github.com/getsyntegrity/go-specs v0.3.3 h1:jP1E71uhvz29fgDZbb5QyGgxJYipZojHBF8IHZMIDps=
+github.com/getsyntegrity/go-specs v0.3.3/go.mod h1:aCL4z/2SIwyuC4f4VxIU2EuycJMt+K7tSc/I0C7oqGI=
 github.com/go-kit/kit v0.8.0/go.mod h1:xBxKIO96dXMWWy0MnWVtmwkA9/13aqxPnvrjFYMA2as=
 github.com/go-kit/kit v0.9.0/go.mod h1:xBxKIO96dXMWWy0MnWVtmwkA9/13aqxPnvrjFYMA2as=
 github.com/go-logfmt/logfmt v0.3.0/go.mod h1:Qt1PoO58o5twSAckw1HlFXLmHsOX5/0LbT9GBnD5lWE=
