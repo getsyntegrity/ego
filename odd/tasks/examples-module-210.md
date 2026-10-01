@@ -84,3 +84,20 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 ## Next step
 
 Open the pull request for `ci/examples-job` (it carries the A, B and C commits until those are merged), and check in its run that the `examples` job is skipped on the feature pull request by design. It runs for the first time on the push to `develop` after the merge.
+
+## Review follow-up
+
+Review of PR #282 found two problems, fixed in three commits after merging the latest spec C commit.
+
+- Merge `eab5961` brings in `ebd9e44` from `ci/inttest-job`. The only conflict was `docs/ci.md`: both the new inttest trade-off paragraph and the Examples section were kept.
+- `d34c6d4` fix(example): the examples imported `internal/samplepb`, so a user who copied one got "use of internal package not allowed". The example module now has its own generated `example/examplepb`, from the same `protos/sample/sample.proto`, through a second template `buf.gen.example.yaml` (it overrides `go_package` for `sample/sample.proto` only, and writes to `gen-example/`, which is git-ignored). The Makefile `proto` and `docker-protogen` targets run both templates. `internal/samplepb` stays for the root tests, enginetest and benchmark. `example/cluster` requires `github.com/getsyntegrity/ego/example v0.0.0` with `replace ... => ../`, instead of keeping a third copy. Rejected alternative: a generated copy inside `example/cluster`, which would duplicate 850 generated lines. Generation uses `buf` v1.69.0 and `protoc-gen-go` v1.36.12; regenerating both packages leaves `git status` clean.
+- `8342c9d` ci: the `examples` job is gone. `example` and `example/cluster` joined the `modules` matrix, so they are built, vetted and tested on every pull request with Go changes. `examples` left `ci-ok`'s needs. Reason: compiling takes seconds and a feature PR that breaks an example must fail before the merge. `actionlint` is clean.
+- The docs commit rewrites the Examples section of `docs/ci.md`, updates the `modules` row, and fixes `contributing.md` and `example/cluster/README.md`.
+
+Proof that no binary links both generated packages (same proto file registered twice would panic at init):
+
+- `go list -deps ./...` in `example` and in `example/cluster` lists `example/examplepb` and never `internal/samplepb`. Per package, each main package depends on exactly one of the two.
+- No package outside `example/` imports `example/examplepb`; `go list -deps ./...` in the root, `benchmark` and `inttest` never lists it.
+- `rg -n 'ego/internal/' example --type go` returns nothing.
+
+Checks: root `go build`/`go vet` and `go test -count=1 ./engine/... ./internal/engine/saga/... ./internal/engine/enginetest/...` ok; `example` and `example/cluster` `go build`, `go vet`, `go test -count=1` ok; `benchmark` `go vet` ok; `go mod tidy -diff` clean in root, `example`, `example/cluster`, `benchmark`, `inttest`; `unitgate -strict` ok; `gofmt -l` empty.
