@@ -49,7 +49,7 @@ CI does not change in this spec. The cluster tests keep running in the normal sh
 
 - [x] **T1 Inventory and baseline.** Write the full cluster inventory below. Record the per-package `go test -json` counts (top-level tests and subtests) on `origin/develop` for every package in scope: `engine`, `internal/engine/...`, `internal/projectionrunner`, `compose/goakt/...`, `internal/extensions`, `migration`. Route: delegated writer.
 - [x] **T2 Isolate in `engine`.** Make every multi-node test a `TestCluster*`. Cluster cases split out of mixed tests go to `*_cluster_test.go` in the same package, and the allowlist is updated. Check: `go test ./engine/` is green. Route: delegated writer.
-- [ ] **T3 Isolate in the other packages.** The same treatment for `compose/goakt` and any other package the inventory finds. Check: their tests are green. Route: delegated writer.
+- [x] **T3 Isolate in the other packages.** The same treatment for `compose/goakt` and any other package the inventory finds. Check: their tests are green. Route: delegated writer.
 - [ ] **T4 `unitgate` rule.** Add the rule with RED and GREEN tests in both directions, and make sure `unitgate -strict` is green on the repo. Route: delegated writer.
 - [ ] **T5 Count parity.** Record the after counts per package, plus the reconciliation for every moved case. Check: `go test -skip '^TestCluster' ./...` and `go test -run '^TestCluster' <packages>` are both green, and their sum equals the baseline. Route: delegated writer.
 
@@ -100,6 +100,7 @@ Nine tests in two packages, 31 subtests in all (1+1+1+14+1+1+7+1+4), counted as 
 
 - T1 done. Route: delegated writer (this session). Inventory and baseline above; the plan's "mixed top-level tests" case does not exist, so T2 and T3 shrink to renames (plus the one clashing name).
 - T2 done. Eight cluster tests in `engine` renamed in place, plus `TestClusterKindsExposesEgoActors` renamed because it is single-node. Live docs that named them (`docs/engine.md`, `docs/testing/unit-migration.md`, the comment in `engine/cluster_kinds.go`) follow. No file was created or moved, so `.github/unit-test-gate-resources.txt` needs no change. Evidence: `go build ./...` and `go vet ./engine/` clean; `go test -count=1 -run '^(TestCluster|TestEngineClusterKinds)' ./engine`: 9 tests PASS (58.5 s); `go run ./.github/scripts/unitgate -strict`: ok (0 pending entries, 40 resource entries).
+- T3 done. The inventory finds only one more package: `compose/goakt`, where `TestApp_TwoNodeClusterPlacesAndStopsCleanly` became `TestCluster_AppTwoNodePlacesAndStopsCleanly` (file `cluster_test.go` already holds only that test; `docs/testing/unit-migration.md` follows). Evidence: `go build ./...` and `go vet ./compose/...` clean; `go test -count=1 -run '^TestCluster' ./compose/goakt`: PASS; `go test -count=1 ./compose/...`: all ok; `unitgate -strict`: ok.
 
 ## Renames
 
@@ -120,4 +121,4 @@ The tests stay in the files where they are: each one is already a whole cluster 
 
 ## Next step
 
-T3.
+T4.

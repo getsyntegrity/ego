@@ -865,7 +865,7 @@ The dependencies column was computed before the migration, from static signals f
 ### Module `.`
 
 - `compose/goakt` (15)
-  - starts a GoAkt cluster on loopback ports: `TestApp_TwoNodeClusterPlacesAndStopsCleanly`
+  - starts a GoAkt cluster on loopback ports: `TestCluster_AppTwoNodePlacesAndStopsCleanly`
   - starts an actor system: `TestNew_G2_ActorSystemName`
   - starts an actor system through a helper: `TestApp_ValidSpecRunsAnEngine`, `TestEngine_UndeclaredFamilyReturnsTypedError`, `TestRuntime_ConsumerDrivesTheAppEndToEnd`, `TestRuntime_IsTheEngineAfterStartAndAfterStop`, `TestRuntime_NilAfterFailedStart`, `TestStart_ActorSystemStepFailsForReal`, `TestStart_AttachStepStartsAndProbesPublishersFirst`, `TestStart_FailureAtEachStepReleasesEverything`, `TestStart_PublisherFailureAtK`, `TestStart_PublisherPingFailureNamesTheAdapter`, `TestStop_AfterStopIsNoOp`, `TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown`, `TestStop_OrderMatchesD7`
 - `engine` (143)
