@@ -27,84 +27,76 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 )
 
-// errText returns err's message, or "<nil>" when err is nil, so a nil error fails
-// a message comparison instead of panicking.
-func errText(err error) string {
-	if err == nil {
-		return "<nil>"
-	}
-	return err.Error()
+var (
+	errOne = errors.New("err1")
+	errTwo = errors.New("err2")
+)
+
+// steps adapts a mock.Controller into the two runner shapes Chain accepts. Each
+// step is a method of the controller, so a case declares what every step
+// returns, and how many times it must run, with Expect(...).Return(...).Times(n).
+type steps struct{ c *mock.Controller }
+
+func (s steps) fn(name string) func() error {
+	return func() error { return s.c.Method(name).Call().Err(0) }
+}
+
+func (s steps) ctxFn(name string) func(context.Context) error {
+	return func(ctx context.Context) error { return s.c.Method(name).Call(ctx).Err(0) }
 }
 
 func TestChain(t *testing.T) {
 	specs.Describe(t, "Chain runs its runners according to the configured error policy", func(s *specs.Spec) {
 		s.It("With AddRunner FailFast", func(ctx *specs.Context) {
-			var (
-				calledFn1 = false
-				calledFn2 = false
-				calledFn3 = false
-			)
+			ctrl := mock.NewController(ctx)
+			st := steps{ctrl}
+			ctrl.Method("fn1").Expect().Return(errOne)
+			ctrl.Method("fn2").Expect().Never()
+			ctrl.Method("fn3").Expect().Never()
 
-			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-			fn3 := func() error { calledFn3 = true; return errors.New("err3") }
+			actual := New(WithFailFast()).
+				AddRunner(st.fn("fn1")).
+				AddRunner(st.fn("fn2")).
+				AddRunner(st.fn("fn3")).
+				Run()
 
-			chain := New(WithFailFast()).
-				AddRunner(fn1).
-				AddRunner(fn2).
-				AddRunner(fn3)
-			actual := chain.Run()
-
-			ctx.Expect(errText(actual)).ToEqual("err1")
-			ctx.Expect(calledFn1).To(specs.BeTrue())
-			ctx.Expect(calledFn2).To(specs.BeFalse())
-			ctx.Expect(calledFn3).To(specs.BeFalse())
+			ctx.Expect(actual).To(specs.MatchError(errOne))
+			ctx.Expect(actual.Error()).ToEqual("err1")
 		})
 
 		s.It("With AddRunners FailFast", func(ctx *specs.Context) {
-			var (
-				calledFn1 = false
-				calledFn2 = false
-				calledFn3 = false
-			)
+			ctrl := mock.NewController(ctx)
+			st := steps{ctrl}
+			ctrl.Method("fn1").Expect().Return(errOne)
+			ctrl.Method("fn2").Expect().Never()
+			ctrl.Method("fn3").Expect().Never()
 
-			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-			fn3 := func() error { calledFn3 = true; return errors.New("err3") }
+			actual := New(WithFailFast()).AddRunners(st.fn("fn1"), st.fn("fn2"), st.fn("fn3")).Run()
 
-			chain := New(WithFailFast()).AddRunners(fn1, fn2, fn3)
-			actual := chain.Run()
-
-			ctx.Expect(errText(actual)).ToEqual("err1")
-			ctx.Expect(calledFn1).To(specs.BeTrue())
-			ctx.Expect(calledFn2).To(specs.BeFalse())
-			ctx.Expect(calledFn3).To(specs.BeFalse())
+			ctx.Expect(actual).To(specs.MatchError(errOne))
+			ctx.Expect(actual.Error()).ToEqual("err1")
 		})
 
 		s.It("With AddRunner ReturnAll", func(ctx *specs.Context) {
-			var (
-				calledFn1 = false
-				calledFn2 = false
-				calledFn3 = false
-			)
+			ctrl := mock.NewController(ctx)
+			st := steps{ctrl}
+			ctrl.Method("fn1").Expect().Return(errOne)
+			ctrl.Method("fn2").Expect().Return(errTwo)
+			ctrl.Method("fn3").Expect().Return(nil)
 
-			fn1 := func() error { calledFn1 = true; return errors.New("err1") }
-			fn2 := func() error { calledFn2 = true; return errors.New("err2") }
-			fn3 := func() error { calledFn3 = true; return nil }
+			actual := New(WithRunAll()).
+				AddRunner(st.fn("fn1")).
+				AddRunner(st.fn("fn2")).
+				AddRunner(st.fn("fn3")).
+				Run()
 
-			chain := New(WithRunAll()).
-				AddRunner(fn1).
-				AddRunner(fn2).
-				AddRunner(fn3)
-			actual := chain.Run()
-
-			ctx.Expect(errText(actual)).ToEqual("err1; err2")
-			ctx.Expect(calledFn1).To(specs.BeTrue())
-			ctx.Expect(calledFn2).To(specs.BeTrue())
-			ctx.Expect(calledFn3).To(specs.BeTrue())
+			ctx.Expect(actual).To(specs.MatchError(errOne))
+			ctx.Expect(actual).To(specs.MatchError(errTwo))
+			ctx.Expect(actual.Error()).ToEqual("err1; err2")
 		})
 	})
 }
@@ -114,58 +106,48 @@ func TestAddContextRunnerIf(t *testing.T) {
 		bg := context.Background()
 
 		s.It("FailFast - condition true, error returned", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err1")
-			}
-			chain := New(WithFailFast(), WithContext(bg)).AddContextRunnerIf(true, fn)
-			ctx.Expect(errText(chain.Run())).ToEqual("err1")
-			ctx.Expect(called).To(specs.BeTrue())
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(bg).Return(errOne)
+
+			chain := New(WithFailFast(), WithContext(bg)).AddContextRunnerIf(true, steps{ctrl}.ctxFn("fn"))
+
+			ctx.Expect(chain.Run()).To(specs.MatchError(errOne))
 		})
 
 		s.It("FailFast - condition false, fn not called", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err1")
-			}
-			chain := New(WithFailFast()).AddContextRunnerIf(false, fn)
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Never()
+
+			chain := New(WithFailFast()).AddContextRunnerIf(false, steps{ctrl}.ctxFn("fn"))
+
 			ctx.Expect(chain.Run()).To(specs.BeNil())
-			ctx.Expect(called).To(specs.BeFalse())
 		})
 
 		s.It("ReturnAll - condition true, error returned", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err2")
-			}
-			chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
-			ctx.Expect(errText(chain.Run())).ToEqual("err2")
-			ctx.Expect(called).To(specs.BeTrue())
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Return(errTwo)
+
+			chain := New(WithRunAll()).AddContextRunnerIf(true, steps{ctrl}.ctxFn("fn"))
+
+			ctx.Expect(chain.Run()).To(specs.MatchError(errTwo))
 		})
 
 		s.It("ReturnAll - condition false, fn not called", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err2")
-			}
-			chain := New(WithRunAll()).AddContextRunnerIf(false, fn)
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Never()
+
+			chain := New(WithRunAll()).AddContextRunnerIf(false, steps{ctrl}.ctxFn("fn"))
+
 			ctx.Expect(chain.Run()).To(specs.BeNil())
-			ctx.Expect(called).To(specs.BeFalse())
 		})
 
 		s.It("ReturnAll - condition true, fn returns nil", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return nil
-			}
-			chain := New(WithRunAll()).AddContextRunnerIf(true, fn)
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Return(nil)
+
+			chain := New(WithRunAll()).AddContextRunnerIf(true, steps{ctrl}.ctxFn("fn"))
+
 			ctx.Expect(chain.Run()).To(specs.BeNil())
-			ctx.Expect(called).To(specs.BeTrue())
 		})
 	})
 }
@@ -173,36 +155,30 @@ func TestAddContextRunnerIf(t *testing.T) {
 func TestAddContextRunner(t *testing.T) {
 	specs.Describe(t, "AddContextRunner adds a context runner that always runs", func(s *specs.Spec) {
 		s.It("FailFast - fn not called, error returned", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err1")
-			}
-			chain := New(WithFailFast()).AddContextRunner(fn)
-			ctx.Expect(chain.Run()).To(specs.Not(specs.BeNil()))
-			ctx.Expect(called).To(specs.BeTrue())
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Return(errOne)
+
+			chain := New(WithFailFast()).AddContextRunner(steps{ctrl}.ctxFn("fn"))
+
+			ctx.Expect(chain.Run()).To(specs.MatchError(errOne))
 		})
 
 		s.It("ReturnAll - fn not called", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return errors.New("err2")
-			}
-			chain := New(WithRunAll()).AddContextRunner(fn)
-			ctx.Expect(chain.Run()).To(specs.Not(specs.BeNil()))
-			ctx.Expect(called).To(specs.BeTrue())
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Return(errTwo)
+
+			chain := New(WithRunAll()).AddContextRunner(steps{ctrl}.ctxFn("fn"))
+
+			ctx.Expect(chain.Run()).To(specs.MatchError(errTwo))
 		})
 
 		s.It("ReturnAll - fn returns nil", func(ctx *specs.Context) {
-			called := false
-			fn := func(_ context.Context) error {
-				called = true
-				return nil
-			}
-			chain := New(WithRunAll()).AddContextRunner(fn)
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("fn").Expect(mock.Any()).Return(nil)
+
+			chain := New(WithRunAll()).AddContextRunner(steps{ctrl}.ctxFn("fn"))
+
 			ctx.Expect(chain.Run()).To(specs.BeNil())
-			ctx.Expect(called).To(specs.BeTrue())
 		})
 	})
 }
