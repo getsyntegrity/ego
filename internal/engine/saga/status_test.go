@@ -35,14 +35,14 @@ import (
 // mapping the saga actor and Engine.SagaStatus share (#153).
 func TestSagaStatusWireRoundTrip(t *testing.T) {
 	specs.Describe(t, "saga status survives the wire round trip", func(s *specs.Spec) {
-		for _, status := range []runtimeport.SagaStatus{runtimeport.SagaRunning, runtimeport.SagaCompleted, runtimeport.SagaCompensating, runtimeport.SagaFailed} {
-			s.It(status.String(), func(ctx *specs.Context) {
+		specs.Table(s, []runtimeport.SagaStatus{runtimeport.SagaRunning, runtimeport.SagaCompleted, runtimeport.SagaCompensating, runtimeport.SagaFailed},
+			func(status runtimeport.SagaStatus) string { return status.String() },
+			func(ctx *specs.Context, status runtimeport.SagaStatus) {
 				wire := StatusToProto(status)
 				// the saga actor must always report a status
 				ctx.Expect(wire).To(specs.NotEqual(egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE))
 				ctx.Expect(StatusFromProto(wire)).ToEqual(status)
 			})
-		}
 		s.It("an unknown wire value reads as running", func(ctx *specs.Context) {
 			ctx.Expect(StatusFromProto(egopb.SagaLifecycleStatus(99))).ToEqual(runtimeport.SagaRunning)
 		})

@@ -33,11 +33,12 @@ import (
 // in port/behavior (design.md §5.2).
 func TestSagaActionIsNoop(t *testing.T) {
 	specs.Describe(t, "actionIsNoop reports whether a saga action asks for nothing", func(s *specs.Spec) {
-		testCases := []struct {
+		type noopCase struct {
 			name   string
 			action *sagaAction
 			noop   bool
-		}{
+		}
+		specs.Table(s, []noopCase{
 			{name: "nil action", action: nil, noop: true},
 			{name: "empty action", action: &sagaAction{}, noop: true},
 			{name: "empty slices", action: &sagaAction{Commands: []sagaCommand{}, Events: []Event{}}, noop: true},
@@ -45,11 +46,8 @@ func TestSagaActionIsNoop(t *testing.T) {
 			{name: "event", action: &sagaAction{Events: []Event{nil}}, noop: false},
 			{name: "complete", action: &sagaAction{Complete: true}, noop: false},
 			{name: "compensate", action: &sagaAction{Compensate: true}, noop: false},
-		}
-		for _, tc := range testCases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				ctx.Expect(actionIsNoop(tc.action)).ToEqual(tc.noop)
-			})
-		}
+		}, func(c noopCase) string { return c.name }, func(ctx *specs.Context, c noopCase) {
+			ctx.Expect(actionIsNoop(c.action)).ToEqual(c.noop)
+		})
 	})
 }

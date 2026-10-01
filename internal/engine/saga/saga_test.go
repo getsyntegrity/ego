@@ -54,21 +54,19 @@ import (
 
 func TestSagaStatus_String(t *testing.T) {
 	specs.Describe(t, "SagaStatus.String names each lifecycle status", func(s *specs.Spec) {
-		tests := []struct {
+		type statusCase struct {
 			status   runtimeport.SagaStatus
 			expected string
-		}{
+		}
+		specs.Table(s, []statusCase{
 			{runtimeport.SagaRunning, "running"},
 			{runtimeport.SagaCompleted, "completed"},
 			{runtimeport.SagaCompensating, "compensating"},
 			{runtimeport.SagaFailed, "failed"},
 			{runtimeport.SagaStatus(99), "unknown"},
-		}
-		for _, tc := range tests {
-			s.It(tc.expected, func(ctx *specs.Context) {
-				ctx.Expect(tc.status.String()).ToEqual(tc.expected)
-			})
-		}
+		}, func(c statusCase) string { return c.expected }, func(ctx *specs.Context, c statusCase) {
+			ctx.Expect(c.status.String()).ToEqual(c.expected)
+		})
 	})
 }
 
