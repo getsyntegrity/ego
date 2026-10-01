@@ -54,22 +54,76 @@ Only the `*_test.go` files in `internal/engine/eventsource` change. The S3a rig
 
 ## Tasks
 
-- [ ] T1 Replace the 16 `pause.For` in `TenancyGate`, `BatchTenantHomogeneity*` and
-      `ResetBatchDoesNotClearActorTenant` with polls. Route: delegated writer. Check: green, and a
-      cross-tenant batch mutation is caught.
-- [ ] T2 In `GetStateDuringPersist`, move the mocks to the adapters and replace its 6 `pause.For`. Route:
-      the same writer. Check: green, and a mutation that answers `GetState` with stale state is caught.
-- [ ] T3 In `Batch`, move the mocks to the adapters and replace its 46 `pause.For`. Route: the same writer.
-      Check: green with `-count=3`, and a mutation that skips the flush timer is caught. After this task
-      there must be no `ego/mocks` and no testify `mock` import left in the package.
-- [ ] T4 Replace the 10 `pause.For` in `event_sourced_actor_tenant_persist_test.go` with polls. Route: the
-      same writer. Check: green, and a tenant persist mutation is caught. After this task there must be no
-      `pause.For` left in the package.
-- [ ] T5 Deliver. Route: inline (parent).
-      - Write the component-lane reclassification on #218's branch.
-      - Verify: full package time and coverage, vet, lint.
-      - Run the native assessment, plus an independent verifier if the result is `high`.
-      - Push and open the stacked PR.
+- [x] T1 Replace the 16 `pause.For` in `TenancyGate`, `BatchTenantHomogeneity*` and
+      `ResetBatchDoesNotClearActorTenant` with polls. Route: delegated writer. Evidence: `a5a0b26`. RED:
+      when the `actorTenant` gate was disabled, three functions failed.
+- [x] T2 In `GetStateDuringPersist`, move the mocks to the adapters and replace its 6 `pause.For`. Route:
+      the same writer. Evidence: `9e1180d`. The stash waits now poll until `StashSize() == 2`. RED: when
+      the stash was skipped, the poll timed out on the last observed value.
+- [x] T3 In `Batch`, move the mocks to the adapters and replace its 46 `pause.For`. Route: the same writer.
+      Evidence: `e751ab6`. `Batch` went from about 40 s to 0.7 s, and `-count=10` passed. RED: both
+      skipping `startFlushTimer` and changing the threshold from `>=` to `>` were caught.
+- [x] T4 Replace the 10 `pause.For` in `event_sourced_actor_tenant_persist_test.go` with polls. Route: the
+      same writer. Evidence: `8361a67`. RED: when `marshalEvent` dropped `TenantMetadata`, the restart
+      test failed.
+- [x] T5 Deliver. Route: inline.
+      - Names: 62 `--- PASS` became 70. No old name was lost; eight single-case functions each gained one
+        `It`.
+      - Package: 152.2 s became 81.1 s, and coverage is 92.0%. One run showed 91.8%, which was timing
+        noise; the parent re-ran it uncached and got 92.0%.
+      - vet, lint and gofmt are clean. The native assessment returned `medium` with RDD off.
+      - The scoped files (`event_sourced_actor_test.go` and `..._tenant_persist_test.go`) have zero
+        `pause.For`, zero `ego/mocks` and zero testify `mock`.
+
+## Correction to this spec
+
+The "Problem" section said that `GetStateDuringPersist` and `Batch` were the last users of `ego/mocks` in
+the package. That is true only within `event_sourced_actor_test.go`. Four other files in the package are
+not part of #238's nine files, and they still have 44 `pause.For` and the generated mocks:
+
+| File | `pause.For` |
+|---|---|
+| `events_janitor_actor_test.go` | 17 |
+| `snapshots_writer_actor_test.go` | 15 |
+| `event_sourced_actor_scope_test.go` | 8 |
+| `events_writer_actor_test.go` | 4 |
+
+The package-wide zero criterion in T3 and T4 was therefore wrong. Those files are covered by the S4
+follow-up.
+
+## Reclassification
+
+No change to `docs/testing/unit-migration.md` (#218) is needed. Every Test function that still starts an
+actor system is already listed there as "out of phase: starts an actor system":
+
+- the 9 durablestate functions;
+- the 23 eventsource functions.
+
+The inventory is per Test function and is recorded at `0de4249`, so editing it here would put it out of
+step with that snapshot.
+
+The caveat is that `TestEventSourcedActor`, `TestEventSourcedActorErrorPaths` and
+`TestDurableStateBehavior` now hold both unit cases and component cases. Splitting each of them into a
+unit function and a component function would rename subtests. That split is left to a follow-up.
+
+## Weak cases found (reported, not changed)
+
+- The two "batch persist failure" cases check only the error reply. Their names promise a shutdown and
+  telemetry, but they assert neither, and telemetry is a noop.
+- Three tenant-persist rejection tests would pass even if the write were skipped, because the
+  spawn-bound tenant seeds `actorTenant`. Only `TenantIdentitySurvivesRestart` catches a metadata
+  regression.
+- `BatchTenantHomogeneity` and `ZeroEventSameTenant` still wait out real 1 s flush windows. Their
+  `Consistently` over 500 ms is also a real-time bound.
+
+## Follow-ups
+
+- **S4 `eventsource-writers-go-specs`:** the janitor, the snapshot writer, the scope and the events writer
+  tests. That is 44 `pause.For` plus the persistence and encryption generated mocks.
+- **Prove `with state recovery from event store`:** run a second system on the same store. This came out
+  of S3a.
+- **Strengthen the weak cases above.**
+- **Split the mixed unit/component Test functions,** once renaming them is acceptable.
 
 ## Progress
 
