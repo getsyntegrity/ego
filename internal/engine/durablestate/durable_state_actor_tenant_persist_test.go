@@ -609,7 +609,7 @@ func TestDurableStateActorFailedFirstCommandDoesNotAppropriateActor(t *testing.T
 			// 0, established together with the committed state), and recovery must
 			// cross-check the recovered metadata against the restarted instance's
 			// own spawn-bound tenant (also A here).
-			rig.kill(ctx, pid, behavior.ID())
+			rig.killForRestart(ctx, pid, behavior.ID())
 
 			// tenant A's committed state must survive PostStop
 			ctx.Eventually(latestState(durableStore, scopeA, persistenceID), bePersisted(),

@@ -139,6 +139,19 @@ func (r *actorRig) kill(ctx *specs.Context, pid *goakt.PID, name string) {
 	waitStopped(ctx, pid)
 }
 
+// killForRestart is kill for a case that spawns the same name again. The actor
+// system drops a stopped actor from its tree asynchronously, through the death
+// watch, so a Spawn right after Kill can get the stale, stopped instance back
+// with no error ("duplicate spawn detected ... returning the canonical
+// instance"). The actor count falling by one is the public signal that the
+// name was released and a respawn creates a fresh actor.
+func (r *actorRig) killForRestart(ctx *specs.Context, pid *goakt.PID, name string) {
+	before := r.system.NumActors()
+	r.kill(ctx, pid, name)
+	ctx.Eventually(func() any { return r.system.NumActors() }, specs.Equal(before-1),
+		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+}
+
 func waitRunning(ctx *specs.Context, pid *goakt.PID) {
 	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeTrue(),
 		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
