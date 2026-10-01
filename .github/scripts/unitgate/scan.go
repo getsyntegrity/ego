@@ -30,6 +30,7 @@ const (
 	RuleNoSpecs  Rule = "no-specs"        // *_test.go with a Test function and no specs.Describe
 	RuleResource Rule = "resource"        // a test reaching a real resource (see resources.go)
 	RuleSkip     Rule = "no-skip"         // a Skip, SkipIt, PendingIt or FIt call, or testing.Short, under inttest/ (see skips.go); never allowlisted
+	RuleCluster  Rule = "cluster-name"    // a test that starts a cluster (goakt.WithCluster, dynaport) and is not named TestCluster* (see cluster.go); never allowlisted
 	RuleUnparsed Rule = "unparsed"        // the file is not valid Go
 )
 
@@ -102,6 +103,7 @@ func scanFile(p string, src []byte) []Finding {
 			add(RuleNoSpecs, "declares "+name+" without specs.Describe")
 		}
 		out = append(out, resourceFindings(p, f, imports)...)
+		out = append(out, clusterFindings(p, f, imports)...)
 	}
 	return out
 }

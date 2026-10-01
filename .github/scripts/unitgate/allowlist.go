@@ -60,13 +60,16 @@ func Evaluate(findings []Finding, pending, resources []Entry, strict bool) (prob
 		if f.Rule == RuleResource {
 			list, used = resources, resourcesUsed
 		}
-		// An unparsed file and a skip under inttest/ cannot be excused by any list.
-		if f.Rule != RuleUnparsed && f.Rule != RuleSkip && markCovered(list, used, f.Path) {
+		// An unparsed file, a skip under inttest/ and a misnamed cluster test cannot be excused by any list.
+		if f.Rule != RuleUnparsed && f.Rule != RuleSkip && f.Rule != RuleCluster && markCovered(list, used, f.Path) {
 			continue
 		}
 		line := fmt.Sprintf("%s: %s: %s", f.Path, f.Rule, f.Detail)
-		if f.Rule == RuleSkip {
+		switch f.Rule {
+		case RuleSkip:
 			line += "; a test under inttest/ must fail when its dependency is missing, never skip, pend or focus"
+		case RuleCluster:
+			line += "; CI selects the cluster tests by this name"
 		}
 		problems = append(problems, line)
 	}
