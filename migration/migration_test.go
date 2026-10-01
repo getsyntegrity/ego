@@ -25,11 +25,10 @@ package migration
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math"
-	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
@@ -459,17 +458,21 @@ func TestMigratorRunWithNilLogger(t *testing.T) {
 	})
 }
 
-// messagesAt returns the messages a MockLogger captured at the given level,
-// so a test can prove a caller-supplied logger really reaches the Migrator's
-// logging call sites.
-func messagesAt(logger *kitlogtest.MockLogger, level slog.Level) []string {
-	var msgs []string
-	for _, entry := range logger.Entries {
-		if entry.Level == level {
-			msgs = append(msgs, entry.Message)
-		}
-	}
-	return msgs
+// loggerMock is a kit-logger Logger whose Migrator-facing methods forward to a
+// mock.Controller. The Migrator logs only through InfoContext and DebugContext,
+// so the other Logger methods stay on the nil embedded interface: a call to one
+// of them panics and fails the case loudly.
+type loggerMock struct {
+	kitlog.Logger
+	c *mock.Controller
+}
+
+func (l loggerMock) InfoContext(ctx context.Context, msg string, args ...any) {
+	l.c.Method("InfoContext").Call(ctx, msg, args)
+}
+
+func (l loggerMock) DebugContext(ctx context.Context, msg string, args ...any) {
+	l.c.Method("DebugContext").Call(ctx, msg, args)
 }
 
 func TestMigratorUsesKitLogger(t *testing.T) {
@@ -480,7 +483,7 @@ func TestMigratorUsesKitLogger(t *testing.T) {
 		})
 
 		s.It("WithLogger injects a custom kit-logger Logger", func(ctx *specs.Context) {
-			logger := kitlogtest.NewMockLogger()
+			logger := loggerMock{c: mock.NewController(ctx)}
 			m := mustNew(ctx, nil, nil, WithLogger(logger))
 			ctx.Expect(m.logger == kitlog.Logger(logger)).To(specs.BeTrue())
 		})
@@ -494,12 +497,11 @@ func TestMigratorUsesKitLogger(t *testing.T) {
 
 			writeLegacyEvent(ctx, eventStore, "entity-1", 1, eventAny, stateAny, 100, 0)
 
-			logger := kitlogtest.NewMockLogger()
-			migrator := mustNew(ctx, eventStore, snapshotStore, WithLogger(logger))
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("InfoContext").Expect(mock.Any(), "migration: completed successfully", mock.Any()).Times(1)
+			ctrl.Method("DebugContext").Expect(mock.Any(), "migration: snapshot written", mock.Any()).Times(1)
+			migrator := mustNew(ctx, eventStore, snapshotStore, WithLogger(loggerMock{c: ctrl}))
 			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
-
-			ctx.Expect(messagesAt(logger, slog.LevelInfo)).To(specs.Contain("migration: completed successfully"))
-			ctx.Expect(messagesAt(logger, slog.LevelDebug)).To(specs.Contain("migration: snapshot written"))
 		})
 	})
 }
@@ -513,72 +515,59 @@ func mustNew(ctx *specs.Context, eventsStore persistence.EventsStore, snapshotSt
 	return m
 }
 
-// scopeSpy records the scope of every record-addressing store call, so a
+// recordScope notes the scope of a record-addressing store call on spy, so a
 // test can prove no call still hard-codes a scope.
-type scopeSpy struct {
-	mu    sync.Mutex
-	calls []string
-}
-
-func (s *scopeSpy) record(method string, scope persistence.Scope) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls = append(s.calls, method+"@"+scope.String())
-}
-
-func (s *scopeSpy) all() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.calls...)
+func recordScope(spy *mock.Spy, method string, scope persistence.Scope) {
+	spy.Call(method, scope.String())
 }
 
 type spyEventsStore struct {
 	persistence.EventsStore
-	spy *scopeSpy
+	spy *mock.Spy
 }
 
 func (e *spyEventsStore) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
-	e.spy.record("PersistenceIDs", scope)
+	recordScope(e.spy, "PersistenceIDs", scope)
 	return e.EventsStore.PersistenceIDs(ctx, scope, pageSize, pageToken)
 }
 
 func (e *spyEventsStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, maxNumber uint64) ([]*egopb.Event, error) {
-	e.spy.record("ReplayEvents", scope)
+	recordScope(e.spy, "ReplayEvents", scope)
 	return e.EventsStore.ReplayEvents(ctx, scope, persistenceID, from, to, maxNumber)
 }
 
 func (e *spyEventsStore) GetLatestEvent(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Event, error) {
-	e.spy.record("GetLatestEvent", scope)
+	recordScope(e.spy, "GetLatestEvent", scope)
 	return e.EventsStore.GetLatestEvent(ctx, scope, persistenceID)
 }
 
 func (e *spyEventsStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
-	e.spy.record("WriteEvents", scope)
+	recordScope(e.spy, "WriteEvents", scope)
 	return e.EventsStore.WriteEvents(ctx, scope, events, precondition)
 }
 
 func (e *spyEventsStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
-	e.spy.record("DeleteEvents", scope)
+	recordScope(e.spy, "DeleteEvents", scope)
 	return e.EventsStore.DeleteEvents(ctx, scope, persistenceID, toSequenceNumber)
 }
 
 type spySnapshotStore struct {
 	persistence.SnapshotStore
-	spy *scopeSpy
+	spy *mock.Spy
 }
 
 func (s *spySnapshotStore) WriteSnapshot(ctx context.Context, scope persistence.Scope, snapshot *egopb.Snapshot) error {
-	s.spy.record("WriteSnapshot", scope)
+	recordScope(s.spy, "WriteSnapshot", scope)
 	return s.SnapshotStore.WriteSnapshot(ctx, scope, snapshot)
 }
 
 func (s *spySnapshotStore) GetLatestSnapshot(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error) {
-	s.spy.record("GetLatestSnapshot", scope)
+	recordScope(s.spy, "GetLatestSnapshot", scope)
 	return s.SnapshotStore.GetLatestSnapshot(ctx, scope, persistenceID)
 }
 
 func (s *spySnapshotStore) DeleteSnapshots(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
-	s.spy.record("DeleteSnapshots", scope)
+	recordScope(s.spy, "DeleteSnapshots", scope)
 	return s.SnapshotStore.DeleteSnapshots(ctx, scope, persistenceID, toSequenceNumber)
 }
 
@@ -643,14 +632,14 @@ func TestMigratorScope(t *testing.T) {
 		ctx.Expect(snapshot.GetState().UnmarshalTo(&state)).To(specs.BeNil())
 		return state.GetSeconds(), true
 	}
-	expectEveryCallIn := func(ctx *specs.Context, spy *scopeSpy, scope persistence.Scope) {
-		calls := spy.all()
+	expectEveryCallIn := func(ctx *specs.Context, spy *mock.Spy, scope persistence.Scope) {
+		calls := spy.Calls()
 		ctx.Expect(calls).To(specs.Not(specs.BeEmpty()))
-		for _, call := range []string{"PersistenceIDs@" + scope.String(), "ReplayEvents@" + scope.String(), "WriteSnapshot@" + scope.String()} {
-			ctx.Expect(calls).To(specs.Contain(call))
+		for _, method := range []string{"PersistenceIDs", "ReplayEvents", "WriteSnapshot"} {
+			ctx.Expect(spy.CalledWith(mock.Equal(method), mock.Equal(scope.String()))).To(specs.BeTrue())
 		}
 		// store calls that do not use the Migrator's scope
-		ctx.Expect(calls).To(specs.EveryElement(specs.EndWith("@" + scope.String())))
+		ctx.Expect(calls).To(specs.EveryElement(specs.Project("scope", func(c mock.Call) any { return c.Args[1] }, specs.Equal(scope.String()))))
 	}
 
 	specs.Describe(t, "Migrator addresses every store call to its configured scope", func(s *specs.Spec) {
@@ -664,7 +653,7 @@ func TestMigratorScope(t *testing.T) {
 
 		s.It("without WithScope it migrates only the unscoped records, exactly as before", func(ctx *specs.Context) {
 			eventStore, snapshotStore := seed(ctx)
-			spy := &scopeSpy{}
+			spy := mock.NewSpy()
 			ctx.Expect(mustNew(ctx, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}).Run(bg)).To(specs.BeNil())
 
 			expectEveryCallIn(ctx, spy, persistence.Unscoped())
@@ -679,7 +668,7 @@ func TestMigratorScope(t *testing.T) {
 
 		s.It("WithScope migrates that tenant's records and nothing in another scope", func(ctx *specs.Context) {
 			eventStore, snapshotStore := seed(ctx)
-			spy := &scopeSpy{}
+			spy := mock.NewSpy()
 			ctx.Expect(mustNew(ctx, &spyEventsStore{EventsStore: eventStore, spy: spy}, &spySnapshotStore{SnapshotStore: snapshotStore, spy: spy}, WithScope(acme)).Run(bg)).To(specs.BeNil())
 
 			expectEveryCallIn(ctx, spy, acme)
