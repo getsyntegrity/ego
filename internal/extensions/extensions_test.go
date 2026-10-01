@@ -38,6 +38,15 @@ import (
 	"github.com/getsyntegrity/ego/testkit"
 )
 
+// beTheSamePointer matches a value that is the very pointer want. ToEqual
+// compares deeply, so it would also accept a copy with the same contents.
+func beTheSamePointer[T any](want *T) specs.Matcher {
+	return specs.Satisfy("be the same pointer as the registered value", func(got any) bool {
+		p, ok := got.(*T)
+		return ok && p == want
+	})
+}
+
 func TestEventsStore(t *testing.T) {
 	specs.Describe(t, "NewEventsStore wraps an events store as a GoAkt extension", func(s *specs.Spec) {
 		s.It("exposes its ID and the wrapped store", func(ctx *specs.Context) {
@@ -113,9 +122,9 @@ func TestProjectionExtension(t *testing.T) {
 
 			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
 			ctx.Expect(ext.ID()).ToEqual(ProjectionExtensionID)
-			ctx.Expect(ext.Get("accounts") == accounts).To(specs.BeTrue())
-			ctx.Expect(ext.Get("audit") == audit).To(specs.BeTrue())
-			ctx.Expect(ext.Get("unknown") == nil).To(specs.BeTrue())
+			ctx.Expect(ext.Get("accounts")).To(beTheSamePointer(accounts))
+			ctx.Expect(ext.Get("audit")).To(beTheSamePointer(audit))
+			ctx.Expect(ext.Get("unknown")).To(specs.BeNil())
 		})
 	})
 }
@@ -127,7 +136,7 @@ func TestEventAdapters(t *testing.T) {
 
 			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
 			ctx.Expect(ext.ID()).ToEqual(EventAdaptersExtensionID)
-			ctx.Expect(ext.Adapters() == nil).To(specs.BeTrue())
+			ctx.Expect(ext.Adapters()).To(specs.BeNil())
 		})
 
 		s.It("with empty adapters", func(ctx *specs.Context) {
@@ -136,7 +145,7 @@ func TestEventAdapters(t *testing.T) {
 
 			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
 			ctx.Expect(ext.ID()).ToEqual(EventAdaptersExtensionID)
-			ctx.Expect(len(ext.Adapters())).ToEqual(0)
+			ctx.Expect(ext.Adapters()).To(specs.BeEmpty())
 		})
 	})
 }
@@ -274,7 +283,7 @@ func TestLocalBehavior(t *testing.T) {
 			// against an actor carrying one gets this error back instead of bytes.
 			data, err := local.MarshalBinary()
 			ctx.Expect(err).To(specs.MatchError(errLocalOnly))
-			ctx.Expect(data == nil).To(specs.BeTrue())
+			ctx.Expect(data).To(specs.BeNil())
 			ctx.Expect(local.UnmarshalBinary([]byte("x"))).To(specs.MatchError(errLocalOnly))
 		})
 	})
