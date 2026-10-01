@@ -31,8 +31,6 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/log"
 
@@ -78,17 +76,17 @@ func newSinkLogger(level kitlog.Level) (kitlog.Logger, *recordSink) {
 func TestResolveLogger(t *testing.T) {
 	specs.Describe(t, "ResolveLogger returns a usable logger", func(s *specs.Spec) {
 		s.It("nil falls back to the default", func(ctx *specs.Context) {
-			ctx.Expect(ResolveLogger(nil) == DefaultLogger()).To(specs.BeTrue())
+			ctx.Expect(ResolveLogger(nil)).To(beTheSame(DefaultLogger()))
 		})
 
 		s.It("typed nil falls back to the default", func(ctx *specs.Context) {
 			var typedNil *kitlogtest.MockLogger
-			ctx.Expect(ResolveLogger(typedNil) == DefaultLogger()).To(specs.BeTrue())
+			ctx.Expect(ResolveLogger(typedNil)).To(beTheSame(DefaultLogger()))
 		})
 
 		s.It("a usable logger is returned as-is", func(ctx *specs.Context) {
 			logger := kitlogtest.NewMockLogger()
-			ctx.Expect(ResolveLogger(logger) == kitlog.Logger(logger)).To(specs.BeTrue())
+			ctx.Expect(ResolveLogger(logger)).To(beTheSame(logger))
 		})
 	})
 }
@@ -96,17 +94,17 @@ func TestResolveLogger(t *testing.T) {
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
 	specs.Describe(t, "DefaultLogger is the kit-logger global", func(s *specs.Spec) {
 		s.It("follows the global, including one installed before configuring eGo", func(ctx *specs.Context) {
-			ctx.Expect(kitlog.L() == DefaultLogger()).To(specs.BeTrue())
+			ctx.Expect(kitlog.L()).To(beTheSame(DefaultLogger()))
 
 			// An application that installs its own global before configuring eGo
 			// gets the engine's records through it without passing WithLogger.
 			previous := kitlog.L()
-			ctx.T.Cleanup(func() { kitlog.SetGlobal(previous) })
+			ctx.Cleanup(func() { kitlog.SetGlobal(previous) })
 
 			custom := kitlogtest.NewMockLogger()
 			kitlog.SetGlobal(custom)
-			ctx.Expect(DefaultLogger() == kitlog.Logger(custom)).To(specs.BeTrue())
-			ctx.Expect(NewConfig(nil).logger == kitlog.Logger(custom)).To(specs.BeTrue())
+			ctx.Expect(DefaultLogger()).To(beTheSame(custom))
+			ctx.Expect(NewConfig(nil).logger).To(beTheSame(custom))
 		})
 	})
 }
@@ -126,7 +124,7 @@ func TestDiscardLoggerDisablesEveryLevel(t *testing.T) {
 					enabled = append(enabled, level)
 				}
 			}
-			ctx.Expect(enabled).To(specs.BeNil())
+			ctx.Expect(enabled).To(specs.BeEmpty())
 
 			// Emitting through a discarding logger must be a no-op, never a panic.
 			panicked := optRecovered(func() {
@@ -143,47 +141,49 @@ func TestDiscardLoggerDisablesEveryLevel(t *testing.T) {
 // TestGoaktOptionsCarryTheResolvedLogger pins the configuration wiring: the
 // logger GoAkt receives from Config.GoaktOptions is the one WithLogger
 // resolved, so eGo's actors recover exactly that backend.
+//
+// The Describe name is empty on purpose: it keeps the subtest names these
+// cases had before the migration (an empty name adds no segment).
 func TestGoaktOptionsCarryTheResolvedLogger(t *testing.T) {
-	ctx := context.Background()
-
-	backendOf := func(t *testing.T, opts ...Option) kitlog.Logger {
-		t.Helper()
-		cfg := NewConfig(testkit.NewEventsStore(), opts...)
-		sys, err := goakt.NewActorSystem("LoggerWiring", cfg.GoaktOptions()...)
-		require.NoError(t, err)
-		return goaktlog.Backend(sys.Logger())
-	}
-
-	t.Run("an explicit logger", func(t *testing.T) {
-		logger, _ := newSinkLogger(kitlog.LevelInfo)
-		assert.Same(t, logger, backendOf(t, WithLogger(logger)))
-	})
-
-	t.Run("no logger falls back to the default", func(t *testing.T) {
-		assert.Same(t, DefaultLogger(), backendOf(t))
-	})
-
-	t.Run("a nil logger falls back to the default", func(t *testing.T) {
-		assert.Same(t, DefaultLogger(), backendOf(t, WithLogger(nil)))
-	})
-
-	t.Run("a typed-nil logger falls back to the default", func(t *testing.T) {
-		var typedNil *kitlogtest.MockLogger
-		assert.Same(t, DefaultLogger(), backendOf(t, WithLogger(typedNil)))
-	})
-
-	t.Run("records reach the backend through the running actor system", func(t *testing.T) {
-		logger, sink := newSinkLogger(kitlog.LevelDebug)
-		cfg := NewConfig(testkit.NewEventsStore(), WithLogger(logger))
-		sys, err := goakt.NewActorSystem("LoggerPath", cfg.GoaktOptions()...)
-		require.NoError(t, err)
-		require.NoError(t, sys.Start(ctx))
-		require.NoError(t, sys.Stop(ctx))
-
-		messages := sink.all()
-		require.NotEmpty(t, messages, "the actor system's own records must reach the kit-logger backend")
-		for _, msg := range messages {
-			assert.NotEmpty(t, msg)
+	specs.Describe(t, "", func(s *specs.Spec) {
+		backendOf := func(ctx *specs.Context, opts ...Option) kitlog.Logger {
+			cfg := NewConfig(testkit.NewEventsStore(), opts...)
+			sys, err := goakt.NewActorSystem("LoggerWiring", cfg.GoaktOptions()...)
+			ctx.Expect(err).To(specs.BeNil())
+			return goaktlog.Backend(sys.Logger())
 		}
+
+		s.It("an explicit logger", func(ctx *specs.Context) {
+			logger, _ := newSinkLogger(kitlog.LevelInfo)
+			ctx.Expect(backendOf(ctx, WithLogger(logger))).To(beTheSame(logger))
+		})
+
+		var typedNil *kitlogtest.MockLogger
+		type fallbackCase struct {
+			name string
+			opts []Option
+		}
+		specs.Table(s, []fallbackCase{
+			{"no logger falls back to the default", nil},
+			{"a nil logger falls back to the default", []Option{WithLogger(nil)}},
+			{"a typed-nil logger falls back to the default", []Option{WithLogger(typedNil)}},
+		}, func(c fallbackCase) string { return c.name }, func(ctx *specs.Context, c fallbackCase) {
+			ctx.Expect(backendOf(ctx, c.opts...)).To(beTheSame(DefaultLogger()))
+		})
+
+		s.It("records reach the backend through the running actor system", func(ctx *specs.Context) {
+			bg := context.Background()
+			logger, sink := newSinkLogger(kitlog.LevelDebug)
+			cfg := NewConfig(testkit.NewEventsStore(), WithLogger(logger))
+			sys, err := goakt.NewActorSystem("LoggerPath", cfg.GoaktOptions()...)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(sys.Start(bg)).To(specs.BeNil())
+			ctx.Expect(sys.Stop(bg)).To(specs.BeNil())
+
+			// The actor system's own records must reach the kit-logger backend.
+			messages := sink.all()
+			ctx.Expect(messages).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(messages).To(specs.EveryElement(specs.Not(specs.BeEmpty())))
+		})
 	})
 }
