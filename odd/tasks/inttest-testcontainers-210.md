@@ -49,7 +49,7 @@ The fix removes the cause instead: each integration test package starts its own 
 ## Tasks
 
 - [x] **B1 Module, infra and gate scope.** `inttest/go.mod`, `inttest/infra` (`StartPostgres`, per-test database), a smoke spec proving that a database is created and reachable, and `unitgate` excluding `inttest/` from the real-resource rule, with a `unitgate` test. Check: `cd inttest && go test ./infra/...`, `go test ./.github/scripts/unitgate`, `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
-- [ ] **B2 Migrate the 19 tests.** Move them into `inttest/postgres`, with `TestMain` owning the container and each test getting its own database and calling `t.Parallel()`. Names and assertions are unchanged. Delete `example/cluster/stores_postgres_test.go` and its allowlist entry. Check: `cd inttest && go test -count=1 ./postgres/...` shows all 19 passed, and `example/cluster` `go test ./...` stays green. Route: delegated writer.
+- [x] **B2 Migrate the 19 tests.** Move them into `inttest/postgres`, with `TestMain` owning the container and each test getting its own database and calling `t.Parallel()`. Names and assertions are unchanged. Delete `example/cluster/stores_postgres_test.go` and its allowlist entry. Check: `cd inttest && go test -count=1 ./postgres/...` shows all 19 passed, and `example/cluster` `go test ./...` stays green. Route: delegated writer.
 - [ ] **B3 Conformance suites.** In `inttest/postgres`, run `RunEventsStoreConformance` and `RunSchemaMigratorConformance` against `persistence/postgres`, including the legacy cases moved from spec A. Check: same command, with conformance subtests passing. Route: delegated writer.
 - [ ] **B4 Evidence.** Record these here:
   - wall-clock time of `cd inttest && go test -count=1 ./...`;
@@ -70,6 +70,14 @@ The fix removes the cause instead: each integration test package starts its own 
 - RED for the gate: the new `inttest` spec in `resources_test.go` failed with `expected [... calls net.Dial ... reads the DSN variable ...] to be empty`. GREEN after `insideInttest` in `resources.go`; `go test ./.github/scripts/unitgate` ok and `go run ./.github/scripts/unitgate -strict` prints `unit-test gate: ok (0 pending entries, 41 resource entries)`.
 - go-specs: `t.Parallel()` before `specs.Describe` works, so no issue was needed.
 
+### B2 (route: delegated writer)
+
+- Moved to `inttest/postgres` (`event_store_test.go`, `schema_test.go`, `main_test.go`): 18 of the 19 `TestPostgresEventStore_*` tests, which includes the two `SchemaMigratesLegacy*` tests. The 19th, `TestPostgresEventStore_Conformance`, moves in B3 with the schema suite. Names and assertions are unchanged; the package is `postgres_test`.
+- `TestMain` starts one container (`infra.StartPostgres`), runs `m.Run` and terminates it; if the container cannot start it prints why and exits 1. Every test calls `t.Parallel()` and gets `shared.NewDatabase(t)`, so the old `TRUNCATE` and `DROP TABLE` resets are gone.
+- The 20 ms polling loop with `time.Sleep` in `waitForLockWaiters` became `sc.Eventually(...)` (go-specs), since the module has no sleeps.
+- Removed `example/cluster/stores_postgres_test.go` and its line in `.github/unit-test-gate-resources.txt`. `example/cluster`: `go mod tidy` dropped one now-unused `go.mod` line, `go vet ./...` clean, `go test ./...` prints `[no test files]`. `go run ./.github/scripts/unitgate -strict`: `ok (0 pending entries, 40 resource entries)`.
+- RED: before the move the package did not exist, and without a container the run fails at start (see B4(b)). GREEN: `go test -count=1 ./postgres/` shows 18 tests passed, none skipped.
+
 ## Next step
 
-B2.
+B3.
