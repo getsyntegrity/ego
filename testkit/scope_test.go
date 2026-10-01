@@ -42,6 +42,32 @@ import (
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
+// The payload builders below fail the spec through ctx when a payload cannot
+// be built. They run inside each case, so every case owns its own records.
+
+func scopeGuardEvents(ctx *specs.Context) []*egopb.Event {
+	ctx.T.Helper()
+	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
+	ctx.Expect(err).To(specs.BeNil())
+	return []*egopb.Event{
+		{PersistenceId: "scope-guard", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
+	}
+}
+
+func scopeGuardState(ctx *specs.Context) *egopb.DurableState {
+	ctx.T.Helper()
+	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
+	ctx.Expect(err).To(specs.BeNil())
+	return &egopb.DurableState{PersistenceId: "scope-guard-ds", ResultingState: anyState, VersionNumber: 1}
+}
+
+func scopeGuardSnapshot(ctx *specs.Context) *egopb.Snapshot {
+	ctx.T.Helper()
+	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
+	ctx.Expect(err).To(specs.BeNil())
+	return &egopb.Snapshot{PersistenceId: "scope-guard-snap", SequenceNumber: 1, State: anyState}
+}
+
 // ---------------------------------------------------------------------------
 // EventStore: invalid scope rejection
 // ---------------------------------------------------------------------------
@@ -51,15 +77,8 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 		bg := context.TODO()
 		var invalid persistence.Scope
 
-		anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-		if err != nil {
-			t.Fatalf("build event payload: %v", err)
-		}
-		events := []*egopb.Event{
-			{PersistenceId: "scope-guard", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		}
-
 		s.It("WriteEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
 			store := NewEventsStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			err := store.WriteEvents(bg, invalid, events, persistence.Unconditional())
@@ -67,10 +86,11 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 
 			ids, _, listErr := store.PersistenceIDs(bg, persistence.Unscoped(), 10, "")
 			ctx.Expect(listErr).To(specs.BeNil())
-			ctx.Expect(len(ids)).ToEqual(0)
+			ctx.Expect(ids).To(specs.BeEmpty())
 		})
 
 		s.It("DeleteEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
 			store := NewEventsStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
@@ -80,10 +100,11 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 
 			replayed, replayErr := store.ReplayEvents(bg, persistence.Unscoped(), "scope-guard", 1, 1, 10)
 			ctx.Expect(replayErr).To(specs.BeNil())
-			ctx.Expect(len(replayed)).ToEqual(1)
+			ctx.Expect(replayed).To(specs.HaveLen(1))
 		})
 
 		s.It("ReplayEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
 			store := NewEventsStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
@@ -94,6 +115,7 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 		})
 
 		s.It("GetLatestEvent", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
 			store := NewEventsStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
@@ -104,14 +126,15 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 		})
 
 		s.It("PersistenceIDs", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
 			store := NewEventsStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
 			ids, token, err := store.PersistenceIDs(bg, invalid, 10, "")
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
-			ctx.Expect(len(ids)).ToEqual(0)
-			ctx.Expect(token).ToEqual("")
+			ctx.Expect(ids).To(specs.BeEmpty())
+			ctx.Expect(token).To(specs.BeEmpty())
 		})
 	})
 }
@@ -125,13 +148,8 @@ func TestDurableStore_InvalidScopeRejected(t *testing.T) {
 		bg := context.TODO()
 		var invalid persistence.Scope
 
-		anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-		if err != nil {
-			t.Fatalf("build state payload: %v", err)
-		}
-		state := &egopb.DurableState{PersistenceId: "scope-guard-ds", ResultingState: anyState, VersionNumber: 1}
-
 		s.It("WriteState", func(ctx *specs.Context) {
+			state := scopeGuardState(ctx)
 			store := NewDurableStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			err := store.WriteState(bg, invalid, state, persistence.Unconditional())
@@ -143,6 +161,7 @@ func TestDurableStore_InvalidScopeRejected(t *testing.T) {
 		})
 
 		s.It("GetLatestState", func(ctx *specs.Context) {
+			state := scopeGuardState(ctx)
 			store := NewDurableStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), state, persistence.Unconditional())).To(specs.BeNil())
@@ -163,13 +182,8 @@ func TestSnapshotStore_InvalidScopeRejected(t *testing.T) {
 		bg := context.TODO()
 		var invalid persistence.Scope
 
-		anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-		if err != nil {
-			t.Fatalf("build snapshot payload: %v", err)
-		}
-		snapshot := &egopb.Snapshot{PersistenceId: "scope-guard-snap", SequenceNumber: 1, State: anyState}
-
 		s.It("WriteSnapshot", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
 			store := NewSnapshotStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			err := store.WriteSnapshot(bg, invalid, snapshot)
@@ -181,6 +195,7 @@ func TestSnapshotStore_InvalidScopeRejected(t *testing.T) {
 		})
 
 		s.It("GetLatestSnapshot", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
 			store := NewSnapshotStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteSnapshot(bg, persistence.Unscoped(), snapshot)).To(specs.BeNil())
@@ -191,6 +206,7 @@ func TestSnapshotStore_InvalidScopeRejected(t *testing.T) {
 		})
 
 		s.It("DeleteSnapshots", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
 			store := NewSnapshotStore()
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 			ctx.Expect(store.WriteSnapshot(bg, persistence.Unscoped(), snapshot)).To(specs.BeNil())
