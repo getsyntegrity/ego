@@ -24,12 +24,13 @@ package eventsource
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -39,10 +40,26 @@ import (
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
-	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
 	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/testkit"
 )
+
+// errSnapshotWrite is what a failing snapshot write returns.
+var errSnapshotWrite = errors.New("snapshot write failed")
+
+// errEncrypt is what a failing encryptor returns.
+var errEncrypt = errors.New("encrypt failed")
+
+// writeGate holds a snapshot write until the case opens it, so a case can
+// observe what happens while the write is still in flight without sleeping.
+type writeGate struct {
+	once sync.Once
+	open chan struct{}
+}
+
+func newWriteGate() *writeGate { return &writeGate{open: make(chan struct{})} }
+
+// release lets every held and future write through. It is safe to call twice.
+func (g *writeGate) release() { g.once.Do(func() { close(g.open) }) }
 
 // snapshotWriterRig wires a snapshots writer and an events janitor on one
 // actor system whose stores record into one shared, ordered log.
@@ -52,23 +69,25 @@ type snapshotWriterRig struct {
 	janitor *goakt.PID
 }
 
-func newSnapshotWriterRig(t *testing.T, snapshotErr error, encryptor *extensions.EncryptorExtension, writeDelay time.Duration) *snapshotWriterRig {
-	t.Helper()
-	ctx := context.Background()
+// newSnapshotWriterRig builds the rig for one case. snapshotErr makes every
+// snapshot write fail, encryptor adds an encryptor extension when non-nil and
+// gate, when non-nil, holds each snapshot write until it is released. The
+// actor system and the stores are stopped when the case ends, after the gate
+// is released.
+func newSnapshotWriterRig(ctx *specs.Context, snapshotErr error, encryptor *extensions.EncryptorExtension, gate *writeGate) *snapshotWriterRig {
+	bg := context.Background()
 
 	calls := new(storeCalls)
-	baseEvents := testkit.NewEventsStore()
-	baseSnapshots := testkit.NewSnapshotStore()
-	require.NoError(t, baseEvents.Connect(ctx))
-	require.NoError(t, baseSnapshots.Connect(ctx))
-	t.Cleanup(func() {
-		_ = baseEvents.Disconnect(ctx)
-		_ = baseSnapshots.Disconnect(ctx)
-	})
+	baseEvents := connectedEventsStore(ctx)
+	baseSnapshots := connectedSnapshotStore(ctx)
 
+	var hold <-chan struct{}
+	if gate != nil {
+		hold = gate.open
+	}
 	exts := []extension.Extension{
 		extensions.NewEventsStore(&loggingEventsStore{EventsStore: baseEvents, calls: calls}),
-		extensions.NewSnapshotStore(&loggingSnapshotStore{SnapshotStore: baseSnapshots, calls: calls, writeErr: snapshotErr, writeDelay: writeDelay}),
+		extensions.NewSnapshotStore(&loggingSnapshotStore{SnapshotStore: baseSnapshots, calls: calls, writeErr: snapshotErr, hold: hold}),
 	}
 	if encryptor != nil {
 		exts = append(exts, encryptor)
@@ -78,25 +97,29 @@ func newSnapshotWriterRig(t *testing.T, snapshotErr error, encryptor *extensions
 		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
 		goakt.WithExtensions(exts...),
 		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
-	t.Cleanup(func() { _ = actorSystem.Stop(ctx) })
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(actorSystem.Start(bg)).To(specs.BeNil())
+	ctx.Cleanup(func() { _ = actorSystem.Stop(bg) })
+	if gate != nil {
+		// registered after the system's cleanup, so it runs first and a held
+		// write cannot keep the system from stopping
+		ctx.Cleanup(gate.release)
+	}
 
 	rig := &snapshotWriterRig{calls: calls}
-	rig.writer, err = actorSystem.Spawn(ctx, "snapshots-writer", newSnapshotsWriterActor())
-	require.NoError(t, err)
-	rig.janitor, err = actorSystem.Spawn(ctx, "events-janitor", newEventsJanitorActor())
-	require.NoError(t, err)
+	rig.writer, err = actorSystem.Spawn(bg, "snapshots-writer", newSnapshotsWriterActor())
+	ctx.Expect(err).To(specs.BeNil())
+	rig.janitor, err = actorSystem.Spawn(bg, "events-janitor", newEventsJanitorActor())
+	ctx.Expect(err).To(specs.BeNil())
 	return rig
 }
 
 // persist sends one snapshot at sequence 4 to the writer. With withRetention
 // the request carries a retention policy for interval 2, so main computes the
 // previous snapshot as sequence 2.
-func (r *snapshotWriterRig) persist(t *testing.T, scope persistence.Scope, withRetention bool) {
-	t.Helper()
+func (r *snapshotWriterRig) persist(ctx *specs.Context, scope persistence.Scope, withRetention bool) {
 	state, err := anypb.New(wrapperspb.String("state"))
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	req := &persistSnapshotRequest{
 		snapshot: &egopb.Snapshot{PersistenceId: "entity-1", SequenceNumber: 4, State: state},
 		scope:    scope,
@@ -112,73 +135,83 @@ func (r *snapshotWriterRig) persist(t *testing.T, scope persistence.Scope, withR
 			scope:                     scope,
 		}
 	}
-	require.NoError(t, goakt.Tell(context.Background(), r.writer, req))
+	ctx.Expect(goakt.Tell(context.Background(), r.writer, req)).To(specs.BeNil())
 }
 
-func (r *snapshotWriterRig) awaitRetention(t *testing.T) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		return r.calls.count(opDeleteEvents) == 1 && r.calls.count(opDeleteSnapshots) == 1
-	}, 10*time.Second, 10*time.Millisecond)
+// awaitRetention waits until each retention delete was called once.
+func (r *snapshotWriterRig) awaitRetention(ctx *specs.Context) {
+	ctx.Eventually(func() any { return r.calls.count(opDeleteEvents) }, specs.Equal(1), snapshotsPoll...)
+	ctx.Eventually(func() any { return r.calls.count(opDeleteSnapshots) }, specs.Equal(1), snapshotsPoll...)
 }
+
+// retentionOrExtraWrites reports whether a retention delete was observed or
+// the snapshot was written more often than the retry budget allows.
+func (r *snapshotWriterRig) retentionOrExtraWrites() any {
+	return r.calls.anyRetention() || r.calls.count(opWriteSnapshot) > defaultMaxRetries+1
+}
+
+// scopeOf projects a recorded call to the scope it received.
+func scopeOf(c storeCall) persistence.Scope { return c.scope }
 
 func TestSnapshotsWriterContract(t *testing.T) {
-	t.Run("the scope reaches the snapshot write and the retention deletes unchanged", func(t *testing.T) {
-		scope, err := persistence.NewTenantScope("tenant-a")
-		require.NoError(t, err)
-		rig := newSnapshotWriterRig(t, nil, nil, 0)
+	specs.Describe(t, "snapshotsWriterActor hands the stores and the janitor the right calls", func(s *specs.Spec) {
+		s.It("the scope reaches the snapshot write and the retention deletes unchanged", func(ctx *specs.Context) {
+			scope, err := persistence.NewTenantScope("tenant-a")
+			ctx.Expect(err).To(specs.BeNil())
+			rig := newSnapshotWriterRig(ctx, nil, nil, nil)
 
-		rig.persist(t, scope, true)
+			rig.persist(ctx, scope, true)
 
-		rig.awaitRetention(t)
-		require.Equal(t, 1, rig.calls.count(opWriteSnapshot))
-		for _, call := range rig.calls.snapshot() {
-			assert.Equal(t, scope, call.scope, "call %s", call.op)
-		}
-	})
+			rig.awaitRetention(ctx)
+			ctx.Expect(rig.calls.count(opWriteSnapshot)).To(specs.Equal(1))
+			ctx.Expect(rig.calls.snapshot()).To(specs.EveryElement(specs.Project("scope", scopeOf, specs.Equal(scope))))
+		})
 
-	t.Run("retention runs after the snapshot write", func(t *testing.T) {
-		rig := newSnapshotWriterRig(t, nil, nil, 150*time.Millisecond)
+		s.It("retention runs after the snapshot write", func(ctx *specs.Context) {
+			gate := newWriteGate()
+			rig := newSnapshotWriterRig(ctx, nil, nil, gate)
 
-		rig.persist(t, persistence.Unscoped(), true)
+			rig.persist(ctx, persistence.Unscoped(), true)
 
-		rig.awaitRetention(t)
-		snapshot := rig.calls.indexOf(opWriteSnapshot, 4)
-		require.GreaterOrEqual(t, snapshot, 0)
-		assert.Greater(t, rig.calls.indexOf(opDeleteEvents, 4), snapshot)
-		// the previous snapshot is the current sequence minus the interval
-		assert.Greater(t, rig.calls.indexOf(opDeleteSnapshots, 2), snapshot)
-	})
+			// while the write is held, no retention may be forwarded
+			ctx.Consistently(func() any { return rig.calls.anyRetention() }, specs.BeFalse(), specs.WithTimeout(snapshotsSettle))
+			gate.release()
 
-	t.Run("a failed snapshot write is retried and then forwards no retention", func(t *testing.T) {
-		rig := newSnapshotWriterRig(t, assert.AnError, nil, 0)
+			rig.awaitRetention(ctx)
+			snapshot := rig.calls.indexOf(opWriteSnapshot, 4)
+			ctx.Expect(snapshot).To(specs.BeGreaterThanOrEqual(0))
+			ctx.Expect(rig.calls.indexOf(opDeleteEvents, 4)).To(specs.BeGreaterThan(snapshot))
+			// the previous snapshot is the current sequence minus the interval
+			ctx.Expect(rig.calls.indexOf(opDeleteSnapshots, 2)).To(specs.BeGreaterThan(snapshot))
+		})
 
-		rig.persist(t, persistence.Unscoped(), true)
+		s.It("a failed snapshot write is retried and then forwards no retention", func(ctx *specs.Context) {
+			rig := newSnapshotWriterRig(ctx, errSnapshotWrite, nil, nil)
 
-		require.Eventually(t, func() bool { return rig.calls.count(opWriteSnapshot) == defaultMaxRetries+1 },
-			10*time.Second, 10*time.Millisecond)
-		require.Never(t, func() bool {
-			return rig.calls.anyRetention() || rig.calls.count(opWriteSnapshot) > defaultMaxRetries+1
-		}, time.Second, 10*time.Millisecond)
-	})
+			rig.persist(ctx, persistence.Unscoped(), true)
 
-	t.Run("an encryption failure writes nothing and forwards no retention", func(t *testing.T) {
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Encrypt(mock.Anything, "entity-1", mock.Anything).Return(nil, "", assert.AnError)
-		rig := newSnapshotWriterRig(t, nil, extensions.NewEncryptor(encryptor), 0)
+			ctx.Eventually(func() any { return rig.calls.count(opWriteSnapshot) }, specs.Equal(defaultMaxRetries+1), snapshotsPoll...)
+			ctx.Consistently(rig.retentionOrExtraWrites, specs.BeFalse(), specs.WithTimeout(time.Second))
+		})
 
-		rig.persist(t, persistence.Unscoped(), true)
+		s.It("an encryption failure writes nothing and forwards no retention", func(ctx *specs.Context) {
+			encryptorCtrl := mock.NewController(ctx)
+			encryptorCtrl.Method("Encrypt").Expect(mock.Any(), "entity-1", mock.Any()).Return(nil, "", errEncrypt)
+			rig := newSnapshotWriterRig(ctx, nil, extensions.NewEncryptor(enginetest.NewEncryptorMock(encryptorCtrl)), nil)
 
-		require.Never(t, func() bool { return len(rig.calls.snapshot()) > 0 }, time.Second, 10*time.Millisecond)
-		encryptor.AssertExpectations(t)
-	})
+			rig.persist(ctx, persistence.Unscoped(), true)
 
-	t.Run("a nil retention request writes the snapshot and triggers no deletes", func(t *testing.T) {
-		rig := newSnapshotWriterRig(t, nil, nil, 0)
+			ctx.Eventually(calls(encryptorCtrl, "Encrypt"), specs.Equal(1), snapshotsPoll...)
+			ctx.Consistently(func() any { return rig.calls.snapshot() }, specs.BeEmpty(), specs.WithTimeout(time.Second))
+		})
 
-		rig.persist(t, persistence.Unscoped(), false)
+		s.It("a nil retention request writes the snapshot and triggers no deletes", func(ctx *specs.Context) {
+			rig := newSnapshotWriterRig(ctx, nil, nil, nil)
 
-		require.Eventually(t, func() bool { return rig.calls.count(opWriteSnapshot) == 1 }, 10*time.Second, 10*time.Millisecond)
-		require.Never(t, func() bool { return rig.calls.anyRetention() }, time.Second, 10*time.Millisecond)
+			rig.persist(ctx, persistence.Unscoped(), false)
+
+			ctx.Eventually(func() any { return rig.calls.count(opWriteSnapshot) }, specs.Equal(1), snapshotsPoll...)
+			ctx.Consistently(func() any { return rig.calls.anyRetention() }, specs.BeFalse(), specs.WithTimeout(time.Second))
+		})
 	})
 }
