@@ -40,7 +40,7 @@ func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
 			ctx.Expect(kitlog.L() == DefaultLogger()).To(specs.BeTrue())
 
 			previous := kitlog.L()
-			ctx.T.Cleanup(func() { kitlog.SetGlobal(previous) })
+			ctx.Cleanup(func() { kitlog.SetGlobal(previous) })
 
 			custom := kitlogtest.NewMockLogger()
 			kitlog.SetGlobal(custom)
