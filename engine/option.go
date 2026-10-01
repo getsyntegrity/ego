@@ -62,6 +62,11 @@ type Config struct {
 	encryptor     encryption.Encryptor
 	behaviorKinds []BehaviorKind
 
+	// schemaMigration is set by WithSchemaMigration: Engine.Start then runs
+	// Migrate on every configured store that implements
+	// persistence.SchemaMigrator.
+	schemaMigration bool
+
 	// entityFamilies is the set declared with WithEntityFamilies; zero
 	// means nothing was declared and every family may be spawned.
 	entityFamilies EntityFamily
@@ -226,6 +231,24 @@ func WithLogger(logger kitlog.Logger) Option {
 func WithStateStore(stateStore persistence.StateStore) Option {
 	return OptionFunc(func(c *Config) {
 		c.stateStore = stateStore
+	})
+}
+
+// WithSchemaMigration makes Engine.Start bring the schema of the configured
+// stores up to date before the engine accepts any command.
+//
+// Start calls Migrate on each store that implements persistence.SchemaMigrator,
+// in this order: events store, state store, offset store, snapshot store. A
+// store that does not implement it is left alone. The first Migrate error
+// stops Start, which returns it, wrapped with the kind of store that failed,
+// and the engine does not start.
+//
+// The option is off by default, so an engine never changes a database schema
+// unless asked to. The stores must be connected before Start: eGo does not
+// connect them.
+func WithSchemaMigration() Option {
+	return OptionFunc(func(c *Config) {
+		c.schemaMigration = true
 	})
 }
 

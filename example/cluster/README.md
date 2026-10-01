@@ -313,13 +313,12 @@ example/cluster/
 ├── main.go                  # Engine setup, HTTP API, graceful shutdown
 ├── behavior.go              # AccountBehavior (event-sourced entity)
 ├── discovery.go             # Kubernetes cluster discovery provider
-├── stores.go                # PostgreSQL EventsStore and OffsetStore
 ├── projection.go            # Projection handler (materializes account balances)
 ├── telemetry.go             # OpenTelemetry setup (OTLP/gRPC exporters)
 ├── Dockerfile               # Multi-stage build (golang → distroless)
 ├── Makefile                 # All build, deploy, and test targets
 ├── kind-config.yaml         # Kind cluster config with ingress port mappings
-├── go.mod                   # Separate module (isolates k8s/pgx/otel dependencies)
+├── go.mod                   # Separate module (isolates k8s/pgx/otel dependencies); the Postgres stores live in ../../persistence/postgres
 ├── go.sum
 ├── README.md
 └── k8s/
@@ -339,6 +338,27 @@ The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so
 
 A separate headless service (`ego-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
 
+## Schema migrations
+
+The tables of this example belong to the `persistence/postgres` module, which
+versions them: five SQL files, an `ego_schema_migrations` table that records which
+ones a database has, and a Postgres advisory lock so that several nodes can
+start at once. An engine opts in with `engine.WithSchemaMigration()`; the
+stores are connected first, and `Engine.Start` then migrates them before the
+engine accepts a command. See
+[`persistence/postgres/README.md`](../../persistence/postgres/README.md).
+
+The Kubernetes manifest in `k8s/postgres.yaml` still creates the schema in its
+`init.sql`, so this example works as it always did. `WithSchemaMigration()` is
+the preferred path for a real deployment: it needs no hand-kept SQL and it
+upgrades an older database by itself. A database created from `init.sql` has no
+version record; the first `Migrate` recognises its shape and records the
+version instead of applying the files again.
+
+The one case it refuses is an `events_store` with no `tenant_id` column, which
+predates the scoped stores. Add that column first, with the recipe in the next
+section, then migrate.
+
 ## Tenant column (`tenant_id`)
 
 `events_store` carries a `tenant_id` column (default `''`), because
@@ -351,7 +371,10 @@ collides with a real one.
 
 Migrating an existing deployment's database needs no data rewrite: every
 existing row keeps reading back as `Unscoped()` once the column is added with
-its default.
+its default. This is the one step `Migrate` does not do for you, because it
+changes the primary key of a table that may be large: a database whose
+`events_store` has no `tenant_id` is refused with `ErrUnsupportedSchema` until
+you run the statements below.
 
 ```sql
 ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255) DEFAULT '' NOT NULL;
@@ -386,30 +409,14 @@ that would make a persistence id that was never written look established,
 so a later `ExpectGenesis()` would wrongly conflict. It never modifies the
 revision either way.
 
-To migrate an existing database, run the statements below (they are also the
-tail of `k8s/postgres.yaml`'s `init.sql`, and are safe to re-run). The backfill
-takes each record's highest *retained* sequence number, so a record whose
-latest events were already deleted before this migration cannot recover its
-old revision.
+`Migrate` creates this table (schema file `003_events_store_revisions.sql`) and,
+on a database that had `events_store` before it, backfills each record's
+revision from its highest *retained* sequence number. A record whose latest
+events were already deleted before this migration cannot recover its old
+revision. The backfill never lowers a revision that is already stored.
 
-```sql
-CREATE TABLE IF NOT EXISTS events_store_revisions
-(
-    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id VARCHAR(255)            NOT NULL,
-    revision       BIGINT                  NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id)
-);
-INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
-SELECT tenant_id, persistence_id, MAX(sequence_number)
-FROM events_store
-GROUP BY tenant_id, persistence_id
-ON CONFLICT (tenant_id, persistence_id)
-DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
-```
-
-Run it while no writer is active, so no event commits between the backfill
-and the new code taking over.
+Run the migration while no writer is active, so no event commits between the
+backfill and the new code taking over.
 
 ## Tenant metadata column (`tenant_metadata`)
 
@@ -423,13 +430,9 @@ tenant-scoped actor rejected its own recovered events after a restart.
 The column is nullable rather than `NOT NULL DEFAULT '{}'` on purpose:
 proto3 cannot distinguish a nil map from an empty one on the wire, so an
 event written with no tenant metadata — and every pre-existing legacy row —
-stores `NULL` and reads back as a nil map. Migrating an existing deployment's
-database needs no backfill and invents no tenant identity for a row that
-never had one:
-
-```sql
-ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
-```
+stores `NULL` and reads back as a nil map. `Migrate` adds the column (schema
+file `004_events_store_tenant_metadata.sql`) with no backfill, so it invents no
+tenant identity for a row that never had one.
 
 ## Dependency Isolation
 

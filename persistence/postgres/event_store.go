@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package main
+package postgres
 
 import (
 	"context"
@@ -36,88 +36,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/offsetstore"
 	"github.com/getsyntegrity/ego/persistence"
 )
-
-// eventsStoreSchemaDDL is the CREATE TABLE statement for events_store, kept
-// in sync by hand with the ConfigMap init.sql in k8s/postgres.yaml (the
-// deployment source of truth). It is used by the Postgres-backed tests
-// (stores_postgres_test.go) to provision a fresh schema without depending on
-// a running cluster's init container.
-//
-// tenant_id defaults to ” (the empty string), which scopeKey encodes as
-// persistence.Unscoped(): a valid tenancy.TenantID is never empty
-// (tenancy.NewTenantID rejects ""), so ” unambiguously means "no tenant".
-// Existing rows from before this column existed read back as ”, so an
-// existing non-tenant deployment needs no data rewrite — see README.md's
-// migration note for the ALTER TABLE recipe on an existing database.
-//
-// events_store_revisions holds one row per (tenant_id, persistence_id): the
-// StorageRevision, i.e. the highest sequence number ever committed for that
-// record. It is separate from events_store because DeleteEvents removes
-// replayable events for retention but must never lower the revision, or
-// ExpectGenesis() would succeed again and a stale ExpectRevision would win.
-// The row is also the per-record lock: every write takes it before touching
-// events_store (see WriteEvents), and so does DeleteEvents before its DELETE
-// (see DeleteEvents), so a delete can never interleave with a concurrent
-// write of the same record.
-//
-// The script is idempotent and doubles as the migration for a database
-// created before events_store_revisions existed: the final INSERT backfills
-// each record's revision from its highest retained sequence number, and never
-// lowers a revision that is already stored.
-//
-// tenant_metadata is a nullable JSONB column carrying egopb.Event's
-// TenantMetadata (proto field 10), the map a tenant-aware EventSourcedActor
-// serializes via tenancy.MarshalMetadata before persisting and reconstructs
-// via tenancy.UnmarshalMetadata on recovery (event_sourced_actor.go). It must
-// be nullable rather than NOT NULL DEFAULT '{}': proto3 cannot distinguish a
-// nil map from an empty one on the wire, so insertEvent (below) writes NULL
-// for both, and scanEvents reads NULL back as a nil map — the same shape
-// GetTenantMetadata() returns for an event that never carried tenant
-// metadata at all. A JSON object, not a second key/value table, mirrors the
-// map's own shape and keeps a single-record write to one row (#115 Codex
-// P2). ADD COLUMN IF NOT EXISTS migrates a database created before this
-// column existed with NO backfill: an existing row's tenant_metadata is
-// NULL, which is already the correct "no tenant metadata" reading for a row
-// nothing ever attached an identity to — inventing one here would be wrong.
-const eventsStoreSchemaDDL = `
-CREATE TABLE IF NOT EXISTS events_store
-(
-    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id    VARCHAR(255)          NOT NULL,
-    sequence_number   BIGINT                NOT NULL,
-    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
-    event_payload     BYTEA                 NOT NULL,
-    event_manifest    VARCHAR(255)          NOT NULL,
-    timestamp         BIGINT                NOT NULL,
-    shard_number      BIGINT                NOT NULL,
-    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
-    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-    tenant_metadata   JSONB,
-    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
-);
-ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
-CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
-CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
-CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
-
-CREATE TABLE IF NOT EXISTS events_store_revisions
-(
-    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id VARCHAR(255)            NOT NULL,
-    revision       BIGINT                  NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id)
-);
-INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
-SELECT tenant_id, persistence_id, MAX(sequence_number)
-FROM events_store
-GROUP BY tenant_id, persistence_id
-ON CONFLICT (tenant_id, persistence_id)
-DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
-`
 
 // scopeKey validates scope and returns the tenant_id column value it maps
 // to: "" for persistence.Unscoped(), or the tenant's id for a tenant scope.
@@ -136,20 +56,23 @@ func scopeKey(scope persistence.Scope) (string, error) {
 	return string(scope.TenantID()), nil
 }
 
-// PostgresEventStore implements persistence.EventsStore using PostgreSQL.
-type PostgresEventStore struct {
+// EventStore implements persistence.EventsStore using PostgreSQL.
+type EventStore struct {
 	pool *pgxpool.Pool
 	dsn  string
 }
 
-var _ persistence.EventsStore = (*PostgresEventStore)(nil)
+var (
+	_ persistence.EventsStore    = (*EventStore)(nil)
+	_ persistence.SchemaMigrator = (*EventStore)(nil)
+)
 
-// NewPostgresEventStore creates a new PostgreSQL-backed event store.
-func NewPostgresEventStore(dsn string) *PostgresEventStore {
-	return &PostgresEventStore{dsn: dsn}
+// NewEventStore creates a new PostgreSQL-backed event store.
+func NewEventStore(dsn string) *EventStore {
+	return &EventStore{dsn: dsn}
 }
 
-func (s *PostgresEventStore) Connect(ctx context.Context) error {
+func (s *EventStore) Connect(ctx context.Context) error {
 	cfg, err := pgxpool.ParseConfig(s.dsn)
 	if err != nil {
 		return fmt.Errorf("event store config: %w", err)
@@ -163,14 +86,27 @@ func (s *PostgresEventStore) Connect(ctx context.Context) error {
 	return nil
 }
 
-func (s *PostgresEventStore) Disconnect(_ context.Context) error {
+// Migrate brings the database schema, every table of this module, to the
+// latest version. It implements persistence.SchemaMigrator and needs a
+// connected store; see SchemaMigrator for what it does.
+func (s *EventStore) Migrate(ctx context.Context) error {
+	return NewSchemaMigrator(s.pool).Migrate(ctx)
+}
+
+// SchemaVersion returns the schema version the database is at. It implements
+// persistence.SchemaMigrator.
+func (s *EventStore) SchemaVersion(ctx context.Context) (uint, error) {
+	return NewSchemaMigrator(s.pool).SchemaVersion(ctx)
+}
+
+func (s *EventStore) Disconnect(_ context.Context) error {
 	if s.pool != nil {
 		s.pool.Close()
 	}
 	return nil
 }
 
-func (s *PostgresEventStore) Ping(ctx context.Context) error {
+func (s *EventStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
@@ -181,7 +117,7 @@ func (s *PostgresEventStore) Ping(ctx context.Context) error {
 // Unconditional()), every event in the batch MUST share one PersistenceId,
 // including that the batch must be non-empty, or persistence.ErrPreconditionScope
 // is returned — mirroring testkit's in-memory EventStore.
-func (s *PostgresEventStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+func (s *EventStore) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return err
@@ -276,7 +212,7 @@ func insertEvent(ctx context.Context, tx pgx.Tx, query, tenantID string, event *
 // revision check and its insert. The ids are locked in sorted order, so two
 // batches that share ids always acquire their locks in the same order and
 // cannot deadlock each other.
-func (s *PostgresEventStore) writeUnconditional(ctx context.Context, tenantID string, events []*egopb.Event) error {
+func (s *EventStore) writeUnconditional(ctx context.Context, tenantID string, events []*egopb.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -333,7 +269,7 @@ func (s *PostgresEventStore) writeUnconditional(ctx context.Context, tenantID st
 // MAX(sequence_number): DeleteEvents removes events for retention without
 // touching the revision, so deleted events never reopen ExpectGenesis() or
 // let a stale ExpectRevision win.
-func (s *PostgresEventStore) writeConditional(ctx context.Context, scope persistence.Scope, tenantID, persistenceID string, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+func (s *EventStore) writeConditional(ctx context.Context, scope persistence.Scope, tenantID, persistenceID string, events []*egopb.Event, precondition persistence.WritePrecondition) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -456,7 +392,7 @@ func lockRevisionIfExists(ctx context.Context, tx pgx.Tx, tenantID, persistenceI
 // DELETE still runs without creating one: that case only ever matches
 // legacy rows written before events_store_revisions existed, and there is
 // no revision to protect for a persistence id that was never written.
-func (s *PostgresEventStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+func (s *EventStore) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return err
@@ -484,7 +420,7 @@ func (s *PostgresEventStore) DeleteEvents(ctx context.Context, scope persistence
 // ReplayEvents implements persistence.EventsStore. scope is validated before
 // anything is read, and this never returns a record that belongs to another
 // scope.
-func (s *PostgresEventStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, fromSequenceNumber, toSequenceNumber, limit uint64) ([]*egopb.Event, error) {
+func (s *EventStore) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, fromSequenceNumber, toSequenceNumber, limit uint64) ([]*egopb.Event, error) {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return nil, err
@@ -507,7 +443,7 @@ func (s *PostgresEventStore) ReplayEvents(ctx context.Context, scope persistence
 // GetLatestEvent implements persistence.EventsStore. scope is validated
 // before anything is read, and this never returns a record that belongs to
 // another scope.
-func (s *PostgresEventStore) GetLatestEvent(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Event, error) {
+func (s *EventStore) GetLatestEvent(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Event, error) {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return nil, err
@@ -546,7 +482,7 @@ func (s *PostgresEventStore) GetLatestEvent(ctx context.Context, scope persisten
 // nextPageToken without querying, like testkit's in-memory EventStore. An
 // empty token there means "iteration complete", which stops a caller that
 // passes 0 instead of handing it a token that repeats the same empty page.
-func (s *PostgresEventStore) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
+func (s *EventStore) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
 	tenantID, err := scopeKey(scope)
 	if err != nil {
 		return nil, "", err
@@ -586,7 +522,7 @@ func (s *PostgresEventStore) PersistenceIDs(ctx context.Context, scope persisten
 	return ids, next, rows.Err()
 }
 
-func (s *PostgresEventStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
+func (s *EventStore) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT persistence_id, sequence_number, is_deleted, event_payload, event_manifest,
 		       timestamp, shard_number, encryption_key_id, is_encrypted, tenant_metadata
@@ -611,7 +547,7 @@ func (s *PostgresEventStore) GetShardEvents(ctx context.Context, shardNumber uin
 	return events, nextOffset, nil
 }
 
-func (s *PostgresEventStore) ShardOffsets(ctx context.Context) (map[uint64]int64, error) {
+func (s *EventStore) ShardOffsets(ctx context.Context) (map[uint64]int64, error) {
 	rows, err := s.pool.Query(ctx, `SELECT shard_number, MAX(timestamp) FROM events_store GROUP BY shard_number`)
 	if err != nil {
 		return nil, err
@@ -683,88 +619,4 @@ func scanEvents(rows pgx.Rows) ([]*egopb.Event, error) {
 		})
 	}
 	return events, rows.Err()
-}
-
-// PostgresOffsetStore implements offsetstore.OffsetStore using PostgreSQL.
-type PostgresOffsetStore struct {
-	pool *pgxpool.Pool
-	dsn  string
-}
-
-var _ offsetstore.OffsetStore = (*PostgresOffsetStore)(nil)
-
-// NewPostgresOffsetStore creates a new PostgreSQL-backed offset store.
-func NewPostgresOffsetStore(dsn string) *PostgresOffsetStore {
-	return &PostgresOffsetStore{dsn: dsn}
-}
-
-func (s *PostgresOffsetStore) Connect(ctx context.Context) error {
-	cfg, err := pgxpool.ParseConfig(s.dsn)
-	if err != nil {
-		return fmt.Errorf("offset store config: %w", err)
-	}
-	cfg.MaxConns = 20
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("offset store connect: %w", err)
-	}
-	s.pool = pool
-	return nil
-}
-
-func (s *PostgresOffsetStore) Disconnect(_ context.Context) error {
-	if s.pool != nil {
-		s.pool.Close()
-	}
-	return nil
-}
-
-func (s *PostgresOffsetStore) Ping(ctx context.Context) error {
-	return s.pool.Ping(ctx)
-}
-
-func (s *PostgresOffsetStore) WriteOffset(ctx context.Context, offset *egopb.Offset) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO offsets_store (projection_name, shard_number, current_offset, timestamp)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (projection_name, shard_number)
-		DO UPDATE SET current_offset = EXCLUDED.current_offset, timestamp = EXCLUDED.timestamp`,
-		offset.GetProjectionName(),
-		offset.GetShardNumber(),
-		offset.GetValue(),
-		offset.GetTimestamp(),
-	)
-	return err
-}
-
-func (s *PostgresOffsetStore) GetCurrentOffset(ctx context.Context, projectionID *egopb.ProjectionId) (*egopb.Offset, error) {
-	row := s.pool.QueryRow(ctx, `
-		SELECT projection_name, shard_number, current_offset, timestamp
-		FROM offsets_store
-		WHERE projection_name=$1 AND shard_number=$2`,
-		projectionID.GetProjectionName(),
-		projectionID.GetShardNumber(),
-	)
-
-	var offset egopb.Offset
-	err := row.Scan(
-		&offset.ProjectionName,
-		&offset.ShardNumber,
-		&offset.Value,
-		&offset.Timestamp,
-	)
-	if err != nil {
-		if err.Error() == "no rows in result set" {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &offset, nil
-}
-
-func (s *PostgresOffsetStore) ResetOffset(ctx context.Context, projectionName string, value int64) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE offsets_store SET current_offset=$1 WHERE projection_name=$2`,
-		value, projectionName)
-	return err
 }

@@ -55,6 +55,7 @@ import (
 
 	"github.com/getsyntegrity/ego/engine"
 	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	"github.com/getsyntegrity/ego/persistence/postgres"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/projection"
 )
@@ -98,14 +99,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	eventStore := NewPostgresEventStore(dsn)
+	eventStore := postgres.NewEventStore(dsn)
 	if err := eventStore.Connect(ctx); err != nil {
 		logger.Error("failed to connect event store", "error", err)
 		os.Exit(1)
 	}
 	defer eventStore.Disconnect(ctx)
 
-	offsetStore := NewPostgresOffsetStore(dsn)
+	offsetStore := postgres.NewOffsetStore(dsn)
 	if err := offsetStore.Connect(ctx); err != nil {
 		logger.Error("failed to connect offset store", "error", err)
 		os.Exit(1)

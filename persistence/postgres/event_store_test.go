@@ -20,13 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package main
+package postgres
 
-// These tests exercise PostgresEventStore's argument validation without a
+// These tests exercise EventStore's argument validation without a
 // database: every scoped method MUST reject an invalid persistence.Scope or
 // persistence.WritePrecondition (and a conditional batch that violates the
 // single-persistence-id rule) before it ever touches s.pool. A
-// *PostgresEventStore with a nil pool is used deliberately: if validation
+// *EventStore with a nil pool is used deliberately: if validation
 // were to fall through to a query, these tests would panic on the nil pool
 // instead of returning the expected sentinel error, making the ordering
 // itself testable.
@@ -41,19 +41,19 @@ import (
 	"github.com/getsyntegrity/ego/persistence"
 )
 
-// unvalidatedStore returns a *PostgresEventStore with a nil pool, so any test
+// unvalidatedStore returns a *EventStore with a nil pool, so any test
 // that reaches an actual query panics instead of silently passing.
-func unvalidatedStore() *PostgresEventStore {
-	return &PostgresEventStore{}
+func unvalidatedStore() *EventStore {
+	return &EventStore{}
 }
 
 func singleEvent(persistenceID string, sequenceNumber uint64) *egopb.Event {
 	return &egopb.Event{PersistenceId: persistenceID, SequenceNumber: sequenceNumber}
 }
 
-func TestPostgresEventStore_WriteEvents_InvalidScope(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("write events invalid scope", func(ctx *specs.Context) {
+func TestEventStore_WriteEvents_InvalidScope(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents scope validation", func(s *specs.Spec) {
+		s.It("rejects an invalid scope with ErrInvalidScope before any query", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			err := store.WriteEvents(context.Background(), persistence.Scope{}, []*egopb.Event{singleEvent("a", 1)}, persistence.Unconditional())
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
@@ -61,9 +61,9 @@ func TestPostgresEventStore_WriteEvents_InvalidScope(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_WriteEvents_InvalidPrecondition(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("write events invalid precondition", func(ctx *specs.Context) {
+func TestEventStore_WriteEvents_InvalidPrecondition(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents precondition validation", func(s *specs.Spec) {
+		s.It("rejects a zero-value precondition with ErrInvalidPrecondition", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			err := store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{singleEvent("a", 1)}, persistence.WritePrecondition{})
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidPrecondition))
@@ -71,9 +71,9 @@ func TestPostgresEventStore_WriteEvents_InvalidPrecondition(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_WriteEvents_EmptyBatchConditional(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("write events empty batch conditional", func(ctx *specs.Context) {
+func TestEventStore_WriteEvents_EmptyBatchConditional(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents empty batch under a conditional precondition", func(s *specs.Spec) {
+		s.It("rejects it with ErrPreconditionScope", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			err := store.WriteEvents(context.Background(), persistence.Unscoped(), nil, persistence.ExpectGenesis())
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrPreconditionScope))
@@ -81,9 +81,9 @@ func TestPostgresEventStore_WriteEvents_EmptyBatchConditional(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_WriteEvents_MixedIDBatchConditional(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("write events mixed id batch conditional", func(ctx *specs.Context) {
+func TestEventStore_WriteEvents_MixedIDBatchConditional(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents single-id rule for conditional batches", func(s *specs.Spec) {
+		s.It("rejects a batch that mixes persistence ids with ErrPreconditionScope", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			events := []*egopb.Event{singleEvent("a", 1), singleEvent("b", 2)}
 			err := store.WriteEvents(context.Background(), persistence.Unscoped(), events, persistence.ExpectRevision(1))
@@ -92,9 +92,9 @@ func TestPostgresEventStore_WriteEvents_MixedIDBatchConditional(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_WriteEvents_EmptyBatchUnconditionalSucceeds(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("write events empty batch unconditional succeeds", func(ctx *specs.Context) {
+func TestEventStore_WriteEvents_EmptyBatchUnconditionalSucceeds(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents empty batch under an unconditional precondition", func(s *specs.Spec) {
+		s.It("succeeds as a no-op without touching the pool", func(ctx *specs.Context) {
 			// Unconditional() never declares a per-persistence-id expectation, so an
 			// empty batch is a legitimate no-op rather than ErrPreconditionScope. This
 			// also exercises the nil-pool guard: writeUnconditional must return before
@@ -106,9 +106,9 @@ func TestPostgresEventStore_WriteEvents_EmptyBatchUnconditionalSucceeds(t *testi
 	})
 }
 
-func TestPostgresEventStore_DeleteEvents_InvalidScope(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("delete events invalid scope", func(ctx *specs.Context) {
+func TestEventStore_DeleteEvents_InvalidScope(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.DeleteEvents scope validation", func(s *specs.Spec) {
+		s.It("rejects an invalid scope with ErrInvalidScope before any query", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			err := store.DeleteEvents(context.Background(), persistence.Scope{}, "a", 1)
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
@@ -116,9 +116,9 @@ func TestPostgresEventStore_DeleteEvents_InvalidScope(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_ReplayEvents_InvalidScope(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("replay events invalid scope", func(ctx *specs.Context) {
+func TestEventStore_ReplayEvents_InvalidScope(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.ReplayEvents scope validation", func(s *specs.Spec) {
+		s.It("rejects an invalid scope with ErrInvalidScope and returns no events", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			events, err := store.ReplayEvents(context.Background(), persistence.Scope{}, "a", 1, 10, 10)
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
@@ -127,9 +127,9 @@ func TestPostgresEventStore_ReplayEvents_InvalidScope(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_GetLatestEvent_InvalidScope(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("get latest event invalid scope", func(ctx *specs.Context) {
+func TestEventStore_GetLatestEvent_InvalidScope(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.GetLatestEvent scope validation", func(s *specs.Spec) {
+		s.It("rejects an invalid scope with ErrInvalidScope and returns no event", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			event, err := store.GetLatestEvent(context.Background(), persistence.Scope{}, "a")
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
@@ -138,9 +138,9 @@ func TestPostgresEventStore_GetLatestEvent_InvalidScope(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("persistence ids invalid scope", func(ctx *specs.Context) {
+func TestEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.PersistenceIDs scope validation", func(s *specs.Spec) {
+		s.It("rejects an invalid scope with ErrInvalidScope and returns no ids and no next page token", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			ids, next, err := store.PersistenceIDs(context.Background(), persistence.Scope{}, 10, "")
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
@@ -154,9 +154,9 @@ func TestPostgresEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
 // nextPageToken, so an iteration that passes it terminates instead of looping
 // on the same empty page. This mirrors testkit's in-memory EventStore. The
 // store's nil pool proves no query runs.
-func TestPostgresEventStore_PersistenceIDs_ZeroPageSize(t *testing.T) {
-	specs.Describe(t, "PostgresEventStore argument validation, without a database", func(s *specs.Spec) {
-		s.It("persistence ids zero page size", func(ctx *specs.Context) {
+func TestEventStore_PersistenceIDs_ZeroPageSize(t *testing.T) {
+	specs.Describe(t, "postgres.EventStore.PersistenceIDs zero page size", func(s *specs.Spec) {
+		s.It("returns an empty page and no next page token without a query, with or without a page token", func(ctx *specs.Context) {
 			store := unvalidatedStore()
 			ids, next, err := store.PersistenceIDs(context.Background(), persistence.Unscoped(), 0, "")
 			ctx.Expect(err).To(specs.BeNil())
@@ -171,6 +171,6 @@ func TestPostgresEventStore_PersistenceIDs_ZeroPageSize(t *testing.T) {
 	})
 }
 
-func TestPostgresEventStore_ImplementsEventsStore(t *testing.T) {
-	var _ persistence.EventsStore = (*PostgresEventStore)(nil)
+func TestEventStore_ImplementsEventsStore(t *testing.T) {
+	var _ persistence.EventsStore = (*EventStore)(nil)
 }

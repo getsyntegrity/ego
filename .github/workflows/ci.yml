@@ -261,6 +261,7 @@ jobs:
         dir:
           - benchmark
           - example/cluster
+          - persistence/postgres
           - publisher/kafka
           - publisher/nats
           - publisher/pulsar
