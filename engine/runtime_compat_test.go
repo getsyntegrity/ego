@@ -46,11 +46,12 @@ func optRecovered(fn func()) (value any) {
 // and the port/runtime name are the same error value, and that errors.Is
 // matches a wrapped error in both directions.
 func TestRuntimeSentinelsAreTheSameValues(t *testing.T) {
-	cases := []struct {
+	type sentinelCase struct {
 		name    string
 		ego     error
 		runtime error
-	}{
+	}
+	cases := []sentinelCase{
 		{"ErrEngineNotStarted", ErrEngineNotStarted, runtimeport.ErrEngineNotStarted},
 		{"ErrUndefinedEntityID", ErrUndefinedEntityID, runtimeport.ErrUndefinedEntityID},
 		{"ErrDurableStateStoreRequired", ErrDurableStateStoreRequired, runtimeport.ErrDurableStateStoreRequired},
@@ -63,16 +64,14 @@ func TestRuntimeSentinelsAreTheSameValues(t *testing.T) {
 		{"ErrEntityFamilyNotDeclared", ErrEntityFamilyNotDeclared, runtimeport.ErrEntityFamilyNotDeclared},
 	}
 	specs.Describe(t, "each moved sentinel is the same error value under the ego and port/runtime names", func(s *specs.Spec) {
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				ctx.Expect(tc.ego).To(specs.Not(specs.BeNil()))
-				ctx.Expect(tc.ego == tc.runtime).To(specs.BeTrue()) //nolint:errorlint // identity is the point
+		specs.Table(s, cases, func(tc sentinelCase) string { return tc.name }, func(ctx *specs.Context, tc sentinelCase) {
+			ctx.Expect(tc.ego).To(specs.Not(specs.BeNil()))
+			ctx.Expect(tc.ego).To(beTheSame(tc.runtime))
 
-				ctx.Expect(fmt.Errorf("op: %w", tc.ego)).To(specs.MatchError(tc.runtime))
-				ctx.Expect(fmt.Errorf("op: %w", tc.runtime)).To(specs.MatchError(tc.ego))
-				ctx.Expect(fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime))).To(specs.MatchError(tc.ego))
-			})
-		}
+			ctx.Expect(fmt.Errorf("op: %w", tc.ego)).To(specs.MatchError(tc.runtime))
+			ctx.Expect(fmt.Errorf("op: %w", tc.runtime)).To(specs.MatchError(tc.ego))
+			ctx.Expect(fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime))).To(specs.MatchError(tc.ego))
+		})
 	})
 }
 
@@ -92,9 +91,13 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 	}
 	specs.Describe(t, "the types and constants that moved to port/runtime are aliases of the ego names", func(s *specs.Spec) {
 		s.It("aliases the moved types, constants and values", func(ctx *specs.Context) {
+			var egoTypes, runtimeTypes []reflect.Type
 			for _, p := range pairs {
-				ctx.Expect(reflect.TypeOf(p.ego)).ToEqual(reflect.TypeOf(p.runtime))
+				egoTypes = append(egoTypes, reflect.TypeOf(p.ego))
+				runtimeTypes = append(runtimeTypes, reflect.TypeOf(p.runtime))
 			}
+			ctx.Expect(egoTypes).To(specs.HaveLen(len(pairs)))
+			ctx.Expect(egoTypes).ToEqual(runtimeTypes)
 
 			var _ *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted} //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
 			info := &SagaInfo{ID: "s", Status: SagaCompleted}
