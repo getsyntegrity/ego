@@ -23,6 +23,7 @@
 package logging
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -30,8 +31,6 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
@@ -72,20 +71,29 @@ func TestResolveLogger(t *testing.T) {
 // closure carries no actor runtime. The architecture-checker rules only see direct
 // imports, so this asserts the transitive closure via go list -deps.
 func TestLoggingStaysRuntimeNeutral(t *testing.T) {
-	goBin, err := exec.LookPath("go")
-	if err != nil {
-		t.Skip("the go tool is not on PATH")
-	}
+	specs.Describe(t, "the import graph of internal/logging", func(s *specs.Spec) {
+		s.It("reaches neither GoAkt nor the GoAkt logging seam", func(ctx *specs.Context) {
+			goBin, err := exec.LookPath("go")
+			if err != nil {
+				ctx.T.Skip("the go tool is not on PATH")
+			}
 
-	out, err := exec.Command(goBin, "list", "-deps", ".").CombinedOutput()
-	require.NoError(t, err, "go list -deps failed: %s", out)
+			out, err := exec.Command(goBin, "list", "-deps", ".").CombinedOutput()
+			var listErr error
+			if err != nil {
+				listErr = fmt.Errorf("go list -deps failed: %w\n%s", err, out)
+			}
+			ctx.Expect(listErr).To(specs.BeNil())
 
-	deps := strings.Fields(string(out))
-	require.NotEmpty(t, deps)
-	for _, dep := range deps {
-		assert.Falsef(t, strings.HasPrefix(dep, "github.com/tochemey/goakt"),
-			"internal/logging must not depend on GoAkt, directly or transitively; found %s", dep)
-		assert.Falsef(t, strings.HasSuffix(dep, "/internal/goaktlog"),
-			"internal/logging must not depend on the GoAkt logging seam; found %s", dep)
-	}
+			deps := strings.Fields(string(out))
+			// The guard first: an empty or truncated graph would prove nothing.
+			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/ego/internal/logging"))
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"a GoAkt package: internal/logging must not depend on GoAkt, directly or transitively",
+				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"the GoAkt logging seam: internal/logging must not depend on it",
+				func(dep any) bool { return strings.HasSuffix(dep.(string), "/internal/goaktlog") })))
+		})
+	})
 }
