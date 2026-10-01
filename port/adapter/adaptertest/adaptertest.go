@@ -154,6 +154,28 @@ const (
 	grace         = time.Second
 )
 
+// clock is how the harness reads time. It is unexported so the public API
+// does not change; in-package tests swap clk for a clock that fires the
+// AT-4 wait at once instead of sleeping for stallDeadline+grace.
+type clock interface {
+	Now() time.Time
+	// NewTimer returns a channel that receives once d has elapsed and a
+	// function that stops the timer.
+	NewTimer(d time.Duration) (fired <-chan time.Time, stop func())
+}
+
+// clk is the harness clock. Only in-package tests assign it.
+var clk clock = realClock{}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) NewTimer(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
+}
+
 // readyPorts are the ports whose interface already has Ping, so CapReady
 // is implied there and never declared (design §D3). They are string
 // literals because this package imports only the standard library and
@@ -450,12 +472,12 @@ func bounded(deadline time.Duration, fn func(ctx context.Context) error) (return
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- fn(ctx) }()
-	timer := time.NewTimer(deadline + grace)
-	defer timer.Stop()
+	fired, stop := clk.NewTimer(deadline + grace)
+	defer stop()
 	select {
 	case err := <-done:
 		return true, err
-	case <-timer.C:
+	case <-fired:
 		return false, nil
 	}
 }
@@ -573,13 +595,13 @@ var checks = []check{
 		v := s.newValue(t, ft, "Target.New", s.target.New)
 		s.mustAcquire(t, v)
 		s.target.Stall(ft)
-		start := time.Now()
+		start := clk.Now()
 		ok, err := bounded(stallDeadline, func(ctx context.Context) error { return s.release(ctx, v) })
 		if !ok {
 			t.Errorf("release ignored its deadline: it did not return within %v of a %v deadline while the backend was stalled (L3)", grace, stallDeadline)
 			return
 		}
-		t.Logf("release under a stalled backend returned after %v: %v", time.Since(start).Round(time.Millisecond), err)
+		t.Logf("release under a stalled backend returned after %v: %v", clk.Now().Sub(start).Round(time.Millisecond), err)
 	}},
 }
 
