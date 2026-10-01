@@ -287,8 +287,8 @@ jobs:
       - name: The gate's own tests
         run: go test ./.github/scripts/unitgate
       - name: Scan the repository
-        # Stale allowlist entries only warn while migration PRs merge in parallel. Add -strict when the pending list is empty.
-        run: go run ./.github/scripts/unitgate
+        # The pending list is empty, so stale entries are errors.
+        run: go run ./.github/scripts/unitgate -strict
 
   # go.mod/go.sum sorted, for the root module and every nested module (a cheap job of its own).
   tidy:
