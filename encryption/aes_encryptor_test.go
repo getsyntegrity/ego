@@ -87,7 +87,7 @@ func TestAESEncryptor_EncryptDecryptRoundTrip(t *testing.T) {
 
 			ciphertext, keyID, err := enc.Encrypt(bg, "entity-1", plaintext)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(len(ciphertext) > 0).To(specs.BeTrue())
+			ctx.Expect(ciphertext).To(specs.Not(specs.BeEmpty()))
 			ctx.Expect(keyID).To(specs.NotEqual(""))
 
 			decrypted, err := enc.Decrypt(bg, "entity-1", ciphertext, keyID)
@@ -129,7 +129,7 @@ func TestAESEncryptor_DecryptWithWrongKeyID(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			_, err = enc.Decrypt(bg, "entity-1", ciphertext, "wrong-key-id")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(encryption.ErrKeyNotFound))
 		})
 	})
 }
@@ -151,6 +151,8 @@ func TestAESEncryptor_DecryptShortCiphertext(t *testing.T) {
 
 			_, err = enc.Decrypt(bg, "entity-1", []byte("short"), keyID)
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.Project("message", func(e error) string { return e.Error() },
+				specs.MatchRegex("ciphertext too short")))
 		})
 	})
 }
