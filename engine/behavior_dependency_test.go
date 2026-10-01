@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,53 +150,66 @@ func (p *placementProbeSystem) Inject(deps ...extension.Dependency) error {
 // which spawn dependency the engine hands to GoAkt for a behavior value, in
 // and out of cluster mode.
 func TestSpawnDependency(t *testing.T) {
-	t.Run("serializable pointer passes through as the same pointer", func(t *testing.T) {
-		for _, inCluster := range []bool{false, true} {
-			sys := &placementProbeSystem{inCluster: inCluster}
-			b := NewAccountEventSourcedBehavior("acct-1")
-
-			dep, err := spawnDependency(sys, b)
-			require.NoError(t, err)
-			// Identity, not equality: the wire bytes and the GoAkt type name
-			// stay exactly those of the caller's value.
-			require.Same(t, b, dep.(*AccountEventSourcedBehavior), "inCluster=%v", inCluster)
-			require.Len(t, sys.injected, 1)
-			assert.Same(t, b, sys.injected[0].(*AccountEventSourcedBehavior))
-		}
-	})
-
-	t.Run("value type outside cluster mode is carried locally and never injected", func(t *testing.T) {
-		sys := &placementProbeSystem{}
-		b := valueTypeEventSourcedBehavior{id: "acct-2"}
-
-		dep, err := spawnDependency(sys, b)
-		require.NoError(t, err)
-		local, ok := dep.(*extensions.LocalBehavior)
-		require.True(t, ok, "got %T", dep)
-		assert.Equal(t, "acct-2", local.ID())
-		assert.Equal(t, b, local.Behavior())
-		assert.Empty(t, sys.injected)
-	})
-
-	t.Run("domain-only behavior outside cluster mode is carried locally", func(t *testing.T) {
-		for _, b := range []interface{ ID() string }{
-			&domainOnlyEventSourced{id: "es"},
-			&domainOnlyDurableState{id: "ds"},
-			&domainOnlySaga{id: "saga"},
+	specs.Describe(t, "spawnDependency picks the dependency handed to GoAkt for a behavior value", func(s *specs.Spec) {
+		for _, mode := range []struct {
+			name      string
+			inCluster bool
+		}{
+			{"outside cluster mode", false},
+			{"in cluster mode", true},
 		} {
-			sys := &placementProbeSystem{}
-			dep, err := spawnDependency(sys, b)
-			require.NoError(t, err)
-			local, ok := dep.(*extensions.LocalBehavior)
-			require.True(t, ok, "got %T", dep)
-			assert.Same(t, b, local.Behavior())
-			assert.Equal(t, b.ID(), local.ID())
-			assert.Empty(t, sys.injected)
-		}
-	})
+			s.It("serializable pointer passes through as the same pointer "+mode.name, func(ctx *specs.Context) {
+				sys := &placementProbeSystem{inCluster: mode.inCluster}
+				b := NewAccountEventSourcedBehavior("acct-1")
 
-	t.Run("cluster mode rejects with a typed error before anything is injected", func(t *testing.T) {
-		cases := []struct {
+				dep, err := spawnDependency(sys, b)
+				ctx.Expect(err).To(specs.BeNil())
+				// Identity, not equality: the wire bytes and the GoAkt type name
+				// stay exactly those of the caller's value.
+				got, ok := dep.(*AccountEventSourcedBehavior)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(got == b).To(specs.BeTrue())
+				ctx.Expect(len(sys.injected)).ToEqual(1)
+				injected, ok := sys.injected[0].(*AccountEventSourcedBehavior)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(injected == b).To(specs.BeTrue())
+			})
+		}
+
+		s.It("value type outside cluster mode is carried locally and never injected", func(ctx *specs.Context) {
+			sys := &placementProbeSystem{}
+			b := valueTypeEventSourcedBehavior{id: "acct-2"}
+
+			dep, err := spawnDependency(sys, b)
+			ctx.Expect(err).To(specs.BeNil())
+			local, ok := dep.(*extensions.LocalBehavior)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(local.ID()).ToEqual("acct-2")
+			ctx.Expect(local.Behavior()).ToEqual(b)
+			ctx.Expect(len(sys.injected)).ToEqual(0)
+		})
+
+		for _, tc := range []struct {
+			name     string
+			behavior interface{ ID() string }
+		}{
+			{"event-sourced", &domainOnlyEventSourced{id: "es"}},
+			{"durable state", &domainOnlyDurableState{id: "ds"}},
+			{"saga", &domainOnlySaga{id: "saga"}},
+		} {
+			s.It("domain-only "+tc.name+" behavior outside cluster mode is carried locally", func(ctx *specs.Context) {
+				sys := &placementProbeSystem{}
+				dep, err := spawnDependency(sys, tc.behavior)
+				ctx.Expect(err).To(specs.BeNil())
+				local, ok := dep.(*extensions.LocalBehavior)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(local.Behavior() == tc.behavior).To(specs.BeTrue())
+				ctx.Expect(local.ID()).ToEqual(tc.behavior.ID())
+				ctx.Expect(len(sys.injected)).ToEqual(0)
+			})
+		}
+
+		for _, tc := range []struct {
 			name     string
 			behavior interface{ ID() string }
 			cause    error
@@ -205,48 +219,51 @@ func TestSpawnDependency(t *testing.T) {
 			{"domain-only event-sourced", &domainOnlyEventSourced{id: "v-1"}, ErrBehaviorNotSerializable, "*engine.domainOnlyEventSourced"},
 			{"domain-only durable state", &domainOnlyDurableState{id: "v-1"}, ErrBehaviorNotSerializable, "*engine.domainOnlyDurableState"},
 			{"domain-only saga", &domainOnlySaga{id: "v-1"}, ErrBehaviorNotSerializable, "*engine.domainOnlySaga"},
-		}
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
+		} {
+			s.It("cluster mode rejects a "+tc.name+" with a typed error before anything is injected", func(ctx *specs.Context) {
 				sys := &placementProbeSystem{inCluster: true}
 				dep, err := spawnDependency(sys, tc.behavior)
-				require.Nil(t, dep)
-				require.ErrorIs(t, err, tc.cause)
+				ctx.Expect(dep == nil).To(specs.BeTrue())
+				ctx.Expect(err).To(specs.MatchError(tc.cause))
 
 				var placement *BehaviorPlacementError
-				require.ErrorAs(t, err, &placement)
-				assert.Equal(t, tc.kind, placement.Kind)
-				assert.Equal(t, "v-1", placement.EntityID)
-				assert.Empty(t, sys.injected)
+				ctx.Expect(err).To(specs.MatchErrorAs(&placement))
+				ctx.Expect(placement.Kind).ToEqual(tc.kind)
+				ctx.Expect(placement.EntityID).ToEqual("v-1")
+				ctx.Expect(len(sys.injected)).ToEqual(0)
 			})
 		}
-	})
 
-	t.Run("nil and typed-nil behaviors are rejected in every mode", func(t *testing.T) {
-		cases := []struct {
-			name     string
-			behavior interface{ ID() string }
-			kind     string
-		}{
-			{"nil", nil, "<nil>"},
-			{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*enginetest.AccountEventSourcedBehavior"},
-			{"typed-nil domain-only event-sourced", (*domainOnlyEventSourced)(nil), "*engine.domainOnlyEventSourced"},
-			{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*enginetest.AccountDurableStateBehavior"},
-			{"typed-nil domain-only durable state", (*domainOnlyDurableState)(nil), "*engine.domainOnlyDurableState"},
-			{"typed-nil serializable saga", (*testSagaBehavior)(nil), "*engine.testSagaBehavior"},
-			{"typed-nil domain-only saga", (*domainOnlySaga)(nil), "*engine.domainOnlySaga"},
-		}
 		for _, inCluster := range []bool{false, true} {
-			for _, tc := range cases {
-				sys := &placementProbeSystem{inCluster: inCluster}
-				dep, err := spawnDependency(sys, tc.behavior)
-				require.Nil(t, dep, "%s inCluster=%v", tc.name, inCluster)
-				require.ErrorIs(t, err, ErrBehaviorNotPointer, "%s inCluster=%v", tc.name, inCluster)
-				var placement *BehaviorPlacementError
-				require.ErrorAs(t, err, &placement)
-				assert.Equal(t, tc.kind, placement.Kind)
-				assert.Empty(t, placement.EntityID, "a nil behavior has no readable ID")
-				assert.Empty(t, sys.injected)
+			mode := "outside cluster mode"
+			if inCluster {
+				mode = "in cluster mode"
+			}
+			for _, tc := range []struct {
+				name     string
+				behavior interface{ ID() string }
+				kind     string
+			}{
+				{"nil", nil, "<nil>"},
+				{"typed-nil serializable event-sourced", (*AccountEventSourcedBehavior)(nil), "*enginetest.AccountEventSourcedBehavior"},
+				{"typed-nil domain-only event-sourced", (*domainOnlyEventSourced)(nil), "*engine.domainOnlyEventSourced"},
+				{"typed-nil serializable durable state", (*AccountDurableStateBehavior)(nil), "*enginetest.AccountDurableStateBehavior"},
+				{"typed-nil domain-only durable state", (*domainOnlyDurableState)(nil), "*engine.domainOnlyDurableState"},
+				{"typed-nil serializable saga", (*testSagaBehavior)(nil), "*engine.testSagaBehavior"},
+				{"typed-nil domain-only saga", (*domainOnlySaga)(nil), "*engine.domainOnlySaga"},
+			} {
+				s.It(tc.name+" behavior is rejected "+mode, func(ctx *specs.Context) {
+					sys := &placementProbeSystem{inCluster: inCluster}
+					dep, err := spawnDependency(sys, tc.behavior)
+					ctx.Expect(dep == nil).To(specs.BeTrue())
+					ctx.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
+					var placement *BehaviorPlacementError
+					ctx.Expect(err).To(specs.MatchErrorAs(&placement))
+					ctx.Expect(placement.Kind).ToEqual(tc.kind)
+					// a nil behavior has no readable ID
+					ctx.Expect(placement.EntityID).ToEqual("")
+					ctx.Expect(len(sys.injected)).ToEqual(0)
+				})
 			}
 		}
 	})
@@ -321,34 +338,47 @@ func TestEngineRejectsNilBehaviorsSingleNode(t *testing.T) {
 }
 
 func TestBehaviorPlacementError(t *testing.T) {
-	spawnErr := &BehaviorPlacementError{Kind: "*main.Account", EntityID: "acct-1", Err: ErrBehaviorNotSerializable}
-	assert.Contains(t, spawnErr.Error(), "*main.Account")
-	assert.Contains(t, spawnErr.Error(), `"acct-1"`)
-	assert.Contains(t, spawnErr.Error(), ErrBehaviorNotSerializable.Error())
-	assert.Same(t, ErrBehaviorNotSerializable, errors.Unwrap(spawnErr))
+	specs.Describe(t, "BehaviorPlacementError reports the kind, the entity id and the cause it wraps", func(s *specs.Spec) {
+		s.It("names the kind, the id and the cause of a spawn error and unwraps to the cause", func(ctx *specs.Context) {
+			spawnErr := &BehaviorPlacementError{Kind: "*main.Account", EntityID: "acct-1", Err: ErrBehaviorNotSerializable}
+			ctx.Expect(spawnErr.Error()).To(specs.Contain("*main.Account"))
+			ctx.Expect(spawnErr.Error()).To(specs.Contain(`"acct-1"`))
+			ctx.Expect(spawnErr.Error()).To(specs.Contain(ErrBehaviorNotSerializable.Error()))
+			ctx.Expect(errors.Unwrap(spawnErr) == ErrBehaviorNotSerializable).To(specs.BeTrue()) //nolint:errorlint // identity is the point
 
-	registrationErr := &BehaviorPlacementError{Kind: "main.Account", Err: ErrBehaviorNotPointer}
-	assert.Contains(t, registrationErr.Error(), "main.Account")
-	assert.NotContains(t, registrationErr.Error(), `""`)
-	assert.ErrorIs(t, registrationErr, ErrBehaviorNotPointer)
-	assert.NotErrorIs(t, registrationErr, ErrBehaviorNotSerializable)
+			registrationErr := &BehaviorPlacementError{Kind: "main.Account", Err: ErrBehaviorNotPointer}
+			ctx.Expect(registrationErr.Error()).To(specs.Contain("main.Account"))
+			ctx.Expect(registrationErr.Error()).To(specs.Not(specs.Contain(`""`)))
+			ctx.Expect(registrationErr).To(specs.MatchError(ErrBehaviorNotPointer))
+			ctx.Expect(registrationErr).To(specs.Not(specs.MatchError(ErrBehaviorNotSerializable)))
+		})
+	})
 }
 
 func TestBehaviorFrom(t *testing.T) {
-	pointer := NewAccountEventSourcedBehavior("acct-1")
-	got, ok := extensions.BehaviorFrom[behaviorport.EventSourced](pointer)
-	require.True(t, ok)
-	assert.Same(t, pointer, got.(*AccountEventSourcedBehavior))
+	specs.Describe(t, "extensions.BehaviorFrom finds a behavior of the requested family", func(s *specs.Spec) {
+		s.It("returns the pointer behavior, the wrapped domain-only one, and no match for another family", func(ctx *specs.Context) {
+			pointer := NewAccountEventSourcedBehavior("acct-1")
+			got, ok := extensions.BehaviorFrom[behaviorport.EventSourced](pointer)
+			ctx.Expect(ok).To(specs.BeTrue())
+			gotPointer, ok := got.(*AccountEventSourcedBehavior)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotPointer == pointer).To(specs.BeTrue())
 
-	domainOnly := &domainOnlyDurableState{id: "ds-1"}
-	gotDS, ok := extensions.BehaviorFrom[behaviorport.DurableState](extensions.NewLocalBehavior(domainOnly))
-	require.True(t, ok)
-	assert.Same(t, domainOnly, gotDS.(*domainOnlyDurableState))
+			domainOnly := &domainOnlyDurableState{id: "ds-1"}
+			gotDS, ok := extensions.BehaviorFrom[behaviorport.DurableState](extensions.NewLocalBehavior(domainOnly))
+			ctx.Expect(ok).To(specs.BeTrue())
+			gotDomainOnly, ok := gotDS.(*domainOnlyDurableState)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotDomainOnly == domainOnly).To(specs.BeTrue())
 
-	_, ok = extensions.BehaviorFrom[behaviorport.EventSourced](extensions.NewLocalBehavior(domainOnly))
-	assert.False(t, ok, "a wrapped behavior of another family must not match")
-	_, ok = extensions.BehaviorFrom[behaviorport.Saga](extensions.NewEntityConfig(1))
-	assert.False(t, ok)
+			// a wrapped behavior of another family must not match
+			_, ok = extensions.BehaviorFrom[behaviorport.EventSourced](extensions.NewLocalBehavior(domainOnly))
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, ok = extensions.BehaviorFrom[behaviorport.Saga](extensions.NewEntityConfig(1))
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 // TestEngineSpawnsDomainOnlyBehaviorsSingleNode spawns behaviors that
