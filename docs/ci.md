@@ -21,28 +21,62 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 |---|---|
 | `flow` | Rejects pull requests to `main` that do not come from `develop` or `hotfix/*`. On pull requests to `main` it also computes the version that will be published and prints it in the run summary. It fails early if the bump cannot be published, for example a major bump without `/vN` in `go.mod`. |
 | `lint` | `golangci-lint` with `.golangci.yml`. On pull requests it only blocks issues introduced by the diff (`only-new-issues`), so existing problems do not stop new work. |
-| `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
-| `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
+| `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). Every shard skips the `TestCluster*` tests (`-skip '^TestCluster'`); they run in the `cluster` job. `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
+| `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version, the `TestCluster*` tests included (see "Test lanes"). |
 | `modules (dir)` | Ego has nested Go modules (`benchmark`, `example` (every example, `example/cluster` included), `inttest`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds and vets each one on every pull request with Go changes, and tests all of them except `inttest` and `benchmark`. Those two are only built and vetted here (`go vet` compiles their test files). They are heavy, because `inttest` needs Docker and the benchmarks start a real goakt actor system, so they run in their own jobs after the merge. The `example` module is compiled here too (see "Examples"). |
 | `benchmark` | Runs every benchmark of the `benchmark` module once (`go test -run '^$' -bench . -benchtime=1x`, about two minutes). The module has no `Test` functions, so a plain `go test` would compile it and run nothing. The job fails if no benchmark reports a result, and writes the results to the run summary and the `benchmark-results` artifact. A manual run (`workflow_dispatch`) takes a `benchtime` input, for example `2s`, for a real measurement. The triggers are the same as `inttest`: every push to `develop`, the `develop` to `main` release pull request and manual runs. Feature and hotfix pull requests only compile it, in `modules`. A red run on `develop` follows the same rule as `inttest`: the author of the merged pull request fixes it, or reverts the merge, before the next merge. |
 | `inttest` | Runs the integration tests of the `inttest` module on real containers (see "Integration tests" below). It runs on every push to `develop` (each merge), on the `develop` to `main` release pull request and on manual runs. Feature and hotfix pull requests never run it; `ci-ok` accepts the skip. Because the release pull request requires `ci-ok`, `main` never receives a release with a red integration run. A hotfix reaches `main` without it and is covered when its `main` to `develop` sync pull request is merged and `develop` is pushed. |
+| `cluster` | Runs the multi-node `TestCluster*` tests of `engine` and `compose/goakt` on their own (`go test -run '^TestCluster' -json`). It counts the top-level `TestCluster*` tests that passed and fails if there are none, because `go test` reports "no tests to run" as a pass. The counts go to the run summary and the JSON to the `cluster-results` artifact. Same triggers as `inttest` (see "Test lanes"). |
+| `race` | Runs the in-process suites under the race detector: `engine`, `internal/engine/...`, `internal/projectionrunner`, `compose/goakt`, `internal/extensions` and `migration`, with `TestCluster*` skipped. Same triggers as `inttest`. |
 | `unit-gate` | The unit-test rules in `docs/testing/go-specs.md` (no testify, no generated mocks, go-specs, no real resources in unit tests), plus the rule that nothing under `inttest/` skips, pends or focuses a test. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
 | `api` | Compares the public API with `apidiff`. Against `develop` it only warns. Against the latest tag (pull requests to `main`) it fails when the API breaks and the release is not labelled `release:major`. |
 | `vuln` | `govulncheck`. It fails only when the code calls a vulnerable function. |
 | `ci-ok` | Passes when every job above succeeded or was legitimately skipped. This is the single required status check. |
 
-The race detector is not used anywhere in this pipeline. The Go version comes from `.go-version` in every job, through the `go-setup` composite action, so nothing pins it by hand. `TEST_SHARDS`, `COVERAGE_MIN` and `TESTFLAGS` are set at the top of `ci.yml`; coverage is only reported for now (`COVERAGE_MIN` is `0`).
+The race detector only runs in the `race` job, on a subset of packages. The Go version comes from `.go-version` in every job, through the `go-setup` composite action, so nothing pins it by hand. `TEST_SHARDS`, `COVERAGE_MIN` and `TESTFLAGS` are set at the top of `ci.yml`; coverage is only reported for now (`COVERAGE_MIN` is `0`).
 
 ### Slow packages
 
-`gotestsum tool ci-matrix` only moves whole packages between shards, so one package that takes minutes would set the wall time of the whole run. The `plan` job therefore runs `.github/scripts/test-matrix.sh`. From the timings of the previous run it finds every package slower than `SPLIT_THRESHOLD` seconds and splits it by top-level test into about `time / SPLIT_TARGET` shards, balancing them with longest-test-first. Each of those shards runs `go test -run '^(TestA|TestB)$'` for its share; the script checks that every test listed by `go test -list` lands in exactly one shard. The remaining packages still go whole into `TEST_SHARDS` shards. Nothing is hard-coded, so a renamed or reorganized package is picked up from its timings. Coverage profiles of the shards of one package overlap; `go tool cover` sums duplicated blocks, so `test-report` just concatenates them.
+`gotestsum tool ci-matrix` only moves whole packages between shards, so one package that takes minutes would set the wall time of the whole run. The `plan` job therefore runs `.github/scripts/test-matrix.sh`. From the timings of the previous run it finds every package slower than `SPLIT_THRESHOLD` seconds and splits it by top-level test into about `time / SPLIT_TARGET` shards, balancing them with longest-test-first. Each of those shards runs `go test -run '^(TestA|TestB)$'` for its share; the script checks that every test listed by `go test -list` lands in exactly one shard. It leaves the `TestCluster*` tests out of that list (the variable `CLUSTER_TESTS`, default `^TestCluster`), because the shards run with `-skip` of the same regex: `-run` selects the share and `-skip` removes the cluster tests from it. The remaining packages still go whole into `TEST_SHARDS` shards. Nothing is hard-coded, so a renamed or reorganized package is picked up from its timings. Coverage profiles of the shards of one package overlap; `go tool cover` sums duplicated blocks, so `test-report` just concatenates them.
 
 The two knobs live at the top of `ci.yml`: `SPLIT_THRESHOLD` (default `90`, seconds a package may take before it is split) and `SPLIT_TARGET` (default `90`, aimed seconds per shard of a split package). Without timings (first run, empty cache) nothing is split.
 
 The `pr-meta` workflow is separate because it also runs when the pull request description is edited, and that should not re-run the tests. It requires a `release-note` block and checks that `OWNERS` and `.github/CODEOWNERS` list the same people.
 
 A push to `develop` runs the same CI (without `lint` and the pull-request-only jobs) so the merged result is validated and the test timings used by later pull requests stay fresh.
+
+## Test lanes
+
+The tests are not all run the same way. A lane is a job that runs one kind of test, and the kinds are told apart by name, not by build tags or by separate Go modules: every test is compiled and vetted in the normal build, and only the choice of which tests execute changes. `CLUSTER_TESTS: "^TestCluster"` at the top of `ci.yml` holds the one regex that splits the lanes.
+
+| Lane (job) | What runs | Feature PRs to `develop` | Push to `develop` | Release PR `develop` to `main` | Hotfix PR to `main` | `workflow_dispatch` |
+|---|---|---|---|---|---|---|
+| Unit and component shards (`test (shard N)`) | The root module, `-skip '^TestCluster'`, with coverage | yes | yes | yes | yes | yes |
+| `test (min)` | Build and vet with the minimum Go; on PRs to `main` also every test, `TestCluster*` included | build and vet only | build and vet only | everything | everything | build and vet only |
+| `cluster` | `-run '^TestCluster'` on `engine` and `compose/goakt`, at least one must pass | no | yes | yes | no | yes |
+| `race` | `-race`, `-skip '^TestCluster'`, on the in-process packages listed in the job table | no | yes | yes | no | yes |
+| `inttest` | The `inttest` module on real containers | no | yes | yes | no | yes |
+| `benchmark` | Every benchmark of the `benchmark` module once | no | yes | yes | no | yes |
+| `modules (dir)` | Build, vet and test of each nested module (`inttest` and `benchmark`: build and vet only) | yes | yes | yes | yes | yes |
+
+The `workflow_dispatch` column reads "yes" once `ci.yml` exists on the default branch, because GitHub only offers a manual run for workflows that are there.
+
+### The `TestCluster` naming rule
+
+A test that starts a clustered actor system (a real GoAkt cluster with gossip, peer and remoting ports on loopback, alone or with several nodes) is a top-level test whose name starts with `TestCluster`, in the same package as the code it tests. Nothing else is called `TestCluster*`: a single-node test of a cluster helper, such as `TestEngineClusterKindsExposesEgoActors`, uses another name, or it would be moved to the cluster lane by accident. The name is the only selector, so the lanes need no tag and no configuration, and every test runs in exactly one lane.
+
+The `unit-gate` job enforces the rule in one direction. Its `cluster-name` rule fails when a test file calls `WithCluster` or a `dynaport` function from a top-level test that is not called `TestCluster*`, directly or through a helper of the same file. It cannot see a helper in another file, and it does not flag a `TestCluster*` test that starts no cluster; such a test only costs time in the cluster lane. How to write one is in [`testing/go-specs.md`](testing/go-specs.md#writing-a-cluster-test).
+
+### Why the cluster tests have their own lane
+
+The cluster tests are the slowest and the most sensitive to the machine (ports, timing), and a failure in them says little about the code in the pull request next to them. Running them on every feature pull request would slow the everyday run, so they follow the `inttest` rule: after each merge to `develop`, on the release pull request and on demand. A hotfix to `main` does not run the `cluster` job, but `test (min)` runs every test, cluster ones included, so a hotfix is still covered by a full run. `test (min)` therefore deliberately does not skip `TestCluster*`.
+
+When `cluster` or `race` is red on a push to `develop`, the rule is the one of `inttest`: the author of the merged pull request fixes it, or reverts the merge, before the next merge to `develop`. A race that `race` finds is fixed in its own pull request; the job is not silenced.
+
+### What `race` does not cover
+
+The race detector only runs on the packages whose tests were migrated to go-specs (`engine`, `internal/engine/...`, `internal/projectionrunner`, `compose/goakt`, `internal/extensions`, `migration`), and it skips the `TestCluster*` tests. Those are not run under `-race` yet, which is a known gap, not a decision that they are race-free. The race detector is never run locally; it only runs in this job.
 
 ## Integration tests
 

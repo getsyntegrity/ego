@@ -212,6 +212,29 @@ Concurrency: never call `ctx.T.Parallel()`; declare `s.ItParallel(...)` or `spec
 goroutine that asserts must be started with `ctx.Go(func(ctx *specs.Context) { ... })`, which the case waits
 for. Do not keep `ctx` after the case ends.
 
+## Writing a cluster test
+
+A test that starts a clustered actor system (`goakt.WithCluster`, with one node or several) opens gossip, peer
+and remoting ports on loopback, so it runs in its own CI lane (the `cluster` job) and not in the unit shards.
+The lane is chosen by name, so a new cluster test needs no tag and no CI change:
+
+1. Name the top-level test `TestCluster<Something>`, for example `TestClusterEngineRemoteEntitySpawn`. Keep it in
+   the same package as the code it tests, so a white-box test stays white-box. A single-node test of a cluster
+   helper is not a cluster test and must not use the prefix.
+2. If you create a new file for it, name it `*_cluster_test.go`. An existing file is fine when the test belongs
+   with its neighbors, and that is where the current ones live. Move a cluster case out of a mostly single-node
+   top-level test into its own `TestCluster*` function, because the lane selects whole top-level tests.
+3. Get free ports from `dynaport` (`github.com/travisjeffery/go-dynaport`) and never hard-code one. Reuse the
+   helpers of the package: `newTestCluster` in `engine/engine_test.go` and `mockClusterProvider` in
+   `engine/helper_test.go`, `newClusterNodes` and `startCluster` in `compose/goakt/cluster_test.go`.
+4. Wait with `Eventually` (a cluster forms and rebalances asynchronously). Never use `time.Sleep`.
+5. Run it with `go test -run '^TestCluster' ./engine/ ./compose/goakt/...`. It does not run in the unit shards
+   (`go test -skip '^TestCluster' ./...`), and it is not run under `-race` yet.
+
+The `unit-gate` rule `cluster-name` fails when a test file starts a cluster (`WithCluster`, `dynaport`) from a
+top-level test whose name does not start with `TestCluster`. See [Test lanes](../ci.md#test-lanes) for what each
+lane runs and when.
+
 ## Subtest names and `go test -run`
 
 go-specs makes every `Describe` name one segment of the subtest name, so a migrated case moves one level down:

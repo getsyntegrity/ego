@@ -48,7 +48,7 @@ The decisions from spec 1 stay: no new `go.mod`, no build tags, and selection by
 - [x] **T1 Shards skip the cluster tests.** Add `-skip '^TestCluster'` to the shard command and make it compose with `test-matrix.sh`. Check: local proof that a split-package shard pattern plus the skip excludes the `TestCluster*` tests and keeps every other test in exactly one shard; `actionlint`. Route: delegated writer.
 - [x] **T2 `cluster` and `race` jobs.** Add both jobs with the zero-count guard, the triggers, timeouts and the `ci-ok` entry. Check: `actionlint`; the guard script tested locally on a zero-test and a non-zero JSON input. Route: delegated writer.
 - [x] **T3 Parity per lane.** For each package, run normal (`-skip`) and cluster (`-run`) locally without `-race`, show that the counts add up to 1402, and record it here. Route: delegated writer.
-- [ ] **T4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
+- [x] **T4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
 - [ ] **T5 CI evidence and #206.** Push the temporary commit, record the `race` and `cluster` run links, revert, check that the final diff is clean, and comment on #206. Route: inline (parent).
 
 ## Progress and evidence
@@ -79,6 +79,8 @@ The decisions from spec 1 stay: no new `go.mod`, no build tags, and selection by
   The name sets are disjoint, and their union equals the set of a third, unfiltered run (404 top-level + 998 subtests = 1402), so every test runs in exactly one lane. The normal lane has no `TestCluster*` name; every top-level name in the cluster lane starts with `TestCluster`.
   - Verification of record: `go test -count=1 -skip '^TestCluster' ./...` at the root is green (every package ok); `go test -count=1 -run '^TestCluster' ./engine/ ./compose/goakt/...` is green with 9 top-level tests PASS; `go run ./.github/scripts/unitgate -strict`: ok (0 pending entries, 40 resource entries).
 
+- **T4 done.** Route: delegated writer. `docs/ci.md`: job table rows for `plan`/`test`, `test (min)`, and new rows for `cluster` and `race`; the sentence "the race detector is not used anywhere" is corrected; "Slow packages" explains how `-run` and `-skip` compose; a new "Test lanes" section holds the lane table (what runs, and when: feature PRs, push to `develop`, release PR, hotfix PR, dispatch), the `TestCluster` naming rule with the `cluster-name` gate rule and its blind spots, the reason for the lane, why `test (min)` does not skip, who fixes a red post-merge lane (the `inttest` rule), and the `-race` gap. `docs/testing/go-specs.md`: a "Writing a cluster test" section. Check (structural readback): every internal link resolves to an existing heading (`ci.md#test-lanes`, `testing/go-specs.md#writing-a-cluster-test`), the tables render with a constant column count, and the facts match `ci.yml` (conditions, packages, timeouts).
+
 ## Next step
 
-T4 (docs), then T5 (parent: CI evidence).
+T5 (parent): temporary `pull_request` commit for `cluster` and `race`, run links, revert, comment on #206. Open point for the parent: the temporary commit must add `pull_request` to the `if:` of both jobs; the PR targets `develop`, so its condition needs to be true for a feature PR.
