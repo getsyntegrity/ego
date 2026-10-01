@@ -35,11 +35,67 @@ const (
 	retryMaxDelay     = 2 * time.Second
 )
 
+// clock is the only source of time retryWithBackoff reads. It is package-private
+// on purpose: it exists so the tests of this package can replace real time with
+// a manual clock and move it explicitly instead of sleeping.
+type clock interface {
+	// NewTimer returns a timer that fires once, d from now.
+	NewTimer(d time.Duration) timer
+}
+
+// timer is a one-shot timer created by a clock.
+type timer interface {
+	// C returns the channel the timer fires on.
+	C() <-chan time.Time
+	// Stop prevents the timer from firing. It reports whether the timer was
+	// still pending.
+	Stop() bool
+}
+
+// realClock is the production clock, backed by the time package.
+type realClock struct{}
+
+var _ clock = realClock{}
+
+// NewTimer returns a timer backed by time.Timer.
+func (realClock) NewTimer(d time.Duration) timer { return realTimer{time.NewTimer(d)} }
+
+// realTimer adapts time.Timer, whose channel is a field, to the timer interface.
+type realTimer struct{ t *time.Timer }
+
+// C returns the channel the timer fires on.
+func (r realTimer) C() <-chan time.Time { return r.t.C }
+
+// Stop stops the timer and reports whether it was still pending.
+func (r realTimer) Stop() bool { return r.t.Stop() }
+
+// backoff holds the two sources retryWithBackoff draws on: the clock that waits
+// and the jitter that scales each wait. Passing them as a value, instead of
+// reading package variables, lets a test give each case its own and keeps the
+// cases independent of one another.
+type backoff struct {
+	// clock arms the timer for each wait.
+	clock clock
+	// jitter returns the factor, in [0.5, 1.5), that scales each delay.
+	jitter func() float64
+}
+
+// defaultBackoff returns the production backoff: real time and a jitter drawn
+// uniformly from [0.5, 1.5).
+func defaultBackoff() backoff {
+	return backoff{
+		clock: realClock{},
+		jitter: func() float64 {
+			return 0.5 + rand.Float64() //nolint:gosec // cryptographic randomness is not needed for backoff jitter
+		},
+	}
+}
+
 // retryWithBackoff retries op up to maxRetries times with exponential backoff
-// and jitter. Returns nil on the first successful attempt or the last error
-// after all attempts are exhausted. Respects context cancellation between
-// attempts.
-func retryWithBackoff(ctx context.Context, maxRetries int, op func() error) error {
+// and jitter, waiting on b. Returns nil on the first successful attempt or the
+// last error after all attempts are exhausted. Respects context cancellation
+// between attempts.
+func retryWithBackoff(ctx context.Context, b backoff, maxRetries int, op func() error) error {
 	var err error
 	for attempt := range maxRetries + 1 {
 		if err = op(); err == nil {
@@ -51,13 +107,14 @@ func retryWithBackoff(ctx context.Context, maxRetries int, op func() error) erro
 				float64(retryBaseDelay)*math.Pow(2, float64(attempt)),
 				float64(retryMaxDelay),
 			))
-			jitter := 0.5 + rand.Float64() //nolint:gosec // cryptographic randomness is not needed for backoff jitter
-			delay = time.Duration(float64(delay) * jitter)
+			delay = time.Duration(float64(delay) * b.jitter())
 
+			t := b.clock.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				t.Stop()
 				return ctx.Err()
-			case <-time.After(delay):
+			case <-t.C():
 			}
 		}
 	}
