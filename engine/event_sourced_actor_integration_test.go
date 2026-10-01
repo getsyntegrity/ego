@@ -64,14 +64,14 @@ func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.
 	specs.Describe(t, "an exact-match ExpectedRevision on a real event sourced actor", func(s *specs.Spec) {
 		s.It("commits and advances the store's persisted revision", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-integration-exact", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-integration-exact", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
 			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
@@ -80,15 +80,15 @@ func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.
 
 			// A second exact-match command: ExpectedRevision matches the real
 			// persisted revision (1), so it commits and advances the store to 2.
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
 
 			latest, err = store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
 			ctx.Expect(err).To(specs.BeNil())
 			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(2)
 
-			specs.ExpectT(ctx, accountOfG2(ctx, result).GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
 		})
 	})
 }
@@ -101,14 +101,14 @@ func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T
 	specs.Describe(t, "a stale ExpectedRevision on a real event sourced actor", func(s *specs.Spec) {
 		s.It("is rejected at the store and leaves the persisted revision unchanged", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-integration-stale", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-integration-stale", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
 			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
@@ -117,8 +117,8 @@ func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T
 
 			// A stale command: ExpectedRevision does not match the real persisted
 			// revision (1).
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
-			expectConcurrencyConflictG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
+			expectConcurrencyConflict(ctx, result)
 
 			// The store must be unchanged by the rejected write.
 			latest, err = store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
@@ -142,13 +142,13 @@ func TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit(t *testi
 	specs.Describe(t, "two event sourced actors racing the genesis revision on one store", func(s *specs.Spec) {
 		s.It("commits exactly one and rejects the other with a concurrency conflict", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedEventsStoreG2(ctx)
+			store := connectedEventsStore(ctx)
 			entityID := uuid.NewString()
 
-			engineA := startEngineG2(ctx, "ES-race-a", store, WithLogger(DiscardLogger))
+			engineA := startEngine(ctx, "ES-race-a", store, WithLogger(DiscardLogger))
 			ctx.Expect(engineA.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			engineB := startEngineG2(ctx, "ES-race-b", store, WithLogger(DiscardLogger))
+			engineB := startEngine(ctx, "ES-race-b", store, WithLogger(DiscardLogger))
 			ctx.Expect(engineB.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
 			var wg sync.WaitGroup
@@ -156,11 +156,11 @@ func TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit(t *testi
 			wg.Add(2)
 			ctx.Go(func(ctx *specs.Context) {
 				defer wg.Done()
-				results[0] = dispatchG2(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
+				results[0] = dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
 			})
 			ctx.Go(func(ctx *specs.Context) {
 				defer wg.Done()
-				results[1] = dispatchG2(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
+				results[1] = dispatch(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
 			})
 			wg.Wait()
 
@@ -168,7 +168,7 @@ func TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit(t *testi
 			ctx.Expect(outcomes).To(specs.ContainTheSameElementsAs([]command.Outcome{command.OutcomeSuccess, command.OutcomeRejected}))
 			for _, result := range results {
 				if result.Outcome() == command.OutcomeRejected {
-					expectConcurrencyConflictG2(ctx, result)
+					expectConcurrencyConflict(ctx, result)
 				}
 			}
 

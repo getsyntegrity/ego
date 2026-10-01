@@ -64,10 +64,10 @@ func TestEngineSpawnWithMultiTenantFixedTenantResolverNeedsWithTenant(t *testing
 	specs.Describe(t, "a multi-tenant resolver that implements FixedTenantResolver", func(s *specs.Spec) {
 		s.It("needs WithTenant to spawn and never resolves at spawn", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			resolver := &multiTenantFixedResolver{stubTenantResolver: stubTenantResolver{id: "acme"}}
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(resolver))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(resolver))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()

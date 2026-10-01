@@ -44,7 +44,7 @@ func TestEngineSpawnMethodsDomainOnlySingleNode(t *testing.T) {
 		bg := context.Background()
 
 		s.It("SpawnEventSourced, envelope-capable", func(ctx *specs.Context) {
-			engine := newTestEngine(ctx.T, "SpawnEventSourced", connectedEventsStoreG4(ctx), WithLogger(DiscardLogger))
+			engine := newTestEngine(ctx.T, "SpawnEventSourced", connectedEventsStore(ctx), WithLogger(DiscardLogger))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			b := &domainOnlyEventSourced{id: uuid.NewString()}
@@ -60,7 +60,7 @@ func TestEngineSpawnMethodsDomainOnlySingleNode(t *testing.T) {
 
 		s.It("SpawnDurableState", func(ctx *specs.Context) {
 			engine := newTestEngine(ctx.T, "SpawnDurableState", nil, WithLogger(DiscardLogger),
-				WithStateStore(connectedStateStoreG4(ctx)))
+				WithStateStore(connectedDurableStore(ctx)))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			b := &domainOnlyDurableState{id: uuid.NewString()}
@@ -73,7 +73,7 @@ func TestEngineSpawnMethodsDomainOnlySingleNode(t *testing.T) {
 		})
 
 		s.It("SpawnSaga", func(ctx *specs.Context) {
-			engine := newTestEngine(ctx.T, "SpawnSaga", connectedEventsStoreG4(ctx), WithLogger(DiscardLogger))
+			engine := newTestEngine(ctx.T, "SpawnSaga", connectedEventsStore(ctx), WithLogger(DiscardLogger))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			b := &domainOnlySaga{id: "saga-" + uuid.NewString()}

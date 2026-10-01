@@ -39,7 +39,7 @@ import (
 // behavior-kind option plus a durable-state store that is disconnected when the
 // case ends.
 func clusterNodeOptsG4(ctx *specs.Context, kinds Option) []Option {
-	return []Option{kinds, WithStateStore(connectedStateStoreG4(ctx))}
+	return []Option{kinds, WithStateStore(connectedDurableStore(ctx))}
 }
 
 // expectNotSpawnedG4 checks that no node of the cluster hosts an actor named id.

@@ -128,7 +128,7 @@ func receiveG2[T any](ctx *specs.Context, ch <-chan T, what string) T {
 func startBatchSteps(ctx *specs.Context, engine *Engine, entityID string, behavior *batchStepBehavior, steps []batchStep) []chan batchDispatchOutcome {
 	chans := make([]chan batchDispatchOutcome, len(steps))
 	for i, step := range steps {
-		env := buildEnvelopeG2(ctx, step.payload, step.opts...)
+		env := buildEnvelope(ctx, step.payload, step.opts...)
 
 		ch := make(chan batchDispatchOutcome, 1)
 		chans[i] = ch
@@ -176,10 +176,10 @@ func expectAllSucceededG2(ctx *specs.Context, results []command.Result) {
 // physical WriteEvents call actually received, and returns the pieces a test
 // needs to drive it.
 func newBatchHarness(ctx *specs.Context, name string, threshold int) (engine *Engine, entityID string, behavior *batchStepBehavior, spy *preconditionSpyEventsStore, store *testkit.EventStore) {
-	underlying := connectedEventsStoreG2(ctx)
+	underlying := connectedEventsStore(ctx)
 	spy = &preconditionSpyEventsStore{EventStore: underlying}
 
-	engine = startEngineG2(ctx, name, spy, WithLogger(DiscardLogger))
+	engine = startEngine(ctx, name, spy, WithLogger(DiscardLogger))
 
 	entityID = uuid.NewString()
 	behavior = newBatchStepBehavior(entityID)
@@ -308,7 +308,7 @@ func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
 	specs.Describe(t, "a batch founded on a brand-new aggregate", func(s *specs.Spec) {
 		specs.Table(s, tests, func(tc batchMatrixCase) string { return tc.name }, func(ctx *specs.Context, tc batchMatrixCase) {
 			bg := context.Background()
-			underlying := connectedEventsStoreG2(ctx)
+			underlying := connectedEventsStore(ctx)
 			spy := &preconditionSpyEventsStore{EventStore: underlying}
 
 			// entityID must be known before steps are built (CreditAccount's
@@ -317,7 +317,7 @@ func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
 			entityID := uuid.NewString()
 			steps := tc.build(entityID)
 
-			engine := startEngineG2(ctx, "matrix-genesis-"+tc.name, spy, WithLogger(DiscardLogger))
+			engine := startEngine(ctx, "matrix-genesis-"+tc.name, spy, WithLogger(DiscardLogger))
 			behavior := newBatchStepBehavior(entityID)
 			ctx.Expect(engine.Entity(bg, behavior, WithBatchThreshold(len(steps)))).To(specs.BeNil())
 
@@ -498,7 +498,7 @@ func TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshB
 			// itself (batchBase=99, its own declared value); that batch's flush
 			// checks storage (real revision 1) against 99 and must conflict.
 			for _, result := range results[1:] {
-				expectConcurrencyConflictG2(ctx, result)
+				expectConcurrencyConflict(ctx, result)
 			}
 
 			// The forced early flush plus the stale command's own fresh-batch
@@ -570,8 +570,8 @@ func TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter(t
 			results := collectBatchResults(ctx, append(officialChans, fillerChans...))
 
 			for _, result := range results {
-				expectConcurrencyConflictG2(ctx, result)
-				conflict := conflictErrorG2(ctx, result)
+				expectConcurrencyConflict(ctx, result)
+				conflict := conflictError(ctx, result)
 				ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectGenesis())
 				// The actual revision is the external writer's event.
 				actual, ok := conflict.ActualRevision()

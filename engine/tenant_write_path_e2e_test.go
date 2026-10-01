@@ -138,10 +138,10 @@ func TestTenantWritePathE2E(t *testing.T) {
 	specs.Describe(t, "a command resolved at Engine.SendCommand keeps its tenant across the saga hop to another entity", func(s *specs.Spec) {
 		s.It("reaches entity B's HandleCommand under the same tenant", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			resolver := &countingTenantResolver{id: "acme"}
-			engine := newSpecsEngineG3(ctx, "TenantWritePathE2E", store, WithTenantResolver(resolver))
+			engine := newSpecsEngine(ctx, "TenantWritePathE2E", store, WithTenantResolver(resolver))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityAID := uuid.NewString()
@@ -222,10 +222,10 @@ func TestEngineSagaStatusTenantIsolation(t *testing.T) {
 		)
 
 		s.BeforeEach(func(ctx *specs.Context) {
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			resolver = &countingTenantResolver{id: "acme"}
-			engine = newSpecsEngineG3(ctx, "SagaStatusTenantIsolation", store, WithTenantResolver(resolver))
+			engine = newSpecsEngine(ctx, "SagaStatusTenantIsolation", store, WithTenantResolver(resolver))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityAID := uuid.NewString()

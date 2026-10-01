@@ -109,7 +109,7 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 // no events store, which NewConfig(nil, ...) allows.
 func newStateOnlyEngineG4(ctx *specs.Context) *Engine {
 	bg := context.Background()
-	cfg := NewConfig(nil, WithStateStore(connectedStateStoreG4(ctx)))
+	cfg := NewConfig(nil, WithStateStore(connectedDurableStore(ctx)))
 	sys, err := goakt.NewActorSystem("state-only-"+uuid.NewString(), cfg.GoaktOptions()...)
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(sys.Start(bg)).To(specs.BeNil())

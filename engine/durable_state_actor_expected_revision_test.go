@@ -125,8 +125,8 @@ type durableStateRevisionRig struct {
 // newDurableStateRevisionRig starts an engine named name over a fresh state
 // store and spawns the standard account behavior on it.
 func newDurableStateRevisionRig(ctx *specs.Context, name string) durableStateRevisionRig {
-	store := connectedDurableStoreG2(ctx)
-	engine := startEngineG2(ctx, name, nil, WithLogger(DiscardLogger), WithStateStore(store))
+	store := connectedDurableStore(ctx)
+	engine := startEngine(ctx, name, nil, WithLogger(DiscardLogger), WithStateStore(store))
 	entityID := uuid.NewString()
 	ctx.Expect(engine.DurableStateEntity(context.Background(), NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 	return durableStateRevisionRig{store: store, engine: engine, entityID: entityID}
@@ -134,14 +134,14 @@ func newDurableStateRevisionRig(ctx *specs.Context, name string) durableStateRev
 
 // createAccount commits the genesis command (balance 500, revision 1).
 func (r durableStateRevisionRig) createAccount(ctx *specs.Context) {
-	created := dispatchG2(ctx, r.engine, r.entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	expectSuccessG2(ctx, created)
+	created := dispatch(ctx, r.engine, r.entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+	expectSuccess(ctx, created)
 	specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 }
 
 // credit dispatches a credit declaring expectedRevision.
 func (r durableStateRevisionRig) credit(ctx *specs.Context, balance float64, expectedRevision uint64) command.Result {
-	return dispatchG2(ctx, r.engine, r.entityID, &testpb.CreditAccount{AccountId: r.entityID, Balance: balance}, command.WithExpectedRevision(expectedRevision))
+	return dispatch(ctx, r.engine, r.entityID, &testpb.CreditAccount{AccountId: r.entityID, Balance: balance}, command.WithExpectedRevision(expectedRevision))
 }
 
 // storedVersion returns the persisted version number of the entity.
@@ -159,21 +159,21 @@ func (r durableStateRevisionRig) storedVersion(ctx *specs.Context) uint64 {
 func TestDurableStateHandlerShapeUnchangedByExpectedRevision(t *testing.T) {
 	specs.Describe(t, "the arguments a durable state handler receives", func(s *specs.Spec) {
 		s.It("never carry the declared ExpectedRevision", func(ctx *specs.Context) {
-			store := connectedDurableStoreG2(ctx)
-			engine := startEngineG2(ctx, "DS-handler-shape", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			store := connectedDurableStore(ctx)
+			engine := startEngine(ctx, "DS-handler-shape", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
 			entityID := uuid.NewString()
 			behavior := newRevisionProbeDurableStateBehavior(entityID)
 			ctx.Expect(engine.DurableStateEntity(context.Background(), behavior)).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 
 			// A second call declaring an ExpectedRevision of its own: if N ever
 			// leaked into the handler as priorVersion, the recorded value would
 			// differ from the actor's real version.
-			credited := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, credited)
+			credited := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, credited)
 
 			// The genesis call sees priorVersion=0, not ExpectedRevision=0
 			// reinterpreted as anything else; the second call sees the actor's
@@ -192,7 +192,7 @@ func TestDurableStateExpectedRevisionExactMatchCommits(t *testing.T) {
 			rig.createAccount(ctx)
 
 			result := rig.credit(ctx, 250, 1)
-			expectSuccessG2(ctx, result)
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
 			specs.ExpectT(ctx, rig.storedVersion(ctx)).ToEqual(2)
 		})
@@ -210,32 +210,32 @@ func TestDurableStateStaleExpectedRevisionRejectedAtStoreNotCache(t *testing.T) 
 	specs.Describe(t, "an actor whose in-memory version is behind the store", func(s *specs.Spec) {
 		s.It("rejects a command that matches its own stale cache", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedDurableStoreG2(ctx)
+			store := connectedDurableStore(ctx)
 			entityID := uuid.NewString()
 
-			engineA := startEngineG2(ctx, "DS-stale-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			engineA := startEngine(ctx, "DS-stale-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
 			ctx.Expect(engineA.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
 			// A second, independent actor instance for the same persistence ID,
 			// against the same underlying store, advances StorageRevision to 2
 			// without engineA's actor ever observing it.
-			engineB := startEngineG2(ctx, "DS-stale-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			engineB := startEngine(ctx, "DS-stale-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
 			ctx.Expect(engineB.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-			advanced := dispatchG2(ctx, engineB, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 100}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, advanced)
+			advanced := dispatch(ctx, engineB, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 100}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, advanced)
 			specs.ExpectT(ctx, advanced.Revision()).ToEqual(2)
 
 			// engineA's actor still believes currentVersion==1; it declares
 			// ExpectedRevision=1 to match its own stale cache, but the real store is
 			// already at revision 2.
-			result := dispatchG2(ctx, engineA, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectConcurrencyConflictG2(ctx, result)
-			conflict := conflictErrorG2(ctx, result)
+			result := dispatch(ctx, engineA, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
 			actual, ok := conflict.ActualRevision()
 			ctx.Expect(ok).To(specs.BeTrue())
 			specs.ExpectT(ctx, actual).ToEqual(2)
@@ -253,13 +253,13 @@ func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T)
 	specs.Describe(t, "two durable state actors racing the genesis revision on one store", func(s *specs.Spec) {
 		s.It("commits exactly one and rejects the other with a concurrency conflict", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedDurableStoreG2(ctx)
+			store := connectedDurableStore(ctx)
 			entityID := uuid.NewString()
 
-			engineA := startEngineG2(ctx, "DS-race-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			engineA := startEngine(ctx, "DS-race-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
 			ctx.Expect(engineA.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-			engineB := startEngineG2(ctx, "DS-race-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			engineB := startEngine(ctx, "DS-race-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
 			ctx.Expect(engineB.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
 			var wg sync.WaitGroup
@@ -267,11 +267,11 @@ func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T)
 			wg.Add(2)
 			ctx.Go(func(ctx *specs.Context) {
 				defer wg.Done()
-				results[0] = dispatchG2(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
+				results[0] = dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
 			})
 			ctx.Go(func(ctx *specs.Context) {
 				defer wg.Done()
-				results[1] = dispatchG2(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
+				results[1] = dispatch(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
 			})
 			wg.Wait()
 
@@ -279,7 +279,7 @@ func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T)
 			ctx.Expect(outcomes).To(specs.ContainTheSameElementsAs([]command.Outcome{command.OutcomeSuccess, command.OutcomeRejected}))
 			for _, result := range results {
 				if result.Outcome() == command.OutcomeRejected {
-					expectConcurrencyConflictG2(ctx, result)
+					expectConcurrencyConflict(ctx, result)
 				}
 			}
 
@@ -305,7 +305,7 @@ func TestDurableStateCheckPreconditionsPassesYetExpectedRevisionConflicts(t *tes
 			// checkPreconditions passes. ExpectedRevision=99 does not match the
 			// persisted revision (1), so the conditional write still rejects.
 			result := rig.credit(ctx, 250, 99)
-			expectConcurrencyConflictG2(ctx, result)
+			expectConcurrencyConflict(ctx, result)
 		})
 	})
 }
@@ -317,13 +317,13 @@ func TestDurableStateCheckPreconditionsPassesYetExpectedRevisionConflicts(t *tes
 func TestDurableStateNonAdjacentVersionIsNeverConcurrencyConflict(t *testing.T) {
 	specs.Describe(t, "a handler-produced non-adjacent version", func(s *specs.Spec) {
 		s.It("fails without the concurrency_conflict code", func(ctx *specs.Context) {
-			store := connectedDurableStoreG2(ctx)
-			engine := startEngineG2(ctx, "DS-non-adjacent", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			store := connectedDurableStore(ctx)
+			engine := startEngine(ctx, "DS-non-adjacent", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.DurableStateEntity(context.Background(), enginetest.NewBadVersionDurableStateBehavior(entityID))).To(specs.BeNil())
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
 			ctx.Expect(result.Outcome()).To(specs.NotEqual(command.OutcomeSuccess))
 
 			failure, ok := result.Failure()
@@ -356,9 +356,9 @@ func TestDurableStateNoPartialCommitOnConflict(t *testing.T) {
 
 			// The follow-up balance is the earlier 500 plus this +250 only.
 			result := rig.credit(ctx, 250, 1)
-			expectSuccessG2(ctx, result)
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
-			specs.ExpectT(ctx, accountOfG2(ctx, result).GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
 		})
 	})
 }
@@ -371,11 +371,11 @@ func TestDurableStateConflictResultShape(t *testing.T) {
 			rig := newDurableStateRevisionRig(ctx, "DS-conflict-shape")
 			rig.createAccount(ctx)
 
-			result := dispatchG2(ctx, rig.engine, rig.entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
+			result := dispatch(ctx, rig.engine, rig.entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
 			ctx.Expect(result.Err()).To(specs.MatchError(command.ErrRejected))
 
-			expectConcurrencyConflictG2(ctx, result)
-			conflict := conflictErrorG2(ctx, result)
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
 			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectGenesis())
 		})
 	})
@@ -399,8 +399,8 @@ func TestDurableStateConditionalWriteEvaluatedAgainstStorageRevision(t *testing.
 			ctx.Expect(writeDirectDurableState(context.Background(), rig.store, rig.entityID, 2, &testpb.Account{AccountId: rig.entityID, AccountBalance: 999})).To(specs.BeNil())
 
 			result := rig.credit(ctx, 250, 1)
-			expectConcurrencyConflictG2(ctx, result)
-			conflict := conflictErrorG2(ctx, result)
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
 			actual, ok := conflict.ActualRevision()
 			ctx.Expect(ok).To(specs.BeTrue())
 			specs.ExpectT(ctx, actual).ToEqual(2)

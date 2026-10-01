@@ -40,8 +40,8 @@ import (
 // store, so a rejected spawn can only come from the declared-family guard,
 // never from a missing store.
 func familyTestEngineG4(ctx *specs.Context, name string, opts ...Option) *Engine {
-	opts = append([]Option{WithLogger(DiscardLogger), WithStateStore(connectedStateStoreG4(ctx))}, opts...)
-	engine := newTestEngine(ctx.T, name, connectedEventsStoreG4(ctx), opts...)
+	opts = append([]Option{WithLogger(DiscardLogger), WithStateStore(connectedDurableStore(ctx))}, opts...)
+	engine := newTestEngine(ctx.T, name, connectedEventsStore(ctx), opts...)
 	ctx.Expect(engine.Start(context.Background())).To(specs.BeNil())
 	return engine
 }

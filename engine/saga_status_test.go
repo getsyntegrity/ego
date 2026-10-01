@@ -52,7 +52,7 @@ type sagaStatusRigG4 struct {
 
 // newSagaStatusRigG4 starts an engine with an in-memory events store.
 func newSagaStatusRigG4(ctx *specs.Context, name string) sagaStatusRigG4 {
-	engine := newTestEngine(ctx.T, name, connectedEventsStoreG4(ctx), WithLogger(DiscardLogger))
+	engine := newTestEngine(ctx.T, name, connectedEventsStore(ctx), WithLogger(DiscardLogger))
 	ctx.Expect(engine.Start(context.Background())).To(specs.BeNil())
 	return sagaStatusRigG4{ctx: ctx, engine: engine}
 }

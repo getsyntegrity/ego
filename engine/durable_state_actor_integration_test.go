@@ -51,14 +51,14 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 	specs.Describe(t, "a durable state actor wired to a real engine and store", func(s *specs.Spec) {
 		s.It("commits the matching ExpectedRevision and rejects the other one, leaving the store untouched", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedDurableStoreG2(ctx)
-			engine := startEngineG2(ctx, "DS-integration-propagation", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			store := connectedDurableStore(ctx)
+			engine := startEngine(ctx, "DS-integration-propagation", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
 			durable, err := store.GetLatestState(bg, persistence.Unscoped(), entityID)
@@ -67,9 +67,9 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 
 			// The non-matching command: same payload/entity, ExpectedRevision does
 			// not match the real persisted revision (1).
-			nonMatching := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
-			expectConcurrencyConflictG2(ctx, nonMatching)
-			conflict := conflictErrorG2(ctx, nonMatching)
+			nonMatching := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
+			expectConcurrencyConflict(ctx, nonMatching)
+			conflict := conflictError(ctx, nonMatching)
 			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectRevision(7))
 			actual, ok := conflict.ActualRevision()
 			ctx.Expect(ok).To(specs.BeTrue())
@@ -83,10 +83,10 @@ func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
 			// The matching command: identical payload, ExpectedRevision now matches
 			// the real persisted revision (1). It commits and advances the real
 			// StorageRevision to 2.
-			matching := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, matching)
+			matching := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, matching)
 			specs.ExpectT(ctx, matching.Revision()).ToEqual(2)
-			specs.ExpectT(ctx, accountOfG2(ctx, matching).GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, accountOf(ctx, matching).GetAccountBalance()).ToEqual(750)
 
 			durable, err = store.GetLatestState(bg, persistence.Unscoped(), entityID)
 			ctx.Expect(err).To(specs.BeNil())

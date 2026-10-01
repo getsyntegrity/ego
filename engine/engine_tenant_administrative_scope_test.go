@@ -70,9 +70,9 @@ func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
 		adminCtx := context.WithValue(bg, administrativeScopeKey{}, true)
 
 		s.It("an administrative-only resolver cannot bind a spawn", func(ctx *specs.Context) {
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			err := engine.Entity(adminCtx, newTenancyProbeEventSourcedBehavior(uuid.NewString()))
@@ -80,9 +80,9 @@ func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
 		})
 
 		s.It("an administrative command is rejected by a tenant-bound entity", func(ctx *specs.Context) {
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
@@ -103,7 +103,7 @@ func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
 		})
 
 		s.It("an administrative erasure is denied and erases nothing", func(ctx *specs.Context) {
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			persistenceID := uuid.NewString()
 			eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
@@ -120,7 +120,7 @@ func TestAdministrativeScopeIsNeverAnAggregateTenantScope(t *testing.T) {
 				}}, persistence.Unconditional())).To(specs.BeNil())
 			}
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(administrativeScopeResolver{}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			ctx.Expect(engine.EraseEntity(adminCtx, persistenceID, true)).To(specs.MatchError(tenancy.ErrDenied))
