@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
@@ -186,195 +186,279 @@ func buildActorSystem(t *testing.T, cfg *Config) goakt.ActorSystem {
 }
 
 func TestOptionWithLogger(t *testing.T) {
-	c := NewConfig(nil, WithLogger(DiscardLogger))
-	assert.Equal(t, DiscardLogger, c.logger)
+	specs.Describe(t, "WithLogger stores the logger on the config", func(s *specs.Spec) {
+		s.It("keeps the given logger", func(ctx *specs.Context) {
+			c := NewConfig(nil, WithLogger(DiscardLogger))
+			ctx.Expect(c.logger).To(specs.Equal(DiscardLogger))
+		})
+	})
 }
 
 func TestOptionWithStateStore(t *testing.T) {
-	store := testkit.NewDurableStore()
-	c := NewConfig(nil, WithStateStore(store))
-	assert.Equal(t, store, c.stateStore)
+	specs.Describe(t, "WithStateStore stores the state store on the config", func(s *specs.Spec) {
+		s.It("keeps the given store", func(ctx *specs.Context) {
+			store := testkit.NewDurableStore()
+			c := NewConfig(nil, WithStateStore(store))
+			ctx.Expect(c.stateStore).To(specs.Equal(store))
+		})
+	})
 }
 
 func TestOptionWithOffsetStore(t *testing.T) {
-	store := testkit.NewOffsetStore()
-	c := NewConfig(nil, WithOffsetStore(store))
-	assert.Equal(t, store, c.offsetStore)
+	specs.Describe(t, "WithOffsetStore stores the offset store on the config", func(s *specs.Spec) {
+		s.It("keeps the given store", func(ctx *specs.Context) {
+			store := testkit.NewOffsetStore()
+			c := NewConfig(nil, WithOffsetStore(store))
+			ctx.Expect(c.offsetStore).To(specs.Equal(store))
+		})
+	})
 }
 
 func TestOptionWithSnapshotStore(t *testing.T) {
-	store := testkit.NewSnapshotStore()
-	c := NewConfig(nil, WithSnapshotStore(store))
-	assert.Equal(t, store, c.snapshotStore)
+	specs.Describe(t, "WithSnapshotStore stores the snapshot store on the config", func(s *specs.Spec) {
+		s.It("keeps the given store", func(ctx *specs.Context) {
+			store := testkit.NewSnapshotStore()
+			c := NewConfig(nil, WithSnapshotStore(store))
+			ctx.Expect(c.snapshotStore).To(specs.Equal(store))
+		})
+	})
 }
 
 func TestOptionWithEncryptor(t *testing.T) {
-	enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
-	c := NewConfig(nil, WithEncryptor(enc))
-	assert.Equal(t, enc, c.encryptor)
+	specs.Describe(t, "WithEncryptor stores the encryptor on the config", func(s *specs.Spec) {
+		s.It("keeps the given encryptor", func(ctx *specs.Context) {
+			enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
+			c := NewConfig(nil, WithEncryptor(enc))
+			ctx.Expect(c.encryptor).To(specs.Equal(enc))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverNil(t *testing.T) {
-	// A nil resolver must be inert: no registration, no error, tenant-aware
-	// mode not activated (spec.md "Nil option is inert").
-	c := NewConfig(nil, WithTenantResolver(nil))
-	assert.Nil(t, c.tenantResolver)
-	assert.Zero(t, c.tenantResolverCount)
+	specs.Describe(t, "WithTenantResolver(nil) is inert", func(s *specs.Spec) {
+		s.It("registers nothing and does not activate tenant-aware mode", func(ctx *specs.Context) {
+			// A nil resolver must be inert: no registration, no error, tenant-aware
+			// mode not activated (spec.md "Nil option is inert").
+			c := NewConfig(nil, WithTenantResolver(nil))
+			ctx.Expect(c.tenantResolver).To(specs.BeNil())
+			ctx.Expect(c.tenantResolverCount).To(specs.BeZero())
+		})
+	})
 }
 
 func TestOptionWithTenantResolverTypedNil(t *testing.T) {
-	// A typed-nil resolver value is non-nil at the interface level but
-	// wraps a nil pointer; isNilResolver must detect it the way
-	// isNilLogger does, so it is treated exactly like a plain nil.
-	var typedNil *stubTenantResolver
-	c := NewConfig(nil, WithTenantResolver(typedNil))
-	assert.Nil(t, c.tenantResolver)
-	assert.Zero(t, c.tenantResolverCount)
+	specs.Describe(t, "WithTenantResolver ignores a typed-nil pointer resolver", func(s *specs.Spec) {
+		s.It("treats it exactly like a plain nil", func(ctx *specs.Context) {
+			// A typed-nil resolver value is non-nil at the interface level but
+			// wraps a nil pointer; isNilResolver must detect it the way
+			// isNilLogger does, so it is treated exactly like a plain nil.
+			var typedNil *stubTenantResolver
+			c := NewConfig(nil, WithTenantResolver(typedNil))
+			ctx.Expect(c.tenantResolver).To(specs.BeNil())
+			ctx.Expect(c.tenantResolverCount).To(specs.BeZero())
+		})
+	})
 }
 
 func TestOptionWithTenantResolverFuncTypedNil(t *testing.T) {
-	// A typed-nil value of a named function type implementing
-	// tenancy.TenantResolver is non-nil at the interface level but wraps a
-	// nil func; isNilResolver must detect it via the reflect.Func branch,
-	// not just reflect.Pointer, or it would be registered as an "effective"
-	// resolver and panic on the first Resolve call.
-	var typedNil funcTenantResolver
-	c := NewConfig(nil, WithTenantResolver(typedNil))
-	assert.Nil(t, c.tenantResolver)
-	assert.Zero(t, c.tenantResolverCount)
+	specs.Describe(t, "WithTenantResolver ignores a typed-nil func resolver", func(s *specs.Spec) {
+		s.It("detects it through the reflect.Func branch", func(ctx *specs.Context) {
+			// A typed-nil value of a named function type implementing
+			// tenancy.TenantResolver is non-nil at the interface level but wraps a
+			// nil func; isNilResolver must detect it via the reflect.Func branch,
+			// not just reflect.Pointer, or it would be registered as an "effective"
+			// resolver and panic on the first Resolve call.
+			var typedNil funcTenantResolver
+			c := NewConfig(nil, WithTenantResolver(typedNil))
+			ctx.Expect(c.tenantResolver).To(specs.BeNil())
+			ctx.Expect(c.tenantResolverCount).To(specs.BeZero())
+		})
+	})
 }
 
 func TestOptionWithTenantResolver(t *testing.T) {
-	// A single non-nil registration becomes the effective resolver and
-	// activates tenant-aware mode (spec.md "Non-nil resolver registers as
-	// effective").
-	resolver := &stubTenantResolver{id: "acme"}
-	c := NewConfig(nil, WithTenantResolver(resolver))
-	assert.Same(t, resolver, c.tenantResolver)
-	assert.Equal(t, 1, c.tenantResolverCount)
+	specs.Describe(t, "WithTenantResolver registers a non-nil resolver", func(s *specs.Spec) {
+		s.It("makes it the effective resolver and activates tenant-aware mode", func(ctx *specs.Context) {
+			// A single non-nil registration becomes the effective resolver and
+			// activates tenant-aware mode (spec.md "Non-nil resolver registers as
+			// effective").
+			resolver := &stubTenantResolver{id: "acme"}
+			c := NewConfig(nil, WithTenantResolver(resolver))
+			ctx.Expect(c.tenantResolver).To(beTheSamePointer(resolver))
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(1))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverNilAfterNonNil(t *testing.T) {
-	// nil after a valid registration must not reset it — nil is not a
-	// mechanism to disable tenancy once configured (spec.md "Nil after
-	// non-nil does not disable tenancy").
-	resolver := &stubTenantResolver{id: "acme"}
-	c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(nil))
-	assert.Same(t, resolver, c.tenantResolver)
-	assert.Equal(t, 1, c.tenantResolverCount)
+	specs.Describe(t, "a nil registration after a valid one", func(s *specs.Spec) {
+		s.It("does not reset the effective resolver", func(ctx *specs.Context) {
+			// nil after a valid registration must not reset it: nil is not a
+			// mechanism to disable tenancy once configured (spec.md "Nil after
+			// non-nil does not disable tenancy").
+			resolver := &stubTenantResolver{id: "acme"}
+			c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(nil))
+			ctx.Expect(c.tenantResolver).To(beTheSamePointer(resolver))
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(1))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverCountsOnlyNonNilRegistrations(t *testing.T) {
-	// A single non-nil registration surrounded by nil registrations still
-	// counts as exactly one (spec.md "Nil registrations do not count").
-	resolver := &stubTenantResolver{id: "acme"}
-	c := NewConfig(nil,
-		WithTenantResolver(nil),
-		WithTenantResolver(resolver),
-		WithTenantResolver(nil),
-	)
-	assert.Same(t, resolver, c.tenantResolver)
-	assert.Equal(t, 1, c.tenantResolverCount)
+	specs.Describe(t, "the registration count", func(s *specs.Spec) {
+		s.It("counts a single non-nil registration surrounded by nils as one", func(ctx *specs.Context) {
+			// A single non-nil registration surrounded by nil registrations still
+			// counts as exactly one (spec.md "Nil registrations do not count").
+			resolver := &stubTenantResolver{id: "acme"}
+			c := NewConfig(nil,
+				WithTenantResolver(nil),
+				WithTenantResolver(resolver),
+				WithTenantResolver(nil),
+			)
+			ctx.Expect(c.tenantResolver).To(beTheSamePointer(resolver))
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(1))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverTypedNilThenValid(t *testing.T) {
-	// A typed-nil registration followed by a valid non-nil registration
-	// must produce exactly one effective registration: the typed-nil is
-	// inert and must not be mistaken for an already-registered resolver.
-	var typedNil *stubTenantResolver
-	resolver := &stubTenantResolver{id: "acme"}
-	c := NewConfig(nil, WithTenantResolver(typedNil), WithTenantResolver(resolver))
-	assert.Same(t, resolver, c.tenantResolver)
-	assert.Equal(t, 1, c.tenantResolverCount)
+	specs.Describe(t, "a typed-nil registration before a valid one", func(s *specs.Spec) {
+		s.It("leaves exactly one effective registration", func(ctx *specs.Context) {
+			// The typed-nil is inert and must not be mistaken for an
+			// already-registered resolver.
+			var typedNil *stubTenantResolver
+			resolver := &stubTenantResolver{id: "acme"}
+			c := NewConfig(nil, WithTenantResolver(typedNil), WithTenantResolver(resolver))
+			ctx.Expect(c.tenantResolver).To(beTheSamePointer(resolver))
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(1))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverValidThenTypedNil(t *testing.T) {
-	// The reverse order must produce the same result: a typed-nil
-	// registration after a valid one must not count and must not disturb
-	// the already-registered effective resolver.
-	var typedNil *stubTenantResolver
-	resolver := &stubTenantResolver{id: "acme"}
-	c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(typedNil))
-	assert.Same(t, resolver, c.tenantResolver)
-	assert.Equal(t, 1, c.tenantResolverCount)
+	specs.Describe(t, "a typed-nil registration after a valid one", func(s *specs.Spec) {
+		s.It("does not count and does not disturb the effective resolver", func(ctx *specs.Context) {
+			// The reverse order must produce the same result as the one above.
+			var typedNil *stubTenantResolver
+			resolver := &stubTenantResolver{id: "acme"}
+			c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(typedNil))
+			ctx.Expect(c.tenantResolver).To(beTheSamePointer(resolver))
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(1))
+		})
+	})
 }
 
 func TestOptionWithTenantResolverAmbiguousCount(t *testing.T) {
-	// Two distinct non-nil registrations are both counted; NewEngine (not
-	// the Option itself, which cannot return an error) rejects
-	// tenantResolverCount > 1.
-	c := NewConfig(nil,
-		WithTenantResolver(&stubTenantResolver{id: "acme"}),
-		WithTenantResolver(&stubTenantResolver{id: "globex"}),
-	)
-	assert.Equal(t, 2, c.tenantResolverCount)
+	specs.Describe(t, "two distinct non-nil registrations", func(s *specs.Spec) {
+		s.It("are both counted, and NewEngine rejects the ambiguity", func(ctx *specs.Context) {
+			// The Option itself cannot return an error; NewEngine rejects
+			// tenantResolverCount > 1.
+			c := NewConfig(nil,
+				WithTenantResolver(&stubTenantResolver{id: "acme"}),
+				WithTenantResolver(&stubTenantResolver{id: "globex"}),
+			)
+			ctx.Expect(c.tenantResolverCount).To(specs.Equal(2))
+		})
+	})
 }
 
 func TestOptionWithProjection(t *testing.T) {
-	handler := projection.NewDiscardHandler()
-	recovery := projection.NewRecovery(projection.WithRetries(10))
-	o := &projection.Options{
-		Handler:      handler,
-		BufferSize:   500,
-		PullInterval: time.Second,
-		Recovery:     recovery,
-	}
-	c := NewConfig(nil, WithProjection("accounts", o))
-	require.NotNil(t, c.projections)
-	assert.Same(t, o, c.projections["accounts"])
+	specs.Describe(t, "WithProjection registers the projection options by name", func(s *specs.Spec) {
+		s.It("keeps the given options under the projection name", func(ctx *specs.Context) {
+			handler := projection.NewDiscardHandler()
+			recovery := projection.NewRecovery(projection.WithRetries(10))
+			o := &projection.Options{
+				Handler:      handler,
+				BufferSize:   500,
+				PullInterval: time.Second,
+				Recovery:     recovery,
+			}
+			c := NewConfig(nil, WithProjection("accounts", o))
+			ctx.Expect(c.projections).To(specs.HaveLen(1))
+			ctx.Expect(c.projections["accounts"]).To(beTheSamePointer(o))
+		})
+	})
 }
 
 func TestOptionWithProjectionMultiple(t *testing.T) {
-	accounts := &projection.Options{Handler: projection.NewDiscardHandler()}
-	audit := &projection.Options{Handler: projection.NewDiscardHandler()}
-	c := NewConfig(nil,
-		WithProjection("accounts", accounts),
-		WithProjection("audit", audit),
-	)
-	require.Len(t, c.projections, 2)
-	assert.Same(t, accounts, c.projections["accounts"])
-	assert.Same(t, audit, c.projections["audit"])
+	specs.Describe(t, "WithProjection called twice", func(s *specs.Spec) {
+		s.It("registers both projections", func(ctx *specs.Context) {
+			accounts := &projection.Options{Handler: projection.NewDiscardHandler()}
+			audit := &projection.Options{Handler: projection.NewDiscardHandler()}
+			c := NewConfig(nil,
+				WithProjection("accounts", accounts),
+				WithProjection("audit", audit),
+			)
+			ctx.Expect(c.projections).To(specs.HaveLen(2))
+			ctx.Expect(c.projections["accounts"]).To(beTheSamePointer(accounts))
+			ctx.Expect(c.projections["audit"]).To(beTheSamePointer(audit))
+		})
+	})
 }
 
 func TestOptionWithProjectionNil(t *testing.T) {
-	c := NewConfig(nil, WithProjection("accounts", nil))
-	assert.Nil(t, c.projections)
+	specs.Describe(t, "WithProjection with nil options", func(s *specs.Spec) {
+		s.It("registers nothing", func(ctx *specs.Context) {
+			c := NewConfig(nil, WithProjection("accounts", nil))
+			ctx.Expect(c.projections).To(specs.BeNil())
+		})
+	})
 }
 
 func TestOptionWithTelemetry(t *testing.T) {
-	tracer := nooptrace.NewTracerProvider().Tracer("test")
-	tel := &Telemetry{Tracer: tracer}
-	c := NewConfig(nil, WithTelemetry(tel))
-	require.NotNil(t, c.telemetry)
-	assert.Equal(t, tracer, c.telemetry.Tracer)
+	specs.Describe(t, "WithTelemetry stores the telemetry on the config", func(s *specs.Spec) {
+		s.It("keeps the given tracer", func(ctx *specs.Context) {
+			tracer := nooptrace.NewTracerProvider().Tracer("test")
+			tel := &Telemetry{Tracer: tracer}
+			c := NewConfig(nil, WithTelemetry(tel))
+			ctx.Expect(c.telemetry).To(specs.Not(specs.BeNil()))
+			ctx.Expect(c.telemetry.Tracer).To(specs.Equal(tracer))
+		})
+	})
 }
 
 func TestOptionWithTelemetryNil(t *testing.T) {
-	c := NewConfig(nil, WithTelemetry(nil))
-	assert.Nil(t, c.telemetry)
+	specs.Describe(t, "WithTelemetry(nil)", func(s *specs.Spec) {
+		s.It("leaves the config without telemetry", func(ctx *specs.Context) {
+			c := NewConfig(nil, WithTelemetry(nil))
+			ctx.Expect(c.telemetry).To(specs.BeNil())
+		})
+	})
 }
 
 func TestOptionWithEventAdapters(t *testing.T) {
-	adapter := &testEventAdapter{}
-	c := NewConfig(nil, WithEventAdapters(adapter))
-	require.Len(t, c.eventAdapters, 1)
-	assert.Equal(t, adapter, c.eventAdapters[0])
+	specs.Describe(t, "WithEventAdapters appends adapters to the config", func(s *specs.Spec) {
+		s.It("keeps the given adapter", func(ctx *specs.Context) {
+			adapter := &testEventAdapter{}
+			c := NewConfig(nil, WithEventAdapters(adapter))
+			ctx.Expect(c.eventAdapters).To(specs.HaveLen(1))
+			ctx.Expect(c.eventAdapters[0]).To(specs.Equal(adapter))
+		})
+	})
 }
 
 func TestOptionWithEventAdaptersMultiple(t *testing.T) {
-	c := NewConfig(nil,
-		WithEventAdapters(&testEventAdapter{}),
-		WithEventAdapters(&testEventAdapter{}),
-	)
-	assert.Len(t, c.eventAdapters, 2)
+	specs.Describe(t, "WithEventAdapters called twice", func(s *specs.Spec) {
+		s.It("keeps both adapters", func(ctx *specs.Context) {
+			c := NewConfig(nil,
+				WithEventAdapters(&testEventAdapter{}),
+				WithEventAdapters(&testEventAdapter{}),
+			)
+			ctx.Expect(c.eventAdapters).To(specs.HaveLen(2))
+		})
+	})
 }
 
 func TestOptionWithLoggerNilFallback(t *testing.T) {
-	// Passing a nil Logger via WithLogger should round-trip through
-	// NewConfig and land on the default logger (ResolveLogger fallback).
-	c := NewConfig(nil, WithLogger(nil))
-	require.NotNil(t, c.logger)
-	assert.Same(t, DefaultLogger(), c.logger)
+	specs.Describe(t, "WithLogger(nil)", func(s *specs.Spec) {
+		s.It("lands on the default logger", func(ctx *specs.Context) {
+			// Passing a nil Logger via WithLogger should round-trip through
+			// NewConfig and land on the default logger (ResolveLogger fallback).
+			c := NewConfig(nil, WithLogger(nil))
+			ctx.Expect(c.logger).To(specs.Not(specs.BeNil()))
+			ctx.Expect(c.logger).To(beTheSamePointer(DefaultLogger()))
+		})
+	})
 }
 
 func TestConfigGoaktOptionsEncryptor(t *testing.T) {
@@ -452,19 +536,21 @@ func TestConfigGoaktOptionsProjectionDefaultsRecovery(t *testing.T) {
 // version only understands these exact names: the types must stay declared in
 // package engine.
 func TestClusterKindsExposesEgoActors(t *testing.T) {
-	want := []string{
-		"engine.eventsourcedactor",
-		"engine.durablestateactor",
-		"engine.sagaactor",
-		"engine.projectionactor",
-	}
+	specs.Describe(t, "ClusterKinds lists the GoAkt kind names of the ego actors", func(s *specs.Spec) {
+		s.It("keeps the exact names other nodes understand, in order", func(ctx *specs.Context) {
+			var got []string
+			for _, kind := range ClusterKinds() {
+				got = append(got, strings.ToLower(reflect.TypeOf(kind).Elem().String()))
+			}
 
-	var got []string
-	for _, kind := range ClusterKinds() {
-		got = append(got, strings.ToLower(reflect.TypeOf(kind).Elem().String()))
-	}
-
-	assert.Equal(t, want, got)
+			ctx.Expect(got).To(specs.HaveElementsInOrder(
+				specs.Equal("engine.eventsourcedactor"),
+				specs.Equal("engine.durablestateactor"),
+				specs.Equal("engine.sagaactor"),
+				specs.Equal("engine.projectionactor"),
+			))
+		})
+	})
 }
 
 // testEventAdapter is a no-op EventAdapter for testing.
