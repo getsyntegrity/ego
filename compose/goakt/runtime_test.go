@@ -27,6 +27,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
+
 	"github.com/getsyntegrity/ego/compose"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 )
@@ -36,12 +38,16 @@ import (
 // holds. Returning the atomic pointer directly would wrap a nil *engine.Engine
 // in a non-nil interface and fail this test.
 func TestRuntime_NilBeforeStart(t *testing.T) {
-	app := mustNew(t, newFixture(t, "runtime-nil-before-start").spec)
+	specs.Describe(t, "Runtime returns an untyped nil interface before Start", func(s *specs.Spec) {
+		s.It("compares equal to nil, not a non-nil interface wrapping a nil engine", func(ctx *specs.Context) {
+			app := mustNew(ctx.T, newFixture(ctx.T, "runtime-nil-before-start").spec)
 
-	rt := app.Runtime()
-	if rt != nil {
-		t.Fatalf("Runtime() before Start = %#v, want an untyped nil interface", rt)
-	}
+			rt := app.Runtime()
+			// Compared as an interface on purpose: a typed-nil *engine.Engine inside
+			// the interface must fail here.
+			ctx.Expect(rt == nil).To(specs.BeTrue())
+		})
+	})
 }
 
 // TestRuntime_IsTheEngineAfterStartAndAfterStop: after Start the accessor

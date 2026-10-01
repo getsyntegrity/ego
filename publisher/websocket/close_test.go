@@ -25,33 +25,34 @@ package websocket
 import (
 	"context"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // Spec scenario "double close" (ego-arch-004 spec 2, lifecycle rule L2):
 // a publisher connected to a real server returns nil from both calls to
 // Close.
 func TestCloseIsIdempotent(t *testing.T) {
-	ctx := context.Background()
-	srv := newTestServer(t)
+	type closeCase struct {
+		name string
+		open func(url string) (interface{ Close(context.Context) error }, error)
+	}
+	specs.Describe(t, "Close on a publisher connected to a real server", func(s *specs.Spec) {
+		specs.Table(s, []closeCase{
+			{"events", func(url string) (interface{ Close(context.Context) error }, error) {
+				return NewEventsPublisher(&Config{URL: url})
+			}},
+			{"state", func(url string) (interface{ Close(context.Context) error }, error) {
+				return NewDurableStatePublisher(&Config{URL: url})
+			}},
+		}, func(c closeCase) string { return c.name + " publisher returns nil from both calls" }, func(ctx *specs.Context, c closeCase) {
+			bg := context.Background()
+			srv := newTestServer(ctx.T)
+			pub, err := c.open(srv.URL())
+			ctx.Expect(err).To(specs.BeNil())
 
-	events, err := NewEventsPublisher(&Config{URL: srv.URL()})
-	if err != nil {
-		t.Fatalf("NewEventsPublisher: %v", err)
-	}
-	state, err := NewDurableStatePublisher(&Config{URL: srv.URL()})
-	if err != nil {
-		t.Fatalf("NewDurableStatePublisher: %v", err)
-	}
-
-	for name, closer := range map[string]interface{ Close(context.Context) error }{
-		"events": events,
-		"state":  state,
-	} {
-		if err := closer.Close(ctx); err != nil {
-			t.Errorf("%s: first Close = %v, want nil", name, err)
-		}
-		if err := closer.Close(ctx); err != nil {
-			t.Errorf("%s: second Close = %v, want nil", name, err)
-		}
-	}
+			ctx.Expect(pub.Close(bg)).To(specs.BeNil())
+			ctx.Expect(pub.Close(bg)).To(specs.BeNil())
+		})
+	})
 }

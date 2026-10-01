@@ -24,10 +24,12 @@ package adaptertest_test
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 const (
@@ -40,17 +42,23 @@ const (
 // dependencies count) holds only the standard library and port/adapter,
 // so a nested adapter module can run the suite without the runtime
 // (ego-arch-004 design §D8).
+//
+// The rule covers the production build only (`go list -deps .` ignores test
+// files), so this test file may use go-specs without breaking it.
 func TestAdaptertestDependsOnlyOnStdlibAndAdapter(t *testing.T) {
-	deps := goListDeps(t, ".")
-	if !slices.Contains(deps, adaptertestPath) || !slices.Contains(deps, adapterPath) || !slices.Contains(deps, "testing") {
-		t.Fatalf("go list -deps . = %v, want it to list %s, %s and testing; the test would prove nothing", deps, adaptertestPath, adapterPath)
-	}
-	for _, dep := range deps {
-		if dep == adaptertestPath || dep == adapterPath || isStdlib(dep) {
-			continue
-		}
-		t.Errorf("port/adapter/adaptertest must not depend on %q: it may import only the standard library and port/adapter (openspec/changes/ego-arch-004/design.md §D8)", dep)
-	}
+	specs.Describe(t, "the import graph of port/adapter/adaptertest", func(s *specs.Spec) {
+		s.It("holds only the standard library and port/adapter besides the package itself", func(ctx *specs.Context) {
+			deps := goListDeps(ctx, ".")
+			// The guard first: an empty or truncated graph would prove nothing.
+			ctx.Expect(deps).To(specs.ContainAllOf(adaptertestPath, adapterPath, "testing"))
+			ctx.Expect(deps).To(specs.EveryElement(specs.Satisfy(
+				"adaptertest itself, port/adapter or a standard library package: it may import only the standard "+
+					"library and port/adapter (openspec/changes/ego-arch-004/design.md §D8)",
+				func(dep any) bool {
+					return dep == adaptertestPath || dep == adapterPath || isStdlib(dep.(string))
+				})))
+		})
+	})
 }
 
 // isStdlib reports whether an import path belongs to the standard library:
@@ -60,18 +68,21 @@ func isStdlib(path string) bool {
 	return !strings.Contains(first, ".")
 }
 
-func goListDeps(t *testing.T, pkg string) []string {
-	t.Helper()
+func goListDeps(ctx *specs.Context, pkg string) []string {
 	goBin, err := exec.LookPath("go")
+	var lookErr error
 	if err != nil {
-		t.Fatalf("go toolchain not found on PATH: %v", err)
+		lookErr = fmt.Errorf("go toolchain not found on PATH: %w", err)
 	}
+	ctx.Expect(lookErr).To(specs.BeNil())
 	cmd := exec.Command(goBin, "list", "-deps", pkg)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	var runErr error
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("go list -deps %s failed: %v\n%s", pkg, err, stderr.String())
+		runErr = fmt.Errorf("go list -deps %s failed: %w\n%s", pkg, err, stderr.String())
 	}
+	ctx.Expect(runErr).To(specs.BeNil())
 	return strings.Fields(stdout.String())
 }

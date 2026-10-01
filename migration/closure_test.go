@@ -23,10 +23,13 @@
 package migration
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // hermeticGoEnv returns a copy of the current process environment with any
@@ -55,19 +58,29 @@ func hermeticGoEnv() []string {
 // evaluates production edges only), so a test-only import of the engine here is
 // not a regression this guard cares about.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", ".")
-	cmd.Env = hermeticGoEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list -deps .: %v\n%s", err, out)
-	}
+	specs.Describe(t, "the production closure of migration", func(s *specs.Spec) {
+		var deps []string
+		s.BeforeEach(func(ctx *specs.Context) {
+			cmd := exec.Command("go", "list", "-deps", ".")
+			cmd.Env = hermeticGoEnv()
+			out, err := cmd.CombinedOutput()
+			var runErr error
+			if err != nil {
+				runErr = fmt.Errorf("go list -deps .: %w\n%s", err, out)
+			}
+			ctx.Expect(runErr).To(specs.BeNil())
+			deps = strings.Fields(string(out))
+		})
 
-	for _, dep := range strings.Fields(string(out)) {
-		switch {
-		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-			t.Errorf("migration's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == "github.com/getsyntegrity/ego/engine":
-			t.Errorf("migration's production closure must not reach the engine package; got %q", dep)
-		}
-	}
+		s.It("never reaches the GoAkt runtime", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy("a GoAkt package", func(dep any) bool {
+				path := dep.(string)
+				return path == "github.com/tochemey/goakt/v4" || strings.HasPrefix(path, "github.com/tochemey/goakt/v4/")
+			})))
+		})
+
+		s.It("never reaches the engine package", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.NoElement(specs.Equal("github.com/getsyntegrity/ego/engine")))
+		})
+	})
 }

@@ -25,20 +25,24 @@ package engine
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestTelemetryFields(t *testing.T) {
-	tracer := nooptrace.NewTracerProvider().Tracer("test")
-	meter := noopmetric.NewMeterProvider().Meter("test")
+	specs.Describe(t, "Telemetry carries the tracer and the meter it was built with", func(s *specs.Spec) {
+		s.It("keeps both fields set", func(ctx *specs.Context) {
+			tracer := nooptrace.NewTracerProvider().Tracer("test")
+			meter := noopmetric.NewMeterProvider().Meter("test")
 
-	tel := &Telemetry{
-		Tracer: tracer,
-		Meter:  meter,
-	}
+			tel := &Telemetry{
+				Tracer: tracer,
+				Meter:  meter,
+			}
 
-	assert.NotNil(t, tel.Tracer)
-	assert.NotNil(t, tel.Meter)
+			ctx.Expect(tel.Tracer != nil).To(specs.BeTrue())
+			ctx.Expect(tel.Meter != nil).To(specs.BeTrue())
+		})
+	})
 }

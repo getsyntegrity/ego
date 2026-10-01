@@ -23,11 +23,13 @@
 package runtimeconsumer
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // hermeticGoEnv returns the process environment with GOWORK=off and an
@@ -56,7 +58,7 @@ const modulePrefix = "github.com/getsyntegrity/ego"
 // the testpb messages. It mirrors port/runtime's architecture test
 // (ego-runtime-001 §D9). A new first-party dependency must be added here in
 // review, which is the point.
-var allowedFirstParty = []string{
+var allowedFirstParty = []any{
 	modulePrefix + "/port/runtime",
 	modulePrefix + "/port/behavior",
 	modulePrefix + "/command",
@@ -67,6 +69,37 @@ var allowedFirstParty = []string{
 	modulePrefix + "/test/data/testpb",
 }
 
+// isGoAkt reports whether dep is the GoAkt runtime module or one of its packages.
+func isGoAkt(dep string) bool {
+	return dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/")
+}
+
+// productionDeps lists the import paths in the production build of the
+// package under test (`go list -deps .`, so no test-only imports).
+func productionDeps(ctx *specs.Context) []string {
+	cmd := exec.Command("go", "list", "-deps", ".")
+	cmd.Env = hermeticGoEnv()
+	out, err := cmd.CombinedOutput()
+	var runErr error
+	if err != nil {
+		runErr = fmt.Errorf("go list -deps .: %w\n%s", err, out)
+	}
+	ctx.Expect(runErr).To(specs.BeNil())
+	return strings.Fields(string(out))
+}
+
+// firstPartyDeps keeps the first-party packages of deps other than the
+// package under test itself.
+func firstPartyDeps(deps []string) []string {
+	var own []string
+	for _, dep := range deps {
+		if strings.HasPrefix(dep, modulePrefix+"/") && dep != modulePrefix+"/internal/runtimeconsumer" {
+			own = append(own, dep)
+		}
+	}
+	return own
+}
+
 // TestProductionClosureExcludesRootAndGoAkt is #147's closure criterion
 // (ego-runtime-001 §D8): the consumer's production build reaches only
 // port/runtime, port/behavior and contracts — every first-party package in
@@ -74,32 +107,26 @@ var allowedFirstParty = []string{
 // GoAkt package. Only the production build is checked; the end-to-end test
 // that needs GoAkt lives in compose/goakt.
 func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", ".")
-	cmd.Env = hermeticGoEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list -deps .: %v\n%s", err, out)
-	}
+	specs.Describe(t, "the production closure of runtimeconsumer", func(s *specs.Spec) {
+		var deps []string
+		s.BeforeEach(func(ctx *specs.Context) { deps = productionDeps(ctx) })
 
-	deps := strings.Fields(string(out))
-	for _, dep := range deps {
-		switch {
-		case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-			t.Errorf("runtimeconsumer's production closure must not reach the GoAkt runtime; got %q", dep)
-		case dep == modulePrefix+"/engine":
-			t.Errorf("runtimeconsumer's production closure must not reach the engine package; got %q", dep)
-		case dep == modulePrefix+"/internal/runtimeconsumer":
-			// the package itself
-		case strings.HasPrefix(dep, modulePrefix+"/") && !slices.Contains(allowedFirstParty, dep):
-			t.Errorf("runtimeconsumer's production closure may contain only port/runtime, port/behavior and contracts; got %q", dep)
-		}
-	}
-	for _, want := range []string{
-		modulePrefix + "/port/runtime",
-		modulePrefix + "/port/behavior",
-	} {
-		if !slices.Contains(deps, want) {
-			t.Errorf("runtimeconsumer's production closure must contain %q, the contract it is written against", want)
-		}
-	}
+		s.It("never reaches the GoAkt runtime", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy("a GoAkt package", func(dep any) bool {
+				return isGoAkt(dep.(string))
+			})))
+		})
+
+		s.It("never reaches the engine package", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.NoElement(specs.Equal(modulePrefix + "/engine")))
+		})
+
+		s.It("contains only port/runtime, port/behavior and contracts as first-party packages", func(ctx *specs.Context) {
+			ctx.Expect(firstPartyDeps(deps)).To(specs.EveryElement(specs.BeOneOf(allowedFirstParty...)))
+		})
+
+		s.It("contains the two contracts it is written against", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.ContainAllOf(modulePrefix+"/port/runtime", modulePrefix+"/port/behavior"))
+		})
+	})
 }
