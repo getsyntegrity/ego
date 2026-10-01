@@ -1,6 +1,6 @@
 # Drop testify from testkit and persistence/conformance (STOPPED)
 
-Origin: #205. Status: **blocked by the STOP rule. No code changed, no PR opened.**
+Origin: #205. Status: **option 2 approved and implemented; `persistence/conformance` split out as `conformance-testify-major`.**
 
 ## Problem
 
@@ -97,17 +97,58 @@ needs an exported change; say the word and I will do it as a separate PR
 (about 3 tasks: enginetest sentinel, testkit require/assert rewrite with RED
 mutation proof, release note describing the changed message layout).
 
+## Approved scope
+
+The coordinator approved option 2 (the user later added: nothing may keep
+testify). This PR covers `testkit/scenario.go`, `internal/engine/enginetest/failing_behavior.go`
+and the two `example/cluster` test files. `persistence/conformance` is NOT touched:
+it is the breaking change above and is done on `feat/conformance-without-testify`
+by another writer (named follow-up `conformance-testify-major`).
+
+Rules kept: fatal stays fatal (testify's `require` was `Errorf` then `FailNow`;
+the new `failNow` helper does exactly that), non-fatal stays `Errorf`. No exported
+signature changed (`api-check.sh origin/develop` reports no API changes).
+
+Message layout that users of `testkit` see now (testify printed `Error Trace`,
+`Error`, `Messages` blocks with diffs; now one line):
+
+| Assertion | New message |
+|---|---|
+| arrangement failed (fatal) | `scenario arrangement failed: <err>` |
+| command returned error (fatal) | `command processing returned an error: <err>` |
+| wrong event count (fatal) | `unexpected number of events: expected N, got M` |
+| expected error, got none (fatal) | `expected an error but got none` |
+| event / state mismatch | unchanged text (`event at index i: expected .., got ..`, `state mismatch: ..`) |
+| error substring (non-fatal) | `error "<err>" does not contain "<sub>"` |
+| unexpected events (non-fatal) | `expected no events but got N` |
+| version (non-fatal) | `version mismatch: expected N, got M` |
+
 ## Tasks
 
-None executed (blocked before the first write).
+- [x] T1 testkit: failure-contract tests, then stdlib rewrite. Route: inline
+  (one source file plus one new test). RED: new `testkit/scenario_failure_test.go`
+  failed 10 of 16 rows against testify (for example `Messages:   unexpected number
+  of events` vs the expected `unexpected number of events: expected 0, got 1`);
+  GREEN after the rewrite; `go test -count=5 ./testkit` ok; coverage 94.5% before and after.
+  Commit: `a579cd8`.
+- [x] T2 enginetest: `assert.AnError` becomes the package sentinel `ErrHandleEvent`
+  (internal package; no caller compared the error). Commit: `febf8bc`.
+- [x] T3 example/cluster tests (separate Go module, own go.mod): `stores_test.go`
+  and `stores_postgres_test.go` use new local helpers in `check_test.go` (`mustX` is
+  fatal, `expectX` is non-fatal). `go.mod` no longer requires testify directly.
+  The Postgres tests need a live database and were only compiled and vetted here;
+  the offline tests in `stores_test.go` run. RED: mutating `stores.go` to return
+  `ErrInvalidPrecondition` made `TestPostgresEventStore_WriteEvents_InvalidScope`
+  fail with `error persistence: write precondition is not valid is not persistence:
+  scope is not valid`; reverted. Commit: see PR.
 
 ## Progress
 
-- [x] Mapped every testify use and exported symbol.
-- [x] Confirmed the leak and the apidiff break empirically.
-- [ ] Implementation: waiting for an owner decision on the options above.
+All three tasks done. Checks: `go build ./...`, `go vet`, `gofmt -l` clean,
+`golangci-lint` 0 issues on the touched root packages; `example/cluster` lint shows
+8 errcheck issues that already existed (main.go and `store.Disconnect` defers).
 
 ## Follow-up (named)
 
-`testkit-enginetest-drop-testify` (option 2) and
-`conformance-testing-t-breaking` (option 1, major).
+`conformance-testify-major`: change `conformance.Check.Run` off `require.TestingT`
+(breaking, needs `release:major`); branch `feat/conformance-without-testify`.
