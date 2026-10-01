@@ -78,24 +78,6 @@ func startSnapshotSystemWith(ctx *specs.Context, name string, initRetries int, e
 	return system
 }
 
-// connectedEventsStore returns an in-memory events store that is disconnected
-// when the case ends.
-func connectedEventsStore(ctx *specs.Context) *testkit.EventStore {
-	store := testkit.NewEventsStore()
-	ctx.Expect(store.Connect(context.Background())).To(specs.BeNil())
-	ctx.Cleanup(func() { _ = store.Disconnect(context.Background()) })
-	return store
-}
-
-// connectedSnapshotStore returns an in-memory snapshot store that is
-// disconnected when the case ends.
-func connectedSnapshotStore(ctx *specs.Context) *testkit.SnapshotStore {
-	store := testkit.NewSnapshotStore()
-	ctx.Expect(store.Connect(context.Background())).To(specs.BeNil())
-	ctx.Cleanup(func() { _ = store.Disconnect(context.Background()) })
-	return store
-}
-
 // newEventsStream returns an events stream that is closed when the case ends.
 func newEventsStream(ctx *specs.Context) eventstream.Stream {
 	stream := eventstream.New()
@@ -136,7 +118,7 @@ func retentionRequest() *applyRetentionRequest {
 }
 
 // latestSnapshot reads the latest snapshot of "entity-1" from store.
-func latestSnapshot(store persistence.SnapshotStore) *egopb.Snapshot {
+func latestEntitySnapshot(store persistence.SnapshotStore) *egopb.Snapshot {
 	latest, _ := store.GetLatestSnapshot(context.Background(), persistence.Unscoped(), "entity-1")
 	return latest
 }
@@ -159,7 +141,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			ctx.Expect(goakt.Tell(context.Background(), pid,
 				&persistSnapshotRequest{snapshot: sampleSnapshot(ctx, 10), scope: persistence.Unscoped()})).To(specs.BeNil())
 
-			ctx.Eventually(func() any { return latestSnapshot(snapshotStore).GetSequenceNumber() },
+			ctx.Eventually(func() any { return latestEntitySnapshot(snapshotStore).GetSequenceNumber() },
 				specs.Equal(uint64(10)), snapshotsPoll...)
 		})
 
@@ -175,9 +157,9 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			ctx.Expect(goakt.Tell(context.Background(), pid,
 				&persistSnapshotRequest{snapshot: sampleSnapshot(ctx, 5), scope: persistence.Unscoped()})).To(specs.BeNil())
 
-			ctx.Eventually(func() any { return latestSnapshot(snapshotStore).GetSequenceNumber() },
+			ctx.Eventually(func() any { return latestEntitySnapshot(snapshotStore).GetSequenceNumber() },
 				specs.Equal(uint64(5)), snapshotsPoll...)
-			latest := latestSnapshot(snapshotStore)
+			latest := latestEntitySnapshot(snapshotStore)
 			ctx.Expect(latest.GetIsEncrypted()).To(specs.BeTrue())
 			ctx.Expect(latest.GetEncryptionKeyId()).To(specs.Not(specs.BeEmpty()))
 		})
@@ -268,7 +250,7 @@ func TestSnapshotsWriterActor(t *testing.T) {
 			ctx.Eventually(calls(encryptorCtrl, "Encrypt"), specs.Equal(1), snapshotsPoll...)
 			ctx.Consistently(func() any { return pid.IsRunning() }, specs.BeTrue(), specs.WithTimeout(snapshotsSettle))
 			// no snapshot was written since encryption failed
-			ctx.Expect(latestSnapshot(snapshotStore)).To(specs.BeNil())
+			ctx.Expect(latestEntitySnapshot(snapshotStore)).To(specs.BeNil())
 		})
 
 		s.It("handles nil snapshot store gracefully", func(ctx *specs.Context) {
