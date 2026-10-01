@@ -79,7 +79,7 @@ Nine tests in two packages, 31 subtests in all (1+1+1+14+1+1+7+1+4), counted as 
 
 ## Baseline (T1, before any change)
 
-`go test -count=1 -json` per package, no `-race`, on `origin/develop` (`ee9af96`). Top-level tests have no `/` in the name, subtests do. Every test passed; no known flake failed, so no re-run was needed. The counting script is `/home/pablog/.claude/jobs/e070bb18/tmp/c206/count.py`, driven by `run.sh` in the same folder.
+`go test -count=1 -json` per package, no `-race`, on `origin/develop` (`ee9af96`). Top-level tests have no `/` in the name, subtests do. Every test passed; no known flake failed, so no re-run was needed. To reproduce the counts, run `.github/scripts/count-tests.sh` (versioned in this PR; needs `go` and `jq`) on the packages in scope; see "How to rerun the counts" below.
 
 | package | top pass | top fail | top skip | sub pass | sub fail | sub skip | total |
 |---|---|---|---|---|---|---|---|
@@ -108,7 +108,7 @@ Nine tests in two packages, 31 subtests in all (1+1+1+14+1+1+7+1+4), counted as 
   - RED: with the rule stubbed out, `go test ./.github/scripts/unitgate` failed 11 cases (10 report cases and the never-allowlisted case). GREEN after the implementation, with one fix on the way: `importNames` names the go-dynaport import `go-dynaport` (last path element), but the package is `dynaport`, so the first run still failed 5 cases until `withPackageNames` added the real name.
   - GREEN: `go test -count=1 ./.github/scripts/unitgate` ok; `go run ./.github/scripts/unitgate -strict`: ok (0 pending entries, 40 resource entries); `go vet` and `gofmt -l` on the package clean.
   - Proof on real files (not committed): renaming `TestClusterEngineRemoteSpawnTenantBinding`, `TestClusterEngineRemoteEntitySpawn` and `TestCluster_AppTwoNodePlacesAndStopsCleanly` back made the gate exit 1 with 3 `cluster-name` problems (the three files, one direct `dynaport.Get`, two through `newTestCluster` and `newClusterNodes`); after reverting the names the gate is ok again.
-- T5 done. Parity holds, measured with `/home/pablog/.claude/jobs/e070bb18/tmp/c206/run.sh` (a `go test -count=1 -json` per package, no `-race`) and `reconcile.py`.
+- T5 done. Parity holds, measured with `.github/scripts/count-tests.sh` (a `go test -count=1 -json` over the packages, no `-race`). The per-name reconciliation compared the sorted test names of the baseline and the after run, with the rename map applied.
   - Before and after, every package has identical counts. After the renames the table is the same as the baseline: engine 205 top-level / 434 subtests (639), compose/goakt 25 / 43 (68), sum 404 / 998 (1402), nothing failed or skipped.
   - Name-level reconciliation: applying the rename table above to the baseline names gives exactly the set of names after the change, with every status equal. Subtests per renamed parent are identical: 1, 1, 1, 14, 1, 1, 7, 1, 4 for the nine cluster tests, and 1 for `TestEngineClusterKindsExposesEgoActors`. No case moved between files, so there is no split to reconcile.
   - Lane split on the same packages: `-skip '^TestCluster'` gives 395 top-level + 967 subtests = 1362 (engine 604, compose/goakt 63, every other package unchanged). `-run '^TestCluster'` gives 9 top-level + 31 subtests = 40 (engine 8 tests / 35 names, compose/goakt 1 test / 5 names). 1362 + 40 = 1402 = baseline total, and the two name sets are disjoint and together equal the full set. All three runs exit 0.
@@ -133,6 +133,25 @@ The tests stay in the files where they are: each one is already a whole cluster 
 - `TestClusterNewEngineRejectsValueTypeKind`: `New Engine Rejects Value Type Kind In Cluster Mode` / `holds` became `engine.NewEngine behavior kind check on a one-member cluster` / `rejects a value-type event-sourced behavior kind`.
 - `TestClusterEngineRemoteEntitySpawn`: `Engine Multi Node Remote Entity Spawn` / `holds` became `engine.Engine.Entity placement on a two-node cluster` / `serves entities that round-robin placement put on the node that never called Entity`.
 - `TestClusterEngineRejectsUnplaceableBehaviors`: the parent `Engine Rejects Unplaceable Behaviors In Cluster Mode` became `engine.Engine spawn validation of behaviors GoAkt cannot place on a cluster`. Its children already described behaviors.
+
+## How to rerun the counts
+
+From the repository root (no `-race`):
+
+```sh
+P="./engine ./internal/engine/... ./internal/projectionrunner ./compose/goakt/... ./internal/extensions ./migration"
+.github/scripts/count-tests.sh $P                                    # all:     top=404 sub=998 total=1402
+.github/scripts/count-tests.sh -skip '^TestCluster' $P               # normal:  top=395 sub=967 total=1362
+.github/scripts/count-tests.sh -run '^TestCluster' ./engine ./compose/goakt/...   # cluster: top=9 sub=31 total=40
+```
+
+Those were the results on this branch, rerun after the review with the versioned script.
+
+## Review follow-up (#286)
+
+- The `cluster-name` rule's doc comment now also lists a blind spot in `compose/goakt` itself. Those tests are `package goakt` and call `WithCluster` unqualified, so the `compose/goakt` branch never fires there. Today `TestCluster_AppTwoNodePlacesAndStopsCleanly` is caught through `dynaport.Get`, but a cluster with fixed ports in that package would not be. Matching the unqualified name would flag the single-node `app_test.go` cases.
+- The counting is now a versioned script, `.github/scripts/count-tests.sh`, with the exact commands above.
+- Follow-up idea, not in this PR: resolve helpers across every `_test.go` file of the same package directory instead of one file at a time. That closes the `newTestCluster` case, the helper the next cluster test is most likely to use.
 
 ## Next step
 

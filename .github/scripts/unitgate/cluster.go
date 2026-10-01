@@ -49,7 +49,12 @@ const (
 //     cluster through newTestCluster, declared in engine/engine_test.go, so that test is checked by review
 //     only);
 //   - calls through a function value stored in a variable, a field or an interface;
-//   - a WithCluster that is not imported from the two packages above, such as a dot import or a re-export.
+//   - a WithCluster that is not imported from the two packages above, such as a dot import or a re-export;
+//   - the tests of compose/goakt itself: they are package goakt and call WithCluster unqualified, so the
+//     compose/goakt branch never fires there. TestCluster_AppTwoNodePlacesAndStopsCleanly is caught through
+//     dynaport.Get, but a cluster with fixed ports in that package would not be. Matching the unqualified
+//     name instead would flag the app_test.go cases, which pass a cluster config GoAkt rejects before any
+//     port opens and are single-node.
 //
 // The opposite direction is not checked: a TestCluster* test whose file shows no cluster setup is accepted.
 // The setup may sit in a helper of another file (the case above), and a per-file syntactic rule cannot tell
