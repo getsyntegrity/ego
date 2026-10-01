@@ -26,6 +26,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -53,13 +54,33 @@ func (a *timestampToDurationAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.A
 	return anypb.New(durationpb.New(ts.AsTime().Sub(ts.AsTime()) + ts.AsTime().Sub(ts.AsTime())))
 }
 
-// errorAdapter always returns an error.
-type errorAdapter struct {
-	err error
+// adapterMock is an EventAdapter backed by a mock.Controller. Each instance forwards Adapt to its own
+// controller method (name), so one controller can stand in for several adapters of a chain and each
+// position declares its own expectation.
+type adapterMock struct {
+	c    *mock.Controller
+	name string
 }
 
-func (a *errorAdapter) Adapt(_ *anypb.Any, _ uint64) (*anypb.Any, error) {
-	return nil, a.err
+func (m adapterMock) Adapt(event *anypb.Any, revision uint64) (*anypb.Any, error) {
+	r := m.c.Method(m.name).Call(event, revision)
+	return mock.Value[*anypb.Any](r, 0), r.Err(1)
+}
+
+// sameEvent matches the very same *anypb.Any pointer, not merely an equal message.
+func sameEvent(want *anypb.Any) specs.Matcher {
+	return specs.Satisfy("be the same event pointer", func(actual any) bool {
+		got, ok := actual.(*anypb.Any)
+		return ok && got == want
+	})
+}
+
+// equalProto matches a message that proto.Equal considers equal to want.
+func equalProto(want proto.Message) specs.Matcher {
+	return specs.Satisfy("equal the expected protobuf message", func(actual any) bool {
+		got, ok := actual.(proto.Message)
+		return ok && proto.Equal(want, got)
+	})
 }
 
 // revisionGatedAdapter only transforms events at or above a given revision.
@@ -98,12 +119,12 @@ func TestChainNoAdapters(t *testing.T) {
 			// nil slice
 			result, err := Chain(nil, event, 1)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(result == event).To(specs.BeTrue())
+			ctx.Expect(result).To(sameEvent(event))
 
 			// empty slice
 			result, err = Chain([]EventAdapter{}, event, 1)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(result == event).To(specs.BeTrue())
+			ctx.Expect(result).To(sameEvent(event))
 		})
 	})
 }
@@ -158,14 +179,16 @@ func TestChainAdapterReturnsError(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			expectedErr := errors.New("adapter failure")
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("failing").Expect(mock.Any(), uint64(1)).Return(nil, expectedErr)
+			ctrl.Method("after").Expect(mock.Any(), mock.Any()).Never() // the chain must stop before it
 			adapters := []EventAdapter{
 				&noopAdapter{},
-				&errorAdapter{err: expectedErr},
-				&addSecondsAdapter{extra: 100}, // should never run
+				adapterMock{ctrl, "failing"},
+				adapterMock{ctrl, "after"},
 			}
 
 			result, err := Chain(adapters, event, 1)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(expectedErr))
 			ctx.Expect(result).To(specs.BeNil())
 		})
@@ -179,14 +202,16 @@ func TestChainErrorStopsEarly(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			expectedErr := errors.New("mid-chain error")
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("failing").Expect(mock.Any(), uint64(1)).Return(nil, expectedErr)
+			ctrl.Method("after").Expect(mock.Any(), mock.Any()).Never() // the chain must stop before it
 			adapters := []EventAdapter{
 				&addSecondsAdapter{extra: 5},
-				&errorAdapter{err: expectedErr},
-				&addSecondsAdapter{extra: 100}, // should never run
+				adapterMock{ctrl, "failing"},
+				adapterMock{ctrl, "after"},
 			}
 
 			result, err := Chain(adapters, event, 1)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(expectedErr))
 			ctx.Expect(result).To(specs.BeNil())
 		})
@@ -204,12 +229,12 @@ func TestChainNoopAdapter(t *testing.T) {
 			result, err := Chain(adapters, event, 1)
 			ctx.Expect(err).To(specs.BeNil())
 			// The pointer should be unchanged since noop returns the same event
-			ctx.Expect(result == event).To(specs.BeTrue())
+			ctx.Expect(result).To(sameEvent(event))
 
 			// Content should still unmarshal to the same timestamp
 			var ts timestamppb.Timestamp
 			ctx.Expect(result.UnmarshalTo(&ts)).To(specs.BeNil())
-			ctx.Expect(proto.Equal(original, &ts)).To(specs.BeTrue())
+			ctx.Expect(&ts).To(equalProto(original))
 		})
 	})
 }
@@ -225,7 +250,7 @@ func TestChainAdapterUsesRevision(t *testing.T) {
 			// revision below threshold: event passes through unchanged
 			result, err := Chain(adapters, event, 5)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(result == event).To(specs.BeTrue())
+			ctx.Expect(result).To(sameEvent(event))
 
 			// revision at threshold: event is transformed to a Duration
 			result, err = Chain(adapters, event, 10)
