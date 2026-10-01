@@ -24,11 +24,10 @@ package tenancy_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/tenancy"
 )
@@ -46,49 +45,61 @@ func (r fixedResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
 	return r.tc, nil
 }
 
-func mustTenantID(t *testing.T, s string) tenancy.TenantID {
-	t.Helper()
+// mustTenantID builds a valid TenantID, failing the case through the spec
+// when s is not one.
+func mustTenantID(ctx *specs.Context, s string) tenancy.TenantID {
 	id, err := tenancy.NewTenantID(s)
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	return id
 }
 
 func TestWithSingleTenant_RejectsInvalidTenantID(t *testing.T) {
-	_, err := tenancy.WithSingleTenant(tenancy.TenantID(""))
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+	specs.Describe(t, "WithSingleTenant rejects an invalid tenant id", func(s *specs.Spec) {
+		s.It("fails with ErrInvalid for an empty id", func(ctx *specs.Context) {
+			_, err := tenancy.WithSingleTenant(tenancy.TenantID(""))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
+	})
 }
 
 func TestWithSingleTenant_ProducesTenantScopedContext(t *testing.T) {
-	id := mustTenantID(t, "acme-corp")
+	specs.Describe(t, "WithSingleTenant resolves to a tenant-scoped context", func(s *specs.Spec) {
+		s.It("resolves to the configured tenant", func(ctx *specs.Context) {
+			id := mustTenantID(ctx, "acme-corp")
 
-	resolver, err := tenancy.WithSingleTenant(id)
-	require.NoError(t, err)
+			resolver, err := tenancy.WithSingleTenant(id)
+			ctx.Expect(err).To(specs.BeNil())
 
-	tc, err := resolver.Resolve(context.Background())
-	require.NoError(t, err)
+			tc, err := resolver.Resolve(context.Background())
+			ctx.Expect(err).To(specs.BeNil())
 
-	assert.Equal(t, tenancy.ScopeTenant, tc.Scope())
-	gotID, ok := tc.Tenant()
-	require.True(t, ok)
-	assert.Equal(t, id, gotID)
+			ctx.Expect(tc.Scope()).ToEqual(tenancy.ScopeTenant)
+			gotID, ok := tc.Tenant()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotID).ToEqual(id)
+		})
+	})
 }
 
 func TestWithSingleTenant_IgnoresIncomingContext(t *testing.T) {
-	id := mustTenantID(t, "acme-corp")
-	resolver, err := tenancy.WithSingleTenant(id)
-	require.NoError(t, err)
+	specs.Describe(t, "a single-tenant resolver ignores the incoming context", func(s *specs.Spec) {
+		s.It("resolves the same identity regardless of the incoming context", func(ctx *specs.Context) {
+			id := mustTenantID(ctx, "acme-corp")
+			resolver, err := tenancy.WithSingleTenant(id)
+			ctx.Expect(err).To(specs.BeNil())
 
-	type otherKey struct{}
-	ctxA := context.Background()
-	ctxB := context.WithValue(context.Background(), otherKey{}, "unrelated")
+			type otherKey struct{}
+			ctxA := context.Background()
+			ctxB := context.WithValue(context.Background(), otherKey{}, "unrelated")
 
-	tcA, err := resolver.Resolve(ctxA)
-	require.NoError(t, err)
-	tcB, err := resolver.Resolve(ctxB)
-	require.NoError(t, err)
+			tcA, err := resolver.Resolve(ctxA)
+			ctx.Expect(err).To(specs.BeNil())
+			tcB, err := resolver.Resolve(ctxB)
+			ctx.Expect(err).To(specs.BeNil())
 
-	assert.Equal(t, tcA, tcB, "a single-tenant resolver must resolve the same identity regardless of the incoming context")
+			ctx.Expect(tcA).ToEqual(tcB)
+		})
+	})
 }
 
 // TestWithSingleTenant_IndistinguishableFromAnyResolver is the acceptance
@@ -97,32 +108,37 @@ func TestWithSingleTenant_IgnoresIncomingContext(t *testing.T) {
 // by any other TenantResolver implementation — not merely "look similar",
 // but compare equal and expose identical Scope()/Tenant() behavior.
 func TestWithSingleTenant_IndistinguishableFromAnyResolver(t *testing.T) {
-	id := mustTenantID(t, "globex-corp")
+	specs.Describe(t, "WithSingleTenant is indistinguishable from any other resolver", func(s *specs.Spec) {
+		s.It("yields a context equal in kind, scope and tenant to a custom resolver's", func(ctx *specs.Context) {
+			id := mustTenantID(ctx, "globex-corp")
 
-	singleTenant, err := tenancy.WithSingleTenant(id)
-	require.NoError(t, err)
+			singleTenant, err := tenancy.WithSingleTenant(id)
+			ctx.Expect(err).To(specs.BeNil())
 
-	wantTC, err := tenancy.NewTenantContext(id)
-	require.NoError(t, err)
-	custom := fixedResolver{tc: wantTC}
+			wantTC, err := tenancy.NewTenantContext(id)
+			ctx.Expect(err).To(specs.BeNil())
+			custom := fixedResolver{tc: wantTC}
 
-	var resolvers = []tenancy.TenantResolver{singleTenant, custom}
+			var resolvers = []tenancy.TenantResolver{singleTenant, custom}
 
-	var results []tenancy.TenantContext
-	for _, r := range resolvers {
-		tc, err := r.Resolve(context.Background())
-		require.NoError(t, err)
-		results = append(results, tc)
-	}
+			var results []tenancy.TenantContext
+			for _, r := range resolvers {
+				tc, err := r.Resolve(context.Background())
+				ctx.Expect(err).To(specs.BeNil())
+				results = append(results, tc)
+			}
 
-	assert.Equal(t, results[0], results[1], "WithSingleTenant's TenantContext must be indistinguishable in kind from any other resolver's")
-	assert.Equal(t, results[0].Scope(), results[1].Scope())
+			// WithSingleTenant's TenantContext must be indistinguishable in kind from any other resolver's
+			ctx.Expect(results[0]).ToEqual(results[1])
+			ctx.Expect(results[0].Scope()).ToEqual(results[1].Scope())
 
-	gotID0, ok0 := results[0].Tenant()
-	gotID1, ok1 := results[1].Tenant()
-	require.True(t, ok0)
-	require.True(t, ok1)
-	assert.Equal(t, gotID0, gotID1)
+			gotID0, ok0 := results[0].Tenant()
+			gotID1, ok1 := results[1].Tenant()
+			ctx.Expect(ok0).To(specs.BeTrue())
+			ctx.Expect(ok1).To(specs.BeTrue())
+			ctx.Expect(gotID0).ToEqual(gotID1)
+		})
+	})
 }
 
 // advertisingResolver implements FixedTenantResolver and reports whatever
@@ -139,95 +155,127 @@ func (r advertisingResolver) FixedTenant() (tenancy.TenantID, bool) { return r.i
 
 var _ tenancy.FixedTenantResolver = advertisingResolver{}
 
-// resolveCountingResolver implements FixedTenantResolver and counts Resolve
-// calls, which asking for a fixed tenant must never make.
-type resolveCountingResolver struct{ calls int }
+// resolverMock implements FixedTenantResolver on top of a mock.Controller, so
+// a case can state how many times Resolve may be called. FixedTenant is the
+// fixed answer under test, not an interaction, so it does not go through the
+// controller.
+type resolverMock struct{ c *mock.Controller }
 
-func (r *resolveCountingResolver) Resolve(context.Context) (tenancy.TenantContext, error) {
-	r.calls++
-	return tenancy.TenantContext{}, nil
+func (m resolverMock) Resolve(ctx context.Context) (tenancy.TenantContext, error) {
+	r := m.c.Method("Resolve").Call(ctx)
+	return mock.Value[tenancy.TenantContext](r, 0), r.Err(1)
 }
 
-func (r *resolveCountingResolver) FixedTenant() (tenancy.TenantID, bool) { return "", false }
+func (m resolverMock) FixedTenant() (tenancy.TenantID, bool) { return "", false }
+
+// singleTenantResolver builds the WithSingleTenant resolver for "acme". It is a
+// row input of the accessor tables, built inside the case so a failure is
+// reported through the spec.
+func singleTenantResolver(ctx *specs.Context) tenancy.TenantResolver {
+	single, err := tenancy.WithSingleTenant(mustTenantID(ctx, "acme"))
+	ctx.Expect(err).To(specs.BeNil())
+	return single
+}
 
 func TestCapFixedTenant_IsAnUntypedConstant(t *testing.T) {
-	// Untyped: it converts to adapter.Capability without tenancy importing
-	// port/adapter (ego-arch-004 design §D3). Assigning it to a plain
-	// string and to a named string type both compile only if it is untyped.
-	type capability string
-	asString := tenancy.CapFixedTenant
-	var asNamed capability = tenancy.CapFixedTenant
-	assert.Equal(t, "tenancy.fixed-tenant", asString)
-	assert.Equal(t, capability("tenancy.fixed-tenant"), asNamed)
+	specs.Describe(t, "CapFixedTenant is an untyped constant", func(s *specs.Spec) {
+		s.It("converts to a plain string and to a named string type", func(ctx *specs.Context) {
+			// Untyped: it converts to adapter.Capability without tenancy importing
+			// port/adapter (ego-arch-004 design §D3). Assigning it to a plain
+			// string and to a named string type both compile only if it is untyped.
+			type capability string
+			asString := tenancy.CapFixedTenant
+			var asNamed capability = tenancy.CapFixedTenant
+			ctx.Expect(asString).ToEqual("tenancy.fixed-tenant")
+			ctx.Expect(asNamed).ToEqual(capability("tenancy.fixed-tenant"))
+		})
+	})
 }
 
 func TestAsFixedTenantResolver(t *testing.T) {
-	single, err := tenancy.WithSingleTenant(mustTenantID(t, "acme"))
-	require.NoError(t, err)
+	specs.Describe(t, "AsFixedTenantResolver reports whether a resolver can be asked for a fixed tenant", func(s *specs.Spec) {
+		type accessorCase struct {
+			name     string
+			resolver func(*specs.Context) tenancy.TenantResolver
+			want     bool
+		}
 
-	tests := []struct {
-		name     string
-		resolver tenancy.TenantResolver
-		want     bool
-	}{
-		{"nil resolver", nil, false},
-		{"plain resolver", fixedResolver{}, false},
-		{"single-tenant resolver", single, true},
-		{"resolver with a fixed tenant", advertisingResolver{id: "acme", has: true}, true},
-		// The capability is the interface ("can be asked"), not the
-		// answer: a multi-tenant resolver that implements it and reports
-		// no fixed tenant still has it.
-		{"multi-tenant resolver implementing the interface", advertisingResolver{}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fixed, ok := tenancy.AsFixedTenantResolver(tt.resolver)
-			assert.Equal(t, tt.want, ok)
-			if !tt.want {
-				assert.Nil(t, fixed)
+		specs.Table(s, []accessorCase{
+			{"nil resolver", func(*specs.Context) tenancy.TenantResolver { return nil }, false},
+			{"plain resolver", func(*specs.Context) tenancy.TenantResolver { return fixedResolver{} }, false},
+			{"single-tenant resolver", singleTenantResolver, true},
+			{"resolver with a fixed tenant", func(*specs.Context) tenancy.TenantResolver {
+				return advertisingResolver{id: "acme", has: true}
+			}, true},
+			// The capability is the interface ("can be asked"), not the
+			// answer: a multi-tenant resolver that implements it and reports
+			// no fixed tenant still has it.
+			{"multi-tenant resolver implementing the interface", func(*specs.Context) tenancy.TenantResolver {
+				return advertisingResolver{}
+			}, true},
+		}, func(c accessorCase) string { return c.name }, func(ctx *specs.Context, c accessorCase) {
+			resolver := c.resolver(ctx)
+
+			fixed, ok := tenancy.AsFixedTenantResolver(resolver)
+			ctx.Expect(ok).ToEqual(c.want)
+			if !c.want {
+				ctx.Expect(fixed).To(specs.BeNil())
 				return
 			}
-			require.NotNil(t, fixed)
+			ctx.Expect(fixed).To(specs.Not(specs.BeNil()))
 			var asResolver tenancy.TenantResolver = fixed
-			assert.Equal(t, tt.resolver, asResolver, "the accessor returns the resolver itself")
+			// the accessor returns the resolver itself
+			ctx.Expect(asResolver).ToEqual(resolver)
 		})
-	}
+	})
 }
 
 func TestFixedTenantOf(t *testing.T) {
-	single, err := tenancy.WithSingleTenant(mustTenantID(t, "acme"))
-	require.NoError(t, err)
+	specs.Describe(t, "FixedTenantOf reports the fixed tenant of a resolver", func(s *specs.Spec) {
+		type fixedTenantCase struct {
+			name     string
+			resolver func(*specs.Context) tenancy.TenantResolver
+			wantID   tenancy.TenantID
+			wantOK   bool
+		}
 
-	tests := []struct {
-		name     string
-		resolver tenancy.TenantResolver
-		wantID   tenancy.TenantID
-		wantOK   bool
-	}{
-		{"nil resolver", nil, "", false},
-		{"plain resolver", fixedResolver{}, "", false},
-		{"single-tenant resolver", single, "acme", true},
-		{"resolver with a fixed tenant", advertisingResolver{id: "globex", has: true}, "globex", true},
-		// ego-arch-004 spec 3 scenario "a multi-tenant resolver that
-		// implements the interface": it reports no fixed tenant.
-		{"multi-tenant resolver implementing the interface", advertisingResolver{}, "", false},
-		// An ID reported next to false is not a fixed tenant.
-		{"resolver reporting an ID with false", advertisingResolver{id: "stale", has: false}, "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			id, ok := tenancy.FixedTenantOf(tt.resolver)
-			assert.Equal(t, tt.wantOK, ok)
-			assert.Equal(t, tt.wantID, id)
+		specs.Table(s, []fixedTenantCase{
+			{"nil resolver", func(*specs.Context) tenancy.TenantResolver { return nil }, "", false},
+			{"plain resolver", func(*specs.Context) tenancy.TenantResolver { return fixedResolver{} }, "", false},
+			{"single-tenant resolver", singleTenantResolver, "acme", true},
+			{"resolver with a fixed tenant", func(*specs.Context) tenancy.TenantResolver {
+				return advertisingResolver{id: "globex", has: true}
+			}, "globex", true},
+			// ego-arch-004 spec 3 scenario "a multi-tenant resolver that
+			// implements the interface": it reports no fixed tenant.
+			{"multi-tenant resolver implementing the interface", func(*specs.Context) tenancy.TenantResolver {
+				return advertisingResolver{}
+			}, "", false},
+			// An ID reported next to false is not a fixed tenant.
+			{"resolver reporting an ID with false", func(*specs.Context) tenancy.TenantResolver {
+				return advertisingResolver{id: "stale", has: false}
+			}, "", false},
+		}, func(c fixedTenantCase) string { return c.name }, func(ctx *specs.Context, c fixedTenantCase) {
+			id, ok := tenancy.FixedTenantOf(c.resolver(ctx))
+			ctx.Expect(ok).ToEqual(c.wantOK)
+			ctx.Expect(id).ToEqual(c.wantID)
 		})
-	}
+	})
 }
 
 // Asking for a fixed tenant is not an execution-time resolution: neither
 // accessor calls Resolve (TENANT-003 T4).
 func TestFixedTenantAccessors_NeverResolve(t *testing.T) {
-	r := &resolveCountingResolver{}
-	_, _ = tenancy.FixedTenantOf(r)
-	_, _ = tenancy.AsFixedTenantResolver(r)
-	assert.Zero(t, r.calls)
+	specs.Describe(t, "the fixed-tenant accessors never resolve", func(s *specs.Spec) {
+		s.It("calls Resolve zero times through FixedTenantOf and AsFixedTenantResolver", func(ctx *specs.Context) {
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("Resolve").Expect(mock.Any()).Never()
+			r := resolverMock{ctrl}
+
+			_, _ = tenancy.FixedTenantOf(r)
+			_, _ = tenancy.AsFixedTenantResolver(r)
+
+			ctx.Expect(ctrl.Method("Resolve").Calls()).To(specs.BeEmpty())
+		})
+	})
 }
