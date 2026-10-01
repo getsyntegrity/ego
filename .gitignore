@@ -11,6 +11,7 @@ vendor
 gen.env
 .env
 gen/
+gen-example/
 /.fleet/settings.json
 .gocache/
 .cache/

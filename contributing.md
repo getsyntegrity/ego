@@ -53,7 +53,7 @@ Each target also works on its own:
 | `docker-image`    | Build the hermetic CI image (`ego-ci:latest`) from `Dockerfile.ci`.  |
 | `docker-lint`     | Run `golangci-lint` against the working tree.                        |
 | `docker-test`     | Run the root module test suite with coverage.                        |
-| `docker-protogen` | Regenerate protobuf code via `buf` and refresh `example/examplepb`.  |
+| `docker-protogen` | Regenerate protobuf code via `buf` and refresh `internal/samplepb` and `example/examplepb`. |
 | `docker-ci`       | Composite of `docker-lint` + `docker-test`.                          |
 
 See [`docs/ci.md`](docs/ci.md) for how the GitHub Actions pipeline works and
@@ -68,4 +68,6 @@ and `ego-go-mod-cache`.
 If you have the toolchain installed locally, the convenience targets
 `make run-eventsourced`, `make run-durablestate`, `make run-saga`, and
 `make proto` are still available and execute directly on the host without
-Docker.
+Docker. The examples are their own Go module in `example/` (public API only, with
+their own generated `example/examplepb`), so the run targets start `go run`
+from that directory.

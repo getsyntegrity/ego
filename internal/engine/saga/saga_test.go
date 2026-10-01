@@ -40,12 +40,12 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/eventstream"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/eventsource"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	"github.com/getsyntegrity/ego/persistence"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"

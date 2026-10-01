@@ -23,7 +23,8 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 | `lint` | `golangci-lint` with `.golangci.yml`. On pull requests it only blocks issues introduced by the diff (`only-new-issues`), so existing problems do not stop new work. |
 | `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
 | `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
-| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `inttest`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds and vets each one and tests all of them except `inttest`, which is only built and vetted here (`go vet` compiles its test files). Its tests need Docker and run in the `inttest` job. |
+| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example` (every example, `example/cluster` included), `inttest`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds and vets each one on every pull request with Go changes, and tests all of them except `inttest` and `benchmark`. Those two are only built and vetted here (`go vet` compiles their test files). Their tests are heavy, because `inttest` needs Docker and `benchmark` starts a real goakt actor system, so they run in their own jobs after the merge. The `example` module is compiled here too (see "Examples"). |
+| `benchmark` | Runs the tests of the `benchmark` module, without `-bench`, so the benchmarks themselves are not executed. The triggers are the same as `inttest`: every push to `develop`, the `develop` to `main` release pull request and manual runs. Feature and hotfix pull requests only compile it, in `modules`. A red run on `develop` follows the same rule as `inttest`: the author of the merged pull request fixes it, or reverts the merge, before the next merge. |
 | `inttest` | Runs the integration tests of the `inttest` module on real containers (see "Integration tests" below). It runs on every push to `develop` (each merge), on the `develop` to `main` release pull request and on manual runs. Feature and hotfix pull requests never run it; `ci-ok` accepts the skip. Because the release pull request requires `ci-ok`, `main` never receives a release with a red integration run. A hotfix reaches `main` without it and is covered when its `main` to `develop` sync pull request is merged and `develop` is pushed. |
 | `unit-gate` | The unit-test rules in `docs/testing/go-specs.md` (no testify, no generated mocks, go-specs, no real resources in unit tests), plus the rule that nothing under `inttest/` skips, pends or focuses a test. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
@@ -100,6 +101,20 @@ Feature pull requests to `develop` and `hotfix/*` pull requests to `main` never 
 
 Leaving the job out of feature pull requests is a deliberate trade-off. The changes most likely to break integration, such as `persistence/postgres` or `internal/engine/eventsource`, arrive through feature pull requests. Their authors do not see the failure before merging, so `develop` can go red after a merge. The rule for that case: when `inttest` fails on a push to `develop`, the author of the merged pull request fixes it, or reverts the merge, before the next merge to `develop`. To get the signal earlier, run the suite locally before merging (`cd inttest && go test -count=1 ./...`, only Docker needed) or start the `ci` workflow by hand with `workflow_dispatch`.
 
+## Examples
+
+The programs under `example/` are written to be copied, so they live in their own Go module and use only the public API. That one module is `example` (`github.com/getsyntegrity/ego/example`). Its `replace` directives point at `../` and `../persistence/postgres`, so it always builds against the working tree. It holds `durablestate`, `eventssourced`, `saga` and the Kubernetes `cluster` example. The cluster example brings `pgx`, OpenTelemetry and the Kubernetes client into the module's `go.mod`. Go only compiles what each `main` package imports, so the simple examples do not link them. The examples import the protobuf messages from `example/examplepb`, not from `internal/`, because a user who copies an example cannot import an internal package. `example/examplepb` is generated from `protos/sample/sample.proto` with `buf.gen.example.yaml`, which only overrides `go_package`; the root tests keep their own copy in `internal/samplepb`, and `make proto` regenerates both. No binary links both copies, because the same proto file registered twice would conflict.
+
+The examples are compiled, never executed. The `modules` job builds, vets and tests the `example` module (it has no tests of its own) on every pull request with Go changes, feature pull requests included. This is the opposite of `inttest`, which stays out of feature pull requests. The reason is cost: compiling the examples takes seconds and needs no Docker, and a feature pull request that breaks an example should fail before the merge, not after it. Dependabot and the `tidy` job cover the module.
+
+To check them locally:
+
+```sh
+cd example && go build ./... && go vet ./... && go test ./...
+```
+
+To run one, use `make run-eventsourced`, `make run-durablestate` or `make run-saga` from the root; they run `go run` inside `example/`.
+
 ## The release note block
 
 Every pull request body contains a fenced block:
@@ -162,4 +177,4 @@ These steps live in GitHub settings, so no commit can do them:
 
 ## Local equivalents
 
-The Makefile targets `docker-lint`, `docker-test`, `docker-mock` and `docker-protogen` run inside `Dockerfile.ci` and are meant for contributors who do not have the toolchain installed. To check a change like the CI does, run `go build ./... && go vet ./... && go test ./...` in the root and in each nested module, `go mod tidy` in each, and `golangci-lint run`. The one exception is `inttest`, whose tests need Docker: run `cd inttest && go test -count=1 ./...` there. To preview the next version: `.github/scripts/next-version.sh develop release:minor` (it needs the tags of the repository).
+The Makefile targets `docker-lint`, `docker-test`, `docker-mock` and `docker-protogen` run inside `Dockerfile.ci` and are meant for contributors who do not have the toolchain installed. To check a change like the CI does, run `go build ./... && go vet ./... && go test ./...` in the root and in each nested module, `go mod tidy` in each, and `golangci-lint run`. The exception is `inttest`, whose tests need Docker (run `cd inttest && go test -count=1 ./...` there). To preview the next version: `.github/scripts/next-version.sh develop release:minor` (it needs the tags of the repository).

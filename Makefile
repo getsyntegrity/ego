@@ -8,17 +8,17 @@
 # Run the event-sourced example
 run-eventsourced:
 	@echo "Running event-sourced example..."
-	go run ./example/eventssourced
+	cd example && go run ./eventssourced
 
 # Run the durable state example
 run-durablestate:
 	@echo "Running durable state example..."
-	go run ./example/durablestate
+	cd example && go run ./durablestate
 
 # Run the fund transfer saga example
 run-saga:
 	@echo "Running fund transfer saga example..."
-	go run ./example/saga
+	cd example && go run ./saga
 
 # Regenerate protobuf code (uses the locally installed `buf`).
 # buf writes everything under gen/ (per buf.gen.yaml). We then copy each
@@ -29,8 +29,12 @@ proto:
 	buf generate
 	cp -R gen/ego/.    egopb/
 	cp -R gen/test/.   test/data/testpb/
-	cp -R gen/sample/. example/examplepb/
+	cp -R gen/sample/. internal/samplepb/
 	rm -rf gen
+	buf generate --template buf.gen.example.yaml --path protos/sample
+	mkdir -p example/examplepb
+	cp -R gen-example/sample/. example/examplepb/
+	rm -rf gen-example
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
@@ -99,8 +103,14 @@ docker-protogen: docker-image
 			--path protos/sample && \
 		cp -R gen/ego/.    egopb/ && \
 		cp -R gen/test/.   test/data/testpb/ && \
-		cp -R gen/sample/. example/examplepb/ && \
-		rm -rf gen'
+		cp -R gen/sample/. internal/samplepb/ && \
+		rm -rf gen && \
+		buf generate \
+			--template buf.gen.example.yaml \
+			--path protos/sample && \
+		mkdir -p example/examplepb && \
+		cp -R gen-example/sample/. example/examplepb/ && \
+		rm -rf gen-example'
 
 # Composite target: lint + test, the same combination the Earthfile `test`
 # target used to BUILD.

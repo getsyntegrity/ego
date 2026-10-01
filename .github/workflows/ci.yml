@@ -9,11 +9,13 @@
 #   test (N)    -> each shard on its own runner, in parallel
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
-#   modules     -> build, vet and test of every nested module (benchmark, example, persistence/postgres,
-#                  publishers, compat); inttest is only built and vetted here, its tests run in the inttest job
+#   modules     -> build, vet and test of every nested module (persistence/postgres, publishers, compat,
+#                  example, which also holds example/cluster); inttest and benchmark are only built and vetted here, their
+#                  tests run in their own jobs. The examples are compiled, never run
 #   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
 #                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
 #                  never on feature or hotfix PRs
+#   benchmark   -> the tests of the benchmark module (a real goakt actor system), same triggers as inttest
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -251,10 +253,12 @@ jobs:
       - if: github.base_ref == 'main'
         run: go test $TESTFLAGS ./...
 
-  # Nested modules (benchmark, example/cluster, persistence/postgres, publisher/*, test/compat, inttest) are
-  # separate Go modules: `./...` at the root does not reach them, so each one is built, vetted and tested on
-  # its own. No race detector. inttest is built and vetted only (go vet compiles its test files): its tests
-  # need Docker and run in the inttest job, so the unit lanes never start a container.
+  # Nested modules (benchmark, persistence/postgres, publisher/*, test/compat, example (all the examples,
+  # example/cluster included), inttest) are separate Go modules: `./...` at the root does not reach them, so each one is built, vetted
+  # and tested on its own. No race detector. The examples are compiled here on every pull request with Go
+  # changes (they are never executed), so a change that breaks one fails before the merge. inttest and
+  # benchmark are built and vetted only (go vet compiles their test files): their tests are heavy (Docker,
+  # a real actor system) and run in the inttest and benchmark jobs, after the merge.
   modules:
     name: modules (${{ matrix.dir }})
     needs: plan
@@ -265,8 +269,7 @@ jobs:
       fail-fast: false
       matrix:
         dir:
-          - benchmark
-          - example/cluster
+          - example
           - persistence/postgres
           - publisher/kafka
           - publisher/nats
@@ -275,7 +278,10 @@ jobs:
           - test/compat
         include:
           # Build and vet only. A string flag, because an absent matrix key is null and null == false.
+          # Their tests run after the merge, in the inttest and benchmark jobs.
           - dir: inttest
+            vet-only: "yes"
+          - dir: benchmark
             vet-only: "yes"
     steps:
       - uses: actions/checkout@v7
@@ -311,6 +317,26 @@ jobs:
       - name: Integration tests
         working-directory: inttest
         run: go test -count=1 -timeout=15m ./...
+
+  # Tests of the benchmark module. They start a real in-process goakt actor system, so they follow the
+  # inttest rule: compiled and vetted on every pull request by modules, executed only after the merge (push
+  # to develop), on the develop -> main release PR and on manual runs. Only tests run here; go test without
+  # -bench does not execute the benchmarks themselves.
+  benchmark:
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.base_ref == 'main' && github.head_ref == 'develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Benchmark module tests
+        working-directory: benchmark
+        run: go test $TESTFLAGS ./...
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
@@ -393,7 +419,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, unit-gate, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, benchmark, unit-gate, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:

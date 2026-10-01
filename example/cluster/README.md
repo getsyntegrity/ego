@@ -422,7 +422,7 @@ tenant identity for a row that never had one.
 
 ## Dependency Isolation
 
-This example is a **separate Go module** (`github.com/getsyntegrity/ego/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
+This example is the package `github.com/getsyntegrity/ego/example/cluster` of the **`example` module** (`example/go.mod`), which holds every example. CI builds, vets and tests that module on every pull request with Go changes. The example imports the generated messages from `example/examplepb`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are listed in the `example` module only, so they do not affect the core eGo library. Go only compiles what each program imports, so the simple examples in the same module do not link them.
 
 ## Cleanup
 

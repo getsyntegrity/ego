@@ -618,6 +618,8 @@ make run-durablestate
 make run-saga
 ```
 
+The examples are a separate Go module in `example/`, so `go run` has to start from there, for example `cd example && go run ./saga`. The `make` targets do that for you.
+
 ## Upgrading
 
 See the [changelog](./CHANGELOG.md) for breaking changes and version-specific migration instructions.

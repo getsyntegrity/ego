@@ -1,15 +1,17 @@
-module github.com/getsyntegrity/ego/example/cluster
+module github.com/getsyntegrity/ego/example
 
 go 1.26.0
 
-// Use the local ego module so the example always builds against the current source.
-replace github.com/getsyntegrity/ego => ../../
+// Use the local ego module so the examples always build against the current source.
+replace github.com/getsyntegrity/ego => ../
 
-replace github.com/getsyntegrity/ego/persistence/postgres => ../../persistence/postgres
+// The cluster example uses the Postgres stores from the working tree as well.
+replace github.com/getsyntegrity/ego/persistence/postgres => ../persistence/postgres
 
 require (
 	github.com/getsyntegrity/ego v0.0.0
 	github.com/getsyntegrity/ego/persistence/postgres v0.0.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	github.com/tochemey/goakt/v4 v4.5.4
@@ -58,7 +60,6 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
