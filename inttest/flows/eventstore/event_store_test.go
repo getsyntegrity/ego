@@ -40,11 +40,11 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/persistence/conformance"
 	"github.com/getsyntegrity/ego/persistence/postgres"
 	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 func TestPostgresEventStore_Conformance(t *testing.T) {

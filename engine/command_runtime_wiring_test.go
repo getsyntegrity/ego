@@ -35,8 +35,8 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getsyntegrity/ego/command"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

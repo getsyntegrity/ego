@@ -39,10 +39,10 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/engine"
 	"github.com/getsyntegrity/ego/eventstream"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/port/adapter"
 	"github.com/getsyntegrity/ego/port/publishing"
 	"github.com/getsyntegrity/ego/projection"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

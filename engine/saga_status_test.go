@@ -36,7 +36,7 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 )
 
 // errSagaCompensationG4 is the failure a saga's compensation returns when the

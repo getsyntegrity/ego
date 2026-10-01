@@ -32,9 +32,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // This file covers TENANT-003 T4's corrected spawn-time tenant design: CI

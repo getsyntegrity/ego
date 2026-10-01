@@ -39,9 +39,9 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	testkit2 "github.com/getsyntegrity/ego/testkit"
 )
 

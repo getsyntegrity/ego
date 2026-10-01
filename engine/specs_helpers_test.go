@@ -35,8 +35,8 @@ import (
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

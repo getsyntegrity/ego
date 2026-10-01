@@ -49,9 +49,9 @@ import (
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	testkit2 "github.com/getsyntegrity/ego/testkit"
 )
 

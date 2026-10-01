@@ -40,9 +40,9 @@ import (
 	"github.com/getsyntegrity/ego/compose"
 	"github.com/getsyntegrity/ego/engine"
 	"github.com/getsyntegrity/ego/eventstream"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/port/publishing"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // ledger is a serializable event-sourced behavior: account's command and

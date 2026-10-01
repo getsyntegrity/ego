@@ -31,7 +31,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 )
 
 const commandTimeout = 30 * time.Second

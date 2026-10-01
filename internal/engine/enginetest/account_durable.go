@@ -30,8 +30,8 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // AccountDurableStateBehavior is a small bank-account durable state behavior

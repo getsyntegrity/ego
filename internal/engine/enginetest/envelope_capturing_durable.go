@@ -32,8 +32,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/command"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // EnvelopeCapturingDurableStateBehavior is the DurableStateBehavior

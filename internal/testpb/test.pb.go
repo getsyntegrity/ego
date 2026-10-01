@@ -527,9 +527,9 @@ const file_test_test_proto_rawDesc = "" +
 	"\n" +
 	"account_id\x18\x01 \x01(\tR\taccountId\x12'\n" +
 	"\x0faccount_balance\x18\x02 \x01(\x01R\x0eaccountBalance\"\r\n" +
-	"\vTestNoEventB\x87\x01\n" +
+	"\vTestNoEventB\x86\x01\n" +
 	"\n" +
-	"com.testpbB\tTestProtoH\x02P\x01Z4github.com/getsyntegrity/ego/test/data/testpb;testpb\xa2\x02\x03TXX\xaa\x02\x06Testpb\xca\x02\x06Testpb\xe2\x02\x12Testpb\\GPBMetadata\xea\x02\x06Testpbb\x06proto3"
+	"com.testpbB\tTestProtoH\x02P\x01Z3github.com/getsyntegrity/ego/internal/testpb;testpb\xa2\x02\x03TXX\xaa\x02\x06Testpb\xca\x02\x06Testpb\xe2\x02\x12Testpb\\GPBMetadata\xea\x02\x06Testpbb\x06proto3"
 
 var (
 	file_test_test_proto_rawDescOnce sync.Once

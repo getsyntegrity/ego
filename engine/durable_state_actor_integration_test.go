@@ -30,8 +30,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/command"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // TestDurableStateExpectedRevisionEndToEndPropagation is task 4.18's
