@@ -8,17 +8,17 @@
 # Run the event-sourced example
 run-eventsourced:
 	@echo "Running event-sourced example..."
-	go run ./example/eventssourced
+	cd example && go run ./eventssourced
 
 # Run the durable state example
 run-durablestate:
 	@echo "Running durable state example..."
-	go run ./example/durablestate
+	cd example && go run ./durablestate
 
 # Run the fund transfer saga example
 run-saga:
 	@echo "Running fund transfer saga example..."
-	go run ./example/saga
+	cd example && go run ./saga
 
 # Regenerate protobuf code (uses the locally installed `buf`).
 # buf writes everything under gen/ (per buf.gen.yaml). We then copy each

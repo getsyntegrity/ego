@@ -43,7 +43,7 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 ## Tasks
 
 - [x] **D1 Move the fixture.** `example/examplepb` becomes `internal/samplepb` (or the closest existing internal fixture location), regenerated, with every importer updated. Check: root `go build ./... && go vet ./...`, plus the affected root tests and `benchmark`. Route: delegated writer.
-- [ ] **D2 `example` module.** `example/go.mod` holds `durablestate`, `eventssourced` and `saga`, and the root Makefile `run-*` targets are updated. Check: `go build ./... && go vet ./... && go test ./...` in `example`; root `go list ./... | rg example` is empty; `go mod tidy -diff` is clean everywhere. Route: delegated writer.
+- [x] **D2 `example` module.** `example/go.mod` holds `durablestate`, `eventssourced` and `saga`, and the root Makefile `run-*` targets are updated. Check: `go build ./... && go vet ./... && go test ./...` in `example`; root `go list ./... | rg example` is empty; `go mod tidy -diff` is clean everywhere. Route: delegated writer.
 - [ ] **D3 `examples` job.** Add the job with the `inttest` triggers, list it in `ci-ok`, remove `example/cluster` from `modules`, and add `/example` to Dependabot. Check: `actionlint`. Route: delegated writer.
 - [ ] **D4 Docs.** Update `docs/ci.md` and the example READMEs. Check: structural readback. Route: delegated writer.
 
@@ -59,6 +59,12 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 - Importers updated: `engine/engine_test.go`, `engine/helper_test.go`, `engine/saga_status_test.go`, `internal/engine/saga/saga_test.go`, `internal/engine/enginetest/callback_saga.go`, `benchmark/benchmark_test.go` and the three example mains.
 - Checks: root `go build ./... && go vet ./...` ok; `go test -count=1 ./engine/... ./internal/engine/saga/... ./internal/engine/enginetest/...` ok; `benchmark`: `go vet ./...` and compile-only `go test -run XXX` ok; `go mod tidy -diff` clean in root and `benchmark`.
 
+### D2 (route: delegated writer)
+
+- New module `github.com/getsyntegrity/ego/example` (`example/go.mod`, `example/go.sum`): `go 1.26.0`, `replace github.com/getsyntegrity/ego => ../`, `require` of ego `v0.0.0`, and the `armon/go-metrics` exclude block copied from `example/cluster/go.mod`. It holds `durablestate`, `eventssourced` and `saga`. `example/cluster` stays its own module, nested inside; `go list ./...` in `example` lists exactly the three packages. The examples import `internal/samplepb` and other root packages; Go allows that because the importer path is under the root module path.
+- The Makefile `run-eventsourced`, `run-durablestate` and `run-saga` targets run `cd example && go run ./<name>`.
+- Checks: `example`: `go build ./... && go vet ./... && go test -count=1 ./...` ok (no test files); `example/cluster`: `go vet ./... && go test -count=1 ./...` ok; root `go list ./... | rg example` is empty; `go mod tidy -diff` clean in root, `example`, `example/cluster`, `benchmark` and `inttest`; `gofmt -l` empty.
+
 ## Next step
 
-D2.
+D3.
