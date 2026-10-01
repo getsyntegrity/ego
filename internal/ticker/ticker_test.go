@@ -26,16 +26,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestTicker(t *testing.T) {
-	intervals := 100 * time.Millisecond
-	ticker := New(intervals)
-	ticker.Start()
-	for i := 0; i < 5; i++ {
-		<-ticker.Ticks
-	}
-	ticker.Stop()
-	assert.False(t, ticker.Ticking())
+	specs.Describe(t, "Ticker delivers ticks until stopped", func(s *specs.Spec) {
+		s.It("stops ticking after five ticks and Stop", func(ctx *specs.Context) {
+			ticker := New(100 * time.Millisecond)
+			ctx.Cleanup(ticker.Stop) // Stop is idempotent; this releases the loop if a check fails
+			ticker.Start()
+			ctx.Expect(ticker.Ticking()).To(specs.BeTrue())
+
+			// Ticks is unbuffered and the ticker drops a tick nobody is waiting for, so
+			// each poll waits for one tick. A ticker that never ticks then fails after
+			// the timeout instead of hanging the case.
+			ticks := 0
+			ctx.Eventually(func() any {
+				select {
+				case <-ticker.Ticks:
+					ticks++
+				case <-time.After(time.Second):
+				}
+				return ticks
+			}, specs.Equal(5), specs.WithTimeout(5*time.Second), specs.WithInterval(time.Millisecond))
+
+			ticker.Stop()
+			ctx.Expect(ticker.Ticking()).To(specs.BeFalse())
+		})
+	})
 }
