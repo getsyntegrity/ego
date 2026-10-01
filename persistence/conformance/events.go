@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/persistence"
@@ -68,93 +67,93 @@ var EventsStoreChecks = []Check[persistence.EventsStore]{
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: eventsUnscopedNeverCollidesWithForgedTenant},
 }
 
-func eventsOtherTenantGetsNothing(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsOtherTenantGetsNothing(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "read-isolation"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
 
 	got, err := store.GetLatestEvent(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.Nil(t, got, "tenant B must not see tenant A's record")
+	requireNoError(t, err)
+	requireNil(t, got, "tenant B must not see tenant A's record")
 
 	replayed, err := store.ReplayEvents(ctx, tenantB, id, 1, 1, 10)
-	require.NoError(t, err)
-	require.Empty(t, replayed, "tenant B must not replay tenant A's events")
+	requireNoError(t, err)
+	requireEmpty(t, replayed, "tenant B must not replay tenant A's events")
 }
 
-func eventsUnscopedAndTenantDoNotCrossRead(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsUnscopedAndTenantDoNotCrossRead(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 
 	const idWrittenByTenant = "unscoped-cross-read-tenant-wrote"
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, idWrittenByTenant, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, idWrittenByTenant, 1, 111), persistence.Unconditional()))
 	gotUnscoped, err := store.GetLatestEvent(ctx, persistence.Unscoped(), idWrittenByTenant)
-	require.NoError(t, err)
-	require.Nil(t, gotUnscoped, "Unscoped() must not see a record written only under a tenant scope")
+	requireNoError(t, err)
+	requireNil(t, gotUnscoped, "Unscoped() must not see a record written only under a tenant scope")
 
 	const idWrittenByUnscoped = "unscoped-cross-read-unscoped-wrote"
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, idWrittenByUnscoped, 1, 222), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, idWrittenByUnscoped, 1, 222), persistence.Unconditional()))
 	gotTenant, err := store.GetLatestEvent(ctx, tenantA, idWrittenByUnscoped)
-	require.NoError(t, err)
-	require.Nil(t, gotTenant, "a tenant scope must not see a record written only under Unscoped()")
+	requireNoError(t, err)
+	requireNil(t, gotTenant, "a tenant scope must not see a record written only under Unscoped()")
 }
 
-func eventsBothTenantsReadOwnRecord(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsBothTenantsReadOwnRecord(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "both-write-own-read"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.Unconditional()))
 
 	gotA, err := store.GetLatestEvent(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotA)
-	require.Equal(t, float64(111), eventMarker(t, gotA), "tenant A must read back its own record, never tenant B's")
+	requireNoError(t, err)
+	requireNotNil(t, gotA)
+	requireEqual(t, float64(111), eventMarker(t, gotA), "tenant A must read back its own record, never tenant B's")
 
 	gotB, err := store.GetLatestEvent(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	require.Equal(t, float64(222), eventMarker(t, gotB), "tenant B must read back its own record, never tenant A's")
+	requireNoError(t, err)
+	requireNotNil(t, gotB)
+	requireEqual(t, float64(222), eventMarker(t, gotB), "tenant B must read back its own record, never tenant A's")
 }
 
-func eventsOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "write-isolation"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
 	before, err := store.GetLatestEvent(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, before)
+	requireNoError(t, err)
+	requireNotNil(t, before)
 
-	require.NoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 999), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 999), persistence.Unconditional()))
 
 	after, err := store.GetLatestEvent(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.True(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's record for the same persistence_id")
+	requireNoError(t, err)
+	requireNotNil(t, after)
+	requireTrue(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's record for the same persistence_id")
 }
 
-func eventsDeleteIsScoped(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsDeleteIsScoped(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "delete-isolation"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.Unconditional()))
 
-	require.NoError(t, store.DeleteEvents(ctx, tenantB, id, 100))
+	requireNoError(t, store.DeleteEvents(ctx, tenantB, id, 100))
 
 	gotA, err := store.GetLatestEvent(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotA, "deleting tenant B's events must not delete tenant A's")
-	require.Equal(t, float64(111), eventMarker(t, gotA))
+	requireNoError(t, err)
+	requireNotNil(t, gotA, "deleting tenant B's events must not delete tenant A's")
+	requireEqual(t, float64(111), eventMarker(t, gotA))
 
 	gotB, err := store.GetLatestEvent(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.Nil(t, gotB, "tenant B's own record must actually be gone after its own scoped delete")
+	requireNoError(t, err)
+	requireNil(t, gotB, "tenant B's own record must actually be gone after its own scoped delete")
 }
 
 // eventsExpectGenesisSucceedsForNewTenant is the sharpest check in the
@@ -165,74 +164,74 @@ func eventsDeleteIsScoped(ctx context.Context, t require.TestingT, store persist
 // spurious conflict, even though tenant B has never written this
 // persistence_id before. Correct isolation means tenant B's CAS state is
 // entirely independent of tenant A's.
-func eventsExpectGenesisSucceedsForNewTenant(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsExpectGenesisSucceedsForNewTenant(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "genesis-cross-tenant"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
 
 	err := store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, "ExpectGenesis() must succeed for tenant B: tenant A having already established this id must never leak into tenant B's own CAS state")
+	requireNoError(t, err, "ExpectGenesis() must succeed for tenant B: tenant A having already established this id must never leak into tenant B's own CAS state")
 
 	gotB, err := store.GetLatestEvent(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	require.Equal(t, float64(222), eventMarker(t, gotB))
+	requireNoError(t, err)
+	requireNotNil(t, gotB)
+	requireEqual(t, float64(222), eventMarker(t, gotB))
 }
 
-func eventsExpectRevisionConflictCarriesScope(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsExpectRevisionConflictCarriesScope(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	const id = "conflict-carries-scope"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
 
 	err := store.WriteEvents(ctx, tenantA, eventBatch(t, id, 2, 222), persistence.ExpectRevision(999))
-	require.Error(t, err)
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
+	requireError(t, err)
+	requireErrorIs(t, err, persistence.ErrConcurrencyConflict)
 
 	var conflictErr *persistence.ConflictError
-	require.True(t, errors.As(err, &conflictErr), "the returned error must be a *persistence.ConflictError")
-	require.True(t, conflictErr.Scope().Equal(tenantA), "the conflict must carry the scope the failed write actually targeted")
+	requireTrue(t, errors.As(err, &conflictErr), "the returned error must be a *persistence.ConflictError")
+	requireTrue(t, conflictErr.Scope().Equal(tenantA), "the conflict must carry the scope the failed write actually targeted")
 }
 
-func eventsConflictNotObservableInAnotherScope(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsConflictNotObservableInAnotherScope(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "conflict-not-cross-scope"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
 	// This attempt conflicts in tenant A's own scope: A already has a record.
 	err := store.WriteEvents(ctx, tenantA, eventBatch(t, id, 1, 999), persistence.ExpectGenesis())
-	require.Error(t, err)
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
+	requireError(t, err)
+	requireErrorIs(t, err, persistence.ErrConcurrencyConflict)
 
 	// Tenant B, using the exact same precondition that just conflicted in A,
 	// must succeed: A's conflict must not have left any observable trace in
 	// B's own CAS state.
 	err = store.WriteEvents(ctx, tenantB, eventBatch(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, "a conflict raised in tenant A's scope must not be observable in tenant B's scope")
+	requireNoError(t, err, "a conflict raised in tenant A's scope must not be observable in tenant B's scope")
 }
 
-func eventsPersistenceIDsScopedToOwnTenant(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsPersistenceIDsScopedToOwnTenant(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const sharedID = "shared-id"
 	const aOnlyID = "a-only-id"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, sharedID, 1, 1), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, sharedID, 1, 2), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, sharedID, 1, 3), persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, aOnlyID, 1, 4), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, sharedID, 1, 1), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantB, eventBatch(t, sharedID, 1, 2), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, sharedID, 1, 3), persistence.Unconditional()))
+	requireNoError(t, store.WriteEvents(ctx, tenantA, eventBatch(t, aOnlyID, 1, 4), persistence.Unconditional()))
 
 	idsA, _, err := store.PersistenceIDs(ctx, tenantA, 100, "")
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{sharedID, aOnlyID}, idsA, "PersistenceIDs(tenantA) must list exactly tenant A's own ids, never tenant B's or Unscoped()'s, even for an identical persistence_id string")
+	requireNoError(t, err)
+	requireElementsMatch(t, []string{sharedID, aOnlyID}, idsA, "PersistenceIDs(tenantA) must list exactly tenant A's own ids, never tenant B's or Unscoped()'s, even for an identical persistence_id string")
 
 	idsB, _, err := store.PersistenceIDs(ctx, tenantB, 100, "")
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{sharedID}, idsB)
-	require.NotContains(t, idsB, aOnlyID)
+	requireNoError(t, err)
+	requireElementsMatch(t, []string{sharedID}, idsB)
+	requireNotContains(t, idsB, aOnlyID)
 }
 
 // eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce proves
@@ -246,7 +245,7 @@ func eventsPersistenceIDsScopedToOwnTenant(ctx context.Context, t require.Testin
 // skips exactly that key at every page boundary (see
 // testkit/eventstore.go's PersistenceIDs doc comment for the exact defect
 // this guards against).
-func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	tenant := mustTenantScope(t, "pagination-tenant")
 
 	const pageSize = 4
@@ -255,7 +254,7 @@ func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context,
 	for i := 0; i < total; i++ {
 		id := fmt.Sprintf("pagination-id-%03d", i)
 		want[id] = struct{}{}
-		require.NoError(t, store.WriteEvents(ctx, tenant, eventBatch(t, id, 1, float64(i)), persistence.Unconditional()))
+		requireNoError(t, store.WriteEvents(ctx, tenant, eventBatch(t, id, 1, float64(i)), persistence.Unconditional()))
 	}
 
 	got := make(map[string]int, total)
@@ -263,9 +262,9 @@ func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context,
 	pages := 0
 	for {
 		ids, nextToken, err := store.PersistenceIDs(ctx, tenant, pageSize, pageToken)
-		require.NoError(t, err)
+		requireNoError(t, err)
 		pages++
-		require.LessOrEqual(t, pages, total+1, "pagination did not terminate: nextPageToken never became empty")
+		requireLessOrEqual(t, pages, total+1, "pagination did not terminate: nextPageToken never became empty")
 		for _, id := range ids {
 			got[id]++
 		}
@@ -277,38 +276,38 @@ func eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce(ctx context.Context,
 
 	gotIDs := make(map[string]struct{}, len(got))
 	for id, count := range got {
-		require.Equal(t, 1, count, "persistence id %q was returned more than once across pages", id)
+		requireEqual(t, 1, count, "persistence id %q was returned more than once across pages", id)
 		gotIDs[id] = struct{}{}
 	}
-	require.Equal(t, want, gotIDs, "pagination must cover every written persistence id exactly once, with none skipped at a page boundary")
+	requireEqual(t, want, gotIDs, "pagination must cover every written persistence id exactly once, with none skipped at a page boundary")
 
 	// This sanity check comes last, deliberately: a store that silently
 	// skips ids at page boundaries can also terminate in fewer pages than
 	// expected (fewer ids returned per page overall), so the coverage
 	// assertion above is the sharper, more diagnostic failure and must be
 	// seen first.
-	require.GreaterOrEqual(t, pages, 4, "the test setup must actually force multiple pages")
+	requireGreaterOrEqual(t, pages, 4, "the test setup must actually force multiple pages")
 }
 
-func eventsUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.EventsStore) {
+func eventsUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t TestingT, store persistence.EventsStore) {
 	forgedTenant := mustTenantScope(t, "unscoped")
 	const id = "forging-guard"
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteEvents(ctx, persistence.Unscoped(), eventBatch(t, id, 1, 111), persistence.ExpectGenesis()))
 	// The sharp assertion is the CAS success below: a store that reduced Scope
 	// to its String() form ("unscoped" vs "tenant:unscoped") could still pass
 	// the read/write checks above by accident, but would incorrectly conflict
 	// here if it ever compared scopes by text rather than structurally.
 	err := store.WriteEvents(ctx, forgedTenant, eventBatch(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, `a tenant literally named "unscoped" must never forge Unscoped()'s own CAS state`)
+	requireNoError(t, err, `a tenant literally named "unscoped" must never forge Unscoped()'s own CAS state`)
 
 	gotUnscoped, err := store.GetLatestEvent(ctx, persistence.Unscoped(), id)
-	require.NoError(t, err)
-	require.NotNil(t, gotUnscoped)
-	require.Equal(t, float64(111), eventMarker(t, gotUnscoped))
+	requireNoError(t, err)
+	requireNotNil(t, gotUnscoped)
+	requireEqual(t, float64(111), eventMarker(t, gotUnscoped))
 
 	gotForged, err := store.GetLatestEvent(ctx, forgedTenant, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotForged)
-	require.Equal(t, float64(222), eventMarker(t, gotForged))
+	requireNoError(t, err)
+	requireNotNil(t, gotForged)
+	requireEqual(t, float64(222), eventMarker(t, gotForged))
 }

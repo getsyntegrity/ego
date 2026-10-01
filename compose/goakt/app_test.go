@@ -193,9 +193,9 @@ type fixture struct {
 // newFixture builds a valid Spec that exercises every start step: two
 // families, all four kinds of store, one projection and one publisher of
 // each kind.
-func newFixture(t *testing.T, name string) *fixture {
-	t.Helper()
-	events, states, offsets := connected(t)
+func newFixture(ctx *specs.Context, name string) *fixture {
+	ctx.Helper()
+	events, states, offsets := connected(ctx)
 	f := &fixture{
 		events:  events,
 		states:  states,
@@ -219,13 +219,13 @@ func newFixture(t *testing.T, name string) *fixture {
 	return f
 }
 
-func mustNew(t *testing.T, spec compose.Spec, opts ...Option) *App {
-	t.Helper()
+func mustNew(ctx *specs.Context, spec compose.Spec, opts ...Option) *App {
+	ctx.Helper()
 	app, err := New(spec, append([]Option{WithLogger(engine.DiscardLogger)}, opts...)...)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+	ctx.Expect(err).To(specs.BeNil())
+	// T.Cleanup, not ctx.Cleanup: a BeforeAll hook builds the cluster nodes, and they
+	// must outlive that hook, so the Describe's T owns them.
+	ctx.T.Cleanup(func() { _ = app.Stop(context.Background()) })
 	return app
 }
 
@@ -234,57 +234,41 @@ func mustNew(t *testing.T, spec compose.Spec, opts ...Option) *App {
 // command, publishes, runs its projection, and stops cleanly (IMPL-4 row,
 // first item; design §5.1 walkthrough).
 func TestApp_ValidSpecRunsAnEngine(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "compose-e2e")
-	app := mustNew(t, f.spec)
+	specs.Describe(t, "A valid Spec reaches a running engine", func(s *specs.Spec) {
+		s.It("spawns, answers a command, publishes, runs its projection and stops cleanly", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "compose-e2e")
+			app := mustNew(ctx, f.spec)
 
-	if app.Engine() != nil {
-		t.Fatal("Engine() before Start must be nil")
-	}
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	engine := app.Engine()
-	if engine == nil || !engine.Started() {
-		t.Fatal("Engine() after Start must be a started engine")
-	}
-	sys := engine.ActorSystem()
-	if sys == nil || !sys.Running() {
-		t.Fatal("the actor system must be running after Start")
-	}
+			ctx.Expect(app.Engine() == nil).To(specs.BeTrue())
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
+			engine := app.Engine()
+			ctx.Expect(engine != nil && engine.Started()).To(specs.BeTrue())
+			sys := engine.ActorSystem()
+			ctx.Expect(sys != nil && sys.Running()).To(specs.BeTrue())
 
-	if err := engine.SpawnEventSourced(ctx, &account{id: "acc-1"}); err != nil {
-		t.Fatalf("SpawnEventSourced: %v", err)
-	}
-	state, revision, err := engine.SendCommand(ctx, "acc-1", &testpb.CreateAccount{AccountBalance: 42}, waitTimeout)
-	if err != nil {
-		t.Fatalf("SendCommand: %v", err)
-	}
-	if revision != 1 || state.(*testpb.Account).GetAccountBalance() != 42 {
-		t.Fatalf("SendCommand = (%v, %d), want balance 42 at revision 1", state, revision)
-	}
-	select {
-	case evt := <-f.evPub.events:
-		if evt.GetPersistenceId() != "acc-1" {
-			t.Fatalf("published event for %q, want acc-1", evt.GetPersistenceId())
-		}
-	case <-time.After(waitTimeout):
-		t.Fatal("the attached events publisher received nothing")
-	}
-	running, err := engine.IsProjectionRunning(ctx, projectionName)
-	if err != nil || !running {
-		t.Fatalf("IsProjectionRunning = (%v, %v), want the Spec's projection running", running, err)
-	}
+			ctx.Expect(engine.SpawnEventSourced(bg, &account{id: "acc-1"})).To(specs.BeNil())
+			state, revision, err := engine.SendCommand(bg, "acc-1", &testpb.CreateAccount{AccountBalance: 42}, waitTimeout)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(revision).To(specs.Equal(uint64(1)))
+			ctx.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(42)))
+			var published *egopb.Event
+			select {
+			case published = <-f.evPub.events:
+			case <-time.After(waitTimeout):
+			}
+			ctx.Expect(published != nil).To(specs.BeTrue())
+			ctx.Expect(published.GetPersistenceId()).To(specs.Equal("acc-1"))
+			running, err := engine.IsProjectionRunning(bg, projectionName)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(running).To(specs.BeTrue())
 
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if engine.Started() || sys.Running() {
-		t.Fatal("Stop must stop the engine and the actor system")
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatalf("publisher closes = (%d, %d), want each closed exactly once", f.evPub.closed.Load(), f.stPub.closed.Load())
-	}
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			ctx.Expect(engine.Started() || sys.Running()).To(specs.BeFalse())
+			ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+		})
+	})
 }
 
 // TestNew_MissingRequiredDependencyFailsWithNothingStarted: a Spec missing a
@@ -326,7 +310,7 @@ func TestNew_StartsNothing(t *testing.T) {
 func TestNew_NegativeShutdownTimeoutFailsAtNew(t *testing.T) {
 	specs.Describe(t, "New rejects a negative ShutdownTimeout", func(s *specs.Spec) {
 		s.It("fails with a V7 ValidationError", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "negative-timeout")
+			f := newFixture(ctx, "negative-timeout")
 			f.spec.ShutdownTimeout = -time.Second
 			_, err := New(f.spec)
 			ctx.Expect(err).To(validationError("V7", ""))
@@ -339,7 +323,7 @@ func TestNew_NegativeShutdownTimeoutFailsAtNew(t *testing.T) {
 func TestNew_G1_ClusterRequiresEntityKinds(t *testing.T) {
 	specs.Describe(t, "New rejects WithCluster without entity kinds or without a cluster config", func(s *specs.Spec) {
 		s.It("reports the missing kinds and the nil config, and accepts a config with kinds", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "cluster-kinds")
+			f := newFixture(ctx, "cluster-kinds")
 
 			_, err := New(f.spec, WithCluster(actor.NewClusterConfig()))
 			ctx.Expect(err).To(specs.MatchError(ErrClusterKindsRequired))
@@ -347,7 +331,9 @@ func TestNew_G1_ClusterRequiresEntityKinds(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(ErrClusterConfigRequired))
 			app, err := New(f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Cleanup(func() { _ = app.Stop(context.Background()) })
+			// T.Cleanup, not ctx.Cleanup: a BeforeAll hook builds the cluster nodes, and they
+			// must outlive that hook, so the Describe's T owns them.
+			ctx.T.Cleanup(func() { _ = app.Stop(context.Background()) })
 		})
 	})
 }
@@ -365,12 +351,14 @@ func TestNew_G2_ActorSystemName(t *testing.T) {
 			{"9lives", "9lives"}, {"-lead", "-lead"}, {"_lead", "_lead"}, {"has space", "has space"},
 			{"dot.ted", "dot.ted"}, {"é", "é"},
 		}, func(c g2Case) string { return c.row }, func(ctx *specs.Context, c g2Case) {
-			f := newFixture(ctx.T, c.name)
+			f := newFixture(ctx, c.name)
 			_, goaktErr := actor.NewActorSystem(c.name)
 
 			app, err := New(f.spec)
 			if app != nil {
-				ctx.Cleanup(func() { _ = app.Stop(context.Background()) })
+				// T.Cleanup, not ctx.Cleanup: a BeforeAll hook builds the cluster nodes, and they
+				// must outlive that hook, so the Describe's T owns them.
+				ctx.T.Cleanup(func() { _ = app.Stop(context.Background()) })
 			}
 
 			var ve *compose.ValidationError
@@ -399,54 +387,47 @@ func TestNew_ReportsEveryProblem(t *testing.T) {
 // publisher closed exactly once (IMPL-4 row; design §D5, §D6).
 func TestStart_FailureAtEachStepReleasesEverything(t *testing.T) {
 	steps := []string{StepProbeStores, StepStartActorSystem, StepStartEngine, StepAttachPublishers, StepStartProjections}
-	for i, step := range steps {
-		t.Run(step, func(t *testing.T) {
-			ctx := context.Background()
-			f := newFixture(t, "fail-"+strings.ReplaceAll(step, " ", "-"))
-			app := mustNew(t, f.spec)
-			var stream *countingStream
-			app.hooks.newEventStream = func() eventstream.Stream {
-				stream = &countingStream{Stream: eventstream.New()}
-				return stream
-			}
-			injected := errors.New("injected failure")
-			app.hooks.afterStep = func(name string) error {
-				if name == step {
-					return injected
+	specs.Describe(t, "", func(s *specs.Spec) {
+		for i, step := range steps {
+			s.It(step, func(ctx *specs.Context) {
+				bg := context.Background()
+				f := newFixture(ctx, "fail-"+strings.ReplaceAll(step, " ", "-"))
+				app := mustNew(ctx, f.spec)
+				var stream *countingStream
+				app.hooks.newEventStream = func() eventstream.Stream {
+					stream = &countingStream{Stream: eventstream.New()}
+					return stream
 				}
-				return nil
-			}
+				injected := errors.New("injected failure")
+				app.hooks.afterStep = func(name string) error {
+					if name == step {
+						return injected
+					}
+					return nil
+				}
 
-			err := app.Start(ctx)
+				err := app.Start(bg)
 
-			var se *compose.StartError
-			if !errors.As(err, &se) || se.Step != step || !errors.Is(se.Err, injected) || se.Rollback != nil {
-				t.Fatalf("Start = %v, want a StartError for %q carrying the injected error and a clean rollback", err, step)
-			}
-			if i >= 1 { // the actor system and the stream exist from step 2 on
-				if app.sys == nil || app.sys.Running() {
-					t.Fatal("a failed Start must leave no running actor system")
+				var se *compose.StartError
+				ctx.Expect(err).To(specs.MatchErrorAs(&se))
+				ctx.Expect(se.Step).To(specs.Equal(step))
+				ctx.Expect(se.Err).To(specs.MatchError(injected))
+				ctx.Expect(se.Rollback).To(specs.BeNil())
+				if i >= 1 { // the actor system and the stream exist from step 2 on
+					ctx.Expect(app.sys != nil && !app.sys.Running()).To(specs.BeTrue())
+					ctx.Expect(stream != nil && stream.closed.Load() > 0).To(specs.BeTrue())
+				} else {
+					ctx.Expect(stream == nil).To(specs.BeTrue())
 				}
-				if stream == nil || stream.closed.Load() == 0 {
-					t.Fatal("a failed Start must close the event stream")
-				}
-			} else if stream != nil {
-				t.Fatal("a failed probe must not allocate the event stream")
-			}
-			if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-				t.Fatalf("publisher closes = (%d, %d), want every publisher closed exactly once", f.evPub.closed.Load(), f.stPub.closed.Load())
-			}
-			if app.Engine() != nil {
-				t.Fatal("Engine() after a failed Start must be nil")
-			}
-			if err := app.Stop(ctx); err != nil {
-				t.Fatalf("Stop after a failed Start = %v, want nil (no-op)", err)
-			}
-			if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-				t.Fatal("Stop after a failed Start must not close anything again")
-			}
-		})
-	}
+				ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+				ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+				ctx.Expect(app.Engine() == nil).To(specs.BeTrue())
+				ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+				ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+				ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+			})
+		}
+	})
 }
 
 // TestStart_ProbeFailureNamesTheStore uses a real Ping failure, not a hook.
@@ -475,30 +456,29 @@ func TestStart_ProbeFailureNamesTheStore(t *testing.T) {
 // step closes the event stream it allocated, and every publisher is closed
 // exactly once. No real cluster is started.
 func TestStart_ActorSystemStepFailsForReal(t *testing.T) {
-	f := newFixture(t, "cluster-misconfigured")
-	app := mustNew(t, f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
-	var stream *countingStream
-	app.hooks.newEventStream = func() eventstream.Stream {
-		stream = &countingStream{Stream: eventstream.New()}
-		return stream
-	}
+	specs.Describe(t, "Start fails the actor system step for real on a misconfigured cluster", func(s *specs.Spec) {
+		s.It("closes the event stream it allocated, leaves no actor system running and closes every publisher once", func(ctx *specs.Context) {
+			f := newFixture(ctx, "cluster-misconfigured")
+			app := mustNew(ctx, f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
+			var stream *countingStream
+			app.hooks.newEventStream = func() eventstream.Stream {
+				stream = &countingStream{Stream: eventstream.New()}
+				return stream
+			}
 
-	err := app.Start(context.Background())
+			err := app.Start(context.Background())
 
-	var se *compose.StartError
-	if !errors.As(err, &se) || se.Step != StepStartActorSystem || se.Rollback != nil {
-		t.Fatalf("Start = %v, want a StartError for %q with a clean rollback", err, StepStartActorSystem)
-	}
-	t.Logf("step 2 failed with: %v", se.Err)
-	if stream == nil || stream.closed.Load() == 0 {
-		t.Fatal("step 2 must close the event stream it allocated")
-	}
-	if app.sys != nil && app.sys.Running() {
-		t.Fatal("no actor system may be left running")
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatalf("publisher closes = (%d, %d), want each closed exactly once", f.evPub.closed.Load(), f.stPub.closed.Load())
-	}
+			var se *compose.StartError
+			ctx.Expect(err).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Step).To(specs.Equal(StepStartActorSystem))
+			ctx.Expect(se.Rollback).To(specs.BeNil())
+			ctx.T.Logf("step 2 failed with: %v", se.Err)
+			ctx.Expect(stream != nil && stream.closed.Load() > 0).To(specs.BeTrue())
+			ctx.Expect(app.sys != nil && app.sys.Running()).To(specs.BeFalse())
+			ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+		})
+	})
 }
 
 // TestStart_CancelledContextStartsNothing: with a context already done,
@@ -541,24 +521,19 @@ func TestStop_NeverStartedClosesPublishers(t *testing.T) {
 
 // TestStop_AfterStopIsNoOp and Start after Stop is refused.
 func TestStop_AfterStopIsNoOp(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "stop-twice")
-	app := mustNew(t, f.spec)
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("first Stop: %v", err)
-	}
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("second Stop = %v, want nil", err)
-	}
-	if f.evPub.closed.Load() != 1 || f.stPub.closed.Load() != 1 {
-		t.Fatal("a second Stop must not close anything again")
-	}
-	if err := app.Start(ctx); !errors.Is(err, ErrNotStartable) {
-		t.Fatalf("Start after Stop = %v, want ErrNotStartable", err)
-	}
+	specs.Describe(t, "Stop after a Stop is a no-op", func(s *specs.Spec) {
+		s.It("closes nothing twice and refuses a Start after Stop", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "stop-twice")
+			app := mustNew(ctx, f.spec)
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(app.Start(bg)).To(specs.MatchError(ErrNotStartable))
+		})
+	})
 }
 
 // TestStop_OrderMatchesD7 records, at the moment each publisher and the
@@ -566,66 +541,63 @@ func TestStop_AfterStopIsNoOp(t *testing.T) {
 // still alive: projections stop first, then the engine (publishers and the
 // stream), then the actor system (design §D7).
 func TestStop_OrderMatchesD7(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "stop-order")
-	app := mustNew(t, f.spec)
-	var stream *countingStream
-	app.hooks.newEventStream = func() eventstream.Stream {
-		stream = &countingStream{Stream: eventstream.New()}
-		return stream
-	}
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	engine := app.Engine()
-	sys := engine.ActorSystem()
+	specs.Describe(t, "Stop follows the D7 order", func(s *specs.Spec) {
+		s.It("closes publishers and the stream after the projection and engine, before the actor system", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "stop-order")
+			app := mustNew(ctx, f.spec)
+			var stream *countingStream
+			app.hooks.newEventStream = func() eventstream.Stream {
+				stream = &countingStream{Stream: eventstream.New()}
+				return stream
+			}
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
+			engine := app.Engine()
+			sys := engine.ActorSystem()
 
-	var mu sync.Mutex
-	var log []string
-	observe := func(what string) func() {
-		return func() {
-			projection := "projection running"
-			if pid, err := sys.ActorOf(ctx, projectionName); err != nil || pid == nil || !pid.IsRunning() {
-				projection = "projection stopped"
+			var mu sync.Mutex
+			var log []string
+			observe := func(what string) func() {
+				return func() {
+					projection := "projection running"
+					if pid, err := sys.ActorOf(bg, projectionName); err != nil || pid == nil || !pid.IsRunning() {
+						projection = "projection stopped"
+					}
+					system := "actor system stopped"
+					if sys.Running() {
+						system = "actor system running"
+					}
+					engineState := "engine stopped"
+					if engine.Started() {
+						engineState = "engine started"
+					}
+					mu.Lock()
+					log = append(log, strings.Join([]string{what, projection, engineState, system}, ", "))
+					mu.Unlock()
+				}
 			}
-			system := "actor system stopped"
-			if sys.Running() {
-				system = "actor system running"
+			f.evPub.onClose = observe("close events publisher")
+			f.stPub.onClose = observe("close state publisher")
+			stream.onClose = observe("close event stream")
+
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			observe("after Stop")()
+
+			want := []string{
+				"close events publisher, projection stopped, engine stopped, actor system running",
+				"close state publisher, projection stopped, engine stopped, actor system running",
+				"close event stream, projection stopped, engine stopped, actor system running",
 			}
-			engineState := "engine stopped"
-			if engine.Started() {
-				engineState = "engine started"
-			}
+			// The stream may also be closed a second time by the actor-system step's
+			// idempotent Close; only the first three observations are ordered by D7.
 			mu.Lock()
-			log = append(log, strings.Join([]string{what, projection, engineState, system}, ", "))
+			got := slices.Clone(log)
 			mu.Unlock()
-		}
-	}
-	f.evPub.onClose = observe("close events publisher")
-	f.stPub.onClose = observe("close state publisher")
-	stream.onClose = observe("close event stream")
-
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	observe("after Stop")()
-
-	want := []string{
-		"close events publisher, projection stopped, engine stopped, actor system running",
-		"close state publisher, projection stopped, engine stopped, actor system running",
-		"close event stream, projection stopped, engine stopped, actor system running",
-	}
-	// The stream may also be closed a second time by the actor-system step's
-	// idempotent Close; only the first three observations are ordered by D7.
-	mu.Lock()
-	got := slices.Clone(log)
-	mu.Unlock()
-	if len(got) < len(want)+1 || !slices.Equal(got[:len(want)], want) {
-		t.Fatalf("stop observations =\n%s\nwant prefix\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-	if last := got[len(got)-1]; last != "after Stop, projection stopped, engine stopped, actor system stopped" {
-		t.Fatalf("after Stop = %q, want everything stopped", last)
-	}
+			ctx.Expect(len(got)).To(specs.BeGreaterThan(len(want)))
+			ctx.Expect(got[:len(want)]).To(specs.Equal(want))
+			ctx.Expect(got[len(got)-1]).To(specs.Equal("after Stop, projection stopped, engine stopped, actor system stopped"))
+		})
+	})
 }
 
 // TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown reproduces the
@@ -636,61 +608,53 @@ func TestStop_OrderMatchesD7(t *testing.T) {
 // flush/drain policy, which belongs to #24 (LIFE-004). If that policy
 // changes, update the expectation below together with it.
 func TestStop_D7OpenQuestion_StateFlushedDuringActorShutdown(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "d7-open-question")
-	app := mustNew(t, f.spec)
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := app.Engine().SpawnDurableState(ctx, &wallet{id: "w-1"}); err != nil {
-		t.Fatalf("SpawnDurableState: %v", err)
-	}
-	if _, _, err := app.Engine().SendCommand(ctx, "w-1", &testpb.CreateAccount{AccountBalance: 5}, waitTimeout); err != nil {
-		t.Fatalf("SendCommand: %v", err)
-	}
-	select {
-	case <-f.stPub.states:
-	case <-time.After(waitTimeout):
-		t.Fatal("the state publisher did not receive the command's state")
-	}
-	writesBefore := f.states.writes.Load()
+	specs.Describe(t, "Stop flushes durable state once while the actor system shuts down (design D7 open question)", func(s *specs.Spec) {
+		s.It("writes the state once in PostStop and delivers none to the already closed publisher", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "d7-open-question")
+			app := mustNew(ctx, f.spec)
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
+			ctx.Expect(app.Engine().SpawnDurableState(bg, &wallet{id: "w-1"})).To(specs.BeNil())
+			_, _, err := app.Engine().SendCommand(bg, "w-1", &testpb.CreateAccount{AccountBalance: 5}, waitTimeout)
+			ctx.Expect(err).To(specs.BeNil())
+			var received *egopb.DurableState
+			select {
+			case received = <-f.stPub.states:
+			case <-time.After(waitTimeout):
+			}
+			ctx.Expect(received != nil).To(specs.BeTrue())
+			writesBefore := f.states.writes.Load()
 
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
 
-	flushWrites := f.states.writes.Load() - writesBefore
-	delivered := len(f.stPub.states) + int(f.stPub.late.Load())
-	t.Logf("D7 observed: state writes during Stop = %d; states delivered to the publisher during Stop = %d", flushWrites, delivered)
-	if flushWrites != 1 {
-		t.Fatalf("observed %d state writes during Stop, want the 1 PostStop flush this test documents", flushWrites)
-	}
-	if delivered != 0 {
-		t.Fatalf("observed %d states delivered during Stop, want 0: the publisher closes before the actor system stops", delivered)
-	}
+			flushWrites := f.states.writes.Load() - writesBefore
+			delivered := len(f.stPub.states) + int(f.stPub.late.Load())
+			ctx.T.Logf("D7 observed: state writes during Stop = %d; states delivered to the publisher during Stop = %d", flushWrites, delivered)
+			// The 1 PostStop flush this test documents.
+			ctx.Expect(flushWrites).To(specs.Equal(int32(1)))
+			// The publisher closes before the actor system stops.
+			ctx.Expect(delivered).To(specs.Equal(0))
+		})
+	})
 }
 
 // TestEngine_UndeclaredFamilyReturnsTypedError: the Spec declares event
 // sourcing only, so a durable-state spawn through either entry point
 // returns engine.ErrEntityFamilyNotDeclared (design §D3).
 func TestEngine_UndeclaredFamilyReturnsTypedError(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "undeclared-family")
-	f.spec.Families = compose.EventSourced
-	app := mustNew(t, f.spec)
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := app.Engine().SpawnDurableState(ctx, &wallet{id: "w-new"}); !errors.Is(err, engine.ErrEntityFamilyNotDeclared) {
-		t.Fatalf("SpawnDurableState = %v, want ErrEntityFamilyNotDeclared", err)
-	}
-	//nolint:staticcheck // the deprecated entry point must enforce the same guard
-	if err := app.Engine().DurableStateEntity(ctx, &wallet{id: "w-old"}); !errors.Is(err, engine.ErrEntityFamilyNotDeclared) {
-		t.Fatalf("DurableStateEntity = %v, want ErrEntityFamilyNotDeclared", err)
-	}
-	if err := app.Engine().SpawnEventSourced(ctx, &account{id: "acc-declared"}); err != nil {
-		t.Fatalf("SpawnEventSourced of a declared family = %v", err)
-	}
+	specs.Describe(t, "A durable-state spawn on a Spec declaring only event sourcing", func(s *specs.Spec) {
+		s.It("returns ErrEntityFamilyNotDeclared through both entry points and still spawns the declared family", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "undeclared-family")
+			f.spec.Families = compose.EventSourced
+			app := mustNew(ctx, f.spec)
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
+			ctx.Expect(app.Engine().SpawnDurableState(bg, &wallet{id: "w-new"})).To(specs.MatchError(engine.ErrEntityFamilyNotDeclared))
+			//nolint:staticcheck // the deprecated entry point must enforce the same guard
+			ctx.Expect(app.Engine().DurableStateEntity(bg, &wallet{id: "w-old"})).To(specs.MatchError(engine.ErrEntityFamilyNotDeclared))
+			ctx.Expect(app.Engine().SpawnEventSourced(bg, &account{id: "acc-declared"})).To(specs.BeNil())
+		})
+	})
 }
 
 // callLog records Start and Ping calls across publishers, in order.
@@ -763,33 +727,30 @@ func (p *pingingStatePublisher) Describe() adapter.Descriptor {
 // probes every publisher, in Spec order (events publishers, then state
 // publishers), before it attaches any (ego-arch-004 design §D4).
 func TestStart_AttachStepStartsAndProbesPublishersFirst(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "start-and-probe")
-	log := &callLog{}
-	first := newStartingEventPublisher("events-1", log)
-	second := newStartingEventPublisher("events-2", log)
-	state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log}
-	f.spec.EventPublishers = []publishing.EventPublisher{first, f.evPub, second}
-	f.spec.StatePublishers = []publishing.StatePublisher{state}
-	app := mustNew(t, f.spec)
-	var attachedAtStart []bool
-	first.onStart = func() { attachedAtStart = append(attachedAtStart, app.eventsAttached || app.statesAttached) }
-	second.onStart = first.onStart
+	specs.Describe(t, "Start step 4 starts and probes every publisher before it attaches any", func(s *specs.Spec) {
+		s.It("calls Start and Ping in Spec order and attaches only afterwards", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "start-and-probe")
+			log := &callLog{}
+			first := newStartingEventPublisher("events-1", log)
+			second := newStartingEventPublisher("events-2", log)
+			state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log}
+			f.spec.EventPublishers = []publishing.EventPublisher{first, f.evPub, second}
+			f.spec.StatePublishers = []publishing.StatePublisher{state}
+			app := mustNew(ctx, f.spec)
+			var attachedAtStart []bool
+			first.onStart = func() { attachedAtStart = append(attachedAtStart, app.eventsAttached || app.statesAttached) }
+			second.onStart = first.onStart
 
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
 
-	want := []string{"start events-1", "ping events-1", "start events-2", "ping events-2", "ping states-1"}
-	if got := log.snapshot(); !slices.Equal(got, want) {
-		t.Fatalf("Start/Ping calls = %v, want %v", got, want)
-	}
-	if !slices.Equal(attachedAtStart, []bool{false, false}) {
-		t.Fatalf("attached when Start ran = %v, want no publisher attached before every Start", attachedAtStart)
-	}
-	if !app.eventsAttached || !app.statesAttached {
-		t.Fatal("step 4 must still attach both kinds of publisher")
-	}
+			want := []string{"start events-1", "ping events-1", "start events-2", "ping events-2", "ping states-1"}
+			ctx.Expect(log.snapshot()).To(specs.Equal(want))
+			// No publisher is attached before every Start has run.
+			ctx.Expect(attachedAtStart).To(specs.Equal([]bool{false, false}))
+			ctx.Expect(app.eventsAttached && app.statesAttached).To(specs.BeTrue())
+		})
+	})
 }
 
 // TestStart_PublisherFailureAtK is the spec 3 scenario "failure at
@@ -797,80 +758,73 @@ func TestStart_AttachStepStartsAndProbesPublishersFirst(t *testing.T) {
 // fails naming it, the third is never started, the earlier steps are
 // undone, and every publisher is closed exactly once (ego-arch-003 §D6).
 func TestStart_PublisherFailureAtK(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "publisher-k-fails")
-	log := &callLog{}
-	pubs := []*startingEventPublisher{
-		newStartingEventPublisher("events-1", log),
-		newStartingEventPublisher("events-2", log),
-		newStartingEventPublisher("events-3", log),
-	}
-	injected := errors.New("broker unreachable")
-	pubs[1].startErr = injected
-	f.spec.EventPublishers = []publishing.EventPublisher{pubs[0], pubs[1], pubs[2]}
-	app := mustNew(t, f.spec)
+	specs.Describe(t, "Start fails at the k-th publisher", func(s *specs.Spec) {
+		s.It("names the failed publisher, never starts the next, undoes earlier steps and closes every publisher once", func(ctx *specs.Context) {
+			bg := context.Background()
+			f := newFixture(ctx, "publisher-k-fails")
+			log := &callLog{}
+			pubs := []*startingEventPublisher{
+				newStartingEventPublisher("events-1", log),
+				newStartingEventPublisher("events-2", log),
+				newStartingEventPublisher("events-3", log),
+			}
+			injected := errors.New("broker unreachable")
+			pubs[1].startErr = injected
+			f.spec.EventPublishers = []publishing.EventPublisher{pubs[0], pubs[1], pubs[2]}
+			app := mustNew(ctx, f.spec)
 
-	err := app.Start(ctx)
+			err := app.Start(bg)
 
-	var se *compose.StartError
-	if !errors.As(err, &se) || se.Step != StepAttachPublishers || !errors.Is(se.Err, injected) || se.Rollback != nil {
-		t.Fatalf("Start = %v, want a StartError for %q carrying the injected error and a clean rollback", err, StepAttachPublishers)
-	}
-	if msg := se.Err.Error(); !strings.Contains(msg, `"events-2"`) || !strings.Contains(msg, "start") || strings.Contains(msg, `"events-3"`) {
-		t.Fatalf("step error %q must name the second publisher's failed Start, and nothing after it", msg)
-	}
-	if got, want := log.snapshot(), []string{"start events-1", "ping events-1", "start events-2"}; !slices.Equal(got, want) {
-		t.Fatalf("Start/Ping calls = %v, want %v", got, want)
-	}
-	for _, p := range pubs {
-		if n := p.closed.Load(); n != 1 {
-			t.Errorf("publisher %s closed %d time(s), want exactly 1", p.id, n)
-		}
-	}
-	if n := f.stPub.closed.Load(); n != 1 {
-		t.Errorf("state publisher closed %d time(s), want exactly 1", n)
-	}
-	if app.sys == nil || app.sys.Running() {
-		t.Fatal("a failed step 4 must leave no running actor system")
-	}
-	if app.Engine() != nil {
-		t.Fatal("Engine() after a failed Start must be nil")
-	}
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop after a failed Start = %v, want nil (no-op)", err)
-	}
-	for _, p := range pubs {
-		if n := p.closed.Load(); n != 1 {
-			t.Errorf("Stop after a failed Start closed publisher %s again (%d closes)", p.id, n)
-		}
-	}
+			var se *compose.StartError
+			ctx.Expect(err).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Step).To(specs.Equal(StepAttachPublishers))
+			ctx.Expect(se.Err).To(specs.MatchError(injected))
+			ctx.Expect(se.Rollback).To(specs.BeNil())
+			// The step error names the second publisher's failed Start, and nothing after it.
+			msg := se.Err.Error()
+			ctx.Expect(msg).To(specs.Contain(`"events-2"`))
+			ctx.Expect(msg).To(specs.Contain("start"))
+			ctx.Expect(msg).To(specs.Not(specs.Contain(`"events-3"`)))
+			ctx.Expect(log.snapshot()).To(specs.Equal([]string{"start events-1", "ping events-1", "start events-2"}))
+			for _, p := range pubs {
+				ctx.Expect(p.closed.Load()).To(specs.Equal(int32(1)))
+			}
+			ctx.Expect(f.stPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(app.sys != nil && !app.sys.Running()).To(specs.BeTrue())
+			ctx.Expect(app.Engine() == nil).To(specs.BeTrue())
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			for _, p := range pubs {
+				ctx.Expect(p.closed.Load()).To(specs.Equal(int32(1)))
+			}
+		})
+	})
 }
 
 // TestStart_PublisherPingFailureNamesTheAdapter: a failed Ping fails step
 // 4 the same way, and a declared publisher is named by its descriptor too.
 func TestStart_PublisherPingFailureNamesTheAdapter(t *testing.T) {
-	ctx := context.Background()
-	f := newFixture(t, "publisher-ping-fails")
-	log := &callLog{}
-	injected := errors.New("not ready")
-	state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log, pingErr: injected}
-	f.spec.StatePublishers = []publishing.StatePublisher{state}
-	app := mustNew(t, f.spec)
+	specs.Describe(t, "Start fails step 4 on a publisher Ping failure", func(s *specs.Spec) {
+		s.It("names the adapter by its descriptor and closes every publisher once", func(ctx *specs.Context) {
+			f := newFixture(ctx, "publisher-ping-fails")
+			log := &callLog{}
+			injected := errors.New("not ready")
+			state := &pingingStatePublisher{statePublisher: newStatePublisher("states-1"), log: log, pingErr: injected}
+			f.spec.StatePublishers = []publishing.StatePublisher{state}
+			app := mustNew(ctx, f.spec)
 
-	err := app.Start(ctx)
+			err := app.Start(context.Background())
 
-	var se *compose.StartError
-	if !errors.As(err, &se) || se.Step != StepAttachPublishers || !errors.Is(se.Err, injected) {
-		t.Fatalf("Start = %v, want a StartError for %q carrying the ping error", err, StepAttachPublishers)
-	}
-	for _, s := range []string{"ping", `state publisher "states-1"`, `"fake-broker"`} {
-		if !strings.Contains(se.Err.Error(), s) {
-			t.Errorf("step error %q does not mention %q", se.Err, s)
-		}
-	}
-	if f.evPub.closed.Load() != 1 || state.closed.Load() != 1 {
-		t.Fatalf("publisher closes = (%d, %d), want every publisher closed exactly once", f.evPub.closed.Load(), state.closed.Load())
-	}
+			var se *compose.StartError
+			ctx.Expect(err).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Step).To(specs.Equal(StepAttachPublishers))
+			ctx.Expect(se.Err).To(specs.MatchError(injected))
+			ctx.Expect(se.Err.Error()).To(specs.Contain("ping"))
+			ctx.Expect(se.Err.Error()).To(specs.Contain(`state publisher "states-1"`))
+			ctx.Expect(se.Err.Error()).To(specs.Contain(`"fake-broker"`))
+			ctx.Expect(f.evPub.closed.Load()).To(specs.Equal(int32(1)))
+			ctx.Expect(state.closed.Load()).To(specs.Equal(int32(1)))
+		})
+	})
 }
 
 // lyingStatePublisher declares CapStart without implementing Start.
