@@ -24,25 +24,23 @@ package eventsource
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
 // Store operation names recorded by the snapshot contract tests.
@@ -137,17 +135,23 @@ func (x *loggingEventsStore) DeleteEvents(ctx context.Context, scope persistence
 
 // loggingSnapshotStore records WriteSnapshot and DeleteSnapshots into the same
 // shared log and optionally fails the write.
-// writeDelay, when set, holds a WriteSnapshot before it is recorded, so a
-// retention forwarded too early would be observed ahead of the write.
+// hold, when set, keeps a WriteSnapshot from being recorded until it is closed,
+// so a retention forwarded too early would be observed ahead of the write.
 type loggingSnapshotStore struct {
 	persistence.SnapshotStore
-	calls      *storeCalls
-	writeErr   error
-	writeDelay time.Duration
+	calls    *storeCalls
+	writeErr error
+	hold     <-chan struct{}
 }
 
 func (x *loggingSnapshotStore) WriteSnapshot(ctx context.Context, scope persistence.Scope, snapshot *egopb.Snapshot) error {
-	time.Sleep(x.writeDelay)
+	if x.hold != nil {
+		select {
+		case <-x.hold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	x.calls.add(opWriteSnapshot, scope, snapshot.GetSequenceNumber())
 	if x.writeErr != nil {
 		return x.writeErr
@@ -160,6 +164,98 @@ func (x *loggingSnapshotStore) DeleteSnapshots(ctx context.Context, scope persis
 	return x.SnapshotStore.DeleteSnapshots(ctx, scope, persistenceID, toSequenceNumber)
 }
 
+// errEventsWrite is what a failing events write returns.
+var errEventsWrite = errors.New("events write failed")
+
+// sequenceRig is one entity actor wired to the logging stores.
+type sequenceRig struct {
+	calls         *storeCalls
+	pid           *goakt.PID
+	persistenceID string
+}
+
+// spawnSequenceRig starts an event-sourced entity with a snapshot interval of 1
+// and a retention policy that deletes both events and snapshots. A non-empty
+// tenant makes the entity tenant-scoped; a non-nil writeErr fails every events
+// write. The actor system and the stores stop when the case ends.
+func spawnSequenceRig(ctx *specs.Context, tenant string, writeErr error) *sequenceRig {
+	bg := context.Background()
+
+	calls := new(storeCalls)
+	baseEvents := connectedEventsStore(ctx)
+	baseSnapshots := connectedSnapshotStore(ctx)
+	stream := newEventsStream(ctx)
+
+	exts := []extension.Extension{
+		extensions.NewEventsStore(&loggingEventsStore{EventsStore: baseEvents, calls: calls, writeErr: writeErr}),
+		extensions.NewEventsStream(stream),
+		extensions.NewSnapshotStore(&loggingSnapshotStore{SnapshotStore: baseSnapshots, calls: calls}),
+	}
+
+	persistenceID := uuid.NewString()
+	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+	entityCfg := &extensions.EntityConfig{
+		SnapshotInterval:          1,
+		HasRetentionPolicy:        true,
+		DeleteEventsOnSnapshot:    true,
+		DeleteSnapshotsOnSnapshot: true,
+	}
+	deps := []extension.Dependency{behavior, entityCfg}
+	if tenant != "" {
+		exts = append(exts, extensions.NewTenancyMarker())
+		deps = append(deps, extensions.NewEntityTenantScope(tenant))
+	}
+
+	actorSystem := startSnapshotSystemWith(ctx, "SnapshotSequenceSystem", 3, exts...)
+	pid, err := actorSystem.Spawn(bg, behavior.ID(), New(),
+		goakt.WithDependencies(deps...), goakt.WithLongLived(), goakt.WithStashing())
+	ctx.Expect(err).To(specs.BeNil())
+	return &sequenceRig{calls: calls, pid: pid, persistenceID: persistenceID}
+}
+
+// ask sends msg to the entity and returns its command reply.
+func (r *sequenceRig) ask(ctx *specs.Context, callCtx context.Context, msg any) *egopb.CommandReply {
+	reply, err := goakt.Ask(callCtx, r.pid, msg, 5*time.Second)
+	ctx.Expect(err).To(specs.BeNil())
+	commandReply, ok := reply.(*egopb.CommandReply)
+	ctx.Expect(ok).To(specs.BeTrue())
+	return commandReply
+}
+
+// replyKind names the concrete type of a command reply's payload, so a failure
+// says which kind of reply came back.
+func replyKind(reply *egopb.CommandReply) string { return fmt.Sprintf("%T", reply.GetReply()) }
+
+const (
+	stateReplyKind = "*egopb.CommandReply_StateReply"
+	errorReplyKind = "*egopb.CommandReply_ErrorReply"
+)
+
+// runTwoCommands drives the entity across two snapshot boundaries and waits
+// for the asynchronous retention of the second one. It returns every call the
+// stores observed.
+func (r *sequenceRig) runTwoCommands(ctx *specs.Context, callCtx context.Context) []storeCall {
+	first := r.ask(ctx, callCtx, &testpb.CreateAccount{AccountBalance: 500})
+	ctx.Expect(replyKind(first)).To(specs.Equal(stateReplyKind))
+	second := r.ask(ctx, callCtx, &testpb.CreditAccount{AccountId: r.persistenceID, Balance: 100})
+	ctx.Expect(replyKind(second)).To(specs.Equal(stateReplyKind))
+
+	ctx.Eventually(func() any { return r.calls.has(opDeleteEvents, 2) }, specs.BeTrue(), snapshotsPoll...)
+	ctx.Eventually(func() any { return r.calls.has(opDeleteSnapshots, 1) }, specs.BeTrue(), snapshotsPoll...)
+	return r.calls.snapshot()
+}
+
+// expectOrdered asserts, for the second boundary, that the events write
+// precedes the snapshot write and that both retention deletes follow it.
+func (r *sequenceRig) expectOrdered(ctx *specs.Context) {
+	write := r.calls.indexOf(opWriteEvents, 2)
+	snapshot := r.calls.indexOf(opWriteSnapshot, 2)
+	ctx.Expect(write).To(specs.BeGreaterThanOrEqual(0))
+	ctx.Expect(snapshot).To(specs.BeGreaterThan(write))
+	ctx.Expect(r.calls.indexOf(opDeleteEvents, 2)).To(specs.BeGreaterThan(snapshot))
+	ctx.Expect(r.calls.indexOf(opDeleteSnapshots, 1)).To(specs.BeGreaterThan(snapshot))
+}
+
 // TestSnapshotAndRetentionObservableSequence pins what the stores can observe
 // of the snapshot path after a command's event write: the events store is
 // written first, the snapshot only after it, and the retention deletes only
@@ -170,141 +266,52 @@ func (x *loggingSnapshotStore) DeleteSnapshots(ctx context.Context, scope persis
 // command is the one whose retention deletes both the events up to sequence 2
 // and the previous snapshot (sequence 1).
 func TestSnapshotAndRetentionObservableSequence(t *testing.T) {
-	spawn := func(t *testing.T, tenant string, writeErr error) (*storeCalls, *goakt.PID, string) {
-		t.Helper()
-		ctx := context.Background()
+	specs.Describe(t, "the stores observe the events write, then the snapshot, then the retention", func(s *specs.Spec) {
+		s.It("events write, then snapshot write, then the retention deletes", func(ctx *specs.Context) {
+			rig := spawnSequenceRig(ctx, "", nil)
 
-		calls := new(storeCalls)
-		baseEvents := testkit.NewEventsStore()
-		baseSnapshots := testkit.NewSnapshotStore()
-		require.NoError(t, baseEvents.Connect(ctx))
-		require.NoError(t, baseSnapshots.Connect(ctx))
-		stream := eventstream.New()
+			got := rig.runTwoCommands(ctx, context.Background())
 
-		exts := []extension.Extension{
-			extensions.NewEventsStore(&loggingEventsStore{EventsStore: baseEvents, calls: calls, writeErr: writeErr}),
-			extensions.NewEventsStream(stream),
-			extensions.NewSnapshotStore(&loggingSnapshotStore{SnapshotStore: baseSnapshots, calls: calls}),
-		}
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval:          1,
-			HasRetentionPolicy:        true,
-			DeleteEventsOnSnapshot:    true,
-			DeleteSnapshotsOnSnapshot: true,
-		}
-		deps := []extension.Dependency{behavior, entityCfg}
-		if tenant != "" {
-			exts = append(exts, extensions.NewTenancyMarker())
-			deps = append(deps, extensions.NewEntityTenantScope(tenant))
-		}
-
-		actorSystem, err := goakt.NewActorSystem("SnapshotSequenceSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(exts...),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-		t.Cleanup(func() {
-			_ = actorSystem.Stop(ctx)
-			stream.Close()
-			_ = baseEvents.Disconnect(ctx)
-			_ = baseSnapshots.Disconnect(ctx)
+			rig.expectOrdered(ctx)
+			ctx.Expect(got).To(specs.EveryElement(specs.Project("scope", scopeOf, specs.Equal(persistence.Unscoped()))))
 		})
 
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), New(),
-			goakt.WithDependencies(deps...), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		return calls, pid, persistenceID
-	}
+		s.It("a failed events write never writes a snapshot nor deletes", func(ctx *specs.Context) {
+			rig := spawnSequenceRig(ctx, "", errEventsWrite)
 
-	ask := func(t *testing.T, ctx context.Context, pid *goakt.PID, msg any) *egopb.CommandReply {
-		t.Helper()
-		reply, err := goakt.Ask(ctx, pid, msg, 5*time.Second)
-		require.NoError(t, err)
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		return commandReply
-	}
+			reply := rig.ask(ctx, context.Background(), &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(replyKind(reply)).To(specs.Equal(errorReplyKind))
 
-	// runTwoCommands drives the entity across two snapshot boundaries and waits
-	// for the asynchronous retention of the second one.
-	runTwoCommands := func(t *testing.T, ctx context.Context, calls *storeCalls, pid *goakt.PID, persistenceID string) []storeCall {
-		t.Helper()
-		first := ask(t, ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
-		require.IsType(t, new(egopb.CommandReply_StateReply), first.GetReply())
-		second := ask(t, ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
-		require.IsType(t, new(egopb.CommandReply_StateReply), second.GetReply())
+			ctx.Expect(rig.calls.has(opWriteEvents, 1)).To(specs.BeTrue())
+			ctx.Consistently(func() any {
+				return rig.calls.count(opWriteSnapshot) > 0 || rig.calls.anyRetention()
+			}, specs.BeFalse(), specs.WithTimeout(time.Second))
+		})
 
-		require.Eventually(t, func() bool {
-			return calls.has(opDeleteEvents, 2) && calls.has(opDeleteSnapshots, 1)
-		}, 10*time.Second, 25*time.Millisecond)
-		return calls.snapshot()
-	}
+		s.It("a tenant scope reaches the events write, the snapshot write and the retention deletes", func(ctx *specs.Context) {
+			rig := spawnSequenceRig(ctx, "acme", nil)
 
-	// requireOrdered asserts, for the second boundary, that the events write
-	// precedes the snapshot write and that both retention deletes follow it.
-	requireOrdered := func(t *testing.T, calls *storeCalls) {
-		t.Helper()
-		write := calls.indexOf(opWriteEvents, 2)
-		snapshot := calls.indexOf(opWriteSnapshot, 2)
-		got := calls.snapshot()
-		require.GreaterOrEqual(t, write, 0, "events write for sequence 2: %v", got)
-		require.Greater(t, snapshot, write, "snapshot must follow the events write: %v", got)
-		require.Greater(t, calls.indexOf(opDeleteEvents, 2), snapshot, "event delete must follow the snapshot: %v", got)
-		require.Greater(t, calls.indexOf(opDeleteSnapshots, 1), snapshot, "snapshot delete must follow the snapshot: %v", got)
-	}
+			want, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantContext, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			tenantCtx, err := tenancy.Attach(context.Background(), tenantContext)
+			ctx.Expect(err).To(specs.BeNil())
 
-	t.Run("events write, then snapshot write, then the retention deletes", func(t *testing.T) {
-		ctx := context.Background()
-		calls, pid, persistenceID := spawn(t, "", nil)
+			got := rig.runTwoCommands(ctx, tenantCtx)
 
-		got := runTwoCommands(t, ctx, calls, pid, persistenceID)
-
-		requireOrdered(t, calls)
-		for _, call := range got {
-			assert.Equal(t, persistence.Unscoped(), call.scope, "call %s", call.op)
-		}
-	})
-
-	t.Run("a failed events write never writes a snapshot nor deletes", func(t *testing.T) {
-		ctx := context.Background()
-		calls, pid, _ := spawn(t, "", assert.AnError)
-
-		reply := ask(t, ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), reply.GetReply())
-
-		require.True(t, calls.has(opWriteEvents, 1))
-		require.Never(t, func() bool {
-			return calls.count(opWriteSnapshot) > 0 || calls.anyRetention()
-		}, time.Second, 25*time.Millisecond)
-	})
-
-	t.Run("a tenant scope reaches the events write, the snapshot write and the retention deletes", func(t *testing.T) {
-		ctx := context.Background()
-		calls, pid, persistenceID := spawn(t, "acme", nil)
-
-		want, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		tenantContext, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		tenantCtx, err := tenancy.Attach(ctx, tenantContext)
-		require.NoError(t, err)
-
-		got := runTwoCommands(t, tenantCtx, calls, pid, persistenceID)
-
-		requireOrdered(t, calls)
-		for _, op := range []string{opWriteEvents, opWriteSnapshot, opDeleteEvents, opDeleteSnapshots} {
-			seen := false
-			for _, call := range got {
-				if call.op == op {
-					seen = true
-					assert.Equal(t, want, call.scope, "%s must receive the tenant scope", op)
+			rig.expectOrdered(ctx)
+			for _, op := range []string{opWriteEvents, opWriteSnapshot, opDeleteEvents, opDeleteSnapshots} {
+				var scopes []persistence.Scope
+				for _, call := range got {
+					if call.op == op {
+						scopes = append(scopes, call.scope)
+					}
 				}
+				// the operation was called, and every call carried the tenant scope
+				ctx.Expect(scopes).To(specs.Not(specs.BeEmpty()))
+				ctx.Expect(scopes).To(specs.EveryElement(specs.Equal(want)))
 			}
-			assert.True(t, seen, "%s was never called", op)
-		}
+		})
 	})
 }
