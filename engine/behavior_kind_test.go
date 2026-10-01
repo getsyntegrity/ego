@@ -236,8 +236,8 @@ func TestNewEngineRejectsUnregistrableKindsSingleNode(t *testing.T) {
 // TestClusterNewEngineRejectsValueTypeKind covers the kind check on a
 // one-member cluster.
 func TestClusterNewEngineRejectsValueTypeKind(t *testing.T) {
-	specs.Describe(t, "New Engine Rejects Value Type Kind In Cluster Mode", func(s *specs.Spec) {
-		s.It("holds", func(sc *specs.Context) {
+	specs.Describe(t, "engine.NewEngine behavior kind check on a one-member cluster", func(s *specs.Spec) {
+		s.It("rejects a value-type event-sourced behavior kind", func(sc *specs.Context) {
 			t := sc.T
 			ctx := context.Background()
 			store := testkit.NewEventsStore()

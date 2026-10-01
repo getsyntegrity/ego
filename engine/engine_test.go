@@ -1067,8 +1067,8 @@ func TestClusterEngineSingleNodeServesProjectionsAndEntities(t *testing.T) {
 // pre-registration path; before the fix those spawns failed because node2's
 // registry was only populated by its own (never-issued) Entity() calls.
 func TestClusterEngineRemoteEntitySpawn(t *testing.T) {
-	specs.Describe(t, "Engine Multi Node Remote Entity Spawn", func(s *specs.Spec) {
-		s.It("holds", func(sc *specs.Context) {
+	specs.Describe(t, "engine.Engine.Entity placement on a two-node cluster", func(s *specs.Spec) {
+		s.It("serves entities that round-robin placement put on the node that never called Entity", func(sc *specs.Context) {
 			t := sc.T
 			ctx := context.Background()
 

@@ -129,8 +129,11 @@ Nine tests in two packages, 31 subtests in all (1+1+1+14+1+1+7+1+4), counted as 
 | `TestClusterKindsExposesEgoActors` (single-node, name clash) | `TestEngineClusterKindsExposesEgoActors` |
 | `TestApp_TwoNodeClusterPlacesAndStopsCleanly` (compose/goakt) | `TestCluster_AppTwoNodePlacesAndStopsCleanly` |
 
-The tests stay in the files where they are: each one is already a whole cluster test, so moving it to a `*_cluster_test.go` file would only add churn. Describe and It texts are untouched, so subtest names do not change. A few of them break the user's naming rule (for example `Engine Multi Node Remote Entity Spawn` / `holds`); fixing them is outside this pure-rename spec and is left for a follow-up.
+The tests stay in the files where they are: each one is already a whole cluster test, so moving it to a `*_cluster_test.go` file would only add churn. Assertions are untouched. Three Describe and It texts broke the user's naming rule, which says a file being touched gets its names fixed in the same change, so they were reworded. Only the texts changed, and the counts are the same:
+- `TestClusterNewEngineRejectsValueTypeKind`: `New Engine Rejects Value Type Kind In Cluster Mode` / `holds` became `engine.NewEngine behavior kind check on a one-member cluster` / `rejects a value-type event-sourced behavior kind`.
+- `TestClusterEngineRemoteEntitySpawn`: `Engine Multi Node Remote Entity Spawn` / `holds` became `engine.Engine.Entity placement on a two-node cluster` / `serves entities that round-robin placement put on the node that never called Entity`.
+- `TestClusterEngineRejectsUnplaceableBehaviors`: the parent `Engine Rejects Unplaceable Behaviors In Cluster Mode` became `engine.Engine spawn validation of behaviors GoAkt cannot place on a cluster`. Its children already described behaviors.
 
 ## Next step
 
-Spec 2 (`odd/tasks/test-lanes-206.md`): the CI lanes that use `-skip '^TestCluster'` and `-run '^TestCluster'`. Follow-up noted here: some Describe/It texts of the renamed tests break the naming rule (for example `Engine Multi Node Remote Entity Spawn` / `holds`) and can be reworded without changing the counts.
+Spec 2 (`odd/tasks/test-lanes-206.md`): the CI lanes that use `-skip '^TestCluster'` and `-run '^TestCluster'`.
