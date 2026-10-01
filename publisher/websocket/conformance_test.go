@@ -159,22 +159,20 @@ func TestDurableStatePublisherPublishingConformance(t *testing.T) {
 // (no Start and no Ping, per O5).
 func TestDescriptors(t *testing.T) {
 	specs.Describe(t, "each publisher declares one port, the name websocket and no capability", func(s *specs.Spec) {
-		cases := []struct {
+		type descriptorCase struct {
 			name  string
 			value any
 			port  adapter.Port
-		}{
+		}
+		specs.Table(s, []descriptorCase{
 			{"events", &EventsPublisher{}, publishing.PortEventPublisher},
 			{"state", &DurableStatePublisher{}, publishing.PortStatePublisher},
-		}
-		for _, tc := range cases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				d, ok := adapter.Describe(tc.value)
-				ctx.Expect(ok).To(specs.BeTrue())
-				ctx.Expect(d.Ports).ToEqual([]adapter.Port{tc.port})
-				ctx.Expect(d.Name).ToEqual("websocket")
-				ctx.Expect(len(d.Capabilities)).ToEqual(0)
-			})
-		}
+		}, func(c descriptorCase) string { return c.name }, func(ctx *specs.Context, c descriptorCase) {
+			d, ok := adapter.Describe(c.value)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(d.Ports).ToEqual([]adapter.Port{c.port})
+			ctx.Expect(d.Name).ToEqual("websocket")
+			ctx.Expect(d.Capabilities).To(specs.BeEmpty())
+		})
 	})
 }

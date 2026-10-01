@@ -42,7 +42,7 @@ func TestDescriptor_IsSoundAndCarriesTheModulePath(t *testing.T) {
 	specs.Describe(t, "the generated file descriptor loads, carries the module path and round-trips every message", func(s *specs.Spec) {
 		fd := egopb.File_ego_ego_proto
 		s.It("is loaded", func(ctx *specs.Context) {
-			ctx.Expect(fd == nil).To(specs.BeFalse())
+			ctx.Expect(fd).To(specs.Not(specs.BeNil()))
 		})
 		if fd == nil {
 			return
@@ -54,7 +54,7 @@ func TestDescriptor_IsSoundAndCarriesTheModulePath(t *testing.T) {
 			ctx.Expect(opts.GetGoPackage()).ToEqual(want)
 		})
 		s.It("declares messages", func(ctx *specs.Context) {
-			ctx.Expect(fd.Messages().Len() > 0).To(specs.BeTrue())
+			ctx.Expect(fd.Messages().Len()).To(specs.BeGreaterThan(0))
 		})
 
 		msgs := fd.Messages()
