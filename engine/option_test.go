@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
@@ -173,15 +172,29 @@ func (perCallerTenantResolver) Resolve(ctx context.Context) (tenancy.TenantConte
 	return tenancy.NewTenantContext(tid)
 }
 
+// beTheSame matches a value that is the very same pointer (or comparable
+// value) as want. Deep equality would also accept a second, equal instance,
+// which is not what "stores the given X" means.
+func beTheSame(want any) specs.Matcher {
+	return specs.Satisfy("the same instance", func(got any) bool { return got == want })
+}
+
+// beNilInterface matches an interface value that is nil itself. specs.BeNil
+// also accepts a typed nil wrapped in a non-nil interface, which is exactly
+// the case the typed-nil tests must tell apart.
+func beNilInterface() specs.Matcher {
+	return specs.Satisfy("a nil interface", func(got any) bool { return got == nil })
+}
+
 // buildActorSystem constructs and starts a goakt actor system from a Config so
-// the optional extension branches in Config.GoaktOptions can be inspected.
-func buildActorSystem(t *testing.T, cfg *Config) goakt.ActorSystem {
-	t.Helper()
-	ctx := context.Background()
+// the optional extension branches in Config.GoaktOptions can be inspected. The
+// system is stopped when the case ends.
+func buildActorSystem(ctx *specs.Context, cfg *Config) goakt.ActorSystem {
+	bg := context.Background()
 	sys, err := goakt.NewActorSystem("OptionTest", cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(ctx) })
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(sys.Start(bg)).To(specs.BeNil())
+	ctx.Cleanup(func() { _ = sys.Stop(bg) })
 	return sys
 }
 
@@ -189,7 +202,7 @@ func TestOptionWithLogger(t *testing.T) {
 	specs.Describe(t, "WithLogger sets the logger of the config", func(s *specs.Spec) {
 		s.It("stores the given logger", func(ctx *specs.Context) {
 			c := NewConfig(nil, WithLogger(DiscardLogger))
-			ctx.Expect(c.logger).ToEqual(DiscardLogger)
+			ctx.Expect(c.logger).To(beTheSame(DiscardLogger))
 		})
 	})
 }
@@ -199,7 +212,7 @@ func TestOptionWithStateStore(t *testing.T) {
 		s.It("stores the given state store", func(ctx *specs.Context) {
 			store := testkit.NewDurableStore()
 			c := NewConfig(nil, WithStateStore(store))
-			ctx.Expect(c.stateStore).ToEqual(store)
+			ctx.Expect(c.stateStore).To(beTheSame(store))
 		})
 	})
 }
@@ -209,7 +222,7 @@ func TestOptionWithOffsetStore(t *testing.T) {
 		s.It("stores the given offset store", func(ctx *specs.Context) {
 			store := testkit.NewOffsetStore()
 			c := NewConfig(nil, WithOffsetStore(store))
-			ctx.Expect(c.offsetStore).ToEqual(store)
+			ctx.Expect(c.offsetStore).To(beTheSame(store))
 		})
 	})
 }
@@ -219,7 +232,7 @@ func TestOptionWithSnapshotStore(t *testing.T) {
 		s.It("stores the given snapshot store", func(ctx *specs.Context) {
 			store := testkit.NewSnapshotStore()
 			c := NewConfig(nil, WithSnapshotStore(store))
-			ctx.Expect(c.snapshotStore).ToEqual(store)
+			ctx.Expect(c.snapshotStore).To(beTheSame(store))
 		})
 	})
 }
@@ -229,7 +242,7 @@ func TestOptionWithEncryptor(t *testing.T) {
 		s.It("stores the given encryptor", func(ctx *specs.Context) {
 			enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
 			c := NewConfig(nil, WithEncryptor(enc))
-			ctx.Expect(c.encryptor).ToEqual(enc)
+			ctx.Expect(c.encryptor).To(beTheSame(enc))
 		})
 	})
 }
@@ -240,7 +253,7 @@ func TestOptionWithTenantResolverNil(t *testing.T) {
 			// A nil resolver must be inert: no registration, no error, tenant-aware
 			// mode not activated (spec.md "Nil option is inert").
 			c := NewConfig(nil, WithTenantResolver(nil))
-			ctx.Expect(c.tenantResolver == nil).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beNilInterface())
 			ctx.Expect(c.tenantResolverCount).ToEqual(0)
 		})
 	})
@@ -254,7 +267,7 @@ func TestOptionWithTenantResolverTypedNil(t *testing.T) {
 			// isNilLogger does, so it is treated exactly like a plain nil.
 			var typedNil *stubTenantResolver
 			c := NewConfig(nil, WithTenantResolver(typedNil))
-			ctx.Expect(c.tenantResolver == nil).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beNilInterface())
 			ctx.Expect(c.tenantResolverCount).ToEqual(0)
 		})
 	})
@@ -270,7 +283,7 @@ func TestOptionWithTenantResolverFuncTypedNil(t *testing.T) {
 			// resolver and panic on the first Resolve call.
 			var typedNil funcTenantResolver
 			c := NewConfig(nil, WithTenantResolver(typedNil))
-			ctx.Expect(c.tenantResolver == nil).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beNilInterface())
 			ctx.Expect(c.tenantResolverCount).ToEqual(0)
 		})
 	})
@@ -284,7 +297,7 @@ func TestOptionWithTenantResolver(t *testing.T) {
 			// effective").
 			resolver := &stubTenantResolver{id: "acme"}
 			c := NewConfig(nil, WithTenantResolver(resolver))
-			ctx.Expect(c.tenantResolver == resolver).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beTheSame(resolver))
 			ctx.Expect(c.tenantResolverCount).ToEqual(1)
 		})
 	})
@@ -298,7 +311,7 @@ func TestOptionWithTenantResolverNilAfterNonNil(t *testing.T) {
 			// non-nil does not disable tenancy").
 			resolver := &stubTenantResolver{id: "acme"}
 			c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(nil))
-			ctx.Expect(c.tenantResolver == resolver).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beTheSame(resolver))
 			ctx.Expect(c.tenantResolverCount).ToEqual(1)
 		})
 	})
@@ -315,7 +328,7 @@ func TestOptionWithTenantResolverCountsOnlyNonNilRegistrations(t *testing.T) {
 				WithTenantResolver(resolver),
 				WithTenantResolver(nil),
 			)
-			ctx.Expect(c.tenantResolver == resolver).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beTheSame(resolver))
 			ctx.Expect(c.tenantResolverCount).ToEqual(1)
 		})
 	})
@@ -330,7 +343,7 @@ func TestOptionWithTenantResolverTypedNilThenValid(t *testing.T) {
 			var typedNil *stubTenantResolver
 			resolver := &stubTenantResolver{id: "acme"}
 			c := NewConfig(nil, WithTenantResolver(typedNil), WithTenantResolver(resolver))
-			ctx.Expect(c.tenantResolver == resolver).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beTheSame(resolver))
 			ctx.Expect(c.tenantResolverCount).ToEqual(1)
 		})
 	})
@@ -345,7 +358,7 @@ func TestOptionWithTenantResolverValidThenTypedNil(t *testing.T) {
 			var typedNil *stubTenantResolver
 			resolver := &stubTenantResolver{id: "acme"}
 			c := NewConfig(nil, WithTenantResolver(resolver), WithTenantResolver(typedNil))
-			ctx.Expect(c.tenantResolver == resolver).To(specs.BeTrue())
+			ctx.Expect(c.tenantResolver).To(beTheSame(resolver))
 			ctx.Expect(c.tenantResolverCount).ToEqual(1)
 		})
 	})
@@ -404,7 +417,7 @@ func TestOptionWithProjectionNil(t *testing.T) {
 	specs.Describe(t, "WithProjection ignores nil options", func(s *specs.Spec) {
 		s.It("registers no projection", func(ctx *specs.Context) {
 			c := NewConfig(nil, WithProjection("accounts", nil))
-			ctx.Expect(c.projections == nil).To(specs.BeTrue())
+			ctx.Expect(c.projections).To(specs.BeNil())
 		})
 	})
 }
@@ -415,7 +428,7 @@ func TestOptionWithTelemetry(t *testing.T) {
 			tracer := nooptrace.NewTracerProvider().Tracer("test")
 			tel := &Telemetry{Tracer: tracer}
 			c := NewConfig(nil, WithTelemetry(tel))
-			ctx.Expect(c.telemetry != nil).To(specs.BeTrue())
+			ctx.Expect(c.telemetry).To(specs.Not(specs.BeNil()))
 			ctx.Expect(c.telemetry.Tracer).ToEqual(tracer)
 		})
 	})
@@ -425,7 +438,7 @@ func TestOptionWithTelemetryNil(t *testing.T) {
 	specs.Describe(t, "WithTelemetry ignores nil telemetry", func(s *specs.Spec) {
 		s.It("leaves the config without telemetry", func(ctx *specs.Context) {
 			c := NewConfig(nil, WithTelemetry(nil))
-			ctx.Expect(c.telemetry == nil).To(specs.BeTrue())
+			ctx.Expect(c.telemetry).To(specs.BeNil())
 		})
 	})
 }
@@ -435,7 +448,7 @@ func TestOptionWithEventAdapters(t *testing.T) {
 		s.It("stores the given adapter", func(ctx *specs.Context) {
 			adapter := &testEventAdapter{}
 			c := NewConfig(nil, WithEventAdapters(adapter))
-			ctx.Expect(len(c.eventAdapters)).ToEqual(1)
+			ctx.Expect(c.eventAdapters).To(specs.HaveLen(1))
 			ctx.Expect(c.eventAdapters[0]).ToEqual(adapter)
 		})
 	})
@@ -448,7 +461,7 @@ func TestOptionWithEventAdaptersMultiple(t *testing.T) {
 				WithEventAdapters(&testEventAdapter{}),
 				WithEventAdapters(&testEventAdapter{}),
 			)
-			ctx.Expect(len(c.eventAdapters)).ToEqual(2)
+			ctx.Expect(c.eventAdapters).To(specs.HaveLen(2))
 		})
 	})
 }
@@ -466,72 +479,88 @@ func TestOptionWithLoggerNilFallback(t *testing.T) {
 }
 
 func TestConfigGoaktOptionsEncryptor(t *testing.T) {
-	// WithEncryptor must register the Encryptor extension via GoaktOptions.
-	enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
-	cfg := NewConfig(testkit.NewEventsStore(), WithEncryptor(enc))
+	specs.Describe(t, "Config.GoaktOptions registers the Encryptor extension", func(s *specs.Spec) {
+		s.It("adds the extension when WithEncryptor is set", func(ctx *specs.Context) {
+			enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
+			cfg := NewConfig(testkit.NewEventsStore(), WithEncryptor(enc))
 
-	sys := buildActorSystem(t, cfg)
-	require.NotNil(t, sys.Extension(extensions.EncryptorExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.EncryptorExtensionID)).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestConfigGoaktOptionsTenancyMarker(t *testing.T) {
-	// WithTenantResolver must register the tenancy marker extension via
-	// GoaktOptions when a non-nil resolver is configured.
-	cfg := NewConfig(testkit.NewEventsStore(), WithTenantResolver(&stubTenantResolver{id: "acme"}))
+	specs.Describe(t, "Config.GoaktOptions registers the tenancy marker extension", func(s *specs.Spec) {
+		s.It("adds the marker when a non-nil resolver is configured", func(ctx *specs.Context) {
+			cfg := NewConfig(testkit.NewEventsStore(), WithTenantResolver(&stubTenantResolver{id: "acme"}))
 
-	sys := buildActorSystem(t, cfg)
-	require.NotNil(t, sys.Extension(extensions.TenancyExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.TenancyExtensionID)).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestConfigGoaktOptionsNoTenancyMarkerWithoutResolver(t *testing.T) {
-	// Backward compatibility (T3/D7): an engine that never registers a
-	// resolver must not carry the tenancy marker extension at all.
-	cfg := NewConfig(testkit.NewEventsStore())
+	specs.Describe(t, "Config.GoaktOptions leaves the tenancy marker out without a resolver", func(s *specs.Spec) {
+		s.It("carries no marker for an engine that never registers a resolver", func(ctx *specs.Context) {
+			// Backward compatibility (T3/D7).
+			cfg := NewConfig(testkit.NewEventsStore())
 
-	sys := buildActorSystem(t, cfg)
-	require.Nil(t, sys.Extension(extensions.TenancyExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.TenancyExtensionID)).To(specs.BeNil())
+		})
+	})
 }
 
 func TestConfigGoaktOptionsNoTenancyMarkerWithTypedNilResolver(t *testing.T) {
-	// A typed-nil resolver (pointer or func) must not activate the tenancy
-	// marker extension: it is inert, not an effective registration.
-	var typedNilPointer *stubTenantResolver
-	var typedNilFunc funcTenantResolver
-	cfg := NewConfig(testkit.NewEventsStore(),
-		WithTenantResolver(typedNilPointer),
-		WithTenantResolver(typedNilFunc),
-	)
+	specs.Describe(t, "Config.GoaktOptions ignores typed-nil resolvers", func(s *specs.Spec) {
+		s.It("carries no marker for a typed-nil pointer and a typed-nil func", func(ctx *specs.Context) {
+			// A typed-nil resolver (pointer or func) is inert, not an effective
+			// registration.
+			var typedNilPointer *stubTenantResolver
+			var typedNilFunc funcTenantResolver
+			cfg := NewConfig(testkit.NewEventsStore(),
+				WithTenantResolver(typedNilPointer),
+				WithTenantResolver(typedNilFunc),
+			)
 
-	sys := buildActorSystem(t, cfg)
-	require.Nil(t, sys.Extension(extensions.TenancyExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.TenancyExtensionID)).To(specs.BeNil())
+		})
+	})
 }
 
 func TestConfigGoaktOptionsTelemetry(t *testing.T) {
-	// WithTelemetry must register the Telemetry extension via GoaktOptions.
-	tel := &Telemetry{
-		Tracer: nooptrace.NewTracerProvider().Tracer("test"),
-		Meter:  noopmetric.NewMeterProvider().Meter("test"),
-	}
-	cfg := NewConfig(testkit.NewEventsStore(), WithTelemetry(tel))
+	specs.Describe(t, "Config.GoaktOptions registers the Telemetry extension", func(s *specs.Spec) {
+		s.It("adds the extension when WithTelemetry is set", func(ctx *specs.Context) {
+			tel := &Telemetry{
+				Tracer: nooptrace.NewTracerProvider().Tracer("test"),
+				Meter:  noopmetric.NewMeterProvider().Meter("test"),
+			}
+			cfg := NewConfig(testkit.NewEventsStore(), WithTelemetry(tel))
 
-	sys := buildActorSystem(t, cfg)
-	require.NotNil(t, sys.Extension(extensions.TelemetryExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.TelemetryExtensionID)).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestConfigGoaktOptionsProjectionDefaultsRecovery(t *testing.T) {
-	// When a projection is configured without a Recovery, GoaktOptions
-	// should still register the extension by falling back to a default
-	// recovery strategy.
-	cfg := NewConfig(testkit.NewEventsStore(),
-		WithProjection("accounts", &projection.Options{
-			Handler:      projection.NewDiscardHandler(),
-			BufferSize:   10,
-			PullInterval: time.Second,
-		}),
-	)
+	specs.Describe(t, "Config.GoaktOptions registers the projection extension", func(s *specs.Spec) {
+		s.It("falls back to a default recovery when the projection has none", func(ctx *specs.Context) {
+			cfg := NewConfig(testkit.NewEventsStore(),
+				WithProjection("accounts", &projection.Options{
+					Handler:      projection.NewDiscardHandler(),
+					BufferSize:   10,
+					PullInterval: time.Second,
+				}),
+			)
 
-	sys := buildActorSystem(t, cfg)
-	require.NotNil(t, sys.Extension(extensions.ProjectionExtensionID))
+			sys := buildActorSystem(ctx, cfg)
+			ctx.Expect(sys.Extension(extensions.ProjectionExtensionID)).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 // TestClusterKindsExposesEgoActors pins the GoAkt kind names of the cluster
