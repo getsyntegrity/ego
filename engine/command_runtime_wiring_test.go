@@ -199,7 +199,7 @@ func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
 
 			var zeroEnv command.Envelope
 
-			sc.Expect(panicValueG1(func() {
+			sc.Expect(panicValue(func() {
 				result, err := engine.Dispatch(ctx, entityID, zeroEnv, time.Minute)
 				sc.Expect(err).To(specs.Not(specs.BeNil()))
 				sc.Expect(err).To(specs.MatchError(command.ErrInvalidEnvelope))

@@ -103,8 +103,8 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		const shardNumber = uint64(9)
 
 		s.It("recovers from transient store failure without restarting", func(ctx *specs.Context) {
-			journalStore := connectedEventsStoreG4(ctx)
-			offsetStore := connectedOffsetStoreG4(ctx)
+			journalStore := connectedEventsStore(ctx)
+			offsetStore := connectedOffsetStore(ctx)
 
 			// fail the first ShardOffsets round trip, then recover
 			eventsStore := &flakyEventsStore{EventsStore: journalStore, failures: atomic.NewInt32(1)}
@@ -134,8 +134,8 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 		})
 
 		s.It("stops on unprocessable event", func(ctx *specs.Context) {
-			journalStore := connectedEventsStoreG4(ctx)
-			offsetStore := connectedOffsetStoreG4(ctx)
+			journalStore := connectedEventsStore(ctx)
+			offsetStore := connectedOffsetStore(ctx)
 
 			// failingProjectionHandler always fails and the default recovery policy is Fail
 			actorSystem := startProjectionSystemG4(ctx, projectionName, journalStore, offsetStore, failingProjectionHandler{})

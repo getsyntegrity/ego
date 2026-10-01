@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.26
 # CI tooling image for ego. Mirrors the toolchain previously declared in the
-# Earthfile so that Makefile targets (docker-lint, docker-test, docker-mock,
+# Earthfile so that Makefile targets (docker-lint, docker-test,
 # docker-protogen) can run in a hermetic container.
 
 FROM golang:1.27.0-alpine
@@ -41,10 +41,6 @@ RUN set -eu; \
         sleep 5; \
     done; \
     golangci-lint --version
-
-# vektra/mockery — held on v2.x; the v3 line drops the CLI-flag interface
-# the docker-mock target relies on.
-RUN go install github.com/vektra/mockery/v2@v2.53.6
 
 ENV PATH="/go/bin:/usr/local/bin:${PATH}"
 

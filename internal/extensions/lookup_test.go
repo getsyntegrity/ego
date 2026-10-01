@@ -34,6 +34,7 @@ import (
 	"github.com/tochemey/goakt/v4/log"
 
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
@@ -133,7 +134,7 @@ func TestRequireExtension(t *testing.T) {
 			bg := context.Background()
 			ctrl := mock.NewController(ctx)
 			expectPing(ctrl)
-			store := eventsStoreMock{ctrl}
+			store := enginetest.NewEventsStoreMock(ctrl)
 			system := startActorSystem(ctx, "TestRequireExtensionOKSystem",
 				goakt.WithExtensions(extensions.NewEventsStore(store)))
 
@@ -213,7 +214,7 @@ func TestOptionalExtension(t *testing.T) {
 			bg := context.Background()
 			ctrl := mock.NewController(ctx)
 			expectPing(ctrl)
-			store := eventsStoreMock{ctrl}
+			store := enginetest.NewEventsStoreMock(ctrl)
 			system := startActorSystem(ctx, "TestOptionalExtensionOKSystem",
 				goakt.WithExtensions(extensions.NewEventsStore(store)))
 

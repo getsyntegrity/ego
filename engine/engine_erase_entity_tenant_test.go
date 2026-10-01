@@ -58,7 +58,7 @@ func TestEngineEraseEntityCannotEraseAnotherTenantsRecord(t *testing.T) {
 			bg := context.Background()
 			persistenceID := uuid.NewString()
 
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			scopeA, err := persistence.NewTenantScope("acme")
 			ctx.Expect(err).To(specs.BeNil())
@@ -81,7 +81,7 @@ func TestEngineEraseEntityCannotEraseAnotherTenantsRecord(t *testing.T) {
 
 			// perCallerTenantResolver (option_test.go) resolves whichever tenant id
 			// the caller placed on ctx under perCallerTenantKey.
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			ctxA := context.WithValue(bg, perCallerTenantKey{}, "acme")

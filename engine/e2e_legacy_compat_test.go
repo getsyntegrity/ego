@@ -53,7 +53,7 @@ func legacyCompatCasesG4() []legacyCompatCaseG4 {
 		{
 			actor: "EventSourcedActor",
 			spawn: func(ctx *specs.Context, name string) (*Engine, string) {
-				engine := newTestEngine(ctx.T, name, connectedEventsStoreG4(ctx), WithLogger(DiscardLogger))
+				engine := newTestEngine(ctx.T, name, connectedEventsStore(ctx), WithLogger(DiscardLogger))
 				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 				entityID := uuid.NewString()
 				ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
@@ -73,17 +73,17 @@ func legacyCompatCasesG4() []legacyCompatCaseG4 {
 		{
 			actor: "DurableStateActor",
 			spawn: func(ctx *specs.Context, name string) (*Engine, string) {
-				engine := newTestEngine(ctx.T, name, nil, WithLogger(DiscardLogger), WithStateStore(connectedStateStoreG4(ctx)))
+				engine := newTestEngine(ctx.T, name, nil, WithLogger(DiscardLogger), WithStateStore(connectedDurableStore(ctx)))
 				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 				entityID := uuid.NewString()
 				ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 				return engine, entityID
 			},
 			first: func(ctx *specs.Context, engine *Engine, entityID string) {
-				// dispatchWithMetadataG4 with zero MetadataOptions declares no
+				// dispatch with zero MetadataOptions declares no
 				// ExpectedRevision, matching the legacy caller contract for
 				// DurableStateActor as well.
-				created := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 100})
+				created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 100})
 				ctx.Expect(created.Outcome()).To(specs.Equal(command.OutcomeSuccess))
 				ctx.Expect(created.Revision()).ToEqual(uint64(1))
 			},
@@ -117,7 +117,7 @@ func TestLegacyCompatEventSourcedAndDurableStateNeverConflict(t *testing.T) {
 			// entity: Unconditional() never declares an expectation that can go
 			// stale, so none of these may ever surface concurrency_conflict,
 			// regardless of the concurrent dispatch racing through the mailbox.
-			// dispatchWithMetadataG4 with zero MetadataOptions declares no
+			// dispatch with zero MetadataOptions declares no
 			// ExpectedRevision -- the same absence contract as the legacy path.
 			const n = 10
 			var wg sync.WaitGroup
@@ -126,7 +126,7 @@ func TestLegacyCompatEventSourcedAndDurableStateNeverConflict(t *testing.T) {
 			for i := range n {
 				ctx.Go(func(task *specs.Context) {
 					defer wg.Done()
-					results[i] = dispatchWithMetadataG4(task, engine, entityID,
+					results[i] = dispatch(task, engine, entityID,
 						&testpb.CreditAccount{AccountId: entityID, Balance: 1})
 				})
 			}
@@ -152,14 +152,14 @@ func TestLegacyCompatEventSourcedAndDurableStateNeverConflict(t *testing.T) {
 		}, func(ctx *specs.Context, c legacyCompatCaseG4) {
 			engine, entityID := c.spawn(ctx, "e2e-legacy-genesis-"+c.actor)
 
-			result := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
 			ctx.Expect(result.Outcome()).To(specs.Equal(command.OutcomeSuccess))
 			ctx.Expect(result.Revision()).ToEqual(uint64(1))
 
 			// A second genesis declaration against the now-existing aggregate must
 			// be rejected as a conflict, proving 0 was read as ExpectGenesis(),
 			// never as Unconditional() nor silently ignored.
-			conflict := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
+			conflict := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
 			ctx.Expect(conflict.Outcome()).To(specs.Equal(command.OutcomeRejected))
 			failure, ok := conflict.Failure()
 			ctx.Expect(ok).To(specs.BeTrue())

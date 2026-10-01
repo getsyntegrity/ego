@@ -47,6 +47,7 @@ import (
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
 	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/instrumentation"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
@@ -116,10 +117,10 @@ type unprocessableCase struct {
 
 // decrypting is an encryptor whose Decrypt of the fixture cipher answers
 // plaintext and err.
-func decrypting(ctx *specs.Context, fx unprocessableFixture, plaintext []byte, err error) encryptorMock {
+func decrypting(ctx *specs.Context, fx unprocessableFixture, plaintext []byte, err error) *enginetest.EncryptorMock {
 	ctrl := mock.NewController(ctx)
 	ctrl.Method("Decrypt").Expect(mock.Any(), fx.persistenceID, fx.cipher, "key-1").Return(plaintext, err).AtLeast(1)
-	return encryptorMock{ctrl}
+	return enginetest.NewEncryptorMock(ctrl)
 }
 
 func TestProjectionRunnerErrorPaths(t *testing.T) {
@@ -143,7 +144,7 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 				arrange: func(ctx *specs.Context, fx unprocessableFixture) ([]*egopb.Event, []Option) {
 					adapterCtrl := mock.NewController(ctx)
 					adapterCtrl.Method("Adapt").Expect(fx.plain[0].GetEvent(), uint64(1)).Return(nil, errFailed).AtLeast(1)
-					return fx.plain, []Option{WithEventAdapters([]eventadapter.EventAdapter{eventAdapterMock{adapterCtrl}})}
+					return fx.plain, []Option{WithEventAdapters([]eventadapter.EventAdapter{enginetest.NewEventAdapterMock(adapterCtrl)})}
 				},
 			},
 		}, func(c unprocessableCase) string { return c.name }, func(ctx *specs.Context, c unprocessableCase) {
@@ -202,13 +203,13 @@ func TestProjectionRunnerErrorPaths(t *testing.T) {
 			resetOffsetTo := time.Now().UTC()
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
 			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
@@ -256,13 +257,13 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			projectionName := "db-writer"
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			// the first ShardOffsets round trip fails, subsequent ones succeed
 			retried := atomic.NewInt32(0)
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(nil, errFailed).Times(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
@@ -327,12 +328,12 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			maxBufferSize := 10
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffset.AsTime().UnixMilli()}, nil).AtLeast(1)
 			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
@@ -387,14 +388,14 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			maxBufferSize := 10
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), mock.Any()).Return(&egopb.Offset{Value: offsetValue}, nil).AtLeast(1)
 
 			// one shard fails its store round trip while the other returns an
 			// event the handler cannot process
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{storeShard: nextOffset, poisonShard: nextOffset}, nil).AtLeast(1)
 			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), storeShard, offsetValue, uint64(maxBufferSize)).Return(nil, int64(0), errFailed).AtLeast(1)
@@ -424,12 +425,12 @@ func TestProjectionRunnerFatalPaths(t *testing.T) {
 			projectionName := "db-writer"
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			pulls := atomic.NewInt32(0)
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
 				Do(func([]any) []any { pulls.Inc(); return []any{nil, errFailed} })
@@ -785,14 +786,14 @@ func TestRunner(t *testing.T) {
 			maxBufferSize := 10
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
 			// the panicking handler must never get its offset committed
 			offsetCtrl.Method("WriteOffset").Expect(mock.Any(), mock.Any()).Never()
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
 			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
@@ -887,7 +888,7 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(offsetStore.Connect(bg)).To(specs.BeNil())
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
@@ -910,7 +911,7 @@ func TestRunner(t *testing.T) {
 			ctx.Expect(eventsStore.Connect(bg)).To(specs.BeNil())
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(errors.New("fail ping")).AtLeast(1)
 
 			// create an instance of the projection
@@ -928,12 +929,12 @@ func TestRunner(t *testing.T) {
 			projectionName := "db-writer"
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			resetOffsetTo := time.Now().UTC()
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("ResetOffset").Expect(bg, projectionName, resetOffsetTo.UnixMilli()).Return(errors.New("fail to reset offset")).AtLeast(1)
 
@@ -1023,12 +1024,12 @@ func TestRunner(t *testing.T) {
 
 			// the stubs every row shares; the row adds the failing round trip
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 
 			failures := atomic.NewInt32(0)
@@ -1390,7 +1391,7 @@ func TestRunner(t *testing.T) {
 
 			writes := atomic.NewInt32(0)
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("ResetOffset").Expect(mock.Any(), projectionName, resetOffsetTo.UnixMilli()).Return(nil).AtLeast(1)
 			offsetCtrl.Method("GetCurrentOffset").Expect(mock.Any(), projectionID).Return(offset, nil).AtLeast(1)
@@ -1398,7 +1399,7 @@ func TestRunner(t *testing.T) {
 				Do(func([]any) []any { writes.Inc(); return []any{nil} })
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).Return(map[uint64]int64{shardNumber: nextOffsetValue.AsTime().UnixMilli()}, nil).AtLeast(1)
 			eventsCtrl.Method("GetShardEvents").Expect(mock.Any(), shardNumber, offset.GetValue(), uint64(maxBufferSize)).
@@ -1593,7 +1594,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			pulls := atomic.NewInt32(0)
 
 			offsetCtrl := mock.NewController(ctx)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			// the committed offset must be resolved from the store exactly once:
 			// afterwards the runner serves it from its in-memory cache.
@@ -1609,7 +1610,7 @@ func TestRunnerPullEfficiency(t *testing.T) {
 			})).Times(1).Do(func([]any) []any { writes.Inc(); return []any{nil} })
 
 			eventsCtrl := mock.NewController(ctx)
-			eventsStore := eventsStoreMock{eventsCtrl}
+			eventsStore := enginetest.NewEventsStoreMock(eventsCtrl)
 			eventsCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AtLeast(1)
 			eventsCtrl.Method("ShardOffsets").Expect(mock.Any()).AtLeast(1).
 				Do(func([]any) []any { pulls.Inc(); return []any{map[uint64]int64{shardNumber: latestOffset}, nil} })

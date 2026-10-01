@@ -6,7 +6,6 @@ require (
 	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/google/uuid v1.6.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
-	github.com/stretchr/testify v1.12.1
 	github.com/tochemey/goakt/v4 v4.5.4
 	github.com/travisjeffery/go-dynaport v1.0.0
 	go.opentelemetry.io/otel v1.46.0
@@ -54,7 +53,6 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/reugn/go-quartz v0.15.2 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
-	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/redcon v1.6.4 // indirect
@@ -68,7 +66,6 @@ require (
 	go.mongodb.org/mongo-driver v1.17.9 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.uber.org/zap v1.28.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

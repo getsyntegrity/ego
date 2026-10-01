@@ -50,12 +50,12 @@ import (
 
 func newRespawnTestEngine(ctx *specs.Context) *Engine {
 	bg := context.Background()
-	eventsStore := newConnectedEventsStoreG3(ctx)
+	eventsStore := connectedEventsStore(ctx)
 	stateStore := testkit.NewDurableStore()
 	ctx.Expect(stateStore.Connect(bg)).To(specs.BeNil())
 	ctx.Cleanup(func() { _ = stateStore.Disconnect(bg) })
 
-	engine := newSpecsEngineG3(ctx, "Respawn", eventsStore,
+	engine := newSpecsEngine(ctx, "Respawn", eventsStore,
 		WithTenantResolver(perCallerTenantResolver{}),
 		WithStateStore(stateStore))
 	ctx.Expect(engine.Start(bg)).To(specs.BeNil())
@@ -185,9 +185,9 @@ func TestEngineRespawnInLegacyModeIsUnchanged(t *testing.T) {
 	specs.Describe(t, "respawning a live id without a resolver", func(s *specs.Spec) {
 		s.It("stays a no-op success and ignores WithTenant", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
-			engine := newSpecsEngineG3(ctx, "RespawnLegacy", store)
+			engine := newSpecsEngine(ctx, "RespawnLegacy", store)
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			id := uuid.NewString()

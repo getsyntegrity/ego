@@ -32,7 +32,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
@@ -49,51 +48,24 @@ import (
 // reason since the machinery is already in place.
 // -----------------------------------------------------------------------
 
-// dispatchWithMetadata wraps payload in a command.Envelope carrying opts and
-// sends it through engine.Dispatch, returning the resulting command.Result.
-// It is a test-only convenience over the canonical entry point real callers
-// use to declare an ExpectedRevision (design.md D5); SendCommand (the legacy
-// path exercised separately by TestEventSourcedLegacyCommandIsUnconditional)
-// never carries one.
-//
-// Spec files should call dispatchG2 instead. This variant takes a plain
-// *testing.T for the test files that are not on go-specs yet, and goes away
-// with them.
-func dispatchWithMetadata(t *testing.T, engine *Engine, entityID string, payload proto.Message, opts ...command.MetadataOption) command.Result {
-	t.Helper()
-	md, err := command.NewMetadata(command.OperationID(uuid.NewString()), opts...)
-	if err != nil {
-		t.Fatalf("building command metadata: %v", err)
-	}
-	env, err := command.NewEnvelope(payload, md)
-	if err != nil {
-		t.Fatalf("building command envelope: %v", err)
-	}
-	result, err := engine.Dispatch(context.Background(), entityID, env, time.Minute)
-	if err != nil {
-		t.Fatalf("dispatching command: %v", err)
-	}
-	return result
-}
-
 // ES-success: expected revision matches the aggregate's current revision.
 func TestEventSourcedExpectedRevisionSuccessMatchesCurrent(t *testing.T) {
 	specs.Describe(t, "an ExpectedRevision that matches the aggregate's current revision", func(s *specs.Spec) {
 		s.It("commits each command and advances the revision", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-success", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-success", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(1)
 
-			result = dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, result)
+			result = dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
-			specs.ExpectT(ctx, accountOfG2(ctx, result).GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
 		})
 	})
 }
@@ -106,20 +78,20 @@ func TestEventSourcedExpectedRevisionSuccessMatchesCurrent(t *testing.T) {
 func TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict(t *testing.T) {
 	specs.Describe(t, "an ExpectedRevision that is behind the aggregate's current revision", func(s *specs.Spec) {
 		s.It("is rejected as a concurrency conflict carrying the real revisions", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-stale", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-stale", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
 
-			expectConcurrencyConflictG2(ctx, result)
-			conflict := conflictErrorG2(ctx, result)
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
 			ctx.Expect(result.Err()).To(specs.MatchError(command.ErrRejected))
 			actual, ok := conflict.ActualRevision()
 			ctx.Expect(ok).To(specs.BeTrue())
@@ -133,14 +105,14 @@ func TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict(t *testing.T) {
 func TestEventSourcedExpectedRevisionGenesisSucceedsOnNewAggregate(t *testing.T) {
 	specs.Describe(t, "the genesis ExpectedRevision on a brand-new aggregate", func(s *specs.Spec) {
 		s.It("commits the first event", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-genesis-success", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-genesis-success", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(1)
 		})
 	})
@@ -152,20 +124,20 @@ func TestEventSourcedExpectedRevisionGenesisSucceedsOnNewAggregate(t *testing.T)
 func TestEventSourcedExpectedRevisionGenesisConflictsOnExistingAggregate(t *testing.T) {
 	specs.Describe(t, "the genesis ExpectedRevision on an aggregate that already has events", func(s *specs.Spec) {
 		s.It("is rejected as a concurrency conflict carrying the real revisions", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-genesis-conflict", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-genesis-conflict", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
 
-			expectConcurrencyConflictG2(ctx, result)
-			conflict := conflictErrorG2(ctx, result)
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
 			actual, ok := conflict.ActualRevision()
 			ctx.Expect(ok).To(specs.BeTrue())
 			specs.ExpectT(ctx, actual).ToEqual(1)
@@ -181,8 +153,8 @@ func TestEventSourcedLegacyCommandIsUnconditional(t *testing.T) {
 	specs.Describe(t, "a command sent through the legacy SendCommand entry point", func(s *specs.Spec) {
 		s.It("keeps writing unconditionally", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-legacy", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-legacy", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
@@ -235,21 +207,21 @@ func (s *preconditionSpyEventsStore) recorded() []persistence.WritePrecondition 
 func TestEventSourcedExpectedRevisionPropagatesToPersistencePrecondition(t *testing.T) {
 	specs.Describe(t, "the ExpectedRevision of a dispatched command", func(s *specs.Spec) {
 		s.It("reaches WriteEvents as the matching write precondition", func(ctx *specs.Context) {
-			underlying := connectedEventsStoreG2(ctx)
+			underlying := connectedEventsStore(ctx)
 			spy := &preconditionSpyEventsStore{EventStore: underlying}
 
-			engine := startEngineG2(ctx, "ES-propagation", spy, WithLogger(DiscardLogger))
+			engine := startEngine(ctx, "ES-propagation", spy, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500})
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500})
+			expectSuccess(ctx, result)
 
-			result = dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, result)
+			result = dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 
-			result = dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 1}, command.WithExpectedRevision(0))
+			result = dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 1}, command.WithExpectedRevision(0))
 			ctx.Expect(result.Outcome()).ToEqual(command.OutcomeRejected)
 
 			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{
@@ -270,23 +242,23 @@ func TestEventSourcedExpectedRevisionPropagatesToPersistencePrecondition(t *test
 func TestEventSourcedActorStaysConsistentAfterConflict(t *testing.T) {
 	specs.Describe(t, "an event sourced actor after a rejected conflicting write", func(s *specs.Spec) {
 		s.It("accepts the next command that declares the correct revision", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-conflict-state", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-conflict-state", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-			conflicted := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
 			ctx.Expect(conflicted.Outcome()).ToEqual(command.OutcomeRejected)
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
-			specs.ExpectT(ctx, accountOfG2(ctx, result).GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
 		})
 	})
 }
@@ -300,21 +272,21 @@ func TestEventSourcedActorStaysConsistentAfterConflict(t *testing.T) {
 func TestEventSourcedBatchedExpectedRevisionSuccessAndConflict(t *testing.T) {
 	specs.Describe(t, "an ExpectedRevision on a batched event sourced actor", func(s *specs.Spec) {
 		s.It("commits the matching command and rejects the conflicting one", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-batched", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-batched", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID), WithBatchThreshold(1))).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-			conflicted := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
-			expectConcurrencyConflictG2(ctx, conflicted)
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
+			expectConcurrencyConflict(ctx, conflicted)
 
-			result := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-			expectSuccessG2(ctx, result)
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
 		})
 	})
@@ -426,15 +398,15 @@ func (x *revisionProbeEventSourcedBehavior) observedPriorBalances() []float64 {
 func TestEventSourcedHandlerArgumentsNeverCarryExpectedRevision(t *testing.T) {
 	specs.Describe(t, "the arguments an event sourced handler receives", func(s *specs.Spec) {
 		s.It("never carry the declared ExpectedRevision", func(ctx *specs.Context) {
-			store := connectedEventsStoreG2(ctx)
-			engine := startEngineG2(ctx, "ES-handler-shape", store, WithLogger(DiscardLogger))
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-handler-shape", store, WithLogger(DiscardLogger))
 
 			entityID := uuid.NewString()
 			behavior := newRevisionProbeEventSourcedBehavior(entityID)
 			ctx.Expect(engine.Entity(context.Background(), behavior)).To(specs.BeNil())
 
-			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-			expectSuccessG2(ctx, created)
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
 			// A deliberately bogus ExpectedRevision, unrelated to the real revision
@@ -444,7 +416,7 @@ func TestEventSourcedHandlerArgumentsNeverCarryExpectedRevision(t *testing.T) {
 			// downstream as a concurrency_conflict (proven by
 			// TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict), but that
 			// must have no bearing on what the handler already saw.
-			conflicted := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(999999))
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(999999))
 			ctx.Expect(conflicted.Outcome()).ToEqual(command.OutcomeRejected)
 
 			// HandleCommand must still be invoked for the rejected command --

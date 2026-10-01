@@ -59,7 +59,7 @@ func TestEngineRemoteSpawnTenantBinding(t *testing.T) {
 			}
 
 			newNode := func(gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
-				store := newConnectedEventsStoreG3(ctx)
+				store := connectedEventsStore(ctx)
 
 				cfg := NewConfig(store,
 					WithLogger(DiscardLogger),

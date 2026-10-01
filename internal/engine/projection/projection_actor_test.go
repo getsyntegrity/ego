@@ -283,7 +283,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 			// Ping succeeds so the store-connectivity retrier passes immediately.
 			ctrl := mock.NewController(ctx)
 			ctrl.Method("Ping").Expect(mock.Any()).Return(nil).AnyTimes()
-			eventsStore := eventsStoreMock{ctrl}
+			eventsStore := enginetest.NewEventsStoreMock(ctrl)
 
 			// Ping succeeds but ResetOffset returns an error, causing preStart
 			// and therefore runner.Start to fail.
@@ -292,7 +292,7 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 			offsetCtrl.Method("ResetOffset").
 				Expect(mock.Any(), projectionName, resetAt.UnixMilli()).
 				Return(errResetFailed).AtLeast(1)
-			offsetStore := offsetStoreMock{offsetCtrl}
+			offsetStore := enginetest.NewOffsetStoreMock(offsetCtrl)
 
 			system := startSystem(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventsStore),
@@ -333,8 +333,8 @@ func TestProjectionActorPreStartFailure(t *testing.T) {
 			offsetCtrl.Method("Ping").Expect(mock.Any()).Return(nil).AnyTimes()
 
 			system := startSystem(ctx, c.system, 1,
-				extensions.NewEventsStore(eventsStoreMock{ctrl}),
-				extensions.NewOffsetStore(offsetStoreMock{offsetCtrl}),
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)),
+				extensions.NewOffsetStore(enginetest.NewOffsetStoreMock(offsetCtrl)),
 				projectionOptions(nil),
 				&enginetest.MistypedExtension{Name: c.extensionID})
 

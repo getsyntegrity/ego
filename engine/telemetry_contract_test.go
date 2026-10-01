@@ -229,10 +229,10 @@ func TestTelemetryContract(t *testing.T) {
 			tracer := provider.Tracer("ego-contract")
 			meter := newRecordingMeter()
 
-			engine := newTestEngine(ctx.T, "Sample", connectedEventsStoreG4(ctx),
+			engine := newTestEngine(ctx.T, "Sample", connectedEventsStore(ctx),
 				WithLogger(DiscardLogger),
-				WithOffsetStore(connectedOffsetStoreG4(ctx)),
-				WithStateStore(connectedStateStoreG4(ctx)),
+				WithOffsetStore(connectedOffsetStore(ctx)),
+				WithStateStore(connectedDurableStore(ctx)),
 				WithTelemetry(&Telemetry{Tracer: tracer, Meter: meter}),
 				WithProjection("discard", &projection.Options{
 					Handler:      projection.NewDiscardHandler(),
@@ -366,9 +366,9 @@ func TestTelemetryDisabled(t *testing.T) {
 			ctx.Cleanup(func() { otel.SetTextMapPropagator(previous) })
 			otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
 
-			engine := newTestEngine(ctx.T, "Sample", connectedEventsStoreG4(ctx),
+			engine := newTestEngine(ctx.T, "Sample", connectedEventsStore(ctx),
 				WithLogger(DiscardLogger),
-				WithOffsetStore(connectedOffsetStoreG4(ctx)),
+				WithOffsetStore(connectedOffsetStore(ctx)),
 				WithProjection("discard", &projection.Options{
 					Handler:      projection.NewDiscardHandler(),
 					BufferSize:   100,

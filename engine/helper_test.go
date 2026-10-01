@@ -26,9 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
 
@@ -49,11 +47,17 @@ func newTestEngine(t *testing.T, name string, eventsStore persistence.EventsStor
 
 	cfg := NewConfig(eventsStore, opts...)
 	sys, err := goakt.NewActorSystem(name, cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
+	if err != nil {
+		t.Fatalf("new actor system: %v", err)
+	}
+	if err := sys.Start(ctx); err != nil {
+		t.Fatalf("start actor system: %v", err)
+	}
 
 	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
 
 	t.Cleanup(func() {
 		_ = engine.Stop(context.Background())
@@ -138,9 +142,6 @@ func (s *testSagaBehavior) UnmarshalBinary(data []byte) error {
 	s.entityID = aux.EntityID
 	return nil
 }
-
-// ensure time is used
-var _ = time.Second
 
 // The event sourced fixtures live in enginetest so that the actor packages
 // share one definition with these tests.

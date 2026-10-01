@@ -314,7 +314,7 @@ func nilBehaviorRejectionSpecs(s *specs.Spec, engine func() *Engine) {
 			sys := e.ActorSystem()
 			before := sys.NumActors()
 			var err error
-			sc.Expect(panicValueG1(func() { err = tc.spawn(ctx, e) })).To(specs.BeNil())
+			sc.Expect(panicValue(func() { err = tc.spawn(ctx, e) })).To(specs.BeNil())
 			sc.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
 			var placement *BehaviorPlacementError
 			sc.Expect(err).To(specs.MatchErrorAs(&placement))

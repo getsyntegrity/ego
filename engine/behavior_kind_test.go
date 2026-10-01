@@ -174,7 +174,7 @@ func TestNewEngineAcceptsTypedNilPointerKind(t *testing.T) {
 				sc.Expect(sys.Start(ctx)).To(specs.BeNil())
 
 				var engine *Engine
-				sc.Expect(panicValueG1(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
+				sc.Expect(panicValue(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
 				sc.Expect(err).To(specs.BeNil())
 				sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 				sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
@@ -194,7 +194,7 @@ func requireKindRejected(sc *specs.Context, sys goakt.ActorSystem, cfg *Config, 
 		engine *Engine
 		err    error
 	)
-	sc.Expect(panicValueG1(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
+	sc.Expect(panicValue(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
 	sc.Expect(engine).To(specs.BeNil())
 	sc.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
 	var placement *BehaviorPlacementError

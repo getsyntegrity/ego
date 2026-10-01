@@ -316,3 +316,74 @@ func TestEventAdapterMock(t *testing.T) {
 		})
 	})
 }
+
+func TestOffsetStoreMock(t *testing.T) {
+	specs.Describe(t, "OffsetStoreMock forwards every OffsetStore method to a mock.Controller", func(s *specs.Spec) {
+		bg := context.Background()
+
+		s.It("returns the scripted values, in signature order, from every method", func(ctx *specs.Context) {
+			c := mock.NewController(ctx)
+			store := enginetest.NewOffsetStoreMock(c)
+			id := &egopb.ProjectionId{ProjectionName: "p"}
+			offset := &egopb.Offset{ProjectionName: "p", Value: 7}
+
+			c.Method("Connect").Expect(mock.Any()).Return(nil)
+			c.Method("Disconnect").Expect(mock.Any()).Return(nil)
+			c.Method("Ping").Expect(mock.Any()).Return(nil)
+			c.Method("WriteOffset").Expect(bg, offset).Return(nil)
+			c.Method("GetCurrentOffset").Expect(bg, id).Return(offset, nil)
+			c.Method("ResetOffset").Expect(bg, "p", int64(3)).Return(nil)
+
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.Disconnect(bg)).To(specs.BeNil())
+			ctx.Expect(store.Ping(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteOffset(bg, offset)).To(specs.BeNil())
+			got, err := store.GetCurrentOffset(bg, id)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Equal(offset))
+			ctx.Expect(store.ResetOffset(bg, "p", 3)).To(specs.BeNil())
+		})
+
+		s.It("returns the scripted error", func(ctx *specs.Context) {
+			c := mock.NewController(ctx)
+			store := enginetest.NewOffsetStoreMock(c)
+			c.Method("GetCurrentOffset").Expect(mock.Any(), mock.Any()).Return(nil, errBoom)
+
+			got, err := store.GetCurrentOffset(bg, &egopb.ProjectionId{})
+			ctx.Expect(err).To(specs.MatchError(errBoom))
+			ctx.Expect(got).To(specs.BeNil())
+		})
+	})
+}
+
+func TestPublisherMocks(t *testing.T) {
+	specs.Describe(t, "the publisher mocks forward ID, Publish and Close to a mock.Controller", func(s *specs.Spec) {
+		bg := context.Background()
+
+		s.It("EventPublisherMock returns the scripted values", func(ctx *specs.Context) {
+			c := mock.NewController(ctx)
+			pub := enginetest.NewEventPublisherMock(c)
+			event := &egopb.Event{PersistenceId: "p1"}
+			c.Method("ID").Expect().Return("events")
+			c.Method("Publish").Expect(bg, event).Return(errBoom)
+			c.Method("Close").Expect(bg).Return(nil)
+
+			ctx.Expect(pub.ID()).ToEqual("events")
+			ctx.Expect(pub.Publish(bg, event)).To(specs.MatchError(errBoom))
+			ctx.Expect(pub.Close(bg)).To(specs.BeNil())
+		})
+
+		s.It("StatePublisherMock returns the scripted values", func(ctx *specs.Context) {
+			c := mock.NewController(ctx)
+			pub := enginetest.NewStatePublisherMock(c)
+			state := &egopb.DurableState{PersistenceId: "p1"}
+			c.Method("ID").Expect().Return("states")
+			c.Method("Publish").Expect(bg, state).Return(errBoom)
+			c.Method("Close").Expect(bg).Return(nil)
+
+			ctx.Expect(pub.ID()).ToEqual("states")
+			ctx.Expect(pub.Publish(bg, state)).To(specs.MatchError(errBoom))
+			ctx.Expect(pub.Close(bg)).To(specs.BeNil())
+		})
+	})
+}

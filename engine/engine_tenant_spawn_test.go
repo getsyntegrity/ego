@@ -31,6 +31,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -63,9 +64,9 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 			// call to it (Ping, GetLatestEvent, WriteEvents, ...) is reported as an
 			// unexpected call, and spawnTenantScope must reject before the actor is
 			// ever created, let alone reaches a store.
-			store := eventsStoreMock{mock.NewController(ctx)}
+			store := enginetest.NewEventsStoreMock(mock.NewController(ctx))
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
@@ -85,10 +86,10 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 		})
 
 		s.It("DurableStateEntity refuses to spawn and touches no store", func(ctx *specs.Context) {
-			store := newConnectedEventsStoreG3(ctx)
-			durableStore := stateStoreMock{mock.NewController(ctx)}
+			store := connectedEventsStore(ctx)
+			durableStore := enginetest.NewStateStoreMock(mock.NewController(ctx))
 
-			engine := newSpecsEngineG3(ctx, "Sample", store,
+			engine := newSpecsEngine(ctx, "Sample", store,
 				WithTenantResolver(&stubTenantResolver{id: "acme"}),
 				WithStateStore(durableStore))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
@@ -119,10 +120,10 @@ func TestEngineEntitySpawnWithExplicitTenantResolvesOnce(t *testing.T) {
 	specs.Describe(t, "Resolve is invoked once per spawn-plus-command sequence, by SendCommand", func(s *specs.Spec) {
 		s.It("never resolves at spawn when the tenant was declared via WithTenant", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			resolver := &countingTenantResolver{id: "acme"}
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(resolver))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(resolver))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
@@ -154,12 +155,12 @@ func TestEngineWithSingleTenantSpawnNeedsNoWithTenant(t *testing.T) {
 	specs.Describe(t, "a single-tenant resolver spawns an entity without WithTenant", func(s *specs.Spec) {
 		s.It("binds the entity to the resolver's fixed tenant scope", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			resolver, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
 			ctx.Expect(err).To(specs.BeNil())
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(resolver))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(resolver))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
@@ -197,9 +198,9 @@ func TestEngineEntitySpawnWithoutResolverStaysUnscoped(t *testing.T) {
 	specs.Describe(t, "legacy mode without a resolver", func(s *specs.Spec) {
 		s.It("spawns without WithTenant and writes under persistence.Unscoped()", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithLogger(DiscardLogger))
+			engine := newSpecsEngine(ctx, "Sample", store, WithLogger(DiscardLogger))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
@@ -227,12 +228,12 @@ func TestEngineCommandRejectsTenantMismatchWithSpawnDeclaredTenant(t *testing.T)
 	specs.Describe(t, "a command resolved to another tenant than the spawn-declared one", func(s *specs.Spec) {
 		s.It("is rejected before HandleCommand runs", func(ctx *specs.Context) {
 			bg := context.Background()
-			store := newConnectedEventsStoreG3(ctx)
+			store := connectedEventsStore(ctx)
 
 			// perCallerTenantResolver (option_test.go) resolves whichever tenant id
 			// the caller placed on ctx, simulating a resolver that derives identity
 			// from request-scoped data rather than a fixed value.
-			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
 			entityID := uuid.NewString()

@@ -33,29 +33,30 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
+	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
 // closingEventPublisherG4 returns an event publisher mock with the given ID
 // whose Close is expected exactly closes times and answers closeErr.
-func closingEventPublisherG4(ctx *specs.Context, id string, closes int, closeErr error) eventPublisherMock {
+func closingEventPublisherG4(ctx *specs.Context, id string, closes int, closeErr error) *enginetest.EventPublisherMock {
 	ctrl := mock.NewController(ctx)
 	ctrl.Method("ID").Expect().Return(id).AnyTimes()
 	if closes > 0 {
 		ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(closes)
 	}
-	return eventPublisherMock{ctrl}
+	return enginetest.NewEventPublisherMock(ctrl)
 }
 
 // closingStatePublisherG4 is closingEventPublisherG4 for a state publisher.
-func closingStatePublisherG4(ctx *specs.Context, id string, closes int, closeErr error) statePublisherMock {
+func closingStatePublisherG4(ctx *specs.Context, id string, closes int, closeErr error) *enginetest.StatePublisherMock {
 	ctrl := mock.NewController(ctx)
 	ctrl.Method("ID").Expect().Return(id).AnyTimes()
 	if closes > 0 {
 		ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(closes)
 	}
-	return statePublisherMock{ctrl}
+	return enginetest.NewStatePublisherMock(ctrl)
 }
 
 // TestEngineStopAttemptsEveryStep is the #126 defect 1 regression: a
@@ -109,7 +110,7 @@ func TestEngineStopAttemptsEveryStep(t *testing.T) {
 // no events store, which NewConfig(nil, ...) allows.
 func newStateOnlyEngineG4(ctx *specs.Context) *Engine {
 	bg := context.Background()
-	cfg := NewConfig(nil, WithStateStore(connectedStateStoreG4(ctx)))
+	cfg := NewConfig(nil, WithStateStore(connectedDurableStore(ctx)))
 	sys, err := goakt.NewActorSystem("state-only-"+uuid.NewString(), cfg.GoaktOptions()...)
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(sys.Start(bg)).To(specs.BeNil())

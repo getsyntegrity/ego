@@ -55,7 +55,7 @@ eGo deliberately does not hide the actor runtime. Your application creates and o
 - OpenTelemetry traces and metrics
 - AES-256-GCM event and snapshot encryption
 - Entity passivation, placement, relocation, and supervision controls
-- In-memory stores, behavior scenarios, and generated mocks for testing
+- In-memory stores, and behavior scenarios for testing
 
 ## Requirements
 
@@ -601,8 +601,6 @@ testkit.ForEventSourcedBehavior(behavior).
 The two compose — `Given(snapshotState).GivenEvents(subsequentEvents...)` mirrors an entity recovered from a snapshot and then replayed. An event `HandleEvent` rejects fails the scenario as a broken arrangement, reported as such by every assertion including `ThenError`, so a bad setup can never pass as a failed command.
 
 The durable-state scenario reads the same way, with `Given(priorState, priorVersion)` and `ThenState`/`ThenVersion`.
-
-Generated mocks for persistence, encryption, adapters, offsets, and publishers are available under [`mocks`](./mocks).
 
 ## Examples
 
