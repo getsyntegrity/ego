@@ -32,12 +32,6 @@ import (
 	"github.com/getsyntegrity/ego/command"
 )
 
-// carrierHas reports whether the carrier holds key.
-func carrierHas(c command.Carrier, key string) bool {
-	_, ok := c[key]
-	return ok
-}
-
 func TestMarshalMetadataUsesCanonicalKeys(t *testing.T) {
 	specs.Describe(t, "MarshalMetadata writes root metadata under the canonical ego.cmd keys", func(s *specs.Spec) {
 		s.It("writes the required keys and omits the optional ones", func(ctx *specs.Context) {
@@ -46,13 +40,14 @@ func TestMarshalMetadataUsesCanonicalKeys(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(md)
-			ctx.Expect(carrier["ego.cmd.operation_id"]).ToEqual(string(op))
-			ctx.Expect(carrier["ego.cmd.correlation_id"]).ToEqual(string(command.CorrelationID(op)))
-			ctx.Expect(carrier["ego.cmd.timestamp"] == "").To(specs.BeFalse())
-			ctx.Expect(carrierHas(carrier, "ego.cmd.causation_id")).To(specs.BeFalse())
-			ctx.Expect(carrierHas(carrier, "ego.cmd.deadline")).To(specs.BeFalse())
-			ctx.Expect(carrierHas(carrier, "ego.cmd.principal_id")).To(specs.BeFalse())
-			ctx.Expect(carrierHas(carrier, "ego.cmd.principal_kind")).To(specs.BeFalse())
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.operation_id", string(op)))
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.correlation_id", string(command.CorrelationID(op))))
+			ctx.Expect(carrier).To(specs.HaveKey("ego.cmd.timestamp"))
+			ctx.Expect(carrier["ego.cmd.timestamp"]).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.causation_id")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.deadline")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.principal_id")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.principal_kind")))
 		})
 	})
 }
@@ -103,7 +98,7 @@ func TestCarrierRoundTripOptionalFieldsAbsent(t *testing.T) {
 			ctx.Expect(ok).To(specs.BeFalse())
 			_, ok = got.Deadline()
 			ctx.Expect(ok).To(specs.BeFalse())
-			ctx.Expect(len(got.Custom())).ToEqual(0)
+			ctx.Expect(got.Custom()).To(specs.BeEmpty())
 		})
 	})
 }
@@ -141,7 +136,7 @@ func TestCarrierRoundTripOptionalFieldsPresent(t *testing.T) {
 
 			gotDeadline, ok := got.Deadline()
 			ctx.Expect(ok).To(specs.BeTrue())
-			ctx.Expect(deadline.Equal(gotDeadline)).To(specs.BeTrue())
+			ctx.Expect(gotDeadline).To(beTime(deadline))
 
 			gotCustom, ok := got.CustomValue("region")
 			ctx.Expect(ok).To(specs.BeTrue())
@@ -209,7 +204,7 @@ func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
 			got, err := command.UnmarshalMetadata(carrier)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got.OperationID()).ToEqual(md.OperationID())
-			ctx.Expect(len(got.Custom())).ToEqual(0)
+			ctx.Expect(got.Custom()).To(specs.BeEmpty())
 		})
 	})
 }
@@ -246,7 +241,7 @@ func TestCarrierRoundTripExpectedRevisionPresent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(md)
-			ctx.Expect(carrier["ego.cmd.expected_revision"]).ToEqual("7")
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.expected_revision", "7"))
 
 			got, err := command.UnmarshalMetadata(carrier)
 			ctx.Expect(err).To(specs.BeNil())
@@ -266,7 +261,7 @@ func TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(md)
-			ctx.Expect(carrierHas(carrier, "ego.cmd.expected_revision")).To(specs.BeFalse())
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.expected_revision")))
 
 			got, err := command.UnmarshalMetadata(carrier)
 			ctx.Expect(err).To(specs.BeNil())
@@ -334,7 +329,7 @@ func TestCarrierRoundTripExpectedRevisionMaxUint64(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(md)
-			ctx.Expect(carrier["ego.cmd.expected_revision"]).ToEqual("18446744073709551615")
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.expected_revision", "18446744073709551615"))
 
 			got, err := command.UnmarshalMetadata(carrier)
 			ctx.Expect(err).To(specs.BeNil())
@@ -355,8 +350,8 @@ func TestCarrierDelegatesTenantSerializationToTenancyPackage(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(md)
-			ctx.Expect(carrier["ego.tenant.scope"]).ToEqual("tenant")
-			ctx.Expect(carrier["ego.tenant.id"]).ToEqual("tenant-1")
+			ctx.Expect(carrier).To(specs.HavePair("ego.tenant.scope", "tenant"))
+			ctx.Expect(carrier).To(specs.HavePair("ego.tenant.id", "tenant-1"))
 		})
 	})
 }

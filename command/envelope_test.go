@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -45,7 +44,7 @@ func TestNewEnvelope(t *testing.T) {
 			env, err := command.NewEnvelope(payload, md)
 			ctx.Expect(err).To(specs.BeNil())
 
-			ctx.Expect(proto.Equal(payload, env.Payload())).To(specs.BeTrue())
+			ctx.Expect(env.Payload()).To(equalProto(payload))
 			ctx.Expect(env.Metadata()).ToEqual(md)
 		})
 	})
@@ -101,7 +100,7 @@ func TestEnvelopeDeriveDelegatesToMetadataDerive(t *testing.T) {
 			childEnv, err := parentEnv.Derive(childPayload, childOp)
 			ctx.Expect(err).To(specs.BeNil())
 
-			ctx.Expect(proto.Equal(childPayload, childEnv.Payload())).To(specs.BeTrue())
+			ctx.Expect(childEnv.Payload()).To(equalProto(childPayload))
 			ctx.Expect(childEnv.Metadata().CorrelationID()).ToEqual(parentMD.CorrelationID())
 			ctx.Expect(childEnv.Metadata().OperationID()).ToEqual(childOp)
 
@@ -124,7 +123,7 @@ func TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			carrier := command.MarshalMetadata(env.Metadata())
-			ctx.Expect(carrierHas(carrier, "ego.cmd.expected_revision")).To(specs.BeFalse())
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.expected_revision")))
 
 			roundTripped, err := command.UnmarshalMetadata(carrier)
 			ctx.Expect(err).To(specs.BeNil())
