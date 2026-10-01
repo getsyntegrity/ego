@@ -49,47 +49,40 @@ import (
 
 // markedEvent builds a single-event batch carrying marker in AccountBalance,
 // so the winner of a race between two writers can be identified afterward
-// from the persisted event alone.
-func markedEvent(t testing.TB, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
-	t.Helper()
+// from the persisted event alone. A payload that cannot be built fails the
+// spec through ctx.
+func markedEvent(ctx *specs.Context, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
+	ctx.T.Helper()
 	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: marker})
-	if err != nil {
-		t.Fatalf("build marked payload: %v", err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return []*egopb.Event{
 		{PersistenceId: persistenceID, SequenceNumber: sequenceNumber, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
 }
 
 // eventMarker recovers the marker written by markedEvent.
-func eventMarker(t testing.TB, event *egopb.Event) float64 {
-	t.Helper()
+func eventMarker(ctx *specs.Context, event *egopb.Event) float64 {
+	ctx.T.Helper()
 	var msg testpb.AccountCreated
-	if err := event.GetEvent().UnmarshalTo(&msg); err != nil {
-		t.Fatalf("unmarshal marked event: %v", err)
-	}
+	ctx.Expect(event.GetEvent().UnmarshalTo(&msg)).To(specs.BeNil())
 	return msg.GetAccountBalance()
 }
 
 // markedState builds a *egopb.DurableState carrying marker in AccountBalance,
 // so the winner of a race between two writers can be identified afterward
 // from the persisted state alone.
-func markedState(t testing.TB, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
-	t.Helper()
+func markedState(ctx *specs.Context, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
+	ctx.T.Helper()
 	anyState, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: marker})
-	if err != nil {
-		t.Fatalf("build marked payload: %v", err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return &egopb.DurableState{PersistenceId: persistenceID, ResultingState: anyState, VersionNumber: versionNumber}
 }
 
 // stateMarker recovers the marker written by markedState.
-func stateMarker(t testing.TB, state *egopb.DurableState) float64 {
-	t.Helper()
+func stateMarker(ctx *specs.Context, state *egopb.DurableState) float64 {
+	ctx.T.Helper()
 	var msg testpb.Account
-	if err := state.GetResultingState().UnmarshalTo(&msg); err != nil {
-		t.Fatalf("unmarshal marked state: %v", err)
-	}
+	ctx.Expect(state.GetResultingState().UnmarshalTo(&msg)).To(specs.BeNil())
 	return msg.GetAccountBalance()
 }
 
@@ -124,21 +117,34 @@ func raceTwoWriters(a, b func() error) (errA, errB error) {
 	return errA, errB
 }
 
-// countOutcomes classifies two conditional-write results into (successes,
-// conflicts), failing the test if either error is a non-conflict failure.
-func countOutcomes(t testing.TB, errA, errB error) (successes, conflicts int) {
-	t.Helper()
-	for _, err := range []error{errA, errB} {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, persistence.ErrConcurrencyConflict):
-			conflicts++
-		default:
-			t.Fatalf("unexpected non-conflict error: %v", err)
-		}
+// outcomeOf names the result of one conditional write: a commit, a concurrency
+// conflict, or any other failure (kept with its message so a spec failure shows
+// what went wrong).
+func outcomeOf(err error) string {
+	switch {
+	case err == nil:
+		return "committed"
+	case errors.Is(err, persistence.ErrConcurrencyConflict):
+		return "conflict"
+	default:
+		return "unexpected error: " + err.Error()
 	}
-	return successes, conflicts
+}
+
+// expectOneWinnerOneConflict asserts that, of two racing conditional writes,
+// exactly one committed and the other got a concurrency conflict, in either order.
+func expectOneWinnerOneConflict(ctx *specs.Context, errA, errB error) {
+	ctx.T.Helper()
+	ctx.Expect([]string{outcomeOf(errA), outcomeOf(errB)}).To(specs.ContainTheSameElementsAs([]string{"committed", "conflict"}))
+}
+
+// winningMarker is the marker the persisted record must carry: a's when a
+// committed, b's otherwise.
+func winningMarker(errA error, markerA, markerB float64) float64 {
+	if errA == nil {
+		return markerA
+	}
+	return markerB
 }
 
 // ---------------------------------------------------------------------------
@@ -153,10 +159,10 @@ func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T)
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
 			const persistenceID = "t8-event-race"
-			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx.T, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-			eventA := markedEvent(ctx.T, persistenceID, 2, 111)
-			eventB := markedEvent(ctx.T, persistenceID, 2, 222)
+			eventA := markedEvent(ctx, persistenceID, 2, 111)
+			eventB := markedEvent(ctx, persistenceID, 2, 222)
 			errA, errB := raceTwoWriters(
 				func() error {
 					return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectRevision(1))
@@ -166,21 +172,14 @@ func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T)
 				},
 			)
 
-			successes, conflicts := countOutcomes(ctx.T, errA, errB)
-			ctx.Expect(successes).ToEqual(1)
-			ctx.Expect(conflicts).ToEqual(1)
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
 			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(2))
 
-			winnerMarker := eventMarker(ctx.T, latest)
-			if errA == nil {
-				ctx.Expect(winnerMarker).ToEqual(float64(111))
-			} else {
-				ctx.Expect(winnerMarker).ToEqual(float64(222))
-			}
+			ctx.Expect(eventMarker(ctx, latest)).ToEqual(winningMarker(errA, 111, 222))
 		})
 	})
 }
@@ -197,10 +196,10 @@ func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
 			const persistenceID = "t9-state-race"
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx.T, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
+			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-			stateA := markedState(ctx.T, persistenceID, 2, 111)
-			stateB := markedState(ctx.T, persistenceID, 2, 222)
+			stateA := markedState(ctx, persistenceID, 2, 111)
+			stateB := markedState(ctx, persistenceID, 2, 222)
 			errA, errB := raceTwoWriters(
 				func() error {
 					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectRevision(1))
@@ -210,21 +209,14 @@ func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.
 				},
 			)
 
-			successes, conflicts := countOutcomes(ctx.T, errA, errB)
-			ctx.Expect(successes).ToEqual(1)
-			ctx.Expect(conflicts).ToEqual(1)
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
 			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
 			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(2))
 
-			winnerMarker := stateMarker(ctx.T, got)
-			if errA == nil {
-				ctx.Expect(winnerMarker).ToEqual(float64(111))
-			} else {
-				ctx.Expect(winnerMarker).ToEqual(float64(222))
-			}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
 		})
 	})
 }
@@ -242,8 +234,8 @@ func TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 
 			const persistenceID = "t10-event-genesis-race"
 
-			eventA := markedEvent(ctx.T, persistenceID, 1, 111)
-			eventB := markedEvent(ctx.T, persistenceID, 1, 222)
+			eventA := markedEvent(ctx, persistenceID, 1, 111)
+			eventB := markedEvent(ctx, persistenceID, 1, 222)
 			errA, errB := raceTwoWriters(
 				func() error {
 					return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectGenesis())
@@ -253,21 +245,14 @@ func TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 				},
 			)
 
-			successes, conflicts := countOutcomes(ctx.T, errA, errB)
-			ctx.Expect(successes).ToEqual(1)
-			ctx.Expect(conflicts).ToEqual(1)
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
 			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
 
-			winnerMarker := eventMarker(ctx.T, latest)
-			if errA == nil {
-				ctx.Expect(winnerMarker).ToEqual(float64(111))
-			} else {
-				ctx.Expect(winnerMarker).ToEqual(float64(222))
-			}
+			ctx.Expect(eventMarker(ctx, latest)).ToEqual(winningMarker(errA, 111, 222))
 		})
 	})
 }
@@ -281,8 +266,8 @@ func TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 
 			const persistenceID = "t10-state-genesis-race"
 
-			stateA := markedState(ctx.T, persistenceID, 1, 111)
-			stateB := markedState(ctx.T, persistenceID, 1, 222)
+			stateA := markedState(ctx, persistenceID, 1, 111)
+			stateB := markedState(ctx, persistenceID, 1, 222)
 			errA, errB := raceTwoWriters(
 				func() error {
 					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectGenesis())
@@ -292,21 +277,14 @@ func TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
 				},
 			)
 
-			successes, conflicts := countOutcomes(ctx.T, errA, errB)
-			ctx.Expect(successes).ToEqual(1)
-			ctx.Expect(conflicts).ToEqual(1)
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
 			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
 			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(1))
 
-			winnerMarker := stateMarker(ctx.T, got)
-			if errA == nil {
-				ctx.Expect(winnerMarker).ToEqual(float64(111))
-			} else {
-				ctx.Expect(winnerMarker).ToEqual(float64(222))
-			}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
 		})
 	})
 }
@@ -327,10 +305,10 @@ func TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates(t *test
 			const rounds = 50
 			for i := 0; i < rounds; i++ {
 				persistenceID := fmt.Sprintf("t8-bulk-%d", i)
-				ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx.T, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
+				ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-				eventA := markedEvent(ctx.T, persistenceID, 2, 1)
-				eventB := markedEvent(ctx.T, persistenceID, 2, 2)
+				eventA := markedEvent(ctx, persistenceID, 2, 1)
+				eventB := markedEvent(ctx, persistenceID, 2, 2)
 				errA, errB := raceTwoWriters(
 					func() error {
 						return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectRevision(1))
@@ -340,9 +318,7 @@ func TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates(t *test
 					},
 				)
 
-				successes, conflicts := countOutcomes(ctx.T, errA, errB)
-				ctx.Expect(successes).ToEqual(1)
-				ctx.Expect(conflicts).ToEqual(1)
+				expectOneWinnerOneConflict(ctx, errA, errB)
 			}
 		})
 	})
@@ -373,7 +349,7 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
 			const persistenceID = "checkpreconditions-narrow-responsibility"
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx.T, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
+			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
 			const observedVersion = 1
 			const newVersion = observedVersion + 1
@@ -385,8 +361,8 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 			delta := int(math.Abs(float64(newVersion - observedVersion)))
 			ctx.Expect(delta).ToEqual(1)
 
-			stateA := markedState(ctx.T, persistenceID, newVersion, 111)
-			stateB := markedState(ctx.T, persistenceID, newVersion, 222)
+			stateA := markedState(ctx, persistenceID, newVersion, 111)
+			stateB := markedState(ctx, persistenceID, newVersion, 222)
 			errA, errB := raceTwoWriters(
 				func() error {
 					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectRevision(observedVersion))
@@ -396,21 +372,14 @@ func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t 
 				},
 			)
 
-			successes, conflicts := countOutcomes(ctx.T, errA, errB)
-			ctx.Expect(successes).ToEqual(1)
-			ctx.Expect(conflicts).ToEqual(1)
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
 			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
 			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(newVersion))
 
-			winnerMarker := stateMarker(ctx.T, got)
-			if errA == nil {
-				ctx.Expect(winnerMarker).ToEqual(float64(111))
-			} else {
-				ctx.Expect(winnerMarker).ToEqual(float64(222))
-			}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
 		})
 	})
 }
