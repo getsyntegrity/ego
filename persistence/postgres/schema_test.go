@@ -25,9 +25,8 @@ package postgres
 // These tests cover the schema runner's pure logic, with no database: how the
 // SQL files are read and ordered, which of them are pending, and how the
 // version of a database that predates schema versioning is inferred from its
-// shape. What the SQL does to a real Postgres is checked by the DSN-gated
-// conformance run in example/cluster (spec B moves it to the integration
-// module).
+// shape. What the SQL does to a real Postgres is checked by the conformance suites run from the inttest module
+// (inttest/flows/eventstore), which starts its own Postgres.
 
 import (
 	"context"

@@ -18,7 +18,7 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
 ```text
                           ┌──────────────────────┐
                           │     HTTP Client      │
-                          │  (curl / make test)  │
+                          │  (curl)              │
                           └──────────┬───────────┘
                                      │
                           ┌──────────▼───────────┐
@@ -98,7 +98,6 @@ This will:
 3. Install NGINX Ingress Controller for load balancing
 4. Deploy PostgreSQL, the observability stack (OTel Collector, Jaeger, Prometheus, Grafana), RBAC, and the 3-replica app with an Ingress
 5. Wait for all pods and the ingress to become ready
-6. Run integration tests via `http://localhost` (load-balanced across pods)
 
 After `make all` completes you can explore the cluster further:
 
@@ -158,23 +157,11 @@ This applies the manifests in order:
 make wait
 ```
 
-### 5. Run the integration tests
+This example has no automated test of its own. Integration tests live in the `inttest` module, which starts
+its own containers with Testcontainers (see [Integration tests](../../docs/ci.md#integration-tests)); the
+flow that restarts the engine on a Postgres events store is `inttest/flows/restart`.
 
-```bash
-make test
-```
-
-The test hits `http://localhost` through the NGINX Ingress (requests are round-robin distributed across pods):
-
-1. Health check
-2. Creates an account with balance **1000**
-3. Sends **30 credit requests** of 10 each (load-balanced across pods)
-4. Sends **10 debit requests** of 5 each (load-balanced across pods)
-5. Waits for the projection to catch up
-6. Queries the projection read table and verifies the balance is **1250** (1000 + 30x10 - 10x5)
-7. Sends 30 health checks and collects the `X-Served-By` response header to **verify requests hit multiple pods**
-
-### 6. Run the load test (optional)
+### 5. Run the load test (optional)
 
 ```bash
 make load-test
@@ -186,7 +173,7 @@ Creates **1000 accounts** sequentially via NGINX Ingress, distributed round-robi
 - Total duration and throughput (~accounts/s)
 - Pod distribution via `X-Served-By` headers (shows how load was spread across pods)
 
-### 7. Inspect the database (optional)
+### 6. Inspect the database (optional)
 
 ```bash
 make db
@@ -274,12 +261,11 @@ Installs and opens the Kubernetes Dashboard. A token is printed to the terminal 
 
 | Target | Description |
 | --- | --- |
-| `make all` | Full flow: create cluster, build, deploy, wait, test |
+| `make all` | Full flow: create cluster, build, deploy, wait |
 | `make kind-create` | Create the Kind cluster with ingress port mappings |
 | `make docker-build` | Build the Docker image and load it into Kind |
 | `make deploy` | Apply all Kubernetes manifests |
 | `make wait` | Wait for StatefulSet rollout and ingress readiness |
-| `make test` | Run integration tests via ingress (balance check + pod spread) |
 | `make load-test` | Create 1000 accounts (sequential); report throughput + pod dist |
 | `make db` | Snapshot PostgreSQL tables (events, offsets, balances) in-cluster |
 | `make grafana` | Port-forward Grafana to localhost:3000 (admin / admin) |
