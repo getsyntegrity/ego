@@ -66,7 +66,7 @@ func Evaluate(findings []Finding, pending, resources []Entry, strict bool) (prob
 		}
 		line := fmt.Sprintf("%s: %s: %s", f.Path, f.Rule, f.Detail)
 		if f.Rule == RuleSkip {
-			line += "; a test under inttest/ must fail when its dependency is missing, never skip"
+			line += "; a test under inttest/ must fail when its dependency is missing, never skip, pend or focus"
 		}
 		problems = append(problems, line)
 	}

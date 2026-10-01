@@ -29,7 +29,7 @@ const (
 	RuleMocks    Rule = "generated-mocks" // import of the generated mocks packages from outside mocks/
 	RuleNoSpecs  Rule = "no-specs"        // *_test.go with a Test function and no specs.Describe
 	RuleResource Rule = "resource"        // a test reaching a real resource (see resources.go)
-	RuleSkip     Rule = "no-skip"         // a Skip call or testing.Short under inttest/ (see skips.go); never allowlisted
+	RuleSkip     Rule = "no-skip"         // a Skip, SkipIt, PendingIt or FIt call, or testing.Short, under inttest/ (see skips.go); never allowlisted
 	RuleUnparsed Rule = "unparsed"        // the file is not valid Go
 )
 

@@ -29,7 +29,9 @@ import (
 
 // skipFindings reports every call that can make a test skip or shrink itself, in a file of the inttest module:
 // a call to a method named Skip, Skipf or SkipNow on any expression (t.Skip, tb.Skipf, s.T().SkipNow and so
-// on, because the receiver can have any name) and a call to testing.Short.
+// on, because the receiver can have any name), a call to the go-specs equivalents SkipIt, PendingIt and FIt
+// (on a Spec or a Builder; FIt focuses one case, so every other case of the run is skipped), and a call to
+// testing.Short.
 //
 // The inttest module exists so that a missing dependency fails the run instead of skipping it. A skip there
 // brings back the green-but-empty result the module replaced, so the rule has no allowlist. It checks
@@ -47,7 +49,7 @@ func skipFindings(p string, f *ast.File, imports map[string]string) []Finding {
 		}
 		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 			switch sel.Sel.Name {
-			case "Skip", "Skipf", "SkipNow":
+			case "Skip", "Skipf", "SkipNow", "SkipIt", "PendingIt", "FIt":
 				details["calls "+sel.Sel.Name] = true
 			}
 		}

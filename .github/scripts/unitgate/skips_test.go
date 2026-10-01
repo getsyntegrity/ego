@@ -51,6 +51,18 @@ func TestScanRejectsSkipsInsideInttest(t *testing.T) {
 				src: "package x\nimport \"testing\"\ntype s struct{}\nfunc (s) T() *testing.T { return nil }\nfunc f(x s) { x.T().Skip(\"x\") }\n", want: []string{"calls Skip"}},
 			{name: "a receiver that is a field", path: "inttest/a/a_test.go",
 				src: "package x\nimport \"testing\"\ntype s struct{ T *testing.T }\nfunc f(x s) { x.T.Skipf(\"x\") }\n", want: []string{"calls Skipf"}},
+			{name: "s.SkipIt on a go-specs Spec", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(s *specs.Spec) { s.SkipIt(\"x\", nil) }\n", want: []string{"calls SkipIt"}},
+			{name: "s.PendingIt on a go-specs Spec", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(s *specs.Spec) { s.PendingIt(\"x\", nil) }\n", want: []string{"calls PendingIt"}},
+			{name: "s.FIt on a go-specs Spec", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(s *specs.Spec) { s.FIt(\"x\", nil) }\n", want: []string{"calls FIt"}},
+			{name: "b.SkipIt on a go-specs Builder", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(b *specs.Builder) { b.SkipIt(\"x\", nil) }\n", want: []string{"calls SkipIt"}},
+			{name: "b.PendingIt on a go-specs Builder", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(b *specs.Builder) { b.PendingIt(\"x\", nil) }\n", want: []string{"calls PendingIt"}},
+			{name: "b.FIt on a go-specs Builder", path: "inttest/a/a_test.go",
+				src: "package x\nimport \"github.com/getsyntegrity/go-specs/specs\"\nfunc f(b *specs.Builder) { b.FIt(\"x\", nil) }\n", want: []string{"calls FIt"}},
 			{name: "testing.Short", path: "inttest/a/a_test.go",
 				src: "package x\nimport \"testing\"\nfunc f() bool { return testing.Short() }\n", want: []string{"calls testing.Short"}},
 			{name: "testing.Short through an import alias", path: "inttest/a/a_test.go",
@@ -85,7 +97,7 @@ func TestScanRejectsSkipsInsideInttest(t *testing.T) {
 
 			problems, _ := Evaluate(findings, pending, resources, false)
 			ctx.Expect(problems).To(specs.HaveLen(1))
-			ctx.Expect(problems[0]).ToEqual("inttest/a/a_test.go: no-skip: calls Skip; a test under inttest/ must fail when its dependency is missing, never skip")
+			ctx.Expect(problems[0]).ToEqual("inttest/a/a_test.go: no-skip: calls Skip; a test under inttest/ must fail when its dependency is missing, never skip, pend or focus")
 		})
 	})
 }

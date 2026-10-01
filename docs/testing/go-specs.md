@@ -244,9 +244,10 @@ module, nested ones included, and fails on:
    `inttest/infra/<backend>` starts a container (today `infra/postgres`; `infra/kafka`, `infra/nats` and
    `infra/pulsar` will sit beside it), and `inttest/flows/<area>` checks a behavior against it (today
    `flows/eventstore`);
-5. under `inttest/` only, any call to `Skip`, `Skipf` or `SkipNow` on any receiver, or to `testing.Short`, in a
-   test or a non-test file. A test there must fail when its dependency is missing, so it can never look green
-   without running. No allowlist can excuse it. See [Integration tests](../ci.md#integration-tests).
+5. under `inttest/` only, any call to `Skip`, `Skipf` or `SkipNow` on any receiver, to the go-specs
+   `SkipIt`, `PendingIt` or `FIt` (on a `Spec` or a `Builder`; `FIt` focuses one case and so skips all the
+   others), or to `testing.Short`, in a test or a non-test file. A test there must fail when its dependency is
+   missing, so it can never look green without running. No allowlist can excuse it. See [Integration tests](../ci.md#integration-tests).
 
 Two plain-text lists hold the exceptions, one `path | note` per line, and the note is required:
 
