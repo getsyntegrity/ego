@@ -30,7 +30,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/supervisor"
 	"go.uber.org/atomic"
@@ -39,160 +38,119 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/ego/offsetstore"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
+// startProjectionSystemG4 starts a real actor system wired with the given
+// stores and one projection named name, and stops it when the case ends.
+func startProjectionSystemG4(ctx *specs.Context, name string, eventsStore persistence.EventsStore,
+	offsetStore offsetstore.OffsetStore, handler projection.Handler) goakt.ActorSystem {
+	bg := context.Background()
+	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
+		goakt.WithLogger(newLoggerAdapter(DiscardLogger)),
+		goakt.WithExtensions(
+			extensions.NewEventsStore(eventsStore),
+			extensions.NewOffsetStore(offsetStore),
+			extensions.NewProjectionExtension(map[string]*projection.Options{
+				name: {Handler: handler, BufferSize: 500, PullInterval: 100 * time.Millisecond, Recovery: projection.NewRecovery()},
+			})),
+		goakt.WithActorInitMaxRetries(3))
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(actorSystem.Start(bg)).To(specs.BeNil())
+	ctx.Cleanup(func() { _ = actorSystem.Stop(context.Background()) })
+	return actorSystem
+}
+
+// accountCreditedEventsG4 builds count journal events of one persistence ID on
+// the given shard.
+func accountCreditedEventsG4(ctx *specs.Context, persistenceID string, shard uint64, count int) []*egopb.Event {
+	event, err := anypb.New(&testpb.AccountCredited{})
+	ctx.Expect(err).To(specs.BeNil())
+
+	timestamp := timestamppb.Now()
+	journals := make([]*egopb.Event, count)
+	for i := range count {
+		journals[i] = &egopb.Event{
+			PersistenceId:  persistenceID,
+			SequenceNumber: uint64(i + 1),
+			IsDeleted:      false,
+			Event:          event,
+			Timestamp:      timestamp.AsTime().Unix(),
+			Shard:          shard,
+		}
+	}
+	return journals
+}
+
+// spawnProjectionG4 spawns the projection the way StartProjection does in
+// standalone mode.
+func spawnProjectionG4(ctx *specs.Context, actorSystem goakt.ActorSystem, name string) *goakt.PID {
+	pid, err := actorSystem.Spawn(context.Background(), name, NewProjectionActor(),
+		goakt.WithLongLived(),
+		goakt.WithSupervisor(newProjectionSupervisor()))
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(pid != nil).To(specs.BeTrue())
+	return pid
+}
+
 func TestProjectionActorRunnerFailure(t *testing.T) {
-	t.Run("recovers from transient store failure without restarting", func(t *testing.T) {
-		ctx := context.TODO()
-		logger := newLoggerAdapter(DiscardLogger)
+	specs.Describe(t, "the projection actor reacts to a failing runner", func(s *specs.Spec) {
+		bg := context.Background()
+		const projectionName = "db-writer"
+		const shardNumber = uint64(9)
 
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
+		s.It("recovers from transient store failure without restarting", func(ctx *specs.Context) {
+			journalStore := connectedEventsStoreG4(ctx)
+			offsetStore := connectedOffsetStoreG4(ctx)
 
-		journalStore := testkit.NewEventsStore()
-		require.NoError(t, journalStore.Connect(ctx))
+			// fail the first ShardOffsets round trip, then recover
+			eventsStore := &flakyEventsStore{EventsStore: journalStore, failures: atomic.NewInt32(1)}
+			actorSystem := startProjectionSystemG4(ctx, projectionName, eventsStore, offsetStore, projection.NewDiscardHandler())
 
-		// fail the first ShardOffsets round trip, then recover
-		eventsStore := &flakyEventsStore{EventsStore: journalStore, failures: atomic.NewInt32(1)}
+			// persist events before the projection pulls for the first time
+			const count = 10
+			journals := accountCreditedEventsG4(ctx, uuid.NewString(), shardNumber, count)
+			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
 
-		offsetStore := testkit.NewOffsetStore()
-		require.NoError(t, offsetStore.Connect(ctx))
+			pid := spawnProjectionG4(ctx, actorSystem, projectionName)
 
-		handler := projection.NewDiscardHandler()
+			// the first pull fails; the runner retries in place with backoff and
+			// replays the stalled backlog once the store recovers, with no actor
+			// restart involved
+			projectionID := &egopb.ProjectionId{ProjectionName: projectionName, ShardNumber: shardNumber}
+			ctx.Eventually(func() any {
+				actual, err := offsetStore.GetCurrentOffset(bg, projectionID)
+				if err != nil {
+					return int64(-1)
+				}
+				return actual.GetValue()
+			}, specs.Equal(journals[count-1].GetTimestamp()), specs.WithTimeout(waitTimeout), specs.WithInterval(50*time.Millisecond))
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(logger),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventsStore),
-				extensions.NewOffsetStore(offsetStore),
-				extensions.NewProjectionExtension(map[string]*projection.Options{
-					projectionName: {Handler: handler, BufferSize: 500, PullInterval: 100 * time.Millisecond, Recovery: projection.NewRecovery()},
-				})),
-			goakt.WithActorInitMaxRetries(3))
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+			ctx.Expect(pid.RestartCount()).To(specs.BeZero())
+		})
 
-		require.NoError(t, err)
-		require.NotNil(t, actorSystem)
+		s.It("stops on unprocessable event", func(ctx *specs.Context) {
+			journalStore := connectedEventsStoreG4(ctx)
+			offsetStore := connectedOffsetStoreG4(ctx)
 
-		require.NoError(t, actorSystem.Start(ctx))
+			// failingProjectionHandler always fails and the default recovery policy is Fail
+			actorSystem := startProjectionSystemG4(ctx, projectionName, journalStore, offsetStore, failingProjectionHandler{})
 
-		// persist events before the projection pulls for the first time
-		event, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
+			journals := accountCreditedEventsG4(ctx, uuid.NewString(), shardNumber, 1)
+			ctx.Expect(journalStore.WriteEvents(bg, persistence.Unscoped(), journals, persistence.Unconditional())).To(specs.BeNil())
 
-		count := 10
-		timestamp := timestamppb.Now()
-		journals := make([]*egopb.Event, count)
-		for i := range count {
-			journals[i] = &egopb.Event{
-				PersistenceId:  persistenceID,
-				SequenceNumber: uint64(i + 1),
-				IsDeleted:      false,
-				Event:          event,
-				Timestamp:      timestamp.AsTime().Unix(),
-				Shard:          shardNumber,
-			}
-		}
+			pid := spawnProjectionG4(ctx, actorSystem, projectionName)
 
-		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
-
-		// spawn the projection the way StartProjection does in standalone mode
-		actor := NewProjectionActor()
-		pid, err := actorSystem.Spawn(ctx, projectionName, actor,
-			goakt.WithLongLived(),
-			goakt.WithSupervisor(newProjectionSupervisor()))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// the first pull fails; the runner retries in place with backoff and
-		// replays the stalled backlog once the store recovers, with no actor
-		// restart involved
-		projectionID := &egopb.ProjectionId{
-			ProjectionName: projectionName,
-			ShardNumber:    shardNumber,
-		}
-
-		require.Eventually(t, func() bool {
-			actual, err := offsetStore.GetCurrentOffset(ctx, projectionID)
-			return err == nil && actual.GetValue() == journals[count-1].GetTimestamp()
-		}, 10*time.Second, 100*time.Millisecond)
-
-		require.True(t, pid.IsRunning())
-		require.Zero(t, pid.RestartCount())
-
-		// free resources
-		require.NoError(t, actorSystem.Stop(ctx))
-		require.NoError(t, journalStore.Disconnect(ctx))
-		require.NoError(t, offsetStore.Disconnect(ctx))
-	})
-	t.Run("stops on unprocessable event", func(t *testing.T) {
-		ctx := context.TODO()
-		logger := newLoggerAdapter(DiscardLogger)
-
-		projectionName := "db-writer"
-		persistenceID := uuid.NewString()
-		shardNumber := uint64(9)
-
-		journalStore := testkit.NewEventsStore()
-		require.NoError(t, journalStore.Connect(ctx))
-
-		offsetStore := testkit.NewOffsetStore()
-		require.NoError(t, offsetStore.Connect(ctx))
-
-		// failingProjectionHandler always fails and the default recovery policy is Fail
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(logger),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(journalStore),
-				extensions.NewOffsetStore(offsetStore),
-				extensions.NewProjectionExtension(map[string]*projection.Options{
-					projectionName: {Handler: failingProjectionHandler{}, BufferSize: 500, PullInterval: 100 * time.Millisecond, Recovery: projection.NewRecovery()},
-				})),
-			goakt.WithActorInitMaxRetries(3))
-
-		require.NoError(t, err)
-		require.NotNil(t, actorSystem)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		event, err := anypb.New(&testpb.AccountCredited{})
-		require.NoError(t, err)
-
-		journals := []*egopb.Event{
-			{
-				PersistenceId:  persistenceID,
-				SequenceNumber: 1,
-				IsDeleted:      false,
-				Event:          event,
-				Timestamp:      timestamppb.Now().AsTime().Unix(),
-				Shard:          shardNumber,
-			},
-		}
-
-		require.NoError(t, journalStore.WriteEvents(ctx, persistence.Unscoped(), journals, persistence.Unconditional()))
-
-		actor := NewProjectionActor()
-		pid, err := actorSystem.Spawn(ctx, projectionName, actor,
-			goakt.WithLongLived(),
-			goakt.WithSupervisor(newProjectionSupervisor()))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// the unprocessable event escalates to the actor and supervision
-		// stops it, making the failure visible instead of leaving a
-		// healthy-looking actor with a dead runner
-		require.Eventually(t, func() bool {
-			return !pid.IsRunning()
-		}, 10*time.Second, 100*time.Millisecond)
-
-		// free resources
-		require.NoError(t, actorSystem.Stop(ctx))
-		require.NoError(t, journalStore.Disconnect(ctx))
-		require.NoError(t, offsetStore.Disconnect(ctx))
+			// the unprocessable event escalates to the actor and supervision
+			// stops it, making the failure visible instead of leaving a
+			// healthy-looking actor with a dead runner
+			ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeFalse(),
+				specs.WithTimeout(waitTimeout), specs.WithInterval(50*time.Millisecond))
+		})
 	})
 }
 
