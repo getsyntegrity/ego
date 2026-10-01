@@ -26,11 +26,10 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/encryption"
@@ -94,50 +93,38 @@ func validSpec() Spec {
 	}
 }
 
-// problems returns every *ValidationError joined into err, in order.
-func problems(t testing.TB, err error) []*ValidationError {
-	t.Helper()
+// problems returns every *ValidationError joined into err, in order. A nil
+// error has none. A malformed error fails the case through the spec.
+func problems(ctx *specs.Context, err error) []*ValidationError {
 	if err == nil {
 		return nil
 	}
-	joined, ok := err.(interface{ Unwrap() []error })
-	if !ok {
-		t.Fatalf("Validate error %T is not a joined error: %v", err, err)
-	}
+	ctx.Expect(err).To(specs.Satisfy("be a joined error", func(v any) bool {
+		_, ok := v.(interface{ Unwrap() []error })
+		return ok
+	}))
 	var out []*ValidationError
-	for _, e := range joined.Unwrap() {
+	for _, e := range err.(interface{ Unwrap() []error }).Unwrap() {
 		var ve *ValidationError
-		if !errors.As(e, &ve) {
-			t.Fatalf("joined error %T is not a *ValidationError: %v", e, e)
-		}
+		ctx.Expect(e).To(specs.MatchErrorAs(&ve))
 		out = append(out, ve)
 	}
 	return out
 }
 
-// ruleFields renders each problem as "<rule> <field>", in order.
-func ruleFields(got []*ValidationError) []string {
-	var out []string
-	for _, ve := range got {
-		out = append(out, ve.Rule+" "+ve.Field)
-	}
-	return out
+// problem matches a *ValidationError with the given rule and field.
+func problem(rule, field string) specs.Matcher {
+	return specs.All(
+		specs.Project("Rule", func(v *ValidationError) string { return v.Rule }, specs.Equal(rule)),
+		specs.Project("Field", func(v *ValidationError) string { return v.Field }, specs.Equal(field)),
+	)
 }
 
 // requireOneProblem asserts err holds exactly one *ValidationError with
 // the given rule and field, and that its message names the field.
-func requireOneProblem(t testing.TB, err error, rule, field string) {
-	t.Helper()
-	got := problems(t, err)
-	if len(got) != 1 {
-		t.Fatalf("Validate() reported %d problem(s), want exactly 1 (%s on %s): %v", len(got), rule, field, err)
-	}
-	if got[0].Rule != rule || got[0].Field != field {
-		t.Fatalf("Validate() problem = {Rule: %q, Field: %q}, want {Rule: %q, Field: %q}: %v", got[0].Rule, got[0].Field, rule, field, err)
-	}
-	if !strings.Contains(err.Error(), field) {
-		t.Errorf("error %q does not name the offending field %q", err, field)
-	}
+func requireOneProblem(ctx *specs.Context, err error, rule, field string) {
+	ctx.Expect(problems(ctx, err)).To(specs.HaveElementsInOrder(problem(rule, field)))
+	ctx.Expect(err.Error()).To(specs.Contain(field))
 }
 
 func TestSpecValidate_ValidSpecPasses(t *testing.T) {
@@ -152,20 +139,18 @@ func TestSpecValidate_ValidSpecPasses(t *testing.T) {
 // optional fields may be left out entirely (a literal nil means "not
 // configured").
 func TestSpecValidate_MinimalSpecsPass(t *testing.T) {
-	cases := []struct {
+	type minimalCase struct {
 		name string
 		spec Spec
-	}{
-		{"event sourced only", Spec{Families: EventSourced, EventsStore: &fakeEventsStore{}}},
-		{"durable state only", Spec{Families: DurableState, StateStore: &fakeStateStore{}}},
-		{"saga only", Spec{Families: Saga, EventsStore: &fakeEventsStore{}}},
 	}
 	specs.Describe(t, "Validate accepts a Spec that declares one family with only that family's store", func(s *specs.Spec) {
-		for _, c := range cases {
-			s.It(c.name, func(ctx *specs.Context) {
-				ctx.Expect(c.spec.Validate()).To(specs.BeNil())
-			})
-		}
+		specs.Table(s, []minimalCase{
+			{"event sourced only", Spec{Families: EventSourced, EventsStore: &fakeEventsStore{}}},
+			{"durable state only", Spec{Families: DurableState, StateStore: &fakeStateStore{}}},
+			{"saga only", Spec{Families: Saga, EventsStore: &fakeEventsStore{}}},
+		}, func(c minimalCase) string { return c.name }, func(ctx *specs.Context, c minimalCase) {
+			ctx.Expect(c.spec.Validate()).To(specs.BeNil())
+		})
 	})
 }
 
@@ -174,31 +159,29 @@ func TestSpecValidate_V1_ZeroFamilies(t *testing.T) {
 		s.It("reports one V1 problem on Families", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.Families = 0
-			requireOneProblem(ctx.T, spec.Validate(), "V1", "Families")
+			requireOneProblem(ctx, spec.Validate(), "V1", "Families")
 		})
 	})
 }
 
 func TestSpecValidate_V2_EventsStoreRequired(t *testing.T) {
-	cases := []struct {
+	type eventsStoreCase struct {
 		name     string
 		families Family
-	}{
-		{"event sourced declared", EventSourced},
-		{"saga declared", Saga},
-		// validSpec has a projection, which needs the events store even
-		// when no event-backed family is declared.
-		{"projections without an event-backed family", DurableState},
 	}
 	specs.Describe(t, "V2 requires an events store when an event-backed family or a projection needs one", func(s *specs.Spec) {
-		for _, c := range cases {
-			s.It(c.name, func(ctx *specs.Context) {
-				spec := validSpec()
-				spec.Families = c.families
-				spec.EventsStore = nil
-				requireOneProblem(ctx.T, spec.Validate(), "V2", "EventsStore")
-			})
-		}
+		specs.Table(s, []eventsStoreCase{
+			{"event sourced declared", EventSourced},
+			{"saga declared", Saga},
+			// validSpec has a projection, which needs the events store even
+			// when no event-backed family is declared.
+			{"projections without an event-backed family", DurableState},
+		}, func(c eventsStoreCase) string { return c.name }, func(ctx *specs.Context, c eventsStoreCase) {
+			spec := validSpec()
+			spec.Families = c.families
+			spec.EventsStore = nil
+			requireOneProblem(ctx, spec.Validate(), "V2", "EventsStore")
+		})
 	})
 }
 
@@ -220,7 +203,7 @@ func TestSpecValidate_V3_StateStoreRequired(t *testing.T) {
 		s.It("reports one V3 problem on StateStore", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.StateStore = nil
-			requireOneProblem(ctx.T, spec.Validate(), "V3", "StateStore")
+			requireOneProblem(ctx, spec.Validate(), "V3", "StateStore")
 		})
 	})
 }
@@ -238,20 +221,19 @@ func TestSpecValidate_V3_NotRequiredWithoutDurableState(t *testing.T) {
 
 func TestSpecValidate_V4_Projections(t *testing.T) {
 	specs.Describe(t, "V4 checks the offset store and every projection's options and handler", func(s *specs.Spec) {
-		s.It("offset store required", func(ctx *specs.Context) {
+		type projectionCase struct {
+			name   string
+			adjust func(*Spec)
+			field  string
+		}
+		specs.Table(s, []projectionCase{
+			{"offset store required", func(s *Spec) { s.OffsetStore = nil }, "OffsetStore"},
+			{"nil options", func(s *Spec) { s.Projections["order-view"] = nil }, `Projections["order-view"]`},
+			{"nil handler", func(s *Spec) { s.Projections["order-view"] = &projection.Options{} }, `Projections["order-view"].Handler`},
+		}, func(c projectionCase) string { return c.name }, func(ctx *specs.Context, c projectionCase) {
 			spec := validSpec()
-			spec.OffsetStore = nil
-			requireOneProblem(ctx.T, spec.Validate(), "V4", "OffsetStore")
-		})
-		s.It("nil options", func(ctx *specs.Context) {
-			spec := validSpec()
-			spec.Projections["order-view"] = nil
-			requireOneProblem(ctx.T, spec.Validate(), "V4", `Projections["order-view"]`)
-		})
-		s.It("nil handler", func(ctx *specs.Context) {
-			spec := validSpec()
-			spec.Projections["order-view"] = &projection.Options{}
-			requireOneProblem(ctx.T, spec.Validate(), "V4", `Projections["order-view"].Handler`)
+			c.adjust(&spec)
+			requireOneProblem(ctx, spec.Validate(), "V4", c.field)
 		})
 		s.It("offset store not required without projections", func(ctx *specs.Context) {
 			spec := validSpec()
@@ -268,10 +250,11 @@ func TestSpecValidate_V4_Projections(t *testing.T) {
 // optional: an optional field left out is a literal nil, whereas a typed
 // nil passes the runtime's own `!= nil` guards and panics on first use.
 func TestSpecValidate_V5_TypedNilPerInterfaceField(t *testing.T) {
-	cases := []struct {
+	type typedNilCase struct {
 		field  string
 		adjust func(*Spec)
-	}{
+	}
+	cases := []typedNilCase{
 		{"EventsStore", func(s *Spec) { s.EventsStore = (*fakeEventsStore)(nil) }},
 		{"StateStore", func(s *Spec) { s.StateStore = (*fakeStateStore)(nil) }},
 		{"SnapshotStore", func(s *Spec) { s.SnapshotStore = (*fakeSnapshotStore)(nil) }},
@@ -286,13 +269,11 @@ func TestSpecValidate_V5_TypedNilPerInterfaceField(t *testing.T) {
 		}},
 	}
 	specs.Describe(t, "V5 rejects a typed-nil value in every interface-typed field and element", func(s *specs.Spec) {
-		for _, c := range cases {
-			s.It(c.field, func(ctx *specs.Context) {
-				spec := validSpec()
-				c.adjust(&spec)
-				requireOneProblem(ctx.T, spec.Validate(), "V5", c.field)
-			})
-		}
+		specs.Table(s, cases, func(c typedNilCase) string { return c.field }, func(ctx *specs.Context, c typedNilCase) {
+			spec := validSpec()
+			c.adjust(&spec)
+			requireOneProblem(ctx, spec.Validate(), "V5", c.field)
+		})
 	})
 }
 
@@ -302,22 +283,25 @@ func TestSpecValidate_V5_NilEventAdapterElement(t *testing.T) {
 		s.It("reports one V5 problem on EventAdapters[0]", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.EventAdapters = []eventadapter.EventAdapter{nil}
-			requireOneProblem(ctx.T, spec.Validate(), "V5", "EventAdapters[0]")
+			requireOneProblem(ctx, spec.Validate(), "V5", "EventAdapters[0]")
 		})
 	})
 }
 
 func TestSpecValidate_V6_NilPublisher(t *testing.T) {
 	specs.Describe(t, "V6 rejects a nil publisher of either kind", func(s *specs.Spec) {
-		s.It("events", func(ctx *specs.Context) {
+		type nilPublisherCase struct {
+			name   string
+			adjust func(*Spec)
+			field  string
+		}
+		specs.Table(s, []nilPublisherCase{
+			{"events", func(s *Spec) { s.EventPublishers[0] = nil }, "EventPublishers[0]"},
+			{"states", func(s *Spec) { s.StatePublishers[0] = nil }, "StatePublishers[0]"},
+		}, func(c nilPublisherCase) string { return c.name }, func(ctx *specs.Context, c nilPublisherCase) {
 			spec := validSpec()
-			spec.EventPublishers[0] = nil
-			requireOneProblem(ctx.T, spec.Validate(), "V6", "EventPublishers[0]")
-		})
-		s.It("states", func(ctx *specs.Context) {
-			spec := validSpec()
-			spec.StatePublishers[0] = nil
-			requireOneProblem(ctx.T, spec.Validate(), "V6", "StatePublishers[0]")
+			c.adjust(&spec)
+			requireOneProblem(ctx, spec.Validate(), "V6", c.field)
 		})
 	})
 }
@@ -328,13 +312,13 @@ func TestSpecValidate_V6_DuplicatePublisherIDsPerKind(t *testing.T) {
 			spec := validSpec()
 			spec.EventPublishers[1] = &fakeEventPublisher{id: "events-a"}
 			err := spec.Validate()
-			requireOneProblem(ctx.T, err, "V6", "EventPublishers[1]")
+			requireOneProblem(ctx, err, "V6", "EventPublishers[1]")
 			ctx.Expect(err.Error()).To(specs.Contain(`"events-a"`))
 		})
 		s.It("states", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.StatePublishers = append(spec.StatePublishers, &fakeStatePublisher{id: "states-a"})
-			requireOneProblem(ctx.T, spec.Validate(), "V6", "StatePublishers[1]")
+			requireOneProblem(ctx, spec.Validate(), "V6", "StatePublishers[1]")
 		})
 		// Uniqueness is per kind: the engine keys events publishers and states
 		// publishers in separate maps, so the two kinds may share an ID.
@@ -350,27 +334,25 @@ func TestSpecValidate_V6_DuplicatePublisherIDsPerKind(t *testing.T) {
 // root fails at New instead of when it builds its lifecycle sequence. Zero
 // (the default) and any positive value pass.
 func TestSpecValidate_V7_NegativeShutdownTimeout(t *testing.T) {
-	accepted := []struct {
+	type acceptedCase struct {
 		name string
 		d    time.Duration
-	}{
-		{"zero", 0},
-		{"one nanosecond", time.Nanosecond},
-		{"one minute", time.Minute},
 	}
 	specs.Describe(t, "V7 rejects a negative ShutdownTimeout and accepts zero and positive ones", func(s *specs.Spec) {
 		s.It("negative is rejected", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.ShutdownTimeout = -time.Second
-			requireOneProblem(ctx.T, spec.Validate(), "V7", "ShutdownTimeout")
+			requireOneProblem(ctx, spec.Validate(), "V7", "ShutdownTimeout")
 		})
-		for _, c := range accepted {
-			s.It(c.name+" is accepted", func(ctx *specs.Context) {
-				spec := validSpec()
-				spec.ShutdownTimeout = c.d
-				ctx.Expect(spec.Validate()).To(specs.BeNil())
-			})
-		}
+		specs.Table(s, []acceptedCase{
+			{"zero", 0},
+			{"one nanosecond", time.Nanosecond},
+			{"one minute", time.Minute},
+		}, func(c acceptedCase) string { return c.name + " is accepted" }, func(ctx *specs.Context, c acceptedCase) {
+			spec := validSpec()
+			spec.ShutdownTimeout = c.d
+			ctx.Expect(spec.Validate()).To(specs.BeNil())
+		})
 	})
 }
 
@@ -387,7 +369,6 @@ func TestSpecValidate_ReportsEveryProblem(t *testing.T) {
 				ShutdownTimeout: -1,
 			}
 			err := spec.Validate()
-			got := problems(ctx.T, err)
 
 			want := []struct{ rule, field string }{
 				{"V1", "Families"},
@@ -400,17 +381,14 @@ func TestSpecValidate_ReportsEveryProblem(t *testing.T) {
 				{"V6", "StatePublishers[0]"},
 				{"V7", "ShutdownTimeout"},
 			}
-			ctx.Expect(len(got)).ToEqual(len(want))
-
-			var wantPairs, unnamed []string
-			for _, w := range want {
-				wantPairs = append(wantPairs, w.rule+" "+w.field)
-				if !strings.Contains(err.Error(), w.field) {
-					unnamed = append(unnamed, w.field)
-				}
+			inOrder := make([]specs.Matcher, len(want))
+			fields := make([]any, len(want))
+			for i, w := range want {
+				inOrder[i] = problem(w.rule, w.field)
+				fields[i] = w.field
 			}
-			ctx.Expect(ruleFields(got)).ToEqual(wantPairs)
-			ctx.Expect(unnamed).To(specs.BeNil())
+			ctx.Expect(problems(ctx, err)).To(specs.HaveElementsInOrder(inOrder...))
+			ctx.Expect(err.Error()).To(specs.ContainAllOf(fields...))
 		})
 	})
 }
@@ -424,8 +402,7 @@ func TestStartError(t *testing.T) {
 			err := error(&StartError{Step: "probe", Err: cause})
 			ctx.Expect(err).To(specs.MatchError(cause))
 			msg := err.Error()
-			ctx.Expect(msg).To(specs.Contain("probe"))
-			ctx.Expect(msg).To(specs.Contain(cause.Error()))
+			ctx.Expect(msg).To(specs.ContainAllOf("probe", cause.Error()))
 			ctx.Expect(msg).To(specs.Not(specs.Contain("rollback")))
 		})
 		s.It("with rollback error", func(ctx *specs.Context) {
@@ -433,9 +410,7 @@ func TestStartError(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(cause))
 			ctx.Expect(err).To(specs.MatchError(undo))
 			msg := err.Error()
-			ctx.Expect(msg).To(specs.Contain("attach publishers"))
-			ctx.Expect(msg).To(specs.Contain(cause.Error()))
-			ctx.Expect(msg).To(specs.Contain(undo.Error()))
+			ctx.Expect(msg).To(specs.ContainAllOf("attach publishers", cause.Error(), undo.Error()))
 			var se *StartError
 			ctx.Expect(err).To(specs.MatchErrorAs(&se))
 			ctx.Expect(se.Step).ToEqual("attach publishers")
@@ -520,14 +495,13 @@ func pingingPublisher(id string, desc adapter.Descriptor) *pingingStatePublisher
 
 // requireV8 asserts err holds exactly one problem, a V8 on field, whose
 // message names the adapter type and every string in mentions.
-func requireV8(t testing.TB, err error, field string, mentions ...string) {
-	t.Helper()
-	requireOneProblem(t, err, "V8", field)
-	for _, m := range append([]string{`"fake"`}, mentions...) {
-		if !strings.Contains(err.Error(), m) {
-			t.Errorf("V8 error %q does not mention %q", err, m)
-		}
+func requireV8(ctx *specs.Context, err error, field string, mentions ...string) {
+	requireOneProblem(ctx, err, "V8", field)
+	want := []any{`"fake"`}
+	for _, m := range mentions {
+		want = append(want, m)
 	}
+	ctx.Expect(err.Error()).To(specs.ContainAllOf(want...))
 }
 
 // Declared adapters that tell the truth pass, in every slot V8 inspects.
@@ -569,12 +543,12 @@ func TestSpecValidate_V8a_SlotPortMustBeDeclared(t *testing.T) {
 		s.It("state store declaring only the events store port", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.StateStore = &declaredStateStore{described: described{descriptor(persistence.PortEventsStore)}}
-			requireV8(ctx.T, spec.Validate(), "StateStore", persistence.PortStateStore)
+			requireV8(ctx, spec.Validate(), "StateStore", persistence.PortStateStore)
 		})
 		s.It("publisher declaring the other publisher port", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.EventPublishers[0] = eventPublisher("events-a", descriptor(publishing.PortStatePublisher))
-			requireV8(ctx.T, spec.Validate(), "EventPublishers[0]", publishing.PortEventPublisher)
+			requireV8(ctx, spec.Validate(), "EventPublishers[0]", publishing.PortEventPublisher)
 		})
 		s.It("one value serving two ports fits either slot", func(ctx *specs.Context) {
 			both := adapter.Descriptor{Ports: []adapter.Port{persistence.PortEventsStore, persistence.PortSnapshotStore}, Name: "fake"}
@@ -589,12 +563,13 @@ func TestSpecValidate_V8a_SlotPortMustBeDeclared(t *testing.T) {
 // V8b: declaration and method set agree in both directions for every
 // optional capability compose knows for the slot's port.
 func TestSpecValidate_V8b_DeclarationMatchesMethods(t *testing.T) {
-	cases := []struct {
+	type declarationCase struct {
 		name       string
 		adjust     func(*Spec)
 		field      string
 		capability string
-	}{
+	}
+	cases := []declarationCase{
 		{
 			name: "declares CapStart without Start",
 			adjust: func(s *Spec) {
@@ -640,13 +615,11 @@ func TestSpecValidate_V8b_DeclarationMatchesMethods(t *testing.T) {
 		},
 	}
 	specs.Describe(t, "V8b requires a declaration and its method set to agree in both directions", func(s *specs.Spec) {
-		for _, c := range cases {
-			s.It(c.name, func(ctx *specs.Context) {
-				spec := validSpec()
-				c.adjust(&spec)
-				requireV8(ctx.T, spec.Validate(), c.field, c.capability)
-			})
-		}
+		specs.Table(s, cases, func(c declarationCase) string { return c.name }, func(ctx *specs.Context, c declarationCase) {
+			spec := validSpec()
+			c.adjust(&spec)
+			requireV8(ctx, spec.Validate(), c.field, c.capability)
+		})
 	})
 }
 
@@ -695,7 +668,7 @@ func TestSpecValidate_V8b_DeclarationOnlyCapabilityIsOneDirectional(t *testing.T
 				implemented:     func(any) bool { return implemented },
 				declarationOnly: true,
 			})
-			ctx.T.Cleanup(func() { knownCapabilities[port] = saved })
+			ctx.Cleanup(func() { knownCapabilities[port] = saved })
 
 			implemented = true
 			spec := validSpec()
@@ -704,7 +677,7 @@ func TestSpecValidate_V8b_DeclarationOnlyCapabilityIsOneDirectional(t *testing.T
 
 			implemented = false
 			spec.EventPublishers[0] = eventPublisher("events-a", descriptor(port, capability))
-			requireV8(ctx.T, spec.Validate(), "EventPublishers[0]", string(capability))
+			requireV8(ctx, spec.Validate(), "EventPublishers[0]", string(capability))
 		})
 	})
 }
@@ -716,30 +689,31 @@ func TestSpecValidate_V8c_RequiredCapabilities(t *testing.T) {
 		// The case adds an entry to the package-level table; its own Cleanup
 		// removes it, so cases stay independent.
 		s.It("rejects a publisher that omits a required capability", func(ctx *specs.Context) {
-			ctx.Expect(len(requiredCapabilities)).ToEqual(0) // empty in v4 (design §D6)
+			ctx.Expect(requiredCapabilities).To(specs.BeEmpty()) // empty in v4 (design §D6)
 			const port adapter.Port = publishing.PortEventPublisher
 			requiredCapabilities[port] = []adapter.Capability{adapter.CapStart}
-			ctx.T.Cleanup(func() { delete(requiredCapabilities, port) })
+			ctx.Cleanup(func() { delete(requiredCapabilities, port) })
 
 			spec := validSpec()
 			spec.EventPublishers = []publishing.EventPublisher{
 				startingPublisher("events-a", descriptor(port, adapter.CapStart)),
 				eventPublisher("events-b", descriptor(port)),
 			}
-			requireV8(ctx.T, spec.Validate(), "EventPublishers[1]", string(adapter.CapStart))
+			requireV8(ctx, spec.Validate(), "EventPublishers[1]", string(adapter.CapStart))
 		})
 	})
 }
 
-// describeCalls counts Describe calls on countingDescribePublisher, whose
-// Describe works on a nil receiver.
-var describeCalls atomic.Int32
+// describeCtrl is the controller of the case that is running. The typed-nil
+// publisher below has no state of its own, since its Describe runs on a nil
+// receiver, so the controller is reached through this variable. The case sets
+// it and restores it with ctx.Cleanup.
+var describeCtrl *mock.Controller
 
 type countingDescribePublisher struct{ fakeEventPublisher }
 
 func (*countingDescribePublisher) Describe() adapter.Descriptor {
-	describeCalls.Add(1)
-	return adapter.Descriptor{Name: "fake"}
+	return mock.Value[adapter.Descriptor](describeCtrl.Method("Describe").Call(), 0)
 }
 
 // Spec 3 scenario "typed nil is reported once": V5 reports a typed-nil
@@ -748,11 +722,12 @@ func (*countingDescribePublisher) Describe() adapter.Descriptor {
 func TestSpecValidate_V8_SkipsValuesV5AndV6Rejected(t *testing.T) {
 	specs.Describe(t, "V8 skips values that V5 or V6 already rejected", func(s *specs.Spec) {
 		s.It("typed-nil publisher", func(ctx *specs.Context) {
-			describeCalls.Store(0)
+			describeCtrl = mock.NewController(ctx)
+			ctx.Cleanup(func() { describeCtrl = nil })
+			describeCtrl.Method("Describe").Expect().Never()
 			spec := validSpec()
 			spec.EventPublishers[1] = (*countingDescribePublisher)(nil)
-			requireOneProblem(ctx.T, spec.Validate(), "V5", "EventPublishers[1]")
-			ctx.Expect(describeCalls.Load()).ToEqual(int32(0))
+			requireOneProblem(ctx, spec.Validate(), "V5", "EventPublishers[1]")
 		})
 		s.It("duplicate ID", func(ctx *specs.Context) {
 			spec := validSpec()
@@ -760,12 +735,12 @@ func TestSpecValidate_V8_SkipsValuesV5AndV6Rejected(t *testing.T) {
 				eventPublisher("dup", descriptor(publishing.PortEventPublisher)),
 				eventPublisher("dup", descriptor(publishing.PortStatePublisher)), // also a V8a mismatch
 			}
-			requireOneProblem(ctx.T, spec.Validate(), "V6", "EventPublishers[1]")
+			requireOneProblem(ctx, spec.Validate(), "V6", "EventPublishers[1]")
 		})
 		s.It("typed-nil tenant resolver", func(ctx *specs.Context) {
 			spec := validSpec()
 			spec.TenantResolver = (*declaredFixedTenantResolver)(nil)
-			requireOneProblem(ctx.T, spec.Validate(), "V5", "TenantResolver")
+			requireOneProblem(ctx, spec.Validate(), "V5", "TenantResolver")
 		})
 	})
 }
@@ -779,15 +754,12 @@ func TestSpecValidate_V8_ReportsInFieldOrder(t *testing.T) {
 			spec.EventsStore = &declaredEventsStore{described: described{descriptor(persistence.PortStateStore)}}
 			spec.TenantResolver = &declaredFixedTenantResolver{declaredTenantResolver{described: described{descriptor(persistence.PortStateStore)}}}
 			spec.ShutdownTimeout = -1
-			got := problems(ctx.T, spec.Validate())
-			want := []string{
-				"V8 EventsStore",
-				"V8 TenantResolver", // V8a: wrong port
-				"V8 TenantResolver", // V8b: FixedTenantResolver undeclared
-				"V7 ShutdownTimeout",
-			}
-			ctx.Expect(len(got)).ToEqual(len(want))
-			ctx.Expect(ruleFields(got)).ToEqual(want)
+			ctx.Expect(problems(ctx, spec.Validate())).To(specs.HaveElementsInOrder(
+				problem("V8", "EventsStore"),
+				problem("V8", "TenantResolver"), // V8a: wrong port
+				problem("V8", "TenantResolver"), // V8b: FixedTenantResolver undeclared
+				problem("V7", "ShutdownTimeout"),
+			))
 		})
 	})
 }
