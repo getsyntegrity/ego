@@ -2,7 +2,7 @@
 
 The project adheres to [Semantic Versioning](https://semver.org)
 and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
-This repo uses Docker-backed `make` targets for its lint, test, mock, and
+This repo uses Docker-backed `make` targets for its lint, test, and
 protobuf-generation workflows. The only host-side prerequisites are
 [Docker](https://docs.docker.com/get-docker/) and `make`.
 
@@ -53,7 +53,6 @@ Each target also works on its own:
 | `docker-image`    | Build the hermetic CI image (`ego-ci:latest`) from `Dockerfile.ci`.  |
 | `docker-lint`     | Run `golangci-lint` against the working tree.                        |
 | `docker-test`     | Run the root module test suite with coverage.                        |
-| `docker-mock`     | Regenerate the mocks under `./mocks` via `mockery`.                  |
 | `docker-protogen` | Regenerate protobuf code via `buf` and refresh `example/examplepb`.  |
 | `docker-ci`       | Composite of `docker-lint` + `docker-test`.                          |
 
@@ -61,7 +60,7 @@ See [`docs/ci.md`](docs/ci.md) for how the GitHub Actions pipeline works and
 [`docs/main-branch-policy.md`](docs/main-branch-policy.md) for the branch rules.
 
 The Docker targets mount the working tree at `/workspace` inside the container
-and run as your local UID/GID, so any generated files (mocks, protobufs,
+and run as your local UID/GID, so any generated files (protobufs,
 `coverage.out`) appear in the repo with normal ownership. Go build and module
 caches are kept warm between runs in the named volumes `ego-go-build-cache`
 and `ego-go-mod-cache`.

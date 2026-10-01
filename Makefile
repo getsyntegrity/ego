@@ -1,5 +1,5 @@
 .PHONY: run-eventsourced run-durablestate run-saga proto \
-        docker-image docker-lint docker-test docker-mock docker-protogen docker-ci
+        docker-image docker-lint docker-test docker-protogen docker-ci
 
 # ---------------------------------------------------------------------------
 # Local developer targets
@@ -37,8 +37,7 @@ proto:
 # Docker-based CI targets
 #
 # These targets replicate what the Earthfile used to do: build a hermetic
-# tooling image (Dockerfile.ci) and run lint, tests, mock generation, and
-# protobuf generation inside a container so contributors and CI do not need
+# tooling image (Dockerfile.ci) and run lint, tests, and protobuf generation inside a container so contributors and CI do not need
 # the toolchain installed locally.
 # ---------------------------------------------------------------------------
 
@@ -86,18 +85,6 @@ docker-lint: docker-image
 docker-test: docker-image
 	@echo "Running tests..."
 	$(DOCKER_RUN) go test -coverprofile=coverage.out ./...
-
-# Regenerate mocks via mockery inside the CI image. Output is written to ./mocks.
-docker-mock: docker-image
-	@echo "Generating mocks..."
-	$(DOCKER_RUN) sh -c '\
-		mockery --dir persistence  --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/persistence  --case snake && \
-		mockery --dir offsetstore  --name OffsetStore     --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/offsetstore  --case snake && \
-		mockery --dir engine       --name EventPublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
-		mockery --dir engine       --name StatePublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
-		mockery --dir encryption   --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/encryption   --case snake && \
-		mockery --dir eventadapter --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/eventadapter --case snake && \
-		mockery --dir tenancy      --name TenantResolver  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/tenancy      --case snake'
 
 # Regenerate protobuf code inside the CI image. buf writes everything under
 # gen/ (per buf.gen.yaml); we then copy each subtree to its destination —
