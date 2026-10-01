@@ -23,7 +23,7 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 | `lint` | `golangci-lint` with `.golangci.yml`. On pull requests it only blocks issues introduced by the diff (`only-new-issues`), so existing problems do not stop new work. |
 | `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
 | `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
-| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds, vets and tests each one. |
+| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds, vets and tests each one. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
 | `api` | Compares the public API with `apidiff`. Against `develop` it only warns. Against the latest tag (pull requests to `main`) it fails when the API breaks and the release is not labelled `release:major`. |
 | `vuln` | `govulncheck`. It fails only when the code calls a vulnerable function. |

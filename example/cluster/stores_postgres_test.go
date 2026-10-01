@@ -49,9 +49,89 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/persistence/conformance"
+	"github.com/getsyntegrity/ego/persistence/postgres"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
+
+// eventsStoreSchemaDDL is the CREATE TABLE statement for events_store, kept
+// in sync by hand with the ConfigMap init.sql in k8s/postgres.yaml (the
+// deployment source of truth). It is used by the Postgres-backed tests
+// (stores_postgres_test.go) to provision a fresh schema without depending on
+// a running cluster's init container.
+//
+// tenant_id defaults to ” (the empty string), which scopeKey encodes as
+// persistence.Unscoped(): a valid tenancy.TenantID is never empty
+// (tenancy.NewTenantID rejects ""), so ” unambiguously means "no tenant".
+// Existing rows from before this column existed read back as ”, so an
+// existing non-tenant deployment needs no data rewrite — see README.md's
+// migration note for the ALTER TABLE recipe on an existing database.
+//
+// events_store_revisions holds one row per (tenant_id, persistence_id): the
+// StorageRevision, i.e. the highest sequence number ever committed for that
+// record. It is separate from events_store because DeleteEvents removes
+// replayable events for retention but must never lower the revision, or
+// ExpectGenesis() would succeed again and a stale ExpectRevision would win.
+// The row is also the per-record lock: every write takes it before touching
+// events_store (see WriteEvents), and so does DeleteEvents before its DELETE
+// (see DeleteEvents), so a delete can never interleave with a concurrent
+// write of the same record.
+//
+// The script is idempotent and doubles as the migration for a database
+// created before events_store_revisions existed: the final INSERT backfills
+// each record's revision from its highest retained sequence number, and never
+// lowers a revision that is already stored.
+//
+// tenant_metadata is a nullable JSONB column carrying egopb.Event's
+// TenantMetadata (proto field 10), the map a tenant-aware EventSourcedActor
+// serializes via tenancy.MarshalMetadata before persisting and reconstructs
+// via tenancy.UnmarshalMetadata on recovery (event_sourced_actor.go). It must
+// be nullable rather than NOT NULL DEFAULT '{}': proto3 cannot distinguish a
+// nil map from an empty one on the wire, so insertEvent (below) writes NULL
+// for both, and scanEvents reads NULL back as a nil map — the same shape
+// GetTenantMetadata() returns for an event that never carried tenant
+// metadata at all. A JSON object, not a second key/value table, mirrors the
+// map's own shape and keeps a single-record write to one row (#115 Codex
+// P2). ADD COLUMN IF NOT EXISTS migrates a database created before this
+// column existed with NO backfill: an existing row's tenant_metadata is
+// NULL, which is already the correct "no tenant metadata" reading for a row
+// nothing ever attached an identity to — inventing one here would be wrong.
+const eventsStoreSchemaDDL = `
+CREATE TABLE IF NOT EXISTS events_store
+(
+    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id    VARCHAR(255)          NOT NULL,
+    sequence_number   BIGINT                NOT NULL,
+    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
+    event_payload     BYTEA                 NOT NULL,
+    event_manifest    VARCHAR(255)          NOT NULL,
+    timestamp         BIGINT                NOT NULL,
+    shard_number      BIGINT                NOT NULL,
+    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
+    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
+    tenant_metadata   JSONB,
+    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
+);
+ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
+CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
+CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
+CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
+
+CREATE TABLE IF NOT EXISTS events_store_revisions
+(
+    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
+    persistence_id VARCHAR(255)            NOT NULL,
+    revision       BIGINT                  NOT NULL,
+    PRIMARY KEY (tenant_id, persistence_id)
+);
+INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
+SELECT tenant_id, persistence_id, MAX(sequence_number)
+FROM events_store
+GROUP BY tenant_id, persistence_id
+ON CONFLICT (tenant_id, persistence_id)
+DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
+`
 
 // postgresTestDSN returns the DSN configured for these tests, skipping the
 // calling test when it is unset.
@@ -69,7 +149,7 @@ func postgresTestDSN(t *testing.T) string {
 // fresh, empty table — the contract persistence/conformance.RunEventsStoreConformance
 // requires of newStore. The returned store is not yet Connect()-ed; the
 // conformance runner and the tests below do that themselves.
-func newPostgresTestStore(sc *specs.Context, dsn string) *PostgresEventStore {
+func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
 	sc.Helper()
 	store, err := provisionPostgresTestStore(dsn)
 	sc.Expect(err).To(specs.BeNil())
@@ -79,7 +159,7 @@ func newPostgresTestStore(sc *specs.Context, dsn string) *PostgresEventStore {
 // provisionPostgresTestStore does the work of newPostgresTestStore and returns the
 // error instead of asserting, for the conformance runner, whose callback has a
 // *testing.T and no spec context.
-func provisionPostgresTestStore(dsn string) (*PostgresEventStore, error) {
+func provisionPostgresTestStore(dsn string) (*postgres.EventStore, error) {
 	ctx := context.Background()
 
 	setupPool, err := pgxpool.New(ctx, dsn)
@@ -94,7 +174,7 @@ func provisionPostgresTestStore(dsn string) (*PostgresEventStore, error) {
 	if _, err = setupPool.Exec(ctx, "TRUNCATE TABLE events_store, events_store_revisions"); err != nil {
 		return nil, err
 	}
-	return NewPostgresEventStore(dsn), nil
+	return postgres.NewEventStore(dsn), nil
 }
 
 func TestPostgresEventStore_Conformance(t *testing.T) {
@@ -106,6 +186,23 @@ func TestPostgresEventStore_Conformance(t *testing.T) {
 		}
 		return store
 	})
+}
+
+// countEventRows returns how many events_store rows an unscoped record has at
+// one sequence number, read through a connection of its own so the check does
+// not depend on the store under test.
+func countEventRows(sc *specs.Context, ctx context.Context, dsn, persistenceID string, sequenceNumber int) int {
+	sc.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	sc.Expect(err).To(specs.BeNil())
+	defer func() { _ = conn.Close(ctx) }()
+
+	var count int
+	sc.Expect(conn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
+		"", persistenceID, sequenceNumber,
+	).Scan(&count)).To(specs.BeNil())
+	return count
 }
 
 // pgMarkedEvent builds a single-event batch carrying marker in its payload,
@@ -246,11 +343,7 @@ func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testi
 
 			// Only the winner's row is persisted: a losing conditional writer must
 			// never have inserted its own row before observing the conflict.
-			var count int
-			sc.Expect(store.pool.QueryRow(ctx,
-				`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
-				"", persistenceID, 2,
-			).Scan(&count)).To(specs.BeNil())
+			count := countEventRows(sc, ctx, dsn, persistenceID, 2)
 			sc.Expect(count).To(specs.Equal(1)) // exactly one row must exist at the contested sequence number
 		})
 	})
@@ -429,7 +522,7 @@ func TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock(t *testing.T)
 
 // writeRevisions commits events 1..n for persistenceID, one ExpectRevision
 // step at a time, so the test also exercises the revision each write leaves.
-func writeRevisions(sc *specs.Context, store *PostgresEventStore, scope persistence.Scope, persistenceID string, n uint64) {
+func writeRevisions(sc *specs.Context, store *postgres.EventStore, scope persistence.Scope, persistenceID string, n uint64) {
 	sc.Helper()
 	ctx := context.Background()
 	sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
@@ -467,11 +560,10 @@ func appendApplicationName(dsn, name string) string {
 // test, or another database — so it can wait for a precise number of lock
 // waiters instead of a fixed sleep. Setup (schema creation and truncation)
 // still runs over the plain, untagged dsn.
-func newPostgresTestStoreNamed(sc *specs.Context, dsn, applicationName string) *PostgresEventStore {
+func newPostgresTestStoreNamed(sc *specs.Context, dsn, applicationName string) *postgres.EventStore {
 	sc.Helper()
-	store := newPostgresTestStore(sc, dsn)
-	store.dsn = appendApplicationName(dsn, applicationName)
-	return store
+	newPostgresTestStore(sc, dsn) // provisions and truncates over the plain dsn
+	return postgres.NewEventStore(appendApplicationName(dsn, applicationName))
 }
 
 // waitForLockWaiters polls pg_locks/pg_stat_activity, scoped to
@@ -741,11 +833,7 @@ func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing
 			sc.Expect(errUnconditional).To(specs.BeNil()) // the unconditional write must always succeed
 			requireConflictAt(sc, errConditional, 7)
 
-			var count int
-			sc.Expect(store.pool.QueryRow(ctx,
-				`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
-				"", persistenceID, 2,
-			).Scan(&count)).To(specs.BeNil())
+			count := countEventRows(sc, ctx, dsn, persistenceID, 2)
 			sc.Expect(count).To(specs.Equal(0)) // the losing conditional write must never have inserted sequence 2
 		})
 	})
@@ -1085,7 +1173,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
 			sc.Expect(err).To(specs.BeNil()) // the schema script must be idempotent
 
-			store := NewPostgresEventStore(dsn)
+			store := postgres.NewEventStore(dsn)
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			defer store.Disconnect(ctx)
 
@@ -1169,7 +1257,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 			).Scan(&tenantMetadataIsNull)).To(specs.BeNil())
 			sc.Expect(tenantMetadataIsNull).To(specs.BeTrue()) // the migration must not backfill or invent tenant metadata for a pre-existing row
 
-			store := NewPostgresEventStore(dsn)
+			store := postgres.NewEventStore(dsn)
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			defer store.Disconnect(ctx)
 

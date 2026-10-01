@@ -5,8 +5,11 @@ go 1.26.0
 // Use the local ego module so the example always builds against the current source.
 replace github.com/getsyntegrity/ego => ../../
 
+replace github.com/getsyntegrity/ego/persistence/postgres => ../../persistence/postgres
+
 require (
 	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/ego/persistence/postgres v0.0.0
 	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
