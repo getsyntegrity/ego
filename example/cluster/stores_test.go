@@ -35,8 +35,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
 )
@@ -54,26 +52,26 @@ func singleEvent(persistenceID string, sequenceNumber uint64) *egopb.Event {
 func TestPostgresEventStore_WriteEvents_InvalidScope(t *testing.T) {
 	store := unvalidatedStore()
 	err := store.WriteEvents(context.Background(), persistence.Scope{}, []*egopb.Event{singleEvent("a", 1)}, persistence.Unconditional())
-	require.ErrorIs(t, err, persistence.ErrInvalidScope)
+	mustErrorIs(t, err, persistence.ErrInvalidScope)
 }
 
 func TestPostgresEventStore_WriteEvents_InvalidPrecondition(t *testing.T) {
 	store := unvalidatedStore()
 	err := store.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{singleEvent("a", 1)}, persistence.WritePrecondition{})
-	require.ErrorIs(t, err, persistence.ErrInvalidPrecondition)
+	mustErrorIs(t, err, persistence.ErrInvalidPrecondition)
 }
 
 func TestPostgresEventStore_WriteEvents_EmptyBatchConditional(t *testing.T) {
 	store := unvalidatedStore()
 	err := store.WriteEvents(context.Background(), persistence.Unscoped(), nil, persistence.ExpectGenesis())
-	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
+	mustErrorIs(t, err, persistence.ErrPreconditionScope)
 }
 
 func TestPostgresEventStore_WriteEvents_MixedIDBatchConditional(t *testing.T) {
 	store := unvalidatedStore()
 	events := []*egopb.Event{singleEvent("a", 1), singleEvent("b", 2)}
 	err := store.WriteEvents(context.Background(), persistence.Unscoped(), events, persistence.ExpectRevision(1))
-	require.ErrorIs(t, err, persistence.ErrPreconditionScope)
+	mustErrorIs(t, err, persistence.ErrPreconditionScope)
 }
 
 func TestPostgresEventStore_WriteEvents_EmptyBatchUnconditionalSucceeds(t *testing.T) {
@@ -83,35 +81,35 @@ func TestPostgresEventStore_WriteEvents_EmptyBatchUnconditionalSucceeds(t *testi
 	// touching s.pool for an empty batch.
 	store := unvalidatedStore()
 	err := store.WriteEvents(context.Background(), persistence.Unscoped(), nil, persistence.Unconditional())
-	require.NoError(t, err)
+	mustNoError(t, err)
 }
 
 func TestPostgresEventStore_DeleteEvents_InvalidScope(t *testing.T) {
 	store := unvalidatedStore()
 	err := store.DeleteEvents(context.Background(), persistence.Scope{}, "a", 1)
-	require.ErrorIs(t, err, persistence.ErrInvalidScope)
+	mustErrorIs(t, err, persistence.ErrInvalidScope)
 }
 
 func TestPostgresEventStore_ReplayEvents_InvalidScope(t *testing.T) {
 	store := unvalidatedStore()
 	events, err := store.ReplayEvents(context.Background(), persistence.Scope{}, "a", 1, 10, 10)
-	require.ErrorIs(t, err, persistence.ErrInvalidScope)
-	require.Nil(t, events)
+	mustErrorIs(t, err, persistence.ErrInvalidScope)
+	mustNil(t, events)
 }
 
 func TestPostgresEventStore_GetLatestEvent_InvalidScope(t *testing.T) {
 	store := unvalidatedStore()
 	event, err := store.GetLatestEvent(context.Background(), persistence.Scope{}, "a")
-	require.ErrorIs(t, err, persistence.ErrInvalidScope)
-	require.Nil(t, event)
+	mustErrorIs(t, err, persistence.ErrInvalidScope)
+	mustNil(t, event)
 }
 
 func TestPostgresEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
 	store := unvalidatedStore()
 	ids, next, err := store.PersistenceIDs(context.Background(), persistence.Scope{}, 10, "")
-	require.ErrorIs(t, err, persistence.ErrInvalidScope)
-	require.Nil(t, ids)
-	require.Empty(t, next)
+	mustErrorIs(t, err, persistence.ErrInvalidScope)
+	mustNil(t, ids)
+	mustEmpty(t, next)
 }
 
 // A zero pageSize is a degenerate page: it lists nothing and returns an empty
@@ -121,14 +119,14 @@ func TestPostgresEventStore_PersistenceIDs_InvalidScope(t *testing.T) {
 func TestPostgresEventStore_PersistenceIDs_ZeroPageSize(t *testing.T) {
 	store := unvalidatedStore()
 	ids, next, err := store.PersistenceIDs(context.Background(), persistence.Unscoped(), 0, "")
-	require.NoError(t, err)
-	require.Empty(t, ids)
-	require.Empty(t, next)
+	mustNoError(t, err)
+	mustEmpty(t, ids)
+	mustEmpty(t, next)
 
 	ids, next, err = store.PersistenceIDs(context.Background(), persistence.Unscoped(), 0, "some-id")
-	require.NoError(t, err)
-	require.Empty(t, ids)
-	require.Empty(t, next)
+	mustNoError(t, err)
+	mustEmpty(t, ids)
+	mustEmpty(t, next)
 }
 
 func TestPostgresEventStore_ImplementsEventsStore(t *testing.T) {
