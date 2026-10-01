@@ -498,132 +498,67 @@ func TestEventSourcedActor(t *testing.T) {
 // runtime without crossing the trust boundary; see TestSagaFailsClosed...
 // in saga_test.go for the end-to-end demonstration).
 func TestEventSourcedActorTenancyGate(t *testing.T) {
-	t.Run("non-batched: missing TenantContext blocks HandleCommand and persistence", func(t *testing.T) {
-		ctx := context.TODO()
+	// The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("non-batched: missing TenantContext blocks HandleCommand and persistence", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			// No TenantContext attached: this is exactly what a caller that
+			// bypasses Engine.SendCommand (e.g. a saga's context.Background()
+			// dispatch, documented in #54) looks like from the actor's side.
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-		// No TenantContext attached: this is exactly what a caller that
-		// bypasses Engine.SendCommand (e.g. a saga's context.Background()
-		// dispatch, documented in #54) looks like from the actor's side.
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			_, wantErr := tenancy.Require(context.Background())
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+			// HandleCommand must never run without an attached TenantContext
+			ctx.Expect(behavior.InvocationCount()).ToEqual(0)
 
-		_, wantErr := tenancy.Require(context.Background())
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
+			// no event may be persisted when the gate blocks the command
+			ctx.Expect(latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()).To(specs.BeNil())
+		})
 
-		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
+		s.It("batched: missing TenantContext blocks HandleCommand before flushBatch is ever reached", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
+			// A short flush window with a threshold that is never reached by a
+			// single command: if the gate failed to block the command and
+			// flushBatch ran, it would still take at least this long, giving the
+			// assertion below a real window to catch a regression.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 200 * time.Millisecond,
+			}
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("batched: missing TenantContext blocks HandleCommand before flushBatch is ever reached", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		// A short flush window with a threshold that is never reached by a
-		// single command: if the gate failed to block the command and
-		// flushBatch ran, it would still take at least this long, giving the
-		// assertion below a real window to catch a regression.
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 200 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			_, wantErr := tenancy.Require(context.Background())
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+			// HandleCommand must never run without an attached TenantContext
+			ctx.Expect(behavior.InvocationCount()).ToEqual(0)
 
-		_, wantErr := tenancy.Require(context.Background())
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
-
-		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
-
-		// Give any wrongly-scheduled flush timer time to fire, then confirm
-		// nothing was ever written: flushBatch's own context.Background()
-		// call (T4-B, out of scope here) must never even be reached.
-		pause.For(500 * time.Millisecond)
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+			// Watch for 2.5 flush windows: a wrongly-scheduled flush timer would
+			// fire inside them, and the store must stay empty throughout.
+			// flushBatch's own context.Background() call (T4-B, out of scope here)
+			// must never even be reached.
+			ctx.Consistently(latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID), specs.BeNil(),
+				specs.WithTimeout(500*time.Millisecond), specs.WithInterval(pollInterval))
+		})
 	})
 }
 
@@ -685,104 +620,62 @@ func TestEventSourcedActorVerifyTenantForPersist(t *testing.T) {
 // context.Background() Ask is ever reached — proving this check is
 // independent from, and additional to, T4-A.
 func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a second tenant in the same batch cycle", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			// A high threshold that a single command never reaches, and a short
+			// flush window: this test only cares about the append-time check, not
+			// any flush behavior, but the first command's reply is still deferred
+			// until its cycle flushes by timer, so the window must stay well under
+			// the Ask timeouts used below.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(eventStore),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	// A high threshold that a single command never reaches, and a short
-	// flush window: this test only cares about the append-time check, not
-	// any flush behavior, but the first command's reply is still deferred
-	// until its cycle flushes by timer, so the window must stay well under
-	// the Ask timeouts used below.
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// The first command's reply is deferred (stashed) until its batch cycle
+			// flushes by timer, since the threshold is never reached by one command
+			// alone: send it in the background and let it run concurrently with the
+			// second command below, exactly as it would for two real concurrent
+			// callers sharing a batch cycle.
+			first := askInBackground(attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Wait until the first command has been received, passed the pre-handler
+			// gate and run HandleCommand. The actor handles its messages one at a
+			// time, so it has recorded tenant A in the batch buffer before the
+			// second command, for a different tenant, is read from the mailbox.
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.CreateAccount{AccountBalance: 10})
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// a second command for a different tenant in the same batch cycle must be rejected
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
+			// the first command of the batch cycle must succeed once its own cycle flushes
+			stateReplyOf(ctx, first.await(ctx))
 
-	// The first command's reply is deferred (stashed) until its batch cycle
-	// flushes by timer, since the threshold is never reached by one command
-	// alone: send it in the background and let it run concurrently with the
-	// second command below, exactly as it would for two real concurrent
-	// callers sharing a batch cycle.
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
-
-	// Give the first command time to be received, pass the pre-handler gate,
-	// and be appended to the batch buffer (recording tenant A) before the
-	// second command — for a different tenant — is sent into the same cycle.
-	pause.For(200 * time.Millisecond)
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 10}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a second command for a different tenant in the same batch cycle must be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
-
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
-		"the first command of the batch cycle must succeed once its own cycle flushes")
-
-	// Exactly the first, tenant-A command's event was ever persisted: the
-	// rejected tenant-B command never reached the buffer at all.
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// Exactly the first, tenant-A command's event was ever persisted: the
+			// rejected tenant-B command never reached the buffer at all.
+			latest := latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()
+			ctx.Expect(latest).To(specs.Satisfy("is the event at sequence 1", func(v any) bool {
+				event, ok := v.(*egopb.Event)
+				return ok && event != nil && event.GetSequenceNumber() == 1
+			}))
+		})
+	})
 }
 
 // TestEventSourcedActorResetBatchDoesNotClearActorTenant covers design.md
@@ -797,91 +690,50 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 // actorTenant, seeded by the first cycle's persist, survives resetBatch and
 // is compared against every later command for this actor's entire lifetime.
 func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("keeps the actor tenant across batch cycles", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   1,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			ctxA := attachTenant(ctx, tenantA)
+			ctxB := attachTenant(ctx, tenantB)
 
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   1,
-		BatchFlushWindow: time.Second,
-	}
+			// First cycle: tenant A. BatchThreshold==1 drives this all the way
+			// through flush, reply, and resetBatch before the Ask returns. The
+			// first cycle's only command must succeed.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Second cycle: tenant B, a brand new batch cycle. actorTenant (seeded
+			// as tenant A by the first cycle's persist) is NOT cleared by
+			// resetBatch, so this cross-tenant command must be rejected, even
+			// though it is the first command of its own, freshly reset cycle. Ask
+			// itself must not fail; the rejection is carried in the CommandReply.
+			reply := askWith(ctx, ctxB, pid, &testpb.CreateAccount{AccountBalance: 10})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	// First cycle: tenant A. BatchThreshold==1 drives this all the way
-	// through flush, reply, and resetBatch before the Ask returns.
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the first cycle's only command must succeed")
-
-	// Second cycle: tenant B, a brand new batch cycle. actorTenant (seeded
-	// as tenant A by the first cycle's persist) is NOT cleared by
-	// resetBatch, so this cross-tenant command must be rejected — even
-	// though it is the first command of its own, freshly reset cycle.
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok,
-		"a different tenant's command in a brand new batch cycle must still be "+
-			"rejected against actorTenant, seeded by the previous, already-flushed cycle")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	// A third command from the SAME tenant (A) that established actorTenant
-	// must still succeed in its own brand new batch cycle: actorTenant
-	// surviving resetBatch is a cross-tenant guard, not a "one cycle only"
-	// restriction on the tenant that originally established it.
-	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 20}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the tenant that established actorTenant must still succeed across later batch cycles")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// A third command from the SAME tenant (A) that established actorTenant
+			// must still succeed in its own brand new batch cycle: actorTenant
+			// surviving resetBatch is a cross-tenant guard, not a "one cycle only"
+			// restriction on the tenant that originally established it.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 20}))
+		})
+	})
 }
 
 // TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant is the
@@ -896,116 +748,71 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 // invocation is acceptable: the check must gate BEFORE HandleCommand runs,
 // exactly like the T4-A pre-handler gate does for a missing tenant.
 func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a zero-event command of another tenant before HandleCommand runs", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			// A high threshold that tenant A's single command never reaches on its
+			// own, so its batch cycle (and batchTenant) stays open when tenant B's
+			// command arrives.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(eventStore),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	// A high threshold that tenant A's single command never reaches on its
-	// own, so its batch cycle (and batchTenant) stays open when tenant B's
-	// command arrives.
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// Tenant A starts the batch: this command produces one event, so
+			// batchTenant becomes A and the batch stays open (threshold not
+			// reached). Its reply is stashed until the cycle flushes by timer, so
+			// send it in the background exactly like the homogeneity test above.
+			first := askInBackground(attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Wait until tenant A's command has been received, passed the
+			// pre-handler gate and run HandleCommand. The actor handles its
+			// messages one at a time, so it has appended it to the batch (recording
+			// batchTenant == A) before tenant B's command is sent into the same
+			// open cycle. Tenant A's command must have run HandleCommand once.
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// Tenant B sends a command whose handler would produce zero events,
+			// a genuine no-op and not an error, against the same actor and
+			// persistence ID, while tenant A's batch is still open. Ask itself must
+			// not fail; the rejection is carried in the CommandReply.
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.TestNoEvent{})
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	// Tenant A starts the batch: this command produces one event, so
-	// batchTenant becomes A and the batch stays open (threshold not
-	// reached). Its reply is stashed until the cycle flushes by timer, so
-	// send it in the background exactly like the homogeneity test above.
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
+			// The decisive assertion: tenant B's HandleCommand must never have run.
+			// Before the Blocker 3 fix, it did run (against tenant A's batchState)
+			// before the zero-event early-return path replied; this proves the
+			// gate now runs first.
+			ctx.Expect(behavior.InvocationCount()).ToEqual(1)
 
-	// Give tenant A's command time to be received, pass the pre-handler
-	// gate, run HandleCommand, and be appended to the batch (recording
-	// batchTenant == A) before tenant B's command is sent into the same
-	// open cycle.
-	pause.For(200 * time.Millisecond)
-	invocationsBeforeB := behavior.InvocationCount()
-	require.EqualValues(t, 1, invocationsBeforeB, "tenant A's command must have already run HandleCommand once")
+			// Tenant A's in-flight batch must be untouched by B's rejected attempt:
+			// let A's cycle flush (by timer) and confirm it still succeeds and
+			// persists exactly A's one event, uncontaminated by B's attempt.
+			stateReplyOf(ctx, first.await(ctx))
 
-	// Tenant B sends a command whose handler would produce zero events —
-	// a genuine no-op, not an error — against the same actor/persistence
-	// ID, while tenant A's batch is still open.
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxB, pid, &testpb.TestNoEvent{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a zero-event command for a different tenant than the open batch must still be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	// The decisive assertion: tenant B's HandleCommand must never have run.
-	// Before the Blocker 3 fix, it did run (against tenant A's batchState)
-	// before the zero-event early-return path replied — this proves the
-	// gate now runs first.
-	assert.EqualValues(t, invocationsBeforeB, behavior.InvocationCount(),
-		"HandleCommand must not execute for a cross-tenant command while a different tenant's batch is open, even if it would have produced zero events")
-
-	// Tenant A's in-flight batch must be untouched by B's rejected attempt:
-	// let A's cycle flush (by timer) and confirm it still succeeds and
-	// persists exactly A's one event, uncontaminated by B's attempt.
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
-		"tenant A's batch must still succeed once its own cycle flushes, unaffected by tenant B's rejected attempt")
-
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber(),
-		"exactly tenant A's one event was persisted; tenant B's rejected attempt contributed nothing")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			latest := latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()
+			ctx.Expect(latest).To(specs.Satisfy("is the event at sequence 1", func(v any) bool {
+				event, ok := v.(*egopb.Event)
+				return ok && event != nil && event.GetSequenceNumber() == 1
+			}))
+		})
+	})
 }
 
 // TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant is the
@@ -1015,74 +822,35 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 // processAndBatch — the Blocker 3 fix's pre-handler homogeneity check must
 // not reject a same-tenant command.
 func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("accepts a zero-event command of the same tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			ctxA := attachTenant(ctx, tenantContextFor(ctx, "acme"))
+			first := askInBackground(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// the first command must be in the open batch before the second one is sent
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Same tenant, zero-event command, into the same still-open batch: it
+			// must still succeed via the cached-state-reply path.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.TestNoEvent{}))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
-
-	pause.For(200 * time.Millisecond)
-
-	// Same tenant, zero-event command, into the same still-open batch.
-	reply, err := goakt.Ask(ctxA, pid, &testpb.TestNoEvent{}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"a same-tenant zero-event command must still succeed via the cached-state-reply path")
-
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply())
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			stateReplyOf(ctx, first.await(ctx))
+		})
+	})
 }
 
 func TestEventSourcedActorErrorPaths(t *testing.T) {

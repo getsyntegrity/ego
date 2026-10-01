@@ -40,6 +40,7 @@ import (
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
@@ -302,11 +303,80 @@ func callCount(method *specmock.Method) func() any {
 // ask sends msg to pid and returns the CommandReply. The Ask itself must
 // succeed: a rejected command is carried inside the reply.
 func ask(ctx *specs.Context, pid *goakt.PID, msg proto.Message) *egopb.CommandReply {
-	reply, err := goakt.Ask(context.Background(), pid, msg, askTimeout)
+	return askWith(ctx, context.Background(), pid, msg)
+}
+
+// askWith is ask with the context the command travels in, for the cases that
+// attach a TenantContext to it.
+func askWith(ctx *specs.Context, callCtx context.Context, pid *goakt.PID, msg proto.Message) *egopb.CommandReply {
+	reply, err := goakt.Ask(callCtx, pid, msg, askTimeout)
 	ctx.Expect(err).To(specs.BeNil())
 	commandReply, ok := reply.(*egopb.CommandReply)
 	ctx.Expect(ok).To(specs.BeTrue())
 	return commandReply
+}
+
+// backgroundAsk is a command whose reply is deferred until its batch cycle
+// flushes, sent from its own goroutine so the case can send another command
+// into the same open cycle.
+type backgroundAsk struct {
+	done  chan struct{}
+	reply any
+	err   error
+}
+
+// askInBackground sends msg to pid with callCtx and returns at once.
+func askInBackground(callCtx context.Context, pid *goakt.PID, msg proto.Message) *backgroundAsk {
+	pending := &backgroundAsk{done: make(chan struct{})}
+	go func() {
+		defer close(pending.done)
+		pending.reply, pending.err = goakt.Ask(callCtx, pid, msg, askTimeout)
+	}()
+	return pending
+}
+
+// await waits for the reply and returns it. The Ask itself must have
+// succeeded.
+func (b *backgroundAsk) await(ctx *specs.Context) *egopb.CommandReply {
+	<-b.done
+	ctx.Expect(b.err).To(specs.BeNil())
+	commandReply, ok := b.reply.(*egopb.CommandReply)
+	ctx.Expect(ok).To(specs.BeTrue())
+	return commandReply
+}
+
+// attachTenant returns a context that carries tenant, the way Engine.SendCommand
+// attaches it before it reaches the actor.
+func attachTenant(ctx *specs.Context, tenant tenancy.TenantContext) context.Context {
+	attached, err := tenancy.Attach(context.Background(), tenant)
+	ctx.Expect(err).To(specs.BeNil())
+	return attached
+}
+
+// tenantScopeOf builds the persistence scope of the named tenant.
+func tenantScopeOf(ctx *specs.Context, name tenancy.TenantID) persistence.Scope {
+	scope, err := persistence.NewTenantScope(name)
+	ctx.Expect(err).To(specs.BeNil())
+	return scope
+}
+
+// latestTenantEvent reads the newest event the store holds for id in scope, or
+// the store error.
+func latestTenantEvent(store persistence.EventsStore, scope persistence.Scope, id string) func() any {
+	return func() any {
+		event, err := store.GetLatestEvent(context.Background(), scope, id)
+		if err != nil {
+			return err
+		}
+		return event
+	}
+}
+
+// invocations reports how many times the probe behavior has run HandleCommand.
+// A poll on it waits until a command that a background Ask sent has reached the
+// actor.
+func invocations(behavior interface{ InvocationCount() int }) func() any {
+	return func() any { return behavior.InvocationCount() }
 }
 
 // stateReplyOf requires reply to be a state reply, the success shape, and
