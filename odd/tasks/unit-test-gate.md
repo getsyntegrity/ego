@@ -47,10 +47,19 @@ program's own tests use an in-memory `fstest.MapFS`, so they touch no disk.
 
 ## Tasks
 
-- [ ] T1 Scanner for rules 1-3 with positive and negative fixtures. Route: inline. Commit: pending.
-- [ ] T2 Resource rule (4) with fixtures. Route: inline. Commit: pending.
-- [ ] T3 Allowlist parsing, stale-entry detection and the command line. Route: inline. Commit: pending.
-- [ ] T4 Real allowlists computed from `origin/develop`, `unit-gate` CI job, docs section. Route: inline. Commit: pending.
+Route for every task: direct inline (one small package, no delegation trigger fired). TDD: go-specs v0.3.3,
+runner `go test`, source: the standing rule of epic #201.
+
+- [x] T1 Scanner for rules 1-3 with positive and negative fixtures. RED: stub `Scan` returned nothing, 6
+  fixtures failed; GREEN after the implementation. Commit 8cf3f00.
+- [x] T2 Resource rule (4). RED: stub returned nothing, 9 cases failed; GREEN after. Commit 5502d26.
+- [x] T3 Allowlist parsing, stale-entry detection and the command line. RED: stubs, 15 cases failed; GREEN
+  after; REFACTOR: tests share one in-memory tree helper. Commit 2e18227.
+- [x] T4 Real allowlists computed from `origin/develop` (41 pending entries including the `mocks/` directory,
+  47 resource entries), `unit-gate` job in `ci.yml` and listed in `ci-ok`, docs section. RED on the real
+  repository: a testify import added to `internal/queue/queue_test.go` made the gate exit 1 with
+  `internal/queue/queue_test.go: testify: imports github.com/stretchr/testify/require`; a pending line for a
+  clean file exited 1 with `stale pending entry`; both reverted. Commit c044c21.
 
 ## Follow-up
 
@@ -59,4 +68,8 @@ the `mocks/` directory. Not in this spec.
 
 ## Progress
 
-Started.
+All four tasks done. `go test -count=5` passes, coverage of the new package is 86.1%, `golangci-lint` reports 0
+issues on it, `actionlint` is clean on `ci.yml`. No existing package changed, so no existing coverage moved.
+The pending list names the owners found on `origin/develop` when it was computed: #245, #246, #264, and, for
+files with no open PR yet (engine remainder after #252, eventsource snapshots), the work that is still pending.
+Delivery strategy: single PR, about 700 authored lines, most of them tests and the two data files.
