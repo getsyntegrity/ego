@@ -233,9 +233,9 @@ func TestNewEngineRejectsUnregistrableKindsSingleNode(t *testing.T) {
 	})
 }
 
-// TestNewEngineRejectsValueTypeKindInClusterMode covers the kind check on a
+// TestClusterNewEngineRejectsValueTypeKind covers the kind check on a
 // one-member cluster.
-func TestNewEngineRejectsValueTypeKindInClusterMode(t *testing.T) {
+func TestClusterNewEngineRejectsValueTypeKind(t *testing.T) {
 	specs.Describe(t, "New Engine Rejects Value Type Kind In Cluster Mode", func(s *specs.Spec) {
 		s.It("holds", func(sc *specs.Context) {
 			t := sc.T

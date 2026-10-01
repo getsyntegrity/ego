@@ -66,7 +66,7 @@ So `EventSourcedActor`, `DurableStateActor`, `SagaActor` and `ProjectionActor`, 
 the error type `projectionRunnerError` (`engine.projectionRunnerError`), stay declared
 in `engine`. Each actor type is a struct with one unexported field that holds the
 implementation, and its three GoAkt methods (`PreStart`, `Receive`, `PostStop`) delegate
-to it. `engine/cluster_kinds.go` holds them, and `TestClusterKindsExposesEgoActors`
+to it. `engine/cluster_kinds.go` holds them, and `TestEngineClusterKindsExposesEgoActors`
 pins the four names. `TestProjectionSupervisorContract` pins the supervisor key.
 
 Two alternatives were rejected. Embedding the internal type would add an exported

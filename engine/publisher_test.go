@@ -392,7 +392,7 @@ func TestEngineSubscribeReceivesEventsAndStates(t *testing.T) {
 	})
 }
 
-// TestEventPublisherClusterHighPartitionCount is the regression test for the
+// TestClusterEventPublisherHighPartitionCount is the regression test for the
 // bug the single-topic refactor fixes. Pre-fix, the engine's publishers
 // subscribed to topic.events.0 ... topic.events.270 because the partition
 // count was hardcoded to goakt's default of 271. If a deployment configured
@@ -406,7 +406,7 @@ func TestEngineSubscribeReceivesEventsAndStates(t *testing.T) {
 // one event arrived from a shard outside the legacy [0, 271) window so the
 // test really exercises the formerly-dropped range, not just the lucky few
 // at the bottom.
-func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
+func TestClusterEventPublisherHighPartitionCount(t *testing.T) {
 	specs.Describe(t, "a high partition count still delivers every entity event to the publisher", func(s *specs.Spec) {
 		s.It("receives one event per entity, including shards beyond 271", func(sc *specs.Context) {
 			t := sc.T

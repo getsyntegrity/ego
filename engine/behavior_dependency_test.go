@@ -460,11 +460,11 @@ func TestEngineSpawnsDomainOnlyBehaviorsSingleNode(t *testing.T) {
 	})
 }
 
-// TestEngineRejectsUnplaceableBehaviorsInClusterMode runs a single-node
+// TestClusterEngineRejectsUnplaceableBehaviors runs a single-node
 // cluster, where GoAkt serializes every spawn's dependencies, and checks
 // that the engine rejects behaviors it cannot hand to GoAkt with a typed
 // error before any spawn, instead of panicking.
-func TestEngineRejectsUnplaceableBehaviorsInClusterMode(t *testing.T) {
+func TestClusterEngineRejectsUnplaceableBehaviors(t *testing.T) {
 	specs.Describe(t, "Engine Rejects Unplaceable Behaviors In Cluster Mode", func(s *specs.Spec) {
 		ctx := context.Background()
 		store := testkit.NewEventsStore()

@@ -38,7 +38,7 @@ import (
 // as "engine.eventsourcedactor" in the spawn, relocation and singleton records
 // it ships between nodes. Moving the type to another package would rename the
 // kind and break a cluster that runs two versions during a rolling upgrade.
-// TestClusterKindsExposesEgoActors pins the names.
+// TestEngineClusterKindsExposesEgoActors pins the names.
 //
 // Each type is a struct with one unexported value field, so new(T) and
 // reflect.New(T) yield a ready zero value, exactly like the types they wrap.
