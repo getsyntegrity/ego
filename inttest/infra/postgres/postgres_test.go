@@ -55,8 +55,8 @@ func TestMain(m *testing.M) {
 
 func TestPostgresNewDatabase(t *testing.T) {
 	t.Parallel()
-	specs.Describe(t, "Postgres.NewDatabase", func(s *specs.Spec) {
-		s.It("returns a reachable, empty database", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.Postgres.NewDatabase on the shared container", func(s *specs.Spec) {
+		s.It("returns a reachable database that has no tables", func(sc *specs.Context) {
 			ctx := context.Background()
 			dsn := shared.NewDatabase(t)
 
@@ -69,7 +69,7 @@ func TestPostgresNewDatabase(t *testing.T) {
 			sc.Expect(tables).To(specs.Equal(0))
 		})
 
-		s.It("gives each call its own database", func(sc *specs.Context) {
+		s.It("gives each call a database whose tables the other databases do not see", func(sc *specs.Context) {
 			ctx := context.Background()
 			first, second := shared.NewDatabase(t), shared.NewDatabase(t)
 			sc.Expect(first).To(specs.Not(specs.Equal(second)))
