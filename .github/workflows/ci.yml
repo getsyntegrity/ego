@@ -11,6 +11,9 @@
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
 #   modules     -> build, vet and test of every nested module (benchmark, example, publishers, compat)
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
+#                  and the static checks of the integration manifest (#210)
+#   integration -> calls integration.yml (Postgres service + gate that every listed suite really ran):
+#                  every PR to main, and PRs to develop that touch integration code or its tooling
 name: ci
 
 on:
@@ -89,6 +92,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       go: ${{ steps.changes.outputs.go || 'true' }}
+      integration: ${{ steps.integration-changes.outputs.integration }}
       matrix: ${{ steps.matrix.outputs.matrix || '{"include":[{"id":0,"packages":"./...","run":""}]}' }}
     steps:
       - uses: actions/checkout@v7
@@ -106,6 +110,23 @@ jobs:
               - '!CHANGELOG/**'
               - '!OWNERS'
               - '!.github/ISSUE_TEMPLATE/**'
+      # Integration code, its adapters or the integration machinery changed: PRs to develop then run the
+      # integration lane too (PRs to main always do). A step of its own, because the filter above needs `every`.
+      - uses: dorny/paths-filter@v4
+        id: integration-changes
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            integration:
+              - 'publisher/**'
+              - 'example/cluster/**'
+              - 'persistence/**'
+              - 'compose/**'
+              - 'test/compat/**'
+              - '**/*integration*_test.go'
+              - '.github/integration-suites.txt'
+              - '.github/scripts/integrationgate/**'
+              - '.github/workflows/integration.yml'
       - if: steps.changes.outputs.go != 'false'
         uses: ./.github/actions/go-setup
       - if: steps.changes.outputs.go != 'false'
@@ -289,6 +310,23 @@ jobs:
       - name: Scan the repository
         # The pending list is empty, so stale entries are errors.
         run: go run ./.github/scripts/unitgate -strict
+      # Static checks of the integration manifest (#210), here because this job always runs: a stale entry, or an
+      # integration-tagged test that is not listed, fails every PR and not only the ones that run the lane.
+      - name: The integration gate's own tests
+        run: go test ./.github/scripts/integrationgate
+      - name: Check the integration manifest
+        run: go run ./.github/scripts/integrationgate -check-manifest
+
+  # Integration lane (#210): Postgres service and the gate that every suite of .github/integration-suites.txt ran.
+  # Every PR to main, so main cannot receive a change without a green gate. PRs to develop only when integration
+  # code or its tooling changed (plan.outputs.integration). Not on push to develop. ci-ok accepts "skipped".
+  integration:
+    needs: plan
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+      (github.base_ref == 'main' || needs.plan.outputs.integration == 'true'))
+    uses: ./.github/workflows/integration.yml
 
   # go.mod/go.sum sorted, for the root module and every nested module (a cheap job of its own).
   tidy:
@@ -357,7 +395,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, unit-gate, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, unit-gate, integration, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:
