@@ -50,8 +50,8 @@ func TestEngineRestart_RecoversEntityFromPostgres(t *testing.T) {
 	t.Parallel()
 	dsn := shared.NewDatabase(t)
 
-	specs.Describe(t, "an engine on a Postgres events store", func(s *specs.Spec) {
-		s.It("recovers an entity after the actor system restarts", func(sc *specs.Context) {
+	specs.Describe(t, "engine.Engine recovery of an event-sourced entity from postgres.EventStore", func(s *specs.Spec) {
+		s.It("rebuilds balance and revision after the actor system restarts and continues at revision 3", func(sc *specs.Context) {
 			ctx := context.Background()
 			accountID := uuid.NewString()
 
