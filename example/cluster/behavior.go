@@ -29,7 +29,7 @@ import (
 	"fmt"
 
 	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 )
 

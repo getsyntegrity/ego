@@ -34,8 +34,8 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/egopb"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 

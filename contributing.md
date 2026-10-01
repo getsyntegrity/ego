@@ -53,7 +53,7 @@ Each target also works on its own:
 | `docker-image`    | Build the hermetic CI image (`ego-ci:latest`) from `Dockerfile.ci`.  |
 | `docker-lint`     | Run `golangci-lint` against the working tree.                        |
 | `docker-test`     | Run the root module test suite with coverage.                        |
-| `docker-protogen` | Regenerate protobuf code via `buf` and refresh `example/examplepb`.  |
+| `docker-protogen` | Regenerate protobuf code via `buf` and refresh `internal/samplepb`.  |
 | `docker-ci`       | Composite of `docker-lint` + `docker-test`.                          |
 
 See [`docs/ci.md`](docs/ci.md) for how the GitHub Actions pipeline works and

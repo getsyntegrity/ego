@@ -47,11 +47,11 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/pause"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	"github.com/getsyntegrity/ego/internal/syncmap"
 	"github.com/getsyntegrity/ego/offsetstore"
 	"github.com/getsyntegrity/ego/persistence"

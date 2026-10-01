@@ -29,7 +29,7 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 )
 

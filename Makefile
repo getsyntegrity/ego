@@ -29,7 +29,7 @@ proto:
 	buf generate
 	cp -R gen/ego/.    egopb/
 	cp -R gen/test/.   test/data/testpb/
-	cp -R gen/sample/. example/examplepb/
+	cp -R gen/sample/. internal/samplepb/
 	rm -rf gen
 	@echo "Done."
 
@@ -99,7 +99,7 @@ docker-protogen: docker-image
 			--path protos/sample && \
 		cp -R gen/ego/.    egopb/ && \
 		cp -R gen/test/.   test/data/testpb/ && \
-		cp -R gen/sample/. example/examplepb/ && \
+		cp -R gen/sample/. internal/samplepb/ && \
 		rm -rf gen'
 
 # Composite target: lint + test, the same combination the Earthfile `test`

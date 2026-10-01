@@ -54,7 +54,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
+	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	"github.com/getsyntegrity/ego/persistence/postgres"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/projection"
