@@ -9,11 +9,7 @@ import (
 
 // scanFiles runs the scanner over an in-memory tree, so these tests touch no disk.
 func scanFiles(ctx *specs.Context, files map[string]string) []Finding {
-	fsys := fstest.MapFS{}
-	for name, src := range files {
-		fsys[name] = &fstest.MapFile{Data: []byte(src)}
-	}
-	got, err := Scan(fsys)
+	got, err := Scan(memFS(files))
 	ctx.Expect(err).To(specs.BeNil())
 	return got
 }
@@ -134,4 +130,12 @@ func Testdata() {}
 			ctx.Expect(scanFiles(ctx, c.files)).ToEqual(c.want)
 		})
 	})
+}
+
+func memFS(files map[string]string) fstest.MapFS {
+	fsys := fstest.MapFS{}
+	for name, src := range files {
+		fsys[name] = &fstest.MapFile{Data: []byte(src)}
+	}
+	return fsys
 }
