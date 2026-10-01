@@ -34,8 +34,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/travisjeffery/go-dynaport"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
@@ -167,34 +165,39 @@ func waitForCond(timeout time.Duration, cond func() bool) bool {
 // agreed on partition 0; the test is here to pin that behavior under the new
 // single-topic model.
 func TestEventPublisherReceivesEventsFromEntity(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Event Publisher Receives Events From Entity", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "Publishers", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "Publishers", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	pub := newRecordingEventPublisher("recorder")
-	require.NoError(t, engine.AddEventPublishers(pub))
+			pub := newRecordingEventPublisher("recorder")
+			sc.Expect(engine.AddEventPublishers(pub)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			entityID := uuid.NewString()
+			sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-	require.NoError(t, err)
-	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
-	require.NoError(t, err)
+			_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
 
-	waitFor(t, 5*time.Second, func() bool {
-		return len(pub.snapshot()) == 2
+			waitFor(t, 5*time.Second, func() bool {
+				return len(pub.snapshot()) == 2
+			})
+
+			events := pub.snapshot()
+			sc.Expect(events).To(specs.HaveLen(2))
+			sc.Expect(events[0].GetPersistenceId()).To(specs.Equal(entityID))
+			sc.Expect(events[0].GetSequenceNumber()).To(specs.Equal(uint64(1)))
+			sc.Expect(events[1].GetSequenceNumber()).To(specs.Equal(uint64(2)))
+		})
 	})
-
-	events := pub.snapshot()
-	require.Len(t, events, 2)
-	assert.Equal(t, entityID, events[0].GetPersistenceId())
-	assert.EqualValues(t, 1, events[0].GetSequenceNumber())
-	assert.EqualValues(t, 2, events[1].GetSequenceNumber())
 }
 
 // TestEventPublisherFanOutToMultipleSubscribers verifies that registering
@@ -207,24 +210,24 @@ func TestEventPublisherFanOutToMultipleSubscribers(t *testing.T) {
 			t := sc.T
 			ctx := context.Background()
 			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 			engine := newTestEngine(t, "FanOut", store, WithLogger(DiscardLogger))
-			require.NoError(t, engine.Start(ctx))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
 			pubs := []*recordingEventPublisher{
 				newRecordingEventPublisher("a"),
 				newRecordingEventPublisher("b"),
 				newRecordingEventPublisher("c"),
 			}
-			require.NoError(t, engine.AddEventPublishers(pubs[0], pubs[1], pubs[2]))
+			sc.Expect(engine.AddEventPublishers(pubs[0], pubs[1], pubs[2])).To(specs.BeNil())
 
 			entityID := uuid.NewString()
-			require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
 			_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 
 			sc.Eventually(func() any {
 				for _, p := range pubs {
@@ -237,8 +240,8 @@ func TestEventPublisherFanOutToMultipleSubscribers(t *testing.T) {
 
 			for _, p := range pubs {
 				events := p.snapshot()
-				require.Lenf(t, events, 1, "publisher %s should have received exactly one event", p.ID())
-				assert.Equal(t, entityID, events[0].GetPersistenceId())
+				sc.Expect(events).To(specs.HaveLen(1))
+				sc.Expect(events[0].GetPersistenceId()).To(specs.Equal(entityID))
 			}
 		})
 	})
@@ -254,20 +257,20 @@ func TestEventPayloadCarriesShard(t *testing.T) {
 			t := sc.T
 			ctx := context.Background()
 			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 			engine := newTestEngine(t, "ShardInPayload", store, WithLogger(DiscardLogger))
-			require.NoError(t, engine.Start(ctx))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
 			pub := newRecordingEventPublisher("recorder")
-			require.NoError(t, engine.AddEventPublishers(pub))
+			sc.Expect(engine.AddEventPublishers(pub)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
-			require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
 			_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 
 			sc.Eventually(func() any { return len(pub.snapshot()) }, specs.Equal(1), specs.WithTimeout(5*time.Second))
 
@@ -275,10 +278,10 @@ func TestEventPayloadCarriesShard(t *testing.T) {
 			// In single-node mode the actor system's Partition() returns 0 for every
 			// actor; we only care that the Shard field is wired up (not its specific
 			// value here). The cluster regression test below covers non-zero shards.
-			assert.EqualValues(t, 0, event.GetShard())
-			assert.NotNil(t, event.GetEvent(), "event payload should be set")
-			assert.Equal(t, entityID, event.GetPersistenceId())
-			assert.EqualValues(t, 1, event.GetSequenceNumber())
+			sc.Expect(event.GetShard()).To(specs.Equal(uint64(0)))
+			sc.Expect(event.GetEvent()).To(specs.Not(specs.BeNil()))
+			sc.Expect(event.GetPersistenceId()).To(specs.Equal(entityID))
+			sc.Expect(event.GetSequenceNumber()).To(specs.Equal(uint64(1)))
 		})
 	})
 }
@@ -291,34 +294,34 @@ func TestStatePublisherReceivesDurableStateUpdates(t *testing.T) {
 			t := sc.T
 			ctx := context.Background()
 			stateStore := testkit.NewDurableStore()
-			require.NoError(t, stateStore.Connect(ctx))
+			sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
 			engine := newTestEngine(t, "StatePub", nil,
 				WithLogger(DiscardLogger),
 				WithStateStore(stateStore),
 			)
-			require.NoError(t, engine.Start(ctx))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
 			pub := newRecordingStatePublisher("recorder")
-			require.NoError(t, engine.AddStatePublishers(pub))
+			sc.Expect(engine.AddStatePublishers(pub)).To(specs.BeNil())
 
 			entityID := uuid.NewString()
-			require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			sc.Expect(engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
 			_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 
 			sc.Eventually(func() any { return len(pub.snapshot()) }, specs.BeGreaterThanOrEqual(1), specs.WithTimeout(10*time.Second))
 
 			states := pub.snapshot()
-			require.NotEmpty(t, states)
-			assert.Equal(t, entityID, states[0].GetPersistenceId())
-			assert.EqualValues(t, 1, states[0].GetVersionNumber())
+			sc.Expect(states).To(specs.Not(specs.BeEmpty()))
+			sc.Expect(states[0].GetPersistenceId()).To(specs.Equal(entityID))
+			sc.Expect(states[0].GetVersionNumber()).To(specs.Equal(uint64(1)))
 			// In single-node mode the actor system always returns partition 0, but
 			// the Shard field must still be populated so downstream consumers can
 			// branch on it once cluster mode kicks in.
-			assert.EqualValues(t, 0, states[0].GetShard())
+			sc.Expect(states[0].GetShard()).To(specs.Equal(uint64(0)))
 		})
 	})
 }
@@ -335,33 +338,33 @@ func TestEngineSubscribeReceivesEventsAndStates(t *testing.T) {
 			t := sc.T
 			ctx := context.Background()
 			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 			stateStore := testkit.NewDurableStore()
-			require.NoError(t, stateStore.Connect(ctx))
+			sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
 			engine := newTestEngine(t, "SubAll", store,
 				WithLogger(DiscardLogger),
 				WithStateStore(stateStore),
 			)
-			require.NoError(t, engine.Start(ctx))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
 			sub, err := engine.Subscribe()
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 			t.Cleanup(sub.Shutdown)
 
 			// Event-sourced entity emits an Event.
 			esID := uuid.NewString()
-			require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(esID)))
+			sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(esID))).To(specs.BeNil())
 			_, _, err = engine.SendCommand(ctx, esID, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 
 			// Durable-state entity emits a DurableState.
 			dsID := uuid.NewString()
-			require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(dsID)))
+			sc.Expect(engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(dsID))).To(specs.BeNil())
 			_, _, err = engine.SendCommand(ctx, dsID, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-			require.NoError(t, err)
+			sc.Expect(err).To(specs.BeNil())
 
 			// Subscriber.Iterator() is a one-shot drain — each call returns whatever
 			// is queued and then closes. Poll it until we see both message kinds or
@@ -412,7 +415,7 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 
 			ctx := context.Background()
 			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 			ports := dynaport.Get(3)
@@ -441,15 +444,15 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 			)
 
 			sys, err := goakt.NewActorSystem("HighPart", goaktOpts...)
-			require.NoError(t, err)
-			require.NoError(t, sys.Start(ctx))
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(sys.Start(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = sys.Stop(ctx) })
 
 			sc.Eventually(func() any { return sys.InCluster() }, specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
 			engine, err := NewEngine(sys, cfg)
-			require.NoError(t, err)
-			require.NoError(t, engine.Start(ctx))
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 			t.Cleanup(func() { _ = engine.Stop(ctx) })
 
 			// Warm the cluster's distributed map so that subsequent SpawnOn calls
@@ -465,9 +468,9 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 			for range warmupEntities {
 				id := "warmup-" + uuid.NewString()
 				warmupIDs = append(warmupIDs, id)
-				require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(id)))
+				sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(id))).To(specs.BeNil())
 				_, _, err := engine.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-				require.NoError(t, err)
+				sc.Expect(err).To(specs.BeNil())
 			}
 			if !waitForCond(60*time.Second, func() bool {
 				for _, id := range warmupIDs {
@@ -484,7 +487,7 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 			// only sees events emitted from this point on, so the warm-up entities'
 			// events (which it would have received too) don't get mixed in.
 			pub := newRecordingEventPublisher("hi-part")
-			require.NoError(t, engine.AddEventPublishers(pub))
+			sc.Expect(engine.AddEventPublishers(pub)).To(specs.BeNil())
 
 			// Generate enough entities that with 1009 partitions at least one is very
 			// likely to land beyond shard 271 (P ≈ 1 - (271/1009)^40, effectively 1).
@@ -493,16 +496,15 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 				entityID := uuid.NewString()
 				entityIDs = append(entityIDs, entityID)
 
-				require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+				sc.Expect(engine.Entity(ctx, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 				_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 1}, time.Minute)
-				require.NoError(t, err)
+				sc.Expect(err).To(specs.BeNil())
 			}
 
 			sc.Eventually(func() any { return len(pub.snapshot()) }, specs.BeGreaterThanOrEqual(numEntities), specs.WithTimeout(10*time.Second))
 
 			got := pub.snapshot()
-			require.Len(t, got, numEntities,
-				"publisher must receive every entity's event regardless of shard placement")
+			sc.Expect(got).To(specs.HaveLen(numEntities))
 
 			// Index received events by persistence id and assert every entity surfaced
 			// exactly one event.
@@ -512,7 +514,7 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 			}
 			for _, entityID := range entityIDs {
 				_, ok := gotByID[entityID]
-				require.Truef(t, ok, "publisher did not receive event for entity %s", entityID)
+				sc.Expect(ok).To(specs.BeTrue())
 			}
 
 			// Confirm at least one event was emitted from a shard outside the legacy
@@ -528,9 +530,7 @@ func TestEventPublisherClusterHighPartitionCount(t *testing.T) {
 					maxShard = evt.GetShard()
 				}
 			}
-			require.Greaterf(t, beyondLegacyCeiling, 0,
-				"workload only produced events in shards [0..270] (max seen: %d); the test does not exercise the pre-fix bug range",
-				maxShard)
+			sc.Expect(beyondLegacyCeiling).To(specs.BeGreaterThan(0))
 		})
 	})
 }

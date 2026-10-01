@@ -1,4 +1,4 @@
-# engine unit tests: fixed waits in the actor-system tests replaced by ctx.Eventually
+# engine tests: no testify and no fixed waits in engine_test.go and publisher_test.go
 
 Follows #241 (`odd/tasks/engine-rest-go-specs-v033.md`), now merged.
 
@@ -23,7 +23,17 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
   `Eventually` calls over a drain function.
 - Each of those tests is wrapped in one `Describe`/`It` only to reach `ctx.Eventually`; the first body line is
   `t := sc.T`, so the old `require` calls work unchanged.
-- New `engine/specs_helpers_test.go`: `projectionRunning` and `waitTimeout`.
+- New standing rule: nothing keeps testify in the files this PR touches. Every `require`/`assert` call in
+  `engine_test.go` and `publisher_test.go` is now a go-specs matcher (`BeNil`, `MatchError`, `BeTrue`,
+  `Equal`, `Contain`, `HaveLen` and so on), and the 34 plain tests there are wrapped in `Describe`/`It`
+  (subtests became `s.It`; the sentinel-error loop became `s.Describe` with one `It` per sentinel). The
+  describe names are derived from the test names and the `It` of a test without subtests is "holds"; a
+  follow-up can give them real wording. `EqualValues` became `Equal` with the real type (`uint64(1)`),
+  because `specs.Equal` is type-strict.
+- Goroutines use `sc.Go`; shared per-`Describe` setup moved into `BeforeEach` (store connect, engine start
+  once). The two helpers that other files call with a `*testing.T` (`newTestCluster`, `processCPUTime`) use
+  `t.Fatalf` instead of testify. `assert.AnError` is now `errAnyFailure` in `specs_helpers_test.go`.
+- New `engine/specs_helpers_test.go`: `projectionRunning`, `waitTimeout` and `errAnyFailure`.
 
 ## What does not change, and why
 
@@ -45,7 +55,8 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 ## Constraints
 
 - Strict TDD, runner `go test ./engine`. For test-only work, RED is a deliberate production mutation, reverted.
-- Every top-level `Test` name stays. No `-race`, no workbench, no force-push.
+- Every top-level `Test` name stays (201, identical to develop); every old subtest name is still the last
+  segment of a new name. `--- PASS` is 546 after. No `-race`, no workbench, no force-push.
 
 ## Tasks
 
@@ -61,6 +72,17 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 
 ## Follow-up (not in this document)
 
+- `engine-no-testify`: the 28 other `engine/*_test.go` files still import testify: `behavior_dependency`,
+  `behavior_kind`, `behavior_value_type`, `command_architecture`, `command_runtime_wiring`,
+  `durable_state_actor_expected_revision`, `durable_state_actor_integration`, `e2e_legacy_compat`,
+  `engine_entity_family`, `engine_erase_entity_tenant`, `engine_fixed_tenant_resolver`,
+  `engine_lifecycle_fixes`, `engine_neutral_cluster`, `engine_spawn`, `engine_tenant_administrative_scope`,
+  `engine_tenant_cluster`, `engine_tenant_respawn`, `engine_tenant_spawn`,
+  `event_sourced_actor_batch_precondition_matrix`, `event_sourced_actor_expected_revision`,
+  `event_sourced_actor_integration`, `helper_test` (`newTestEngine`), `logger_architecture`,
+  `projection_actor`, `saga_status`, `telemetry_contract`, `tenancy_architecture` and
+  `tenant_write_path_e2e` (all `_test.go` in `engine/`). The conversion script used here is mechanical; the
+  work is reviewing the results and giving the describe names real wording.
 - `engine-go-specs-actor-lane`: the tests that start a real actor system (entity, saga, tenant, projection,
   durable-state) need a production seam or a component lane. Includes moving the existing `require.Eventually`
   calls to `ctx.Eventually`, and the architecture tests that shell out or walk the tree.

@@ -24,6 +24,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -39,3 +40,7 @@ func projectionRunning(ctx context.Context, engine *Engine, name string) func() 
 		return err == nil && running
 	}
 }
+
+// errAnyFailure is the error the publisher tests make a mock return when the
+// value does not matter, only that it is a failure.
+var errAnyFailure = errors.New("an error for testing")
