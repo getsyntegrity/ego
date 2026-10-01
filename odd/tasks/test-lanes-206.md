@@ -120,6 +120,16 @@ P="./engine ./internal/engine/... ./internal/projectionrunner ./compose/goakt/..
 
 No race was found, so no separate issue was needed.
 
+## Review follow-up (PR #287, round 2)
+
+Decision (approved by the user): the `cluster` and `race` jobs run on every pull request with Go changes, exactly like the unit shards (`if: needs.plan.outputs.go == 'true'`), instead of only after the merge. The temporary evidence commit is no longer needed for the trigger, because the PR itself now runs both lanes.
+
+What changed:
+- `cluster` runs `go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./...` on the whole root module. A hardcoded package list would let a new `TestCluster*` in another package be skipped by the shards and never run, unnoticed by the zero-pass guard. The guard, the exit-status check, `-count=1` and the absence of retries are unchanged.
+- `race` runs `go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS" ./...` on the whole root module. `timeout-minutes` stays 30 until the real duration is measured. A comment states the rule: a package with a known race is excluded only via an explicit list in `ci.yml` with a linked issue and an exit condition, never silently, never with retries. No exclusion list exists yet.
+- Texts that were no longer true are updated: the header comment of `ci.yml`, the `test (min)` comment (the cluster job now also runs on hotfix PRs; what stays true is that `test (min)` is the only job running the cluster tests with the minimum Go), the `cluster` and `race` job comments, the job and lane tables, the "Why the cluster tests have their own lane" and "What `race` does not cover" sections of `docs/ci.md`, and the "Writing a cluster test" section of `docs/testing/go-specs.md`.
+- PR run: _pending_ (link, total race time, per-package race times, cluster test count and timings)
+
 ## Next step
 
 Review and merge #286, then this PR.

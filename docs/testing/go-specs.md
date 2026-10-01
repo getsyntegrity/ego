@@ -215,8 +215,9 @@ for. Do not keep `ctx` after the case ends.
 ## Writing a cluster test
 
 A test that starts a clustered actor system (`goakt.WithCluster`, with one node or several) opens gossip, peer
-and remoting ports on loopback, so it runs in its own CI lane (the `cluster` job) and not in the unit shards.
-The lane is chosen by name, so a new cluster test needs no tag and no CI change:
+and remoting ports on loopback, so it runs in its own CI lane (the `cluster` job, on every pull request with Go changes) and not in the unit
+shards. The lane is chosen by name and covers the whole root module, so a new cluster test needs no tag and no CI
+change:
 
 1. Name the top-level test `TestCluster<Something>`, for example `TestClusterEngineRemoteEntitySpawn`. Keep it in
    the same package as the code it tests, so a white-box test stays white-box. A single-node test of a cluster

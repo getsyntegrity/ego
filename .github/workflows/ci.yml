@@ -17,10 +17,10 @@
 #                  never on feature or hotfix PRs
 #   benchmark   -> every benchmark of the benchmark module once (-benchtime=1x; a manual run can choose a
 #                  longer benchtime), same triggers as inttest; fails if no benchmark ran
-#   cluster     -> the multi-node TestCluster* tests of engine and compose/goakt, alone (the shards skip them);
-#                  same triggers as inttest; fails if no TestCluster* test passed
-#   race        -> the in-process suites (engine, internal/engine, projectionrunner, compose/goakt, extensions,
-#                  migration) under -race, TestCluster* skipped; same triggers as inttest
+#   cluster     -> every TestCluster* test of the root module, alone (the shards skip them); every pull request
+#                  with Go changes, like the unit shards, plus pushes to develop; fails if no TestCluster* test passed
+#   race        -> the whole root module under -race, TestCluster* skipped; every pull request with Go
+#                  changes, like the unit shards, plus pushes to develop
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -250,7 +250,8 @@ jobs:
   #   PR to main:    runs ALL the tests with the minimum before publishing.
   # Uses plain `go test`: gotestsum 1.13 needs Go >= 1.24 and the minimum may be lower.
   # It does NOT skip the TestCluster tests, on purpose: it is the only job that runs them with the minimum
-  # Go, and the only full test run of a hotfix/* PR to main (the cluster job does not run there).
+  # Go. (The cluster job also runs on every PR with Go changes, hotfix PRs included, but with the toolchain
+# of .go-version.) It keeps running everything.
   test-min:
     name: test (min)
     needs: plan
@@ -382,20 +383,18 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # The multi-node cluster tests: every top-level test named TestCluster* (engine and compose/goakt). They start
-  # real clustered actor systems on loopback ports, so the test shards skip them (-skip) and they run here,
-  # alone. Same triggers as inttest: push to develop, the develop -> main release PR and manual runs; feature
-  # and hotfix PRs never run it (test (min) still runs them on PRs to main). `go test` reports "no tests to
-  # run" as a pass, so the step counts the top-level TestCluster* pass events in the -json output and fails
-  # if there is none (a rename that left the lane empty would otherwise stay green). A red run on develop
-  # follows the inttest rule: the author of the merged PR fixes it, or reverts the merge, before the next merge.
+  # The multi-node cluster tests: every top-level test named TestCluster* in the root module. They start real
+  # clustered actor systems on loopback ports, so the test shards skip them (-skip) and they run here, alone.
+  # They run on every pull request with Go changes, like the unit shards, plus pushes to develop and manual
+  # runs: they are in-process (no Docker) and every PR ran them before the lanes existed. The command takes
+  # ./... on purpose. A hardcoded package list would let a new TestCluster* in another package be skipped by
+  # the shards and never run here, and the zero-pass guard would not notice while other packages still pass.
+  # `go test` reports "no tests to run" as a pass, so the step counts the top-level TestCluster* pass events in
+  # the -json output and fails if there is none (a rename that left the lane empty would otherwise stay
+  # green). No retries: a flaky cluster test is fixed in its own PR.
   cluster:
     needs: plan
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        github.base_ref == 'main' && github.head_ref == 'develop')
+    if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -406,7 +405,7 @@ jobs:
         run: |
           out="$RUNNER_TEMP/cluster.json"
           status=0
-          go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./engine/ ./compose/goakt/... > "$out" || status=$?
+          go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./... > "$out" || status=$?
           # Top-level tests only (no "/" in the name) that passed.
           passed=$(jq -Rr --arg re "$CLUSTER_TESTS" 'fromjson? | select(.Action == "pass" and .Test != null and (.Test | contains("/") | not) and (.Test | test($re))) | .Test' "$out" | sort -u)
           n=$(printf '%s' "$passed" | grep -c . || true)
@@ -433,28 +432,22 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # The in-process suites under the race detector (#206): engine, internal/engine/*, internal/projectionrunner,
-  # compose/goakt, internal/extensions and migration, the packages whose tests were migrated to go-specs. The
-  # TestCluster* tests are skipped: they are not run under -race yet (out of scope for #206, a follow-up once
-  # the in-process suites are known to be race-free). Same triggers as inttest. A race found here is fixed in
-  # its own pull request, never by silencing the job. The race detector is never run locally.
+  # The whole root module under the race detector (#206), TestCluster* skipped: they are not run under -race
+  # yet (out of scope for #206, a follow-up once the in-process suites are known to be race-free). It runs on
+  # every pull request with Go changes, like the unit shards, plus pushes to develop and manual runs. A race
+  # found here is fixed in its own pull request, never by silencing the job. No retries. A package with a
+  # known race is excluded only via an explicit list here with a linked issue and exit condition, never
+  # silently, never with retries. The race detector is never run locally.
   race:
     needs: plan
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        github.base_ref == 'main' && github.head_ref == 'develop')
+    if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/go-setup
       - name: Race detector
-        run: >-
-          go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS"
-          ./engine/... ./internal/engine/... ./internal/projectionrunner/...
-          ./compose/goakt/... ./internal/extensions/... ./migration/...
+        run: go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS" ./...
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
