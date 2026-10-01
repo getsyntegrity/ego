@@ -25,6 +25,8 @@ package eventsource
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	specmock "github.com/getsyntegrity/go-specs/mock"
@@ -292,6 +294,82 @@ func expectAccountState(ctx *specs.Context, state *egopb.StateReply, seq uint64,
 	got := new(testpb.Account)
 	ctx.Expect(state.GetState().UnmarshalTo(got)).To(specs.BeNil())
 	ctx.Expect(got).To(beProto(want))
+}
+
+// awaitWithin waits up to d for the reply and fails the case, naming what it
+// waited for, when none arrives. It is a reply timeout, not synchronization.
+func (b *backgroundAsk) awaitWithin(ctx *specs.Context, d time.Duration, what string) {
+	select {
+	case <-b.done:
+	case <-time.After(d):
+		ctx.T.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// stashSize reports how many messages the actor has stashed. A command that
+// arrives while a write is in flight stashes itself, so a poll on it waits for
+// that command to reach the actor.
+func stashSize(pid *goakt.PID) func() any {
+	return func() any { return pid.StashSize() }
+}
+
+// containsText matches a string that contains want.
+func containsText(want string) specs.Matcher {
+	return specs.Satisfy(fmt.Sprintf("contains %q", want), func(v any) bool {
+		got, ok := v.(string)
+		return ok && strings.Contains(got, want)
+	})
+}
+
+// writeGate holds one events store write in flight. The write enters hold, tells
+// the case it started, and waits until the case opens the gate.
+type writeGate struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newWriteGate() *writeGate {
+	return &writeGate{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+// hold is the Do function of the held write: it answers result once the gate
+// opens.
+func (g *writeGate) hold(result any) func([]any) []any {
+	return func([]any) []any {
+		close(g.started)
+		<-g.release
+		return []any{result}
+	}
+}
+
+// open lets the held write complete. Opening twice is harmless.
+func (g *writeGate) open() { g.once.Do(func() { close(g.release) }) }
+
+// openOnCleanup opens the gate when the case ends, so a case that fails while
+// the write is held does not hang the actor system's stop. Call it after
+// starting the rig: cleanups run last registered first, so the gate opens
+// before the system stops.
+func (g *writeGate) openOnCleanup(ctx *specs.Context) { ctx.Cleanup(g.open) }
+
+// awaitStarted waits until the held write has entered hold, and fails the case
+// naming what it waited for when it does not within the reply timeout.
+func (g *writeGate) awaitStarted(ctx *specs.Context, what string) {
+	select {
+	case <-g.started:
+	case <-time.After(askTimeout):
+		ctx.T.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// expectStoreStartup declares the calls every spawn of an actor makes on its
+// events store before it takes commands: PreStart pings the store and recovery
+// reads the latest event, which is none for a new persistence id.
+func expectStoreStartup(ctrl *specmock.Controller, persistenceID string) {
+	ctrl.Method("Ping").Expect(specmock.Any()).AtLeast(1)
+	ctrl.Method("GetLatestEvent").
+		Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+		Return(nil, nil).AtLeast(1)
 }
 
 // callCount reports how many calls method has received so far. A poll on it

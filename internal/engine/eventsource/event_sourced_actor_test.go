@@ -1338,314 +1338,155 @@ func (a *noopEventAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.Any, error)
 // write is unsettled (phasePersisting/phaseDirectReplying), and it must
 // never receive a persist failure addressed to a different command.
 func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
-	type asyncReply struct {
-		reply any
-		err   error
-	}
+	// These cases need the actor system and keep one write in flight on purpose.
+	// The empty Describe name keeps the old subtest names. The time.After guards
+	// are reply timeouts: they only turn a hung actor into a failure, they never
+	// pace the case.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("read during persist waits for confirmation then returns new state", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	t.Run("read during persist waits for confirmation then returns new state", func(t *testing.T) {
-		ctx := context.TODO()
+			// The first write (the create) is confirmed at once, the second (the
+			// credit) is held in flight until the case releases it.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(nil)).Times(1)
 
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
 
-		started := make(chan struct{})
-		release := make(chan struct{})
+			createState := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+			ctx.Expect(createState.GetSequenceNumber()).ToEqual(uint64(1))
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(nil).Once()
+			credit := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "the credit write to enter phasePersisting")
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
+			read := askInBackground(context.Background(), pid, &egopb.GetStateCommand{})
 
-		require.NoError(t, actorSystem.Start(ctx))
+			// Wait until the GetStateCommand has stashed itself behind the in-flight
+			// write: the stash then holds the credit command and the read. Only
+			// then let that write complete.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		createState := reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, createState.StateReply.GetSequenceNumber())
-
-		creditDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			creditDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
-		}
-
-		stateDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-			stateDone <- asyncReply{r, e}
-		}()
-
-		// give the GetStateCommand time to reach the mailbox and stash itself
-		// behind the in-flight write before we let that write complete.
-		pause.For(300 * time.Millisecond)
-
-		select {
-		case <-stateDone:
-			t.Fatal("GetStateCommand replied before the in-flight persist write was confirmed")
-		default:
-		}
-
-		close(release)
-
-		var credit asyncReply
-		select {
-		case credit = <-creditDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit command reply")
-		}
-		require.NoError(t, credit.err)
-		creditState := credit.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, creditState.StateReply.GetSequenceNumber())
-
-		var got asyncReply
-		select {
-		case got = <-stateDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the deferred GetStateCommand reply")
-		}
-		require.NoError(t, got.err)
-		commandReply := got.reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-		stateReply := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, stateReply.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		require.NoError(t, stateReply.StateReply.GetState().UnmarshalTo(resultingState))
-		assert.Equal(t, 600.00, resultingState.GetAccountBalance())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("two concurrent commands preserve order and correct recipient", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		started := make(chan struct{})
-		release := make(chan struct{})
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-
-		aDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			aDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command A to enter phasePersisting")
-		}
-
-		bDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 5*time.Second)
-			bDone <- asyncReply{r, e}
-		}()
-
-		// give command B time to arrive and stash behind the in-flight write.
-		pause.For(300 * time.Millisecond)
-		close(release)
-
-		var a, b asyncReply
-		select {
-		case a = <-aDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command A's reply")
-		}
-		select {
-		case b = <-bDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command B's reply")
-		}
-
-		require.NoError(t, a.err)
-		aState := a.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, aState.StateReply.GetSequenceNumber())
-		aAccount := new(testpb.Account)
-		require.NoError(t, aState.StateReply.GetState().UnmarshalTo(aAccount))
-		assert.Equal(t, 600.00, aAccount.GetAccountBalance())
-
-		require.NoError(t, b.err)
-		bState := b.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 3, bState.StateReply.GetSequenceNumber())
-		bAccount := new(testpb.Account)
-		require.NoError(t, bState.StateReply.GetState().UnmarshalTo(bAccount))
-		assert.Equal(t, 650.00, bAccount.GetAccountBalance())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("persistence error reaches the originating command only", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		started := make(chan struct{})
-		release := make(chan struct{})
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(assert.AnError).Once()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-
-		creditDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			creditDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
-		}
-
-		stateDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-			stateDone <- asyncReply{r, e}
-		}()
-
-		// give the deferred read time to arrive and stash behind the failing write.
-		pause.For(300 * time.Millisecond)
-		close(release)
-
-		var credit asyncReply
-		select {
-		case credit = <-creditDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit command reply")
-		}
-		require.NoError(t, credit.err)
-		creditReply := credit.reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), creditReply.GetReply())
-		errorReply := creditReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Contains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error())
-
-		// The originating command's persist failure sets directShutdown, so the
-		// actor stops itself (pre-existing fail-fast behavior, unrelated to this
-		// fix) before it can dispatch the redelivered, deferred GetStateCommand.
-		// The contract this test protects is narrower than "the deferred read
-		// gets a normal reply": it must never receive the error reply meant for
-		// the command that actually failed. An Ask timeout against a
-		// now-stopped actor satisfies that (it is clearly not the mistaken
-		// error), whereas an ErrorReply carrying assert.AnError's message would
-		// prove the two commands' responses got cross-wired.
-		var deferred asyncReply
-		select {
-		case deferred = <-stateDone:
-		case <-time.After(8 * time.Second):
-			t.Fatal("timed out waiting for the deferred GetStateCommand to settle")
-		}
-		if deferred.err == nil {
-			deferredReply := deferred.reply.(*egopb.CommandReply)
-			if errorReply, ok := deferredReply.GetReply().(*egopb.CommandReply_ErrorReply); ok {
-				assert.NotContains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error(),
-					"deferred GetStateCommand must not receive the originating command's persist error")
+			select {
+			case <-read.done:
+				ctx.T.Fatal("GetStateCommand replied before the in-flight persist write was confirmed")
+			default:
 			}
-		}
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			gate.open()
+
+			credit.awaitWithin(ctx, askTimeout, "the credit command reply")
+			creditState := stateReplyOf(ctx, credit.await(ctx))
+			ctx.Expect(creditState.GetSequenceNumber()).ToEqual(uint64(2))
+
+			read.awaitWithin(ctx, askTimeout, "the deferred GetStateCommand reply")
+			readState := stateReplyOf(ctx, read.await(ctx))
+			expectAccountState(ctx, readState, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 600.00})
+		})
+
+		s.It("two concurrent commands preserve order and correct recipient", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			// The create is confirmed at once, command A is held in flight, and
+			// command B writes after it.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(nil)).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
+
+			ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+
+			a := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "command A to enter phasePersisting")
+
+			b := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50})
+
+			// Wait until command B has stashed behind the in-flight write: the stash
+			// then holds command A and command B.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			gate.open()
+
+			a.awaitWithin(ctx, askTimeout, "command A's reply")
+			b.awaitWithin(ctx, askTimeout, "command B's reply")
+
+			aState := stateReplyOf(ctx, a.await(ctx))
+			expectAccountState(ctx, aState, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 600.00})
+
+			bState := stateReplyOf(ctx, b.await(ctx))
+			expectAccountState(ctx, bState, 3, &testpb.Account{AccountId: persistenceID, AccountBalance: 650.00})
+		})
+
+		s.It("persistence error reaches the originating command only", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			// The create is confirmed at once, the credit write is held in flight and
+			// then fails.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(assert.AnError)).Times(1)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
+
+			ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+
+			credit := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "the credit write to enter phasePersisting")
+
+			read := askInBackground(context.Background(), pid, &egopb.GetStateCommand{})
+
+			// Wait until the deferred read has stashed behind the failing write: the
+			// stash then holds the credit command and the read.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			gate.open()
+
+			credit.awaitWithin(ctx, askTimeout, "the credit command reply")
+			creditMessage := errorReplyMessage(ctx, credit.await(ctx))
+			ctx.Expect(creditMessage).To(containsText(assert.AnError.Error()))
+
+			// The originating command's persist failure sets directShutdown, so the
+			// actor stops itself (pre-existing fail-fast behavior, unrelated to this
+			// fix) before it can dispatch the redelivered, deferred GetStateCommand.
+			// The contract this test protects is narrower than "the deferred read
+			// gets a normal reply": it must never receive the error reply meant for
+			// the command that actually failed. An Ask timeout against a
+			// now-stopped actor satisfies that (it is clearly not the mistaken
+			// error), whereas an ErrorReply carrying assert.AnError's message would
+			// prove the two commands' responses got cross-wired.
+			read.awaitWithin(ctx, 8*time.Second, "the deferred GetStateCommand to settle")
+			if read.err == nil {
+				deferred := read.await(ctx)
+				if _, ok := deferred.GetReply().(*egopb.CommandReply_ErrorReply); ok {
+					// the deferred GetStateCommand must not receive the originating command's persist error
+					ctx.Expect(deferred.GetErrorReply().GetMessage()).To(specs.Not(containsText(assert.AnError.Error())))
+				}
+			}
+		})
 	})
 }
 
