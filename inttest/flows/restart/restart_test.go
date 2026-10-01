@@ -71,7 +71,6 @@ func TestEngineRestart_RecoversEntityFromPostgres(t *testing.T) {
 			first.stop(sc)
 
 			second := startNode(sc, dsn)
-			defer second.stop(sc)
 			sc.Expect(second.engine.SpawnEventSourced(ctx, enginetest.NewAccountEventSourcedBehavior(accountID))).To(specs.BeNil())
 
 			// TestNoEvent produces no event, so the reply is the recovered state and nothing more.

@@ -24,6 +24,7 @@ package restart_test
 
 import (
 	"context"
+	"sync"
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
@@ -39,6 +40,8 @@ type node struct {
 	store  *postgres.EventStore
 	system goakt.ActorSystem
 	engine *engine.Engine
+
+	stopOnce sync.Once
 }
 
 // startNode builds a node on the database at dsn. WithSchemaMigration makes engine.Start create the schema, so
@@ -48,27 +51,38 @@ func startNode(sc *specs.Context, dsn string) *node {
 	sc.Helper()
 	ctx := context.Background()
 
-	store := postgres.NewEventStore(dsn)
-	sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+	n := &node{store: postgres.NewEventStore(dsn)}
+	// Registered before anything can fail, so a node that only half started is still torn down with the spec.
+	// stop is idempotent, so the explicit stop of the restart flow makes this a no-op.
+	sc.Cleanup(func() { n.stop(sc) })
+	sc.Expect(n.store.Connect(ctx)).To(specs.BeNil())
 
-	cfg := engine.NewConfig(store, engine.WithSchemaMigration(), engine.WithLogger(engine.DiscardLogger))
+	cfg := engine.NewConfig(n.store, engine.WithSchemaMigration(), engine.WithLogger(engine.DiscardLogger))
 	system, err := goakt.NewActorSystem("inttest-"+uuid.NewString(), cfg.GoaktOptions()...)
 	sc.Expect(err).To(specs.BeNil())
+	n.system = system
 	sc.Expect(system.Start(ctx)).To(specs.BeNil())
 
 	eng, err := engine.NewEngine(system, cfg)
 	sc.Expect(err).To(specs.BeNil())
+	n.engine = eng
 	sc.Expect(eng.Start(ctx)).To(specs.BeNil())
-
-	return &node{store: store, system: system, engine: eng}
+	return n
 }
 
-// stop shuts the engine, the actor system and the store down, in that order. After it returns nothing of the
-// node is alive, so a following node can only learn the entity state from the database.
+// stop shuts the engine, the actor system and the store down, in that order, skipping what never started. It
+// runs once and later calls do nothing. After it returns nothing of the node is alive, so a following node can
+// only learn the entity state from the database.
 func (n *node) stop(sc *specs.Context) {
 	sc.Helper()
-	ctx := context.Background()
-	sc.Expect(n.engine.Stop(ctx)).To(specs.BeNil())
-	sc.Expect(n.system.Stop(ctx)).To(specs.BeNil())
-	sc.Expect(n.store.Disconnect(ctx)).To(specs.BeNil())
+	n.stopOnce.Do(func() {
+		ctx := context.Background()
+		if n.engine != nil {
+			sc.Expect(n.engine.Stop(ctx)).To(specs.BeNil())
+		}
+		if n.system != nil {
+			sc.Expect(n.system.Stop(ctx)).To(specs.BeNil())
+		}
+		sc.Expect(n.store.Disconnect(ctx)).To(specs.BeNil())
+	})
 }
