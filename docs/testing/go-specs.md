@@ -24,7 +24,9 @@ cluster (#201). It also rules out real time used as synchronization: no `time.Sl
 
 When the code under test depends on one of those, replace the dependency with a go-specs mock (next section).
 A test that genuinely needs the real resource is not a unit test. It belongs to the component or integration
-lane, and `unit-migration.md` lists it as out of phase.
+lane, and `unit-migration.md` lists it as out of phase. Tests that need a real database or broker go in the
+`inttest` module, which starts its own containers and never skips; see
+[Integration tests](../ci.md#integration-tests).
 
 In-memory implementations that already live in the repository, such as the `testkit` stores, are not
 external resources. A test may use one when what it checks is the behavior on top of the store and not the
@@ -238,7 +240,10 @@ module, nested ones included, and fails on:
    `exec.Command*`, `httptest.NewServer*`, a real goakt `actor.NewActorSystem`, `os.Create` in a file with no
    `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file. Files under `inttest/` are
    outside this rule, because that module exists to run against real infrastructure started with
-   Testcontainers; rules 1 to 3 still apply there.
+   Testcontainers; rules 1 to 3 still apply there;
+5. under `inttest/` only, any call to `Skip`, `Skipf` or `SkipNow` on any receiver, or to `testing.Short`, in a
+   test or a non-test file. A test there must fail when its dependency is missing, so it can never look green
+   without running. No allowlist can excuse it. See [Integration tests](../ci.md#integration-tests).
 
 Two plain-text lists hold the exceptions, one `path | note` per line, and the note is required:
 

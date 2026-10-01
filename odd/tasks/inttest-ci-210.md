@@ -52,7 +52,7 @@ After spec B, the integration tests live in `inttest/` and start their own Postg
 - [x] **C1 Restart flow.** `inttest/flows`: engine on `persistence/postgres`, commands, actor-system restart, and an assertion that the state is recovered. Check: `cd inttest && go test -count=1 ./flows/...`. Route: delegated writer.
 - [x] **C2 No-skip rule.** Add the rule to `unitgate` and cover it with a test. Check: `go test ./.github/scripts/unitgate` and `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
 - [x] **C3 CI job.** Add the `inttest` job, the paths filter, the `ci-ok` needs entry, and the `modules` coverage for both new modules. Check: `actionlint`, plus a green CI run of the PR in which `inttest` really ran. Route: delegated writer, then a parent check of the CI run.
-- [ ] **C4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
+- [x] **C4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
 
 ## Progress and evidence
 
@@ -76,6 +76,13 @@ After spec B, the integration tests live in `inttest/` and start their own Postg
 - Root unit lanes never include `inttest`: `go list ./...` at the root lists 45 packages and none is under `inttest`, and `.github/scripts/test-matrix.sh` builds its list from `go list ./...`. `tidy` walks `git ls-files 'go.mod' '**/go.mod'`, so it covers `inttest/go.mod` and `persistence/postgres/go.mod`. `.github/dependabot.yml` gets `/inttest` next to `/persistence/postgres`.
 - Check: `actionlint .github/workflows/ci.yml` exits 0. Pending, to be checked by the parent: a green CI run of the PR in which the `inttest` job really ran.
 
+### C4 (route: delegated writer)
+
+- `docs/ci.md`: the `modules` row now names `inttest` (build and vet only) and `persistence/postgres`; new `inttest` and `unit-gate` rows; a new "Integration tests" section (where they live, why they never skip, how to run them locally with only Docker, how to add an infra helper, when CI runs them); the local-equivalents paragraph names the `inttest` exception.
+- `docs/testing/go-specs.md`: a link to that section from the unit-test rule, and the no-skip rule listed as rule 5 of the gate.
+- Stale `EGO_EXAMPLE_POSTGRES_DSN` mentions removed from `persistence/postgres/README.md` (now points at `inttest` and Docker) and `docs/testing/unit-migration.md` (two historical lines now say the tests moved to `inttest/postgres`). The remaining `POSTGRES_DSN` hits are `example/cluster/main.go` and `example/cluster/k8s/app.yaml`, which configure the example app itself, so they stay.
+- Check: structural readback of the three documents (anchors `#integration-tests` resolve to the new heading).
+
 ## Next step
 
-C4.
+Open the PR to `develop` and confirm that the `inttest` job really ran in CI (the open part of C3).

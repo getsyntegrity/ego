@@ -23,7 +23,9 @@ Everything is in `.github/workflows/ci.yml` and reports into one required check,
 | `lint` | `golangci-lint` with `.golangci.yml`. On pull requests it only blocks issues introduced by the diff (`only-new-issues`), so existing problems do not stop new work. |
 | `plan`, `test (shard N)`, `test-report` | The root module tests, split into shards by real timings from the previous run (see "Slow packages" below). `test-report` merges coverage, lists the slowest tests and stores the timings for next time. Pull requests that only touch Markdown, `CHANGELOG/`, `OWNERS` or issue templates skip the tests; `ci-ok` still reports. |
 | `test (min)` | Builds and vets with the minimum Go version declared in `go.mod`. On pull requests to `main` it also runs every test with that version. |
-| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds, vets and tests each one. |
+| `modules (dir)` | Ego has nested Go modules (`benchmark`, `example/cluster`, `inttest`, `persistence/postgres`, `publisher/kafka`, `publisher/nats`, `publisher/pulsar`, `publisher/websocket`, `test/compat`). `./...` at the root does not reach them, so this job builds and vets each one and tests all of them except `inttest`, which is only built and vetted here (`go vet` compiles its test files). Its tests need Docker and run in the `inttest` job. |
+| `inttest` | Runs the integration tests of the `inttest` module on real containers (see "Integration tests" below). It runs on every pull request to `main`, on manual runs, and on pull requests to `develop` that touch `inttest/`, `persistence/`, `example/cluster/`, `publisher/`, `compose/` or `engine/`. Otherwise it is skipped, and `ci-ok` accepts that. |
+| `unit-gate` | The unit-test rules in `docs/testing/go-specs.md` (no testify, no generated mocks, go-specs, no real resources in unit tests), plus the rule that nothing under `inttest/` skips. |
 | `tidy` | Runs `go mod tidy` in the root module and in every nested module and fails if `go.mod` or `go.sum` change. |
 | `api` | Compares the public API with `apidiff`. Against `develop` it only warns. Against the latest tag (pull requests to `main`) it fails when the API breaks and the release is not labelled `release:major`. |
 | `vuln` | `govulncheck`. It fails only when the code calls a vulnerable function. |
@@ -40,6 +42,50 @@ The two knobs live at the top of `ci.yml`: `SPLIT_THRESHOLD` (default `90`, seco
 The `pr-meta` workflow is separate because it also runs when the pull request description is edited, and that should not re-run the tests. It requires a `release-note` block and checks that `OWNERS` and `.github/CODEOWNERS` list the same people.
 
 A push to `develop` runs the same CI (without `lint` and the pull-request-only jobs) so the merged result is validated and the test timings used by later pull requests stay fresh.
+
+## Integration tests
+
+Unit tests never leave the process. Tests that need a real system, today a Postgres database, live in the `inttest/` module and run against containers they start themselves.
+
+### Where they live
+
+`inttest/` is a nested Go module (`github.com/getsyntegrity/ego/inttest`) with `replace` directives to the root and to `persistence/postgres`, so it always tests the code in the working tree. pgx and Testcontainers appear only in its `go.mod` and in `persistence/postgres/go.mod`, never in the root one.
+
+- `inttest/infra` starts the infrastructure. `StartPostgres` returns a handle, and `NewDatabase(t)` creates an empty database with a unique name on it and drops it when the test ends.
+- `inttest/postgres` holds the Postgres event store tests and the store and schema conformance suites.
+- `inttest/flows` holds end-to-end flows through the engine. `restart_test.go` runs an engine on a Postgres events store, stops the whole actor system, starts a new one on the same database and checks that the entity comes back with its state.
+
+### Why they never skip
+
+The old Postgres tests called `t.Skip` when `EGO_EXAMPLE_POSTGRES_DSN` was not set, and `go test` reports a skip as a pass, so they looked green in every CI run without running. The `inttest` module removes the cause instead of auditing it afterwards:
+
+- Each test package starts its container from `TestMain`. If Docker or the container is not available, `TestMain` exits non-zero and the run fails with the reason. There is no variable to forget.
+- The `unit-gate` job fails on a call to `Skip`, `Skipf` or `SkipNow` on any receiver, and on `testing.Short`, in any Go file under `inttest/`. No allowlist can excuse it.
+- A nested module is opt-in by directory, not by build tag. The root `go test ./...` never reaches it, and `cd inttest && go test ./...` always runs everything in it.
+
+### Run them locally
+
+You need Docker and nothing else. No database, no environment variable:
+
+```sh
+cd inttest && go test -count=1 ./...
+```
+
+The first run pulls the images. Without Docker the run fails; it does not skip.
+
+### Add an infra helper
+
+For a new system (Kafka, NATS or Pulsar are the planned ones), add one file to `inttest/infra`:
+
+1. Write `StartX(ctx) (*X, error)` on top of the Testcontainers module for that system. It takes no `testing.TB`, because `TestMain` has none, and returns an error that says Docker may be the problem.
+2. Pin the image to an exact tag, never `latest`, and use the module's readiness wait strategy so the function returns only when the system accepts connections.
+3. Give the handle a `Terminate(ctx)` and a per-test isolation method in the style of `NewDatabase` (a database, a topic or a subject with a unique name, removed in `t.Cleanup`).
+4. In the test package, start it once in `TestMain`, terminate it after `m.Run`, and have every test call `t.Parallel()` and take its own isolated resource. One container per package, never one per test.
+5. Use go-specs and `Eventually` for anything asynchronous. No `time.Sleep`.
+
+### When CI runs them
+
+The `inttest` job runs on every pull request to `main` and on `workflow_dispatch`. On a pull request to `develop` it runs only when the diff touches `inttest/`, `persistence/`, `example/cluster/`, `publisher/`, `compose/` or `engine/`. A separate `paths-filter` step in `plan` decides that, because the filter the tests use removes Markdown files and this one has to match any file. The job has no `services:` section: `ubuntu-latest` already has Docker and the tests start what they need.
 
 ## The release note block
 
@@ -103,4 +149,4 @@ These steps live in GitHub settings, so no commit can do them:
 
 ## Local equivalents
 
-The Makefile targets `docker-lint`, `docker-test`, `docker-mock` and `docker-protogen` run inside `Dockerfile.ci` and are meant for contributors who do not have the toolchain installed. To check a change like the CI does, run `go build ./... && go vet ./... && go test ./...` in the root and in each nested module, `go mod tidy` in each, and `golangci-lint run`. To preview the next version: `.github/scripts/next-version.sh develop release:minor` (it needs the tags of the repository).
+The Makefile targets `docker-lint`, `docker-test`, `docker-mock` and `docker-protogen` run inside `Dockerfile.ci` and are meant for contributors who do not have the toolchain installed. To check a change like the CI does, run `go build ./... && go vet ./... && go test ./...` in the root and in each nested module, `go mod tidy` in each, and `golangci-lint run`. The one exception is `inttest`, whose tests need Docker: run `cd inttest && go test -count=1 ./...` there. To preview the next version: `.github/scripts/next-version.sh develop release:minor` (it needs the tags of the repository).

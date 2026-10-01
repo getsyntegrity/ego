@@ -98,10 +98,11 @@ go test ./...
 ```
 
 What the SQL does to a real Postgres is checked with `conformance.RunSchemaMigratorConformance` and the store
-conformance suites, which run from `example/cluster` when `EGO_EXAMPLE_POSTGRES_DSN` is set:
+conformance suites, which run from the `inttest` module. It starts its own Postgres with Testcontainers, so
+Docker is all you need and no DSN is involved:
 
 ```sh
-docker run -d --rm --name ego-pg -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:17-alpine
-export EGO_EXAMPLE_POSTGRES_DSN="postgres://postgres:pg@localhost:55432/postgres?sslmode=disable"
-(cd ../../example/cluster && go test -count=1 ./...)
+(cd ../../inttest && go test -count=1 ./postgres/...)
 ```
+
+See [Integration tests](../../docs/ci.md#integration-tests) for how they work.
