@@ -42,7 +42,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
@@ -52,6 +51,15 @@ import (
 // PostgresImage is the exact image the tests run against. It is pinned to a tag so a run never depends on
 // whatever "latest" is that day.
 const PostgresImage = "postgres:17.6-alpine"
+
+// T is the part of testing.TB that NewDatabase needs. *testing.T satisfies it, and so does the SchemaT the
+// persistence conformance suites hand to their harness hooks, which is not a testing.TB.
+type T interface {
+	Helper()
+	Errorf(format string, args ...any)
+	FailNow()
+	Cleanup(func())
+}
 
 // Postgres is a running Postgres container shared by all the tests of one package.
 type Postgres struct {
@@ -101,18 +109,20 @@ func (p *Postgres) Terminate(ctx context.Context) error {
 // NewDatabase creates an empty database with a unique name on the shared container and returns its DSN. The
 // database is dropped when the test ends. Each test gets its own, so tests can run in parallel without seeing
 // each other's rows. It fails the test when the database cannot be created.
-func (p *Postgres) NewDatabase(tb testing.TB) string {
+func (p *Postgres) NewDatabase(tb T) string {
 	tb.Helper()
 	ctx := context.Background()
 
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
-		tb.Fatalf("generate a database name: %v", err)
+		tb.Errorf("generate a database name: %v", err)
+		tb.FailNow()
 	}
 	name := "t_" + hex.EncodeToString(suffix)
 
 	if err := p.admin(ctx, `CREATE DATABASE `+pgx.Identifier{name}.Sanitize()); err != nil {
-		tb.Fatalf("create the database %s: %v", name, err)
+		tb.Errorf("create the database %s: %v", name, err)
+		tb.FailNow()
 	}
 	tb.Cleanup(func() {
 		// FORCE closes connections a test left open, so the drop never waits on a leaked pool.

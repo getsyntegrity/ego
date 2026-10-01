@@ -41,10 +41,22 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/persistence/conformance"
 	"github.com/getsyntegrity/ego/persistence/postgres"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
+
+func TestPostgresEventStore_Conformance(t *testing.T) {
+	t.Parallel()
+	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
+		store, err := provisionPostgresTestStore(shared.NewDatabase(t))
+		if err != nil { // the runner's callback takes a *testing.T by API
+			t.Fatalf("provision the Postgres test store: %v", err)
+		}
+		return store
+	})
+}
 
 // newPostgresTestStore migrates the schema of an empty database to the latest version. Every test owns its
 // database (infra.Postgres.NewDatabase), so there is nothing to truncate. The returned store is not yet

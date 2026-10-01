@@ -50,7 +50,7 @@ The fix removes the cause instead: each integration test package starts its own 
 
 - [x] **B1 Module, infra and gate scope.** `inttest/go.mod`, `inttest/infra` (`StartPostgres`, per-test database), a smoke spec proving that a database is created and reachable, and `unitgate` excluding `inttest/` from the real-resource rule, with a `unitgate` test. Check: `cd inttest && go test ./infra/...`, `go test ./.github/scripts/unitgate`, `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
 - [x] **B2 Migrate the 19 tests.** Move them into `inttest/postgres`, with `TestMain` owning the container and each test getting its own database and calling `t.Parallel()`. Names and assertions are unchanged. Delete `example/cluster/stores_postgres_test.go` and its allowlist entry. Check: `cd inttest && go test -count=1 ./postgres/...` shows all 19 passed, and `example/cluster` `go test ./...` stays green. Route: delegated writer.
-- [ ] **B3 Conformance suites.** In `inttest/postgres`, run `RunEventsStoreConformance` and `RunSchemaMigratorConformance` against `persistence/postgres`, including the legacy cases moved from spec A. Check: same command, with conformance subtests passing. Route: delegated writer.
+- [x] **B3 Conformance suites.** In `inttest/postgres`, run `RunEventsStoreConformance` and `RunSchemaMigratorConformance` against `persistence/postgres`, including the legacy cases moved from spec A. Check: same command, with conformance subtests passing. Route: delegated writer.
 - [ ] **B4 Evidence.** Record these here:
   - wall-clock time of `cd inttest && go test -count=1 ./...`;
   - the run with Docker stopped, which must FAIL, with its error output;
@@ -78,6 +78,12 @@ The fix removes the cause instead: each integration test package starts its own 
 - Removed `example/cluster/stores_postgres_test.go` and its line in `.github/unit-test-gate-resources.txt`. `example/cluster`: `go mod tidy` dropped one now-unused `go.mod` line, `go vet ./...` clean, `go test ./...` prints `[no test files]`. `go run ./.github/scripts/unitgate -strict`: `ok (0 pending entries, 40 resource entries)`.
 - RED: before the move the package did not exist, and without a container the run fails at start (see B4(b)). GREEN: `go test -count=1 ./postgres/` shows 18 tests passed, none skipped.
 
+### B3 (route: delegated writer)
+
+- `TestPostgresEventStore_Conformance` (in `event_store_test.go`) runs `RunEventsStoreConformance`: each `newStore` call creates a fresh database, runs the store's own `Migrate`, and returns the store for the runner to connect. `TestPostgresSchemaMigratorConformance` (in `schema_test.go`) runs `RunSchemaMigratorConformance`: `NewBackend` creates a fresh database per check, and the three legacy cases (`EventsStoreWithoutRevisions`, `EventsStoreWithoutTenantMetadata`, `CurrentShapeWithoutVersionRecord`) moved over from `example/cluster` with the same DDL.
+- Design change: `infra.Postgres.NewDatabase` takes a small `infra.T` interface (`Helper`, `Errorf`, `FailNow`, `Cleanup`) instead of `testing.TB`, because the harness hooks receive a `conformance.SchemaT`, which is not a `testing.TB`. Each check therefore drops its database when the check ends.
+- RED: with `TestPostgresSchemaMigratorConformance` calling a missing `postgresSchemaHarness`, `go vet ./postgres/` gave `undefined: postgresSchemaHarness`. GREEN: `go test -count=1 -json ./...` in `inttest` has 21 top-level tests and 60 passes counting subtests, no skips and no failures, in about 4 s.
+
 ## Next step
 
-B3.
+B4.

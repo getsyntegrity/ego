@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/ego/persistence/conformance"
 	"github.com/getsyntegrity/ego/persistence/postgres"
 )
 
@@ -183,4 +184,77 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 			sc.Expect(latest.GetTimestamp()).To(specs.Equal(int64(1000))) // the legacy row's other columns must be unaffected by the migration
 		})
 	})
+}
+
+// openSchemaMigrator is the opener of the schema suite: each call returns a new, connected EventStore, which is
+// the SchemaMigrator under test, with its own pool as a separate cluster node would have.
+type openSchemaMigrator = func(t conformance.SchemaT) persistence.SchemaMigrator
+
+// postgresSchemaHarness wires the schema migrator suite to a real database. A backend is a database of its own,
+// created empty on the shared container for each check, so no check has to reset anything.
+func postgresSchemaHarness() conformance.SchemaMigratorHarness {
+	ctx := context.Background()
+	fatal := func(t conformance.SchemaT, what string, err error) {
+		t.Helper()
+		t.Errorf("%s: %v", what, err)
+		t.FailNow()
+	}
+	// backendWith creates the database, lets setup leave a legacy shape on it, and returns the opener for it.
+	// setup receives the opener of that database and returns SQL to run afterwards, or "".
+	backendWith := func(setup func(t conformance.SchemaT, open openSchemaMigrator) string) func(conformance.SchemaT) openSchemaMigrator {
+		return func(t conformance.SchemaT) openSchemaMigrator {
+			dsn := shared.NewDatabase(t)
+			open := func(t conformance.SchemaT) persistence.SchemaMigrator {
+				store := postgres.NewEventStore(dsn)
+				if err := store.Connect(ctx); err != nil {
+					fatal(t, "connect a store", err)
+				}
+				t.Cleanup(func() { _ = store.Disconnect(ctx) })
+				return store
+			}
+			if setup == nil {
+				return open
+			}
+			ddl := setup(t, open)
+			if ddl == "" {
+				return open
+			}
+			pool, err := pgxpool.New(ctx, dsn)
+			if err != nil {
+				fatal(t, "open a setup pool", err)
+			}
+			defer pool.Close()
+			if _, err = pool.Exec(ctx, ddl); err != nil {
+				fatal(t, "apply the legacy shape", err)
+			}
+			return open
+		}
+	}
+	legacy := func(ddl string) func(conformance.SchemaT) openSchemaMigrator {
+		return backendWith(func(conformance.SchemaT, openSchemaMigrator) string { return ddl })
+	}
+	return conformance.SchemaMigratorHarness{
+		NewBackend:    backendWith(nil),
+		LatestVersion: postgresLatestSchemaVersion,
+		Legacy: []conformance.LegacySchema{
+			{Name: "EventsStoreWithoutRevisions", Prepare: legacy(legacyEventsStoreDDL)},
+			{Name: "EventsStoreWithoutTenantMetadata", Prepare: legacy(legacyEventsStoreDDLBeforeTenantMetadata)},
+			{
+				// A database that is already at the latest shape, created by hand
+				// (the k8s init.sql) and so without a version record.
+				Name: "CurrentShapeWithoutVersionRecord",
+				Prepare: backendWith(func(t conformance.SchemaT, open openSchemaMigrator) string {
+					if err := open(t).Migrate(ctx); err != nil {
+						fatal(t, "build the current shape", err)
+					}
+					return "DROP TABLE schema_migrations"
+				}),
+			},
+		},
+	}
+}
+
+func TestPostgresSchemaMigratorConformance(t *testing.T) {
+	t.Parallel()
+	conformance.RunSchemaMigratorConformance(t, postgresSchemaHarness())
 }
