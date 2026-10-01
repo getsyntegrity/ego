@@ -324,8 +324,8 @@ func countOutcomes(sc *specs.Context, errA, errB error) (successes, conflicts in
 // directly (no actor, no mailbox), and exactly one of them must commit.
 func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("concurrent expect revision has exactly one winner", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents racing expect-revision writers", func(s *specs.Spec) {
+		s.It("commits exactly one of two writers that race ExpectRevision(1) on the same persistence id", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -374,8 +374,8 @@ func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testi
 // without touching the existing row.
 func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("expect genesis conflicts on existing id", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents genesis precondition", func(s *specs.Spec) {
+		s.It("fails ExpectGenesis on an existing persistence id with a ConflictError carrying the actual revision", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -410,8 +410,8 @@ func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
 // depth; this test pins it once more at the SQL layer specifically).
 func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("tenant scope isolates records", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore tenant scope isolation", func(s *specs.Spec) {
+		s.It("keeps revisions and records of two tenants with the same persistence id independent", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -457,8 +457,8 @@ func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
 // window observable.
 func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("unconditional write cannot break expect revision", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents unconditional write racing a conditional one", func(s *specs.Spec) {
+		s.It("never turns the race into a primary-key error: the loser gets a typed conflict or a no-op", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -511,8 +511,8 @@ func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testi
 // otherwise abort one of them with a deadlock error.
 func TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("unconditional mixed batches do not deadlock", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.WriteEvents unconditional batches in opposite id order", func(s *specs.Spec) {
+		s.It("lets concurrent batches over the same two persistence ids finish without a deadlock", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -668,8 +668,8 @@ func rawLockRow(sc *specs.Context, ctx context.Context, dsn, query string, args 
 // highest committed sequence number.
 func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("partial delete keeps revision", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.DeleteEvents partial delete", func(s *specs.Spec) {
+		s.It("keeps the revision at the highest committed sequence number", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -698,8 +698,8 @@ func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
 // number ever committed.
 func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("total delete keeps revision", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.DeleteEvents total delete", func(s *specs.Spec) {
+		s.It("keeps the revision so ExpectGenesis stays invalid and a stale revision is refused", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -732,8 +732,8 @@ func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
 // and leaves another tenant's same persistence id untouched.
 func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("delete keeps revision per tenant", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.DeleteEvents revision marker per tenant", func(s *specs.Spec) {
+		s.It("keeps the deleting tenant's revision and leaves another tenant's record untouched", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -764,8 +764,8 @@ func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 // when there is real data it could otherwise have paged over.
 func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("persistence ids zero page size with data", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.PersistenceIDs zero page size on a scope with data", func(s *specs.Spec) {
+		s.It("returns an empty page and an empty token even though persistence ids exist", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -800,8 +800,8 @@ func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
 // revision 7 already won.
 func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("unconditional race distinct sequence conflict", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore revision lock between an unconditional write and ExpectRevision, distinct sequences", func(s *specs.Spec) {
+		s.It("makes the conditional writer queue behind the revision row and fail with a typed conflict", func(sc *specs.Context) {
 			const appName = "pg-race-distinct"
 			store := newPostgresTestStoreNamed(sc, dsn, appName)
 			ctx := context.Background()
@@ -868,8 +868,8 @@ func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing
 // guards against under timing luck; this test pins it deterministically.
 func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("unconditional race same sequence conflict", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore revision lock between an unconditional write and ExpectRevision, same sequence", func(s *specs.Spec) {
+		s.It("returns a typed conflict instead of a raw primary-key violation", func(sc *specs.Context) {
 			const appName = "pg-race-same"
 			store := newPostgresTestStoreNamed(sc, dsn, appName)
 			ctx := context.Background()
@@ -937,8 +937,8 @@ func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) 
 // the record's new frontier.
 func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("delete events locks revision against concurrent write", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.DeleteEvents locking of the revision row", func(s *specs.Spec) {
+		s.It("makes a concurrent ExpectRevision write wait for the delete, then both succeed and sequence 3 becomes the frontier", func(sc *specs.Context) {
 			const appName = "pg-race-delete"
 			store := newPostgresTestStoreNamed(sc, dsn, appName)
 			ctx := context.Background()
@@ -1000,8 +1000,8 @@ func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *t
 // tenancy.UnmarshalMetadata).
 func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("tenant metadata round trips unconditional write", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore tenant metadata on an unconditional write", func(s *specs.Spec) {
+		s.It("persists the metadata exactly and returns it unchanged from GetLatestEvent and ReplayEvents", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -1039,8 +1039,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testi
 // writeUnconditional's insertEventIgnoreDuplicateSQL (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("tenant metadata round trips conditional write", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore tenant metadata on a conditional write", func(s *specs.Spec) {
+		s.It("persists the metadata exactly and returns it unchanged from GetLatestEvent and ReplayEvents", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -1077,8 +1077,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing
 // egopb.Event.TenantMetadata exactly (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("tenant metadata round trips get shard events", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.GetShardEvents tenant metadata", func(s *specs.Spec) {
+		s.It("returns the stored tenant metadata unchanged", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -1119,8 +1119,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T
 // produces (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("tenant metadata absent reads as none", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore tenant metadata when none was written", func(s *specs.Spec) {
+		s.It("reads the event back with no tenant metadata", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
 			ctx := context.Background()
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
@@ -1165,8 +1165,8 @@ CREATE TABLE events_store
 // highest retained sequence number. Applying the script twice is a no-op.
 func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("schema migrates legacy database", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.Migrate on a database without a revisions table", func(s *specs.Spec) {
+		s.It("backfills each revision from the highest retained sequence number and is idempotent", func(sc *specs.Context) {
 			ctx := context.Background()
 
 			pool, err := pgxpool.New(ctx, dsn)
@@ -1245,8 +1245,8 @@ CREATE TABLE events_store_revisions
 // Applying the script twice is a no-op (#115 Codex P2).
 func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("schema migrates legacy tenant metadata", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.Migrate on a database without the tenant_metadata column", func(s *specs.Spec) {
+		s.It("adds the column without a backfill, leaves the legacy row unchanged and is idempotent", func(sc *specs.Context) {
 			ctx := context.Background()
 
 			pool, err := pgxpool.New(ctx, dsn)

@@ -55,10 +55,10 @@ type loadCase struct {
 }
 
 func TestLoadSchemaFiles(t *testing.T) {
-	specs.Describe(t, "loadSchemaFiles reads the numbered SQL files in order", func(s *specs.Spec) {
+	specs.Describe(t, "postgres.loadSchemaFiles ordering and validation of the numbered SQL files", func(s *specs.Spec) {
 		specs.Table(s, []loadCase{
 			{
-				name: "versions 1..n in order",
+				name: "orders the files by version 1..n",
 				files: fstest.MapFS{
 					"schema/003_c.sql": sqlFile("SELECT 3;"),
 					"schema/001_a.sql": sqlFile("SELECT 1;"),
@@ -71,7 +71,7 @@ func TestLoadSchemaFiles(t *testing.T) {
 				},
 			},
 			{
-				name: "files that are not .sql are ignored",
+				name: "ignores files that are not .sql",
 				files: fstest.MapFS{
 					"schema/001_a.sql": sqlFile("SELECT 1;"),
 					"schema/README.md": sqlFile("notes"),
@@ -79,12 +79,12 @@ func TestLoadSchemaFiles(t *testing.T) {
 				want: []schemaFile{{version: 1, name: "001_a.sql", sql: "SELECT 1;"}},
 			},
 			{
-				name:    "a sequence that does not start at 1 is rejected",
+				name:    "rejects a sequence that does not start at 1",
 				files:   fstest.MapFS{"schema/002_b.sql": sqlFile("SELECT 2;")},
 				wantErr: "gap",
 			},
 			{
-				name: "a gap in the sequence is rejected",
+				name: "rejects a gap in the sequence",
 				files: fstest.MapFS{
 					"schema/001_a.sql": sqlFile("SELECT 1;"),
 					"schema/003_c.sql": sqlFile("SELECT 3;"),
@@ -92,7 +92,7 @@ func TestLoadSchemaFiles(t *testing.T) {
 				wantErr: "gap",
 			},
 			{
-				name: "two files with the same version are rejected",
+				name: "rejects two files with the same version",
 				files: fstest.MapFS{
 					"schema/001_a.sql": sqlFile("SELECT 1;"),
 					"schema/001_b.sql": sqlFile("SELECT 1;"),
@@ -100,22 +100,22 @@ func TestLoadSchemaFiles(t *testing.T) {
 				wantErr: "duplicate",
 			},
 			{
-				name:    "a .sql file without a numeric prefix is rejected",
+				name:    "rejects a .sql file without a numeric prefix",
 				files:   fstest.MapFS{"schema/events.sql": sqlFile("SELECT 1;")},
 				wantErr: "not named",
 			},
 			{
-				name:    "version 0 is rejected because 0 means never migrated",
+				name:    "rejects version 0 because 0 means never migrated",
 				files:   fstest.MapFS{"schema/000_a.sql": sqlFile("SELECT 1;")},
 				wantErr: "version 0",
 			},
 			{
-				name:    "an empty file is rejected",
+				name:    "rejects an empty file",
 				files:   fstest.MapFS{"schema/001_a.sql": sqlFile("  \n")},
 				wantErr: "empty",
 			},
 			{
-				name:    "a directory with no SQL file is rejected",
+				name:    "rejects a directory with no SQL file",
 				files:   fstest.MapFS{"schema/README.md": sqlFile("notes")},
 				wantErr: "no schema files",
 			},
@@ -133,8 +133,8 @@ func TestLoadSchemaFiles(t *testing.T) {
 }
 
 func TestEmbeddedSchema(t *testing.T) {
-	specs.Describe(t, "the SQL files shipped with the module", func(s *specs.Spec) {
-		s.It("load as the sequence 1..n", func(ctx *specs.Context) {
+	specs.Describe(t, "postgres embedded schema files", func(s *specs.Spec) {
+		s.It("load as the version sequence 1..n, each holding SQL", func(ctx *specs.Context) {
 			files, err := loadSchemaFiles(schemaFS, schemaDir)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(files).To(specs.EveryElement(specs.Satisfy("has SQL", func(f any) bool { return f.(schemaFile).sql != "" })))
@@ -157,12 +157,12 @@ type pendingCase struct {
 
 func TestPendingSchemaFiles(t *testing.T) {
 	files := []schemaFile{{version: 1}, {version: 2}, {version: 3}}
-	specs.Describe(t, "pendingSchemaFiles selects the files above the current version", func(s *specs.Spec) {
+	specs.Describe(t, "postgres.pendingSchemaFiles selection by recorded version", func(s *specs.Spec) {
 		specs.Table(s, []pendingCase{
-			{name: "an empty database applies everything", current: 0, want: []uint{1, 2, 3}},
-			{name: "a partly migrated database applies the rest", current: 1, want: []uint{2, 3}},
-			{name: "an up-to-date database applies nothing", current: 3, want: nil},
-			{name: "a database ahead of this build applies nothing", current: 9, want: nil},
+			{name: "selects every file for a database that was never migrated", current: 0, want: []uint{1, 2, 3}},
+			{name: "selects only the files above the recorded version for a partly migrated database", current: 1, want: []uint{2, 3}},
+			{name: "selects nothing for an up-to-date database", current: 3, want: nil},
+			{name: "selects nothing for a database ahead of this build", current: 9, want: nil},
 		}, func(c pendingCase) string { return c.name }, func(ctx *specs.Context, c pendingCase) {
 			var got []uint
 			for _, f := range pendingSchemaFiles(files, c.current) {
@@ -181,26 +181,26 @@ type baselineCase struct {
 }
 
 func TestInferSchemaVersion(t *testing.T) {
-	specs.Describe(t, "inferSchemaVersion reads the version of a database that was never versioned", func(s *specs.Spec) {
+	specs.Describe(t, "postgres.inferSchemaVersion baseline detection for a database with no version record", func(s *specs.Spec) {
 		specs.Table(s, []baselineCase{
-			{name: "an empty database is version 0", objects: nil, want: 0},
-			{name: "only the offsets table is still version 0, the earlier tables are missing",
+			{name: "infers version 0 for an empty database", objects: nil, want: 0},
+			{name: "infers version 0 when only the offsets table exists, because the earlier tables are missing",
 				objects: []string{"offsets_store"}, want: 0},
-			{name: "events_store with tenant_id is version 1",
+			{name: "infers version 1 for events_store with tenant_id",
 				objects: []string{"events_store", "events_store.tenant_id"}, want: 1},
-			{name: "the events indexes make it version 2",
+			{name: "infers version 2 once the events indexes exist",
 				objects: []string{"events_store", "events_store.tenant_id", "index.idx_events_store_shard"}, want: 2},
-			{name: "the revisions table makes it version 3",
+			{name: "infers version 3 once the revisions table exists",
 				objects: []string{"events_store", "events_store.tenant_id", "index.idx_events_store_shard", "events_store_revisions"}, want: 3},
-			{name: "the shape of a legacy database without indexes stops before them",
+			{name: "stops at version 1 for a legacy database without the indexes",
 				objects: []string{"events_store", "events_store.tenant_id", "events_store_revisions"}, want: 1},
-			{name: "tenant_metadata makes it version 4",
+			{name: "infers version 4 once tenant_metadata exists",
 				objects: []string{"events_store", "events_store.tenant_id", "index.idx_events_store_shard", "events_store_revisions", "events_store.tenant_metadata"}, want: 4},
-			{name: "the full k8s init.sql shape is version 5",
+			{name: "infers version 5 for the full k8s init.sql shape",
 				objects: []string{"events_store", "events_store.tenant_id", "index.idx_events_store_shard", "events_store_revisions", "events_store.tenant_metadata", "offsets_store"}, want: 5},
-			{name: "a later object without the earlier ones does not skip a version",
+			{name: "does not skip a version when a later object exists without the earlier ones",
 				objects: []string{"events_store", "events_store.tenant_id", "events_store.tenant_metadata", "offsets_store"}, want: 1},
-			{name: "events_store without tenant_id predates the scoped stores and is refused",
+			{name: "refuses an events_store without tenant_id, which predates the scoped stores",
 				objects: []string{"events_store"}, wantErr: true},
 		}, func(c baselineCase) string { return c.name }, func(ctx *specs.Context, c baselineCase) {
 			catalog := catalogOf(c.objects...)
@@ -224,7 +224,7 @@ type aheadCase struct {
 }
 
 func TestCheckSchemaNotAhead(t *testing.T) {
-	specs.Describe(t, "checkSchemaNotAhead compares the recorded version with the newest embedded file", func(s *specs.Spec) {
+	specs.Describe(t, "postgres.checkSchemaNotAhead comparison of the recorded version with the newest embedded file", func(s *specs.Spec) {
 		specs.Table(s, []aheadCase{
 			{name: "accepts a database that was never migrated", current: 0, latest: 5},
 			{name: "accepts a database one file behind", current: 4, latest: 5},
@@ -246,15 +246,15 @@ func TestCheckSchemaNotAhead(t *testing.T) {
 }
 
 func TestStoresNeedAConnectionToMigrate(t *testing.T) {
-	specs.Describe(t, "Migrate and SchemaVersion on a store that is not connected", func(s *specs.Spec) {
-		s.It("EventStore returns ErrNotConnected", func(ctx *specs.Context) {
+	specs.Describe(t, "postgres.EventStore and postgres.OffsetStore Migrate and SchemaVersion before Connect", func(s *specs.Spec) {
+		s.It("EventStore returns ErrNotConnected from Migrate and SchemaVersion", func(ctx *specs.Context) {
 			store := NewEventStore("postgres://unused")
 			ctx.Expect(store.Migrate(context.Background())).To(specs.MatchError(ErrNotConnected))
 			_, err := store.SchemaVersion(context.Background())
 			ctx.Expect(err).To(specs.MatchError(ErrNotConnected))
 		})
 
-		s.It("OffsetStore returns ErrNotConnected", func(ctx *specs.Context) {
+		s.It("OffsetStore returns ErrNotConnected from Migrate and SchemaVersion", func(ctx *specs.Context) {
 			store := NewOffsetStore("postgres://unused")
 			ctx.Expect(store.Migrate(context.Background())).To(specs.MatchError(ErrNotConnected))
 			_, err := store.SchemaVersion(context.Background())
