@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // hermeticGoEnv returns a copy of the current process environment with any
@@ -107,24 +109,33 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 // anything under it) as well as GoAkt and the engine package, matched by
 // whole path segment.
 func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
-	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/compose",
-		"github.com/getsyntegrity/ego/compose/goakt",
-		"github.com/getsyntegrity/ego/compose/internal/lifecycle",
-		"github.com/getsyntegrity/ego/engine",
-		"github.com/tochemey/goakt/v4/actor",
-	} {
-		if closureViolation(dep) == "" {
-			t.Errorf("closureViolation(%q) = \"\", want a rejection", dep)
+	specs.Describe(t, "the closure guard rejects the runtime, the engine and the composition root by whole path segment", func(s *specs.Spec) {
+		type closureCase struct {
+			name, dep string
+			// wantPrefix is the start of the violation message, or "" when dep is allowed.
+			wantPrefix string
 		}
-	}
-	for _, dep := range []string{
-		"github.com/getsyntegrity/ego/composer",
-		"github.com/getsyntegrity/ego/port/publishing",
-		"github.com/getsyntegrity/ego/egopb",
-	} {
-		if msg := closureViolation(dep); msg != "" {
-			t.Errorf("closureViolation(%q) = %q, want it allowed", dep, msg)
+		const (
+			runtimeRegressed = "unit-test closure regressed: "
+			rootDependency   = "adapter depends on the composition root: "
+		)
+		rows := []closureCase{
+			{"rejects the composition root", "github.com/getsyntegrity/ego/compose", rootDependency},
+			{"rejects a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt", rootDependency},
+			{"rejects a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle", rootDependency},
+			{"rejects the engine package", "github.com/getsyntegrity/ego/engine", runtimeRegressed},
+			{"rejects a GoAkt package", "github.com/tochemey/goakt/v4/actor", runtimeRegressed},
+			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer", ""},
+			{"allows the publishing port", "github.com/getsyntegrity/ego/port/publishing", ""},
+			{"allows the protobuf package", "github.com/getsyntegrity/ego/egopb", ""},
 		}
-	}
+		specs.Table(s, rows, func(c closureCase) string { return c.name }, func(ctx *specs.Context, c closureCase) {
+			got := closureViolation(c.dep)
+			if c.wantPrefix == "" {
+				ctx.Expect(got).To(specs.BeEmpty())
+				return
+			}
+			ctx.Expect(got).To(specs.StartWith(c.wantPrefix))
+		})
+	})
 }
