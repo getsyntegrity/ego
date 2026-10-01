@@ -15,7 +15,8 @@
 #   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
 #                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
 #                  never on feature or hotfix PRs
-#   benchmark   -> the tests of the benchmark module (a real goakt actor system), same triggers as inttest
+#   benchmark   -> every benchmark of the benchmark module once (-benchtime=1x; a manual run can choose a
+#                  longer benchtime), same triggers as inttest; fails if no benchmark ran
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -30,6 +31,11 @@ on:
     # labeled/unlabeled: recomputes the version when the release:* labels change
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      benchtime:
+        description: "go test -benchtime for the benchmark job (1x = every benchmark once; e.g. 2s for a real measurement)"
+        required: false
+        default: "1x"
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -318,10 +324,12 @@ jobs:
         working-directory: inttest
         run: go test -count=1 -timeout=15m ./...
 
-  # Tests of the benchmark module. They start a real in-process goakt actor system, so they follow the
-  # inttest rule: compiled and vetted on every pull request by modules, executed only after the merge (push
-  # to develop), on the develop -> main release PR and on manual runs. Only tests run here; go test without
-  # -bench does not execute the benchmarks themselves.
+  # The benchmarks of the benchmark module. The module has no Test functions, only Benchmark ones, which
+  # start a real in-process goakt actor system, so plain `go test` would compile them and run nothing.
+  # They follow the inttest rule: compiled and vetted on every pull request by modules, executed only
+  # after the merge (push to develop), on the develop -> main release PR and on manual runs. Automatic runs
+  # use -benchtime=1x (every benchmark once, about two minutes) to prove they still run; a manual run can
+  # pass a longer benchtime for a real measurement. The step fails if no benchmark reported a result.
   benchmark:
     needs: plan
     if: >-
@@ -334,9 +342,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/go-setup
-      - name: Benchmark module tests
+      - name: Run every benchmark
         working-directory: benchmark
-        run: go test $TESTFLAGS ./...
+        shell: bash
+        env:
+          BENCHTIME: ${{ inputs.benchtime || '1x' }}
+        run: |
+          out="$RUNNER_TEMP/benchmark.txt"
+          go test -count=1 -timeout=20m -run '^$' -bench . -benchtime="$BENCHTIME" ./... | tee "$out"
+          n=$(grep -cE '^Benchmark[^[:space:]]+[[:space:]]+[0-9]+' "$out" || true)
+          {
+            echo "### Benchmarks (benchtime $BENCHTIME): $n results"
+            echo '```'
+            grep -E '^Benchmark' "$out" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no benchmark reported a result"
+            exit 1
+          fi
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results
+          path: ${{ runner.temp }}/benchmark.txt
+          retention-days: 14
+          if-no-files-found: ignore
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
