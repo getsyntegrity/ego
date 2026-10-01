@@ -119,6 +119,7 @@ func TestScopeTwoTenantScopesWithSameIDAreEqual(t *testing.T) {
 			_, second := mustTenantScope(ctx, "acme")
 
 			ctx.Expect(first.Equal(second)).To(specs.BeTrue())
+			ctx.Expect(persistence.Unscoped().Equal(persistence.Unscoped())).To(specs.BeTrue())
 		})
 	})
 }
