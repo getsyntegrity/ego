@@ -32,8 +32,6 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
@@ -849,100 +847,75 @@ func TestSagaActor(t *testing.T) {
 // invoking a real tenant-aware eventsource.Actor via SendSync, exactly as
 // production code would.
 func TestSagaFailsClosed(t *testing.T) {
-	t.Run("saga-dispatched command in tenant-aware mode is blocked before HandleCommand", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-		targetID := uuid.NewString()
+	specs.Describe(t, "a saga in tenant-aware mode cannot reach a domain handler", func(s *specs.Spec) {
+		s.It("saga-dispatched command in tenant-aware mode is blocked before HandleCommand", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			targetID := uuid.NewString()
+			store := newTestkitStore(ctx)
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
+			// extensions.NewTenancyMarker() puts the actor system in tenant-aware
+			// mode, exactly as Engine.NewEngine does when a resolver is
+			// registered via WithTenantResolver. No resolver is registered here
+			// at all: the saga must never be able to reach one (see structural
+			// invariant), and this test does not need one to prove the gate.
+			rig := newSagaRig(ctx, store, extensions.NewTenancyMarker())
 
-		stream := eventstream.New()
-		defer stream.Close()
+			// The saga's real target: a genuine tenant-aware eventsource.Actor,
+			// not a stub. If the gate ever regressed and let a saga-dispatched
+			// command through, this probe would record it.
+			//
+			// This test spawns directly through actorSystem.Spawn, bypassing
+			// Engine.Entity entirely, so it must supply the per-spawn
+			// extensions.EntityTenantScope dependency itself — exactly what
+			// Engine.Entity injects when given engine.WithTenant (TENANT-003 T4,
+			// corrected). Without it, tenancy being active
+			// (extensions.NewTenancyMarker() above) makes the target's own
+			// PreStart fail closed with extensions.ErrEntityTenantScopeMissing before this
+			// test ever reaches the saga-dispatch gate it means to prove.
+			targetProbe := enginetest.NewTenancyProbeEventSourcedBehavior(targetID)
+			_, err := rig.system.Spawn(context.Background(), targetID, eventsource.New(),
+				goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
+			ctx.Expect(err).To(specs.BeNil())
 
-		// extensions.NewTenancyMarker() puts the actor system in tenant-aware
-		// mode, exactly as Engine.NewEngine does when a resolver is
-		// registered via WithTenantResolver. No resolver is registered here
-		// at all: the saga must never be able to reach one (see structural
-		// invariant), and this test does not need one to prove the gate.
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		// The saga's real target: a genuine tenant-aware eventsource.Actor,
-		// not a stub. If the gate ever regressed and let a saga-dispatched
-		// command through, this probe would record it.
-		//
-		// This test spawns directly through actorSystem.Spawn, bypassing
-		// Engine.Entity entirely, so it must supply the per-spawn
-		// extensions.EntityTenantScope dependency itself — exactly what
-		// Engine.Entity injects when given engine.WithTenant (TENANT-003 T4,
-		// corrected). Without it, tenancy being active
-		// (extensions.NewTenancyMarker() above) makes the target's own
-		// PreStart fail closed with extensions.ErrEntityTenantScopeMissing before this
-		// test ever reaches the saga-dispatch gate it means to prove.
-		targetProbe := enginetest.NewTenancyProbeEventSourcedBehavior(targetID)
-		_, err = actorSystem.Spawn(ctx, targetID, eventsource.New(),
-			goakt.WithDependencies(targetProbe, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-
-		// Post-EGO-TENANT-002/PR3, Actor reconstructs a TenantContext from
-		// each incoming event's own tenant metadata (SG2) and rejects the
-		// event outright — before HandleEvent ever runs, so no sagaAction and
-		// no command is ever produced — when that metadata is absent or
-		// malformed (SG4). This is a strictly earlier and stronger form of
-		// the structural invariant this test originally proved by relying on
-		// the saga blindly dispatching via context.Background() and the
-		// target entity's own tenancy gate catching it downstream: that
-		// fallback path no longer exists because the saga never reaches
-		// sendCommand for a tenant-less event in the first place.
-		var handleEventCalls atomic.Int32
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalls.Add(1)
-				return &sagaAction{Commands: []sagaCommand{
-					{EntityID: targetID, Command: &testpb.CreateAccount{AccountBalance: 500}, Timeout: 3 * time.Second},
-				}}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
+			// Post-EGO-TENANT-002/PR3, Actor reconstructs a TenantContext from
+			// each incoming event's own tenant metadata (SG2) and rejects the
+			// event outright — before HandleEvent ever runs, so no sagaAction and
+			// no command is ever produced — when that metadata is absent or
+			// malformed (SG4). This is a strictly earlier and stronger form of
+			// the structural invariant this test originally proved by relying on
+			// the saga blindly dispatching via context.Background() and the
+			// target entity's own tenancy gate catching it downstream: that
+			// fallback path no longer exists because the saga never reaches
+			// sendCommand for a tenant-less event in the first place.
+			var handleEventCalls atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handleEventCalls)
+					return &sagaAction{Commands: []sagaCommand{
+						{EntityID: targetID, Command: &testpb.CreateAccount{AccountBalance: 500}, Timeout: 3 * time.Second},
+					}}, nil
+				},
+			}
 			// Same reasoning as the target's spawn above: this saga is also
 			// spawned directly through actorSystem.Spawn, so it needs its own
 			// EntityTenantScope dependency to get past tenancy-active PreStart.
-			goakt.WithDependencies(behavior, sagaCfg, extensions.NewEntityTenantScope("acme")))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0), extensions.NewEntityTenantScope("acme"))
 
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
 
-		require.Never(t, func() bool { return handleEventCalls.Load() != 0 }, 2*time.Second, 20*time.Millisecond,
-			"HandleEvent must never run for an event with no tenant metadata in tenant-aware mode")
+			// HandleEvent must never run for an event with no tenant metadata in tenant-aware mode
+			expectCallsStay(ctx, &handleEventCalls, 0, 2*time.Second)
 
-		assert.Zero(t, targetProbe.InvocationCount(),
-			"HandleCommand must never run for a command the saga could not have formed for a rejected event")
+			// HandleCommand must never run for a command the saga could not have formed for a rejected event
+			ctx.Expect(targetProbe.InvocationCount()).To(specs.BeZero())
 
-		latest, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), targetID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no event may be persisted when the gate blocks the saga's command")
+			// no event may be persisted when the gate blocks the saga's command
+			latest, err := store.GetLatestEvent(context.Background(), persistence.Unscoped(), targetID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.BeNil())
 
-		require.True(t, pid.IsRunning())
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
 	})
 }
