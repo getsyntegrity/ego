@@ -392,7 +392,7 @@ jobs:
   cluster:
     needs: plan
     if: >-
-      github.event_name == 'push' ||
+      github.event_name == 'pull_request' || github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
         github.base_ref == 'main' && github.head_ref == 'develop')
@@ -441,7 +441,7 @@ jobs:
   race:
     needs: plan
     if: >-
-      github.event_name == 'push' ||
+      github.event_name == 'pull_request' || github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
         github.base_ref == 'main' && github.head_ref == 'develop')
