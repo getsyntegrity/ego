@@ -27,44 +27,67 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestDiscardHandler_InterfaceCompliance(t *testing.T) {
-	var _ Handler = (*DiscardHandler)(nil)
+	specs.Describe(t, "DiscardHandler satisfies the Handler interface", func(s *specs.Spec) {
+		s.It("is assignable to Handler", func(ctx *specs.Context) {
+			var _ Handler = (*DiscardHandler)(nil)
+		})
+	})
 }
 
 func TestNewDiscardHandler(t *testing.T) {
-	handler := NewDiscardHandler()
-	require.NotNil(t, handler)
+	specs.Describe(t, "NewDiscardHandler builds a discard handler", func(s *specs.Spec) {
+		s.It("returns a non-nil handler", func(ctx *specs.Context) {
+			handler := NewDiscardHandler()
+			ctx.Expect(handler).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestDiscardHandler_Handle(t *testing.T) {
-	handler := NewDiscardHandler()
-	err := handler.Handle(context.Background(), "persistence-id-1", &anypb.Any{}, 1)
-	assert.NoError(t, err)
+	specs.Describe(t, "DiscardHandler discards every event", func(s *specs.Spec) {
+		s.It("handles an event without error", func(ctx *specs.Context) {
+			handler := NewDiscardHandler()
+			err := handler.Handle(context.Background(), "persistence-id-1", &anypb.Any{}, 1)
+			ctx.Expect(err).To(specs.BeNil())
+		})
+	})
 }
 
 func TestDiscardDeadLetterHandler_InterfaceCompliance(t *testing.T) {
-	var _ DeadLetterHandler = (*DiscardDeadLetterHandler)(nil)
+	specs.Describe(t, "DiscardDeadLetterHandler satisfies the DeadLetterHandler interface", func(s *specs.Spec) {
+		s.It("is assignable to DeadLetterHandler", func(ctx *specs.Context) {
+			var _ DeadLetterHandler = (*DiscardDeadLetterHandler)(nil)
+		})
+	})
 }
 
 func TestNewDiscardDeadLetterHandler(t *testing.T) {
-	handler := NewDiscardDeadLetterHandler()
-	require.NotNil(t, handler)
+	specs.Describe(t, "NewDiscardDeadLetterHandler builds a discard dead-letter handler", func(s *specs.Spec) {
+		s.It("returns a non-nil handler", func(ctx *specs.Context) {
+			handler := NewDiscardDeadLetterHandler()
+			ctx.Expect(handler).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestDiscardDeadLetterHandler_Handle(t *testing.T) {
-	handler := NewDiscardDeadLetterHandler()
-	err := handler.Handle(
-		context.Background(),
-		"test-projection",
-		"persistence-id-1",
-		&anypb.Any{},
-		1,
-		errors.New("some failure"),
-	)
-	assert.NoError(t, err)
+	specs.Describe(t, "DiscardDeadLetterHandler discards every dead letter", func(s *specs.Spec) {
+		s.It("handles a dead letter without error", func(ctx *specs.Context) {
+			handler := NewDiscardDeadLetterHandler()
+			err := handler.Handle(
+				context.Background(),
+				"test-projection",
+				"persistence-id-1",
+				&anypb.Any{},
+				1,
+				errors.New("some failure"),
+			)
+			ctx.Expect(err).To(specs.BeNil())
+		})
+	})
 }
