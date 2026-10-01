@@ -34,8 +34,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -558,64 +556,71 @@ func TestTenantAdopterStampsTargetTenantMetadata(t *testing.T) {
 // actor's own seedActorTenant/tenancy.VerifyUnchanged cross-check (T4) would
 // refuse to recover at all.
 func TestTenantAdopterEndToEndRecoveryThroughRealActor(t *testing.T) {
-	ctx := context.Background()
-	eventsStore := testkit.NewEventsStore()
-	require.NoError(t, eventsStore.Connect(ctx))
-	t.Cleanup(func() { _ = eventsStore.Disconnect(ctx) })
+	specs.Describe(t, "a real tenant-bound actor recovers the data an adoption migrated", func(s *specs.Spec) {
+		s.It("recovers the migrated event and keeps applying commands on top of it", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventsStore := testkit.NewEventsStore()
+			ctx.Expect(eventsStore.Connect(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = eventsStore.Disconnect(bg) })
 
-	entityID := "acct-" + uuid.NewString()
-	source := persistence.Unscoped()
+			entityID := "acct-" + uuid.NewString()
+			source := persistence.Unscoped()
 
-	// Legacy data: written exactly as a pre-tenancy deployment would have,
-	// with no tenant_metadata at all.
-	createdPayload, err := anypb.New(&testpb.AccountCreated{AccountId: entityID, AccountBalance: 100})
-	require.NoError(t, err)
-	legacyEvent := &egopb.Event{
-		PersistenceId:  entityID,
-		SequenceNumber: 1,
-		Event:          createdPayload,
-		Timestamp:      time.Now().Unix(),
-	}
-	require.NoError(t, eventsStore.WriteEvents(ctx, source, []*egopb.Event{legacyEvent}, persistence.Unconditional()))
+			// Legacy data: written exactly as a pre-tenancy deployment would have,
+			// with no tenant_metadata at all.
+			createdPayload, err := anypb.New(&testpb.AccountCreated{AccountId: entityID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			legacyEvent := &egopb.Event{
+				PersistenceId:  entityID,
+				SequenceNumber: 1,
+				Event:          createdPayload,
+				Timestamp:      time.Now().Unix(),
+			}
+			ctx.Expect(eventsStore.WriteEvents(bg, source, []*egopb.Event{legacyEvent}, persistence.Unconditional())).To(specs.BeNil())
 
-	adopter, err := NewTenantAdopter(
-		fixedAssignment(map[string]tenancy.TenantID{entityID: "acme"}),
-		WithEventsStore(eventsStore),
-		WithWriteEnabled(), WithAdoptionFence(newTestFence()),
-	)
-	require.NoError(t, err)
-	report, err := adopter.Run(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, report.Copied)
-	require.Equal(t, 1, report.Verified)
+			adopter, err := NewTenantAdopter(
+				fixedAssignment(map[string]tenancy.TenantID{entityID: "acme"}),
+				WithEventsStore(eventsStore),
+				WithWriteEnabled(), WithAdoptionFence(newTestFence()),
+			)
+			ctx.Expect(err).To(specs.BeNil())
+			report, err := adopter.Run(bg)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(report.Copied).ToEqual(1)
+			ctx.Expect(report.Verified).ToEqual(1)
 
-	resolver, err := tenancy.WithSingleTenant("acme")
-	require.NoError(t, err)
+			resolver, err := tenancy.WithSingleTenant("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-	cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver))
-	sys, err := goakt.NewActorSystem("TenantAdoptionE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(context.Background()) })
+			cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver))
+			sys, err := goakt.NewActorSystem("TenantAdoptionE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(sys.Start(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = sys.Stop(context.Background()) })
 
-	engine, err := engine.NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
+			eng, err := engine.NewEngine(sys, cfg)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(eng.Start(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = eng.Stop(context.Background()) })
 
-	behavior := &adoptionAccountBehavior{id: entityID}
-	require.NoError(t, engine.Entity(ctx, behavior)) //nolint:staticcheck // exercises the deprecated API on purpose (#124)
+			behavior := &adoptionAccountBehavior{id: entityID}
+			ctx.Expect(eng.Entity(bg, behavior)).To(specs.BeNil()) //nolint:staticcheck // exercises the deprecated API on purpose (#124)
 
-	// The recovered state must reflect the migrated event (balance 100)
-	// BEFORE any new command is applied: crediting 50 on top of it must
-	// yield 150, which is only possible if recovery actually replayed the
-	// migrated AccountCreated event rather than starting from a blank slate.
-	resultingState, _, err := engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
-	require.NoError(t, err, "the tenant-bound actor must recover the migrated event without a tenant_metadata cross-check failure")
+			// The recovered state must reflect the migrated event (balance 100)
+			// BEFORE any new command is applied: crediting 50 on top of it must
+			// yield 150, which is only possible if recovery actually replayed the
+			// migrated AccountCreated event rather than starting from a blank slate.
+			// An error here means the tenant-bound actor failed its tenant_metadata
+			// cross-check while recovering.
+			resultingState, _, err := eng.SendCommand(bg, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	account, ok := resultingState.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 150, account.GetAccountBalance(), "150 == migrated balance (100) + credited amount (50), proving recovery used the migrated data")
+			account, ok := resultingState.(*testpb.Account)
+			ctx.Expect(ok).To(specs.BeTrue())
+			// 150 == migrated balance (100) + credited amount (50), proving recovery used the migrated data.
+			ctx.Expect(account.GetAccountBalance()).ToEqual(float64(150))
+		})
+	})
 }
 
 func TestTenantAdopterTwoTenantsAreIsolated(t *testing.T) {
@@ -1496,20 +1501,17 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		target := tenantScope(t, "acme")
 		source := persistence.Unscoped()
 
-		adoptAndDelete := func(t testing.TB, snapshotStore *testkit.SnapshotStore, id string) {
-			t.Helper()
-			seedSnapshot(t, snapshotStore, source, newLegacySnapshot(t, id, 5, 500))
-			adopter := newAdopter(t, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		adoptAndDelete := func(ctx *specs.Context, snapshotStore *testkit.SnapshotStore, id string) {
+			seedSnapshot(ctx.T, snapshotStore, source, newLegacySnapshot(ctx.T, id, 5, 500))
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 				WithSnapshotStore(snapshotStore), WithPersistenceIDs(id), WithWriteEnabled(), WithAdoptionFence(newTestFence()), WithSourceDeletion())
-			if first := mustAdopt(t, adopter); first.SourceDeleted != 1 {
-				t.Fatalf("adopt %q: source deleted = %d, want 1", id, first.SourceDeleted)
-			}
+			ctx.Expect(mustAdopt(ctx.T, adopter).SourceDeleted).ToEqual(1)
 		}
 
 		s.It("a record altered after adoption no longer matches its receipt", func(ctx *specs.Context) {
 			snapshotStore := connectedSnapshotStore(ctx.T)
 			const id = "tampered-receipt"
-			adoptAndDelete(ctx.T, snapshotStore, id)
+			adoptAndDelete(ctx, snapshotStore, id)
 
 			adopted := latestSnapshot(ctx.T, snapshotStore, target, id)
 			tampered, ok := proto.Clone(adopted).(*egopb.Snapshot)
@@ -1528,7 +1530,7 @@ func TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion(t *testing.T) {
 		s.It("a receipt for a different source scope is not proof", func(ctx *specs.Context) {
 			snapshotStore := connectedSnapshotStore(ctx.T)
 			const id = "other-source-scope"
-			adoptAndDelete(ctx.T, snapshotStore, id)
+			adoptAndDelete(ctx, snapshotStore, id)
 
 			otherSource := tenantScope(ctx.T, "legacy-partition")
 			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
@@ -2139,14 +2141,11 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			seedEvents(t, store, source, newLegacyEvent(t, id, 1, 100))
 			return store
 		}
-		run := func(t testing.TB, fence *testFence, store persistence.EventsStore, id string, runCtx context.Context) *AdoptionReport {
-			t.Helper()
-			adopter := newAdopter(t, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
+		run := func(ctx *specs.Context, fence *testFence, store persistence.EventsStore, id string, runCtx context.Context) *AdoptionReport {
+			adopter := newAdopter(ctx.T, fixedAssignment(map[string]tenancy.TenantID{id: "acme"}),
 				WithEventsStore(store), WithWriteEnabled(), WithSourceDeletion(), WithAdoptionFence(fence))
 			report, err := adopter.Run(runCtx)
-			if err != nil {
-				t.Fatalf("adopter run %q: %v", id, err)
-			}
+			ctx.Expect(err).To(specs.BeNil())
 			return report
 		}
 		expectBalanced := func(ctx *specs.Context, fence *testFence, wantAcquired int) {
@@ -2158,7 +2157,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 
 		s.It("success", func(ctx *specs.Context) {
 			fence := newTestFence()
-			report := run(ctx.T, fence, seeded(ctx.T, "ok"), "ok", bg)
+			report := run(ctx, fence, seeded(ctx.T, "ok"), "ok", bg)
 			ctx.Expect(report.SourceDeleted).ToEqual(1)
 			expectBalanced(ctx, fence, 2)
 		})
@@ -2166,7 +2165,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 		s.It("failed verification", func(ctx *specs.Context) {
 			fence := newTestFence()
 			store := &corruptingEventsStore{EventsStore: seeded(ctx.T, "corrupt"), corruptScope: target, mangle: func(e *egopb.Event) { e.Event = nil }}
-			report := run(ctx.T, fence, store, "corrupt", bg)
+			report := run(ctx, fence, store, "corrupt", bg)
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			expectBalanced(ctx, fence, 2)
@@ -2176,7 +2175,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			fence := newTestFence()
 			fence.failOn = testFenceKey(target, "unavailable")
 			store := seeded(ctx.T, "unavailable")
-			report := run(ctx.T, fence, store, "unavailable", bg)
+			report := run(ctx, fence, store, "unavailable", bg)
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTestFenceUnavailable))
@@ -2193,7 +2192,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			store := seeded(ctx.T, "waiting")
 			waitCtx, cancel := context.WithTimeout(bg, 100*time.Millisecond)
 			defer cancel()
-			report := run(ctx.T, fence, store, "waiting", waitCtx)
+			report := run(ctx, fence, store, "waiting", waitCtx)
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(context.DeadlineExceeded))
@@ -2205,7 +2204,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 		s.It("panic", func(ctx *specs.Context) {
 			fence := newTestFence()
 			store := &panickingEventsStore{EventsStore: seeded(ctx.T, "panic"), target: target}
-			ctx.Expect(panics(func() { run(ctx.T, fence, store, "panic", bg) })).To(specs.BeTrue())
+			ctx.Expect(panics(func() { run(ctx, fence, store, "panic", bg) })).To(specs.BeTrue())
 			expectBalanced(ctx, fence, 2)
 		})
 	})
@@ -2262,14 +2261,13 @@ func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
 // scopedLegacyAccountEvent builds a legacy event in a tenant scope: an
 // AccountCreated payload plus the pre-snapshot resulting_state (field 5),
 // carrying metadata as its tenant_metadata.
-func scopedLegacyAccountEvent(t *testing.T, id string, balance float64, metadata map[string]string) *egopb.Event {
-	t.Helper()
+func scopedLegacyAccountEvent(ctx *specs.Context, id string, balance float64, metadata map[string]string) *egopb.Event {
 	created, err := anypb.New(&testpb.AccountCreated{AccountId: id, AccountBalance: balance})
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	state, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: balance})
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	evt := new(egopb.Event)
-	require.NoError(t, proto.Unmarshal(buildLegacyEventBytes(t, id, 1, created, state, time.Now().Unix(), 0), evt))
+	ctx.Expect(proto.Unmarshal(buildLegacyEventBytes(ctx.T, id, 1, created, state, time.Now().Unix(), 0), evt)).To(specs.BeNil())
 	evt.TenantMetadata = metadata
 	return evt
 }
@@ -2279,52 +2277,58 @@ func scopedLegacyAccountEvent(t *testing.T, id string, balance float64, metadata
 // metadata: a real tenant-aware EventSourcedActor loads it first and must
 // recover from it rather than reject it.
 func TestScopedMigratorSnapshotRecoversThroughTenantAwareActor(t *testing.T) {
-	ctx := context.Background()
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	acmeContext, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "a snapshot the scoped Migrator writes is accepted by a tenant-aware actor", func(s *specs.Spec) {
+		s.It("recovers from the migrated snapshot and keeps applying commands", func(ctx *specs.Context) {
+			bg := context.Background()
+			acme, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			acmeContext, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-	eventsStore := testkit.NewEventsStore()
-	require.NoError(t, eventsStore.Connect(ctx))
-	snapshotStore := testkit.NewSnapshotStore()
-	require.NoError(t, snapshotStore.Connect(ctx))
+			eventsStore := testkit.NewEventsStore()
+			ctx.Expect(eventsStore.Connect(bg)).To(specs.BeNil())
+			snapshotStore := testkit.NewSnapshotStore()
+			ctx.Expect(snapshotStore.Connect(bg)).To(specs.BeNil())
 
-	entityID := "acct-" + uuid.NewString()
-	require.NoError(t, eventsStore.WriteEvents(ctx, acme, []*egopb.Event{
-		scopedLegacyAccountEvent(t, entityID, 100, tenancy.MarshalMetadata(acmeContext)),
-	}, persistence.Unconditional()))
+			entityID := "acct-" + uuid.NewString()
+			ctx.Expect(eventsStore.WriteEvents(bg, acme, []*egopb.Event{
+				scopedLegacyAccountEvent(ctx, entityID, 100, tenancy.MarshalMetadata(acmeContext)),
+			}, persistence.Unconditional())).To(specs.BeNil())
 
-	migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
-	require.NoError(t, err)
-	require.NoError(t, migrator.Run(ctx))
+			migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(migrator.Run(bg)).To(specs.BeNil())
 
-	snapshot, err := snapshotStore.GetLatestSnapshot(ctx, acme, entityID)
-	require.NoError(t, err)
-	require.NotNil(t, snapshot)
-	snapshotTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(snapshot.GetTenantMetadata()))
-	require.NoError(t, err, "the scoped snapshot must carry tenant metadata")
-	assert.Equal(t, acmeContext, snapshotTenant)
+			snapshot, err := snapshotStore.GetLatestSnapshot(bg, acme, entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshot).To(specs.Not(specs.BeNil()))
+			// The scoped snapshot must carry tenant metadata.
+			snapshotTenant, err := tenancy.UnmarshalMetadata(tenancy.Metadata(snapshot.GetTenantMetadata()))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshotTenant).ToEqual(acmeContext)
 
-	resolver, err := tenancy.WithSingleTenant("acme")
-	require.NoError(t, err)
-	cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver), engine.WithSnapshotStore(snapshotStore))
-	sys, err := goakt.NewActorSystem("ScopedMigratorE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(context.Background()) })
-	engine, err := engine.NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
+			resolver, err := tenancy.WithSingleTenant("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			cfg := engine.NewConfig(eventsStore, engine.WithTenantResolver(resolver), engine.WithSnapshotStore(snapshotStore))
+			sys, err := goakt.NewActorSystem("ScopedMigratorE2E-"+uuid.NewString(), cfg.GoaktOptions()...)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(sys.Start(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = sys.Stop(context.Background()) })
+			eng, err := engine.NewEngine(sys, cfg)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(eng.Start(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = eng.Stop(context.Background()) })
 
-	require.NoError(t, engine.Entity(ctx, &adoptionAccountBehavior{id: entityID}), //nolint:staticcheck // exercises the deprecated API on purpose (#124)
-		"a tenant-aware actor must recover from the migrated snapshot")
-	state, _, err := engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
-	require.NoError(t, err)
-	account, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 150, account.GetAccountBalance(), "150 == migrated snapshot balance (100) + credit (50)")
+			// A tenant-aware actor must recover from the migrated snapshot.
+			ctx.Expect(eng.Entity(bg, &adoptionAccountBehavior{id: entityID})).To(specs.BeNil()) //nolint:staticcheck // exercises the deprecated API on purpose (#124)
+			state, _, err := eng.SendCommand(bg, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 50}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
+			account, ok := state.(*testpb.Account)
+			ctx.Expect(ok).To(specs.BeTrue())
+			// 150 == migrated snapshot balance (100) + credit (50).
+			ctx.Expect(account.GetAccountBalance()).ToEqual(float64(150))
+		})
+	})
 }
 
 // TestScopedMigratorFailsClosedOnUnprovableTenantMetadata pins that a
@@ -2349,7 +2353,7 @@ func TestScopedMigratorFailsClosedOnUnprovableTenantMetadata(t *testing.T) {
 				eventsStore := connectedEventsStore(ctx.T)
 				snapshotStore := connectedSnapshotStore(ctx.T)
 				const id = "unprovable"
-				seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx.T, id, 100, tc.metadata))
+				seedEvents(ctx.T, eventsStore, acme, scopedLegacyAccountEvent(ctx, id, 100, tc.metadata))
 
 				migrator, err := New(eventsStore, snapshotStore, WithScope(acme))
 				ctx.Expect(err).To(specs.BeNil())
@@ -2547,26 +2551,23 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 		target := tenantScope(t, "acme")
 		acme := tenantContextOf(t, "acme")
 
-		adoptSparse := func(t testing.TB, id string) *testkit.EventStore {
-			t.Helper()
-			store := connectedEventsStore(t)
-			seedEvents(t, store, source, newLegacyEvent(t, id, 1, 100), newLegacyEvent(t, id, 5, 500), newLegacyEvent(t, id, 9, 900))
+		adoptSparse := func(ctx *specs.Context, id string) *testkit.EventStore {
+			store := connectedEventsStore(ctx.T)
+			seedEvents(ctx.T, store, source, newLegacyEvent(ctx.T, id, 1, 100), newLegacyEvent(ctx.T, id, 5, 500), newLegacyEvent(ctx.T, id, 9, 900))
 			// The sparse stream must be adopted and its source deleted.
-			if first := rerun(t, store, id); first.SourceDeleted != 1 {
-				t.Fatalf("adopt sparse %q: source deleted = %d, want 1", id, first.SourceDeleted)
-			}
+			ctx.Expect(rerun(ctx.T, store, id).SourceDeleted).ToEqual(1)
 			return store
 		}
 
 		s.It("a sparse stream re-run after source deletion is already present", func(ctx *specs.Context) {
-			store := adoptSparse(ctx.T, "sparse")
+			store := adoptSparse(ctx, "sparse")
 			report := rerun(ctx.T, store, "sparse")
 			ctx.Expect(report.AlreadyPresent).ToEqual(1)
 			ctx.Expect(report.Failed).ToEqual(0)
 		})
 
 		s.It("live events after the adopted chain are not mistaken for part of it", func(ctx *specs.Context) {
-			store := adoptSparse(ctx.T, "sparse-live")
+			store := adoptSparse(ctx, "sparse-live")
 			live := newLegacyEvent(ctx.T, "sparse-live", 12, 1200)
 			live.TenantMetadata = tenancy.MarshalMetadata(acme)
 			seedEvents(ctx.T, store, target, live)
@@ -2577,7 +2578,7 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 		})
 
 		s.It("a missing first adopted event fails", func(ctx *specs.Context) {
-			store := adoptSparse(ctx.T, "sparse-first")
+			store := adoptSparse(ctx, "sparse-first")
 			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 1}, "sparse-first")
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
@@ -2586,7 +2587,7 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 		})
 
 		s.It("a missing middle adopted event fails", func(ctx *specs.Context) {
-			store := adoptSparse(ctx.T, "sparse-middle")
+			store := adoptSparse(ctx, "sparse-middle")
 			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 5}, "sparse-middle")
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
@@ -2595,7 +2596,7 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 		})
 
 		s.It("a receipt whose recorded predecessor was altered fails", func(ctx *specs.Context) {
-			store := adoptSparse(ctx.T, "sparse-tampered")
+			store := adoptSparse(ctx, "sparse-tampered")
 			adopted := replayEvents(ctx.T, store, target, "sparse-tampered", 1, math.MaxUint64, 10)
 			ctx.Expect(adopted).To(specs.HaveLen(3))
 			tampered, ok := proto.Clone(adopted[2]).(*egopb.Event)
