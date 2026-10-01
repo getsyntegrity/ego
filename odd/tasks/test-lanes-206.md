@@ -49,17 +49,17 @@ The decisions from spec 1 stay: no new `go.mod`, no build tags, and selection by
 - [x] **T2 `cluster` and `race` jobs.** Add both jobs with the zero-count guard, the triggers, timeouts and the `ci-ok` entry. Check: `actionlint`; the guard script tested locally on a zero-test and a non-zero JSON input. Route: delegated writer.
 - [x] **T3 Parity per lane.** For each package, run normal (`-skip`) and cluster (`-run`) locally without `-race`, show that the counts add up to 1402, and record it here. Route: delegated writer.
 - [x] **T4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
-- [ ] **T5 CI evidence and #206.** Push the temporary commit, record the `race` and `cluster` run links, revert, check that the final diff is clean, and comment on #206. Route: inline (parent).
+- [x] **T5 CI evidence and #206.** Push the temporary commit, record the `race` and `cluster` run links, revert, check that the final diff is clean, and comment on #206. Route: inline (parent).
 
 ## Progress and evidence
 
 - **T1 done** (commit `ffa8df1`). Route: delegated writer. `ci.yml` gets one workflow-level variable, `CLUSTER_TESTS: "^TestCluster"`, used by every lane so the regex lives in one place. The shard step adds `-skip "$CLUSTER_TESTS"` after the optional `-run "$RUN"`: for a split package Go applies both, `-run` selects the shard's share and `-skip` removes the cluster tests from it. `test-matrix.sh` reads the same variable (default `^TestCluster`) and drops matching names from the `go test -list` result before it builds the bins, so a split package never distributes a cluster test and the rule "every listed test lands in exactly one shard" covers exactly the tests the shards run. An empty `CLUSTER_TESTS` turns the filter off. If a package had only cluster tests, the filtered list is empty and the package stays whole, where `-skip` leaves nothing to run.
-  - Proof (`/home/pablog/.claude/jobs/e070bb18/tmp/matrixproof.sh`): a crafted timing file makes `engine` a 400 s package (cluster tests 20 s each) and the real script splits it into 5 shards out of 7. Default run: 205 tests listed, 8 cluster, 197 non-cluster; no cluster name appears in any shard's `-run` pattern; all 197 non-cluster tests are in exactly one shard; the shards execute 0 cluster tests. Control with `CLUSTER_TESTS=""`: all 8 cluster tests are distributed (the filter is what removes them).
+  - Proof (a one-off local harness that feeds `.github/scripts/test-matrix.sh` a crafted `.test-timings` file): a crafted timing file makes `engine` a 400 s package (cluster tests 20 s each) and the real script splits it into 5 shards out of 7. Default run: 205 tests listed, 8 cluster, 197 non-cluster; no cluster name appears in any shard's `-run` pattern; all 197 non-cluster tests are in exactly one shard; the shards execute 0 cluster tests. Control with `CLUSTER_TESTS=""`: all 8 cluster tests are distributed (the filter is what removes them).
   - `-run` plus `-skip` really compose: `go test -run '^(TestEngineClusterKindsExposesEgoActors|TestClusterEngineNeutralBehaviors)$' -skip '^TestCluster' ./engine` ran only the first (`--- PASS: TestEngineClusterKindsExposesEgoActors`). `actionlint ci.yml`: clean.
   - Decision on `test (min)`: it still runs everything, cluster tests included. It is the only job that runs them with the minimum Go version, and the only full run of a `hotfix/*` PR to `main`, where the cluster job does not run. Its cost is unchanged. A comment in `ci.yml` says so. `test-report` timings now come from shards that no longer run the cluster tests (about 58 s of `engine`), so the next plan splits on the non-cluster time.
 - **T2 done** (commit `8642aa6`). Route: delegated writer. Jobs `cluster` and `race` added before `unit-gate`, both with the `inttest` condition verbatim, `needs: plan`, no services, and both listed in `ci-ok`; header comments updated. `cluster` runs `go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./engine/ ./compose/goakt/...` into `$RUNNER_TEMP/cluster.json`, keeps the exit status, counts the distinct top-level passing `TestCluster*` tests with `jq`, writes a step summary, fails on a non-zero status or on zero tests, and uploads `cluster-results`. `race` runs `go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS"` on the 11 in-scope packages (`go list` of the six patterns returns the same 11 packages as the spec 1 inventory); its comment says the cluster tests are out of scope under `-race`.
-  - Guard proof (`/home/pablog/.claude/jobs/e070bb18/tmp/guardproof.sh` extracts the real `run:` block from `ci.yml`, replaces only the `go test` line with a fixture copy, and runs it with `bash -eo pipefail`): a JSON with no top-level `TestCluster*` pass (only a subtest, a non-cluster test, a package event and a non-JSON line) printed `0 top-level ... passed` and `::error::the cluster lane ran no top-level ^TestCluster test`, exit 1. The real `go test -json -run '^TestCluster'` output printed `9 top-level ... passed` and exit 0. The same real output with `go test` status 1 printed `::error::go test failed in the cluster lane (exit status 1)`, exit 1. `actionlint ci.yml`: clean.
-- **T3 done.** Route: delegated writer. Per lane, no `-race`, `go test -count=1 -json` over the 11 packages (`/home/pablog/.claude/jobs/e070bb18/tmp/lane.sh`, counted by `c206/count.py`, set comparison by `c206/lanecheck.py`). All three runs exit 0 and no test failed or skipped; no flake appeared, so no re-run was needed.
+  - Guard proof (a one-off local harness that extracts the real `run:` block of the `cluster` job from `ci.yml`, replaces only its `go test` line with a copy of a fixture JSON, and runs it with `bash -eo pipefail`): a JSON with no top-level `TestCluster*` pass (only a subtest, a non-cluster test, a package event and a non-JSON line) printed `0 top-level ... passed` and `::error::the cluster lane ran no top-level ^TestCluster test`, exit 1. The real `go test -json -run '^TestCluster'` output printed `9 top-level ... passed` and exit 0. The same real output with `go test` status 1 printed `::error::go test failed in the cluster lane (exit status 1)`, exit 1. `actionlint ci.yml`: clean.
+- **T3 done.** Route: delegated writer. Per lane, no `-race`, `go test -count=1 -json` over the 11 packages, counted with `.github/scripts/count-tests.sh` (versioned in #286). The set comparison checked that the sorted test names of the two lanes are disjoint and that their union equals the unfiltered run. All three runs exit 0 and no test failed or skipped; no flake appeared, so no re-run was needed.
 
   | package | normal (`-skip`) | cluster (`-run`) | sum | baseline |
   |---|---|---|---|---|
@@ -81,6 +81,45 @@ The decisions from spec 1 stay: no new `go.mod`, no build tags, and selection by
 
 - **T4 done.** Route: delegated writer. `docs/ci.md`: job table rows for `plan`/`test`, `test (min)`, and new rows for `cluster` and `race`; the sentence "the race detector is not used anywhere" is corrected; "Slow packages" explains how `-run` and `-skip` compose; a new "Test lanes" section holds the lane table (what runs, and when: feature PRs, push to `develop`, release PR, hotfix PR, dispatch), the `TestCluster` naming rule with the `cluster-name` gate rule and its blind spots, the reason for the lane, why `test (min)` does not skip, who fixes a red post-merge lane (the `inttest` rule), and the `-race` gap. `docs/testing/go-specs.md`: a "Writing a cluster test" section. Check (structural readback): every internal link resolves to an existing heading (`ci.md#test-lanes`, `testing/go-specs.md#writing-a-cluster-test`), the tables render with a constant column count, and the facts match `ci.yml` (conditions, packages, timeouts).
 
+## How to rerun the per-lane counts
+
+From the repository root, without `-race`:
+
+```sh
+P="./engine ./internal/engine/... ./internal/projectionrunner ./compose/goakt/... ./internal/extensions ./migration"
+.github/scripts/count-tests.sh -skip '^TestCluster' $P                           # normal:  top=395 sub=967 total=1362
+.github/scripts/count-tests.sh -run '^TestCluster' ./engine ./compose/goakt/...  # cluster: top=9 sub=31 total=40
+.github/scripts/count-tests.sh $P                                                # all:     top=404 sub=998 total=1402
+```
+
+## CI evidence (T5)
+
+`workflow_dispatch` is only offered for workflows on the default branch, and `ci.yml` is not on `main` yet. So, as agreed in review, the evidence comes from a temporary commit:
+
+- **Temporary commit** `6496b46`, `ci(tmp): run race and cluster on this PR for evidence (#206), reverted next`. It only added `github.event_name == 'pull_request' ||` to the `if:` of `cluster` and `race`.
+- **Run** https://github.com/getsyntegrity/ego/actions/runs/36941277783 at `6496b46`, green.
+  - `cluster`: `9 top-level ^TestCluster tests passed (go test exit status 0)`.
+  - `race`: all 11 packages report `ok`, with **0** `WARNING: DATA RACE`.
+
+    | Package | Time |
+    |---|---|
+    | `engine` | 7.8s |
+    | `internal/engine/durablestate` | 1.3s |
+    | `internal/engine/enginetest` | 1.0s |
+    | `internal/engine/eventsource` | 22.9s |
+    | `internal/engine/projection` | 6.1s |
+    | `internal/engine/protocol` | 1.0s |
+    | `internal/engine/saga` | 13.1s |
+    | `internal/projectionrunner` | 2.2s |
+    | `compose/goakt` | 1.1s |
+    | `internal/extensions` | 1.1s |
+    | `migration` | 1.1s |
+
+  - `ci-ok`: green.
+- **Revert** `7db17b6`, in its own commit. The diff of `.github/workflows/ci.yml` between `6496b46~1` and the branch head is empty, so `ci.yml` carries no trace of the temporary change. The squash merge also removes it from the history of `develop`.
+
+No race was found, so no separate issue was needed.
+
 ## Next step
 
-T5 (parent): temporary `pull_request` commit for `cluster` and `race`, run links, revert, comment on #206. Open point for the parent: the temporary commit must add `pull_request` to the `if:` of both jobs; the PR targets `develop`, so its condition needs to be true for a feature PR.
+Review and merge #286, then this PR.
