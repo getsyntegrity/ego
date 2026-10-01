@@ -24,7 +24,6 @@ package eventsource
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,8 +31,6 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -49,13 +46,8 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/encryption"
 	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
-	mockencryption "github.com/getsyntegrity/ego/mocks/encryption"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -498,132 +490,67 @@ func TestEventSourcedActor(t *testing.T) {
 // runtime without crossing the trust boundary; see TestSagaFailsClosed...
 // in saga_test.go for the end-to-end demonstration).
 func TestEventSourcedActorTenancyGate(t *testing.T) {
-	t.Run("non-batched: missing TenantContext blocks HandleCommand and persistence", func(t *testing.T) {
-		ctx := context.TODO()
+	// The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("non-batched: missing TenantContext blocks HandleCommand and persistence", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			// No TenantContext attached: this is exactly what a caller that
+			// bypasses Engine.SendCommand (e.g. a saga's context.Background()
+			// dispatch, documented in #54) looks like from the actor's side.
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-		// No TenantContext attached: this is exactly what a caller that
-		// bypasses Engine.SendCommand (e.g. a saga's context.Background()
-		// dispatch, documented in #54) looks like from the actor's side.
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			_, wantErr := tenancy.Require(context.Background())
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+			// HandleCommand must never run without an attached TenantContext
+			ctx.Expect(behavior.InvocationCount()).ToEqual(0)
 
-		_, wantErr := tenancy.Require(context.Background())
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
+			// no event may be persisted when the gate blocks the command
+			ctx.Expect(latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()).To(specs.BeNil())
+		})
 
-		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
+		s.It("batched: missing TenantContext blocks HandleCommand before flushBatch is ever reached", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
+			// A short flush window with a threshold that is never reached by a
+			// single command: if the gate failed to block the command and
+			// flushBatch ran, it would still take at least this long, giving the
+			// assertion below a real window to catch a regression.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 200 * time.Millisecond,
+			}
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("batched: missing TenantContext blocks HandleCommand before flushBatch is ever reached", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		// A short flush window with a threshold that is never reached by a
-		// single command: if the gate failed to block the command and
-		// flushBatch ran, it would still take at least this long, giving the
-		// assertion below a real window to catch a regression.
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 200 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			_, wantErr := tenancy.Require(context.Background())
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "expected an error reply because no TenantContext was attached")
+			// HandleCommand must never run without an attached TenantContext
+			ctx.Expect(behavior.InvocationCount()).ToEqual(0)
 
-		_, wantErr := tenancy.Require(context.Background())
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
-
-		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
-
-		// Give any wrongly-scheduled flush timer time to fire, then confirm
-		// nothing was ever written: flushBatch's own context.Background()
-		// call (T4-B, out of scope here) must never even be reached.
-		pause.For(500 * time.Millisecond)
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no event may be persisted when the gate blocks the command")
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+			// Watch for 2.5 flush windows: a wrongly-scheduled flush timer would
+			// fire inside them, and the store must stay empty throughout.
+			// flushBatch's own context.Background() call (T4-B, out of scope here)
+			// must never even be reached.
+			ctx.Consistently(latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID), specs.BeNil(),
+				specs.WithTimeout(500*time.Millisecond), specs.WithInterval(pollInterval))
+		})
 	})
 }
 
@@ -685,104 +612,62 @@ func TestEventSourcedActorVerifyTenantForPersist(t *testing.T) {
 // context.Background() Ask is ever reached — proving this check is
 // independent from, and additional to, T4-A.
 func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a second tenant in the same batch cycle", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			// A high threshold that a single command never reaches, and a short
+			// flush window: this test only cares about the append-time check, not
+			// any flush behavior, but the first command's reply is still deferred
+			// until its cycle flushes by timer, so the window must stay well under
+			// the Ask timeouts used below.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(eventStore),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	// A high threshold that a single command never reaches, and a short
-	// flush window: this test only cares about the append-time check, not
-	// any flush behavior, but the first command's reply is still deferred
-	// until its cycle flushes by timer, so the window must stay well under
-	// the Ask timeouts used below.
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// The first command's reply is deferred (stashed) until its batch cycle
+			// flushes by timer, since the threshold is never reached by one command
+			// alone: send it in the background and let it run concurrently with the
+			// second command below, exactly as it would for two real concurrent
+			// callers sharing a batch cycle.
+			first := askInBackground(attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Wait until the first command has been received, passed the pre-handler
+			// gate and run HandleCommand. The actor handles its messages one at a
+			// time, so it has recorded tenant A in the batch buffer before the
+			// second command, for a different tenant, is read from the mailbox.
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.CreateAccount{AccountBalance: 10})
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// a second command for a different tenant in the same batch cycle must be rejected
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
+			// the first command of the batch cycle must succeed once its own cycle flushes
+			stateReplyOf(ctx, first.await(ctx))
 
-	// The first command's reply is deferred (stashed) until its batch cycle
-	// flushes by timer, since the threshold is never reached by one command
-	// alone: send it in the background and let it run concurrently with the
-	// second command below, exactly as it would for two real concurrent
-	// callers sharing a batch cycle.
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
-
-	// Give the first command time to be received, pass the pre-handler gate,
-	// and be appended to the batch buffer (recording tenant A) before the
-	// second command — for a different tenant — is sent into the same cycle.
-	pause.For(200 * time.Millisecond)
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 10}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a second command for a different tenant in the same batch cycle must be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
-
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
-		"the first command of the batch cycle must succeed once its own cycle flushes")
-
-	// Exactly the first, tenant-A command's event was ever persisted: the
-	// rejected tenant-B command never reached the buffer at all.
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// Exactly the first, tenant-A command's event was ever persisted: the
+			// rejected tenant-B command never reached the buffer at all.
+			latest := latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()
+			ctx.Expect(latest).To(specs.Satisfy("is the event at sequence 1", func(v any) bool {
+				event, ok := v.(*egopb.Event)
+				return ok && event != nil && event.GetSequenceNumber() == 1
+			}))
+		})
+	})
 }
 
 // TestEventSourcedActorResetBatchDoesNotClearActorTenant covers design.md
@@ -797,91 +682,50 @@ func TestEventSourcedActorBatchTenantHomogeneity(t *testing.T) {
 // actorTenant, seeded by the first cycle's persist, survives resetBatch and
 // is compared against every later command for this actor's entire lifetime.
 func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("keeps the actor tenant across batch cycles", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   1,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			ctxA := attachTenant(ctx, tenantA)
+			ctxB := attachTenant(ctx, tenantB)
 
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   1,
-		BatchFlushWindow: time.Second,
-	}
+			// First cycle: tenant A. BatchThreshold==1 drives this all the way
+			// through flush, reply, and resetBatch before the Ask returns. The
+			// first cycle's only command must succeed.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Second cycle: tenant B, a brand new batch cycle. actorTenant (seeded
+			// as tenant A by the first cycle's persist) is NOT cleared by
+			// resetBatch, so this cross-tenant command must be rejected, even
+			// though it is the first command of its own, freshly reset cycle. Ask
+			// itself must not fail; the rejection is carried in the CommandReply.
+			reply := askWith(ctx, ctxB, pid, &testpb.CreateAccount{AccountBalance: 10})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	// First cycle: tenant A. BatchThreshold==1 drives this all the way
-	// through flush, reply, and resetBatch before the Ask returns.
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the first cycle's only command must succeed")
-
-	// Second cycle: tenant B, a brand new batch cycle. actorTenant (seeded
-	// as tenant A by the first cycle's persist) is NOT cleared by
-	// resetBatch, so this cross-tenant command must be rejected — even
-	// though it is the first command of its own, freshly reset cycle.
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreateAccount{AccountBalance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok,
-		"a different tenant's command in a brand new batch cycle must still be "+
-			"rejected against actorTenant, seeded by the previous, already-flushed cycle")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	// A third command from the SAME tenant (A) that established actorTenant
-	// must still succeed in its own brand new batch cycle: actorTenant
-	// surviving resetBatch is a cross-tenant guard, not a "one cycle only"
-	// restriction on the tenant that originally established it.
-	reply, err = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 20}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the tenant that established actorTenant must still succeed across later batch cycles")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// A third command from the SAME tenant (A) that established actorTenant
+			// must still succeed in its own brand new batch cycle: actorTenant
+			// surviving resetBatch is a cross-tenant guard, not a "one cycle only"
+			// restriction on the tenant that originally established it.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.CreateAccount{AccountBalance: 20}))
+		})
+	})
 }
 
 // TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant is the
@@ -896,116 +740,71 @@ func TestEventSourcedActorResetBatchDoesNotClearActorTenant(t *testing.T) {
 // invocation is acceptable: the check must gate BEFORE HandleCommand runs,
 // exactly like the T4-A pre-handler gate does for a missing tenant.
 func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a zero-event command of another tenant before HandleCommand runs", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			eventStore := connectedEventsStore(ctx)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			// A high threshold that tenant A's single command never reaches on its
+			// own, so its batch cycle (and batchTenant) stays open when tenant B's
+			// command arrives.
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(eventStore),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	// A high threshold that tenant A's single command never reaches on its
-	// own, so its batch cycle (and batchTenant) stays open when tenant B's
-	// command arrives.
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// Tenant A starts the batch: this command produces one event, so
+			// batchTenant becomes A and the batch stays open (threshold not
+			// reached). Its reply is stashed until the cycle flushes by timer, so
+			// send it in the background exactly like the homogeneity test above.
+			first := askInBackground(attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Wait until tenant A's command has been received, passed the
+			// pre-handler gate and run HandleCommand. The actor handles its
+			// messages one at a time, so it has appended it to the batch (recording
+			// batchTenant == A) before tenant B's command is sent into the same
+			// open cycle. Tenant A's command must have run HandleCommand once.
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// Tenant B sends a command whose handler would produce zero events,
+			// a genuine no-op and not an error, against the same actor and
+			// persistence ID, while tenant A's batch is still open. Ask itself must
+			// not fail; the rejection is carried in the CommandReply.
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.TestNoEvent{})
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// rejection must be the fail-closed tenant error VerifyUnchanged
+			// produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
 
-	// Tenant A starts the batch: this command produces one event, so
-	// batchTenant becomes A and the batch stays open (threshold not
-	// reached). Its reply is stashed until the cycle flushes by timer, so
-	// send it in the background exactly like the homogeneity test above.
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
+			// The decisive assertion: tenant B's HandleCommand must never have run.
+			// Before the Blocker 3 fix, it did run (against tenant A's batchState)
+			// before the zero-event early-return path replied; this proves the
+			// gate now runs first.
+			ctx.Expect(behavior.InvocationCount()).ToEqual(1)
 
-	// Give tenant A's command time to be received, pass the pre-handler
-	// gate, run HandleCommand, and be appended to the batch (recording
-	// batchTenant == A) before tenant B's command is sent into the same
-	// open cycle.
-	pause.For(200 * time.Millisecond)
-	invocationsBeforeB := behavior.InvocationCount()
-	require.EqualValues(t, 1, invocationsBeforeB, "tenant A's command must have already run HandleCommand once")
+			// Tenant A's in-flight batch must be untouched by B's rejected attempt:
+			// let A's cycle flush (by timer) and confirm it still succeeds and
+			// persists exactly A's one event, uncontaminated by B's attempt.
+			stateReplyOf(ctx, first.await(ctx))
 
-	// Tenant B sends a command whose handler would produce zero events —
-	// a genuine no-op, not an error — against the same actor/persistence
-	// ID, while tenant A's batch is still open.
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxB, pid, &testpb.TestNoEvent{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a zero-event command for a different tenant than the open batch must still be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	// The decisive assertion: tenant B's HandleCommand must never have run.
-	// Before the Blocker 3 fix, it did run (against tenant A's batchState)
-	// before the zero-event early-return path replied — this proves the
-	// gate now runs first.
-	assert.EqualValues(t, invocationsBeforeB, behavior.InvocationCount(),
-		"HandleCommand must not execute for a cross-tenant command while a different tenant's batch is open, even if it would have produced zero events")
-
-	// Tenant A's in-flight batch must be untouched by B's rejected attempt:
-	// let A's cycle flush (by timer) and confirm it still succeeds and
-	// persists exactly A's one event, uncontaminated by B's attempt.
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply(),
-		"tenant A's batch must still succeed once its own cycle flushes, unaffected by tenant B's rejected attempt")
-
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	latest, err := eventStore.GetLatestEvent(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber(),
-		"exactly tenant A's one event was persisted; tenant B's rejected attempt contributed nothing")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			latest := latestTenantEvent(eventStore, tenantScopeOf(ctx, "acme"), persistenceID)()
+			ctx.Expect(latest).To(specs.Satisfy("is the event at sequence 1", func(v any) bool {
+				event, ok := v.(*egopb.Event)
+				return ok && event != nil && event.GetSequenceNumber() == 1
+			}))
+		})
+	})
 }
 
 // TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant is the
@@ -1015,74 +814,35 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventCrossTenant(t *testing
 // processAndBatch — the Blocker 3 fix's pre-handler homogeneity check must
 // not reject a same-tenant command.
 func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("accepts a zero-event command of the same tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeEventSourcedBehavior(persistenceID)
+			entityCfg := &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: time.Second,
+			}
 
-	require.NoError(t, eventStore.Connect(ctx))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, entityCfg, extensions.NewEntityTenantScope("acme"))
 
-	eventStream := eventstream.New()
+			ctxA := attachTenant(ctx, tenantContextFor(ctx, "acme"))
+			first := askInBackground(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	entityCfg := &extensions.EntityConfig{
-		BatchThreshold:   100,
-		BatchFlushWindow: time.Second,
-	}
+			// the first command must be in the open batch before the second one is sent
+			ctx.Eventually(invocations(behavior), specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Same tenant, zero-event command, into the same still-open batch: it
+			// must still succeed via the cached-state-reply path.
+			stateReplyOf(ctx, askWith(ctx, ctxA, pid, &testpb.TestNoEvent{}))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, entityCfg, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(),
-		goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	firstDone := make(chan struct{})
-	var firstReply any
-	var firstErr error
-	go func() {
-		defer close(firstDone)
-		firstReply, firstErr = goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	}()
-
-	pause.For(200 * time.Millisecond)
-
-	// Same tenant, zero-event command, into the same still-open batch.
-	reply, err := goakt.Ask(ctxA, pid, &testpb.TestNoEvent{}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"a same-tenant zero-event command must still succeed via the cached-state-reply path")
-
-	<-firstDone
-	require.NoError(t, firstErr)
-	firstCommandReply, ok := firstReply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), firstCommandReply.GetReply())
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			stateReplyOf(ctx, first.await(ctx))
+		})
+	})
 }
 
 func TestEventSourcedActorErrorPaths(t *testing.T) {
@@ -1570,1894 +1330,835 @@ func (a *noopEventAdapter) Adapt(event *anypb.Any, _ uint64) (*anypb.Any, error)
 // write is unsettled (phasePersisting/phaseDirectReplying), and it must
 // never receive a persist failure addressed to a different command.
 func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
-	type asyncReply struct {
-		reply any
-		err   error
-	}
+	// These cases need the actor system and keep one write in flight on purpose.
+	// The empty Describe name keeps the old subtest names. The time.After guards
+	// are reply timeouts: they only turn a hung actor into a failure, they never
+	// pace the case.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("read during persist waits for confirmation then returns new state", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	t.Run("read during persist waits for confirmation then returns new state", func(t *testing.T) {
-		ctx := context.TODO()
+			// The first write (the create) is confirmed at once, the second (the
+			// credit) is held in flight until the case releases it.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(nil)).Times(1)
 
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
 
-		started := make(chan struct{})
-		release := make(chan struct{})
+			createState := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+			ctx.Expect(createState.GetSequenceNumber()).ToEqual(uint64(1))
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(nil).Once()
+			credit := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "the credit write to enter phasePersisting")
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
+			read := askInBackground(context.Background(), pid, &egopb.GetStateCommand{})
 
-		require.NoError(t, actorSystem.Start(ctx))
+			// Wait until the GetStateCommand has stashed itself behind the in-flight
+			// write: the stash then holds the credit command and the read. Only
+			// then let that write complete.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		createState := reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, createState.StateReply.GetSequenceNumber())
-
-		creditDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			creditDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
-		}
-
-		stateDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-			stateDone <- asyncReply{r, e}
-		}()
-
-		// give the GetStateCommand time to reach the mailbox and stash itself
-		// behind the in-flight write before we let that write complete.
-		pause.For(300 * time.Millisecond)
-
-		select {
-		case <-stateDone:
-			t.Fatal("GetStateCommand replied before the in-flight persist write was confirmed")
-		default:
-		}
-
-		close(release)
-
-		var credit asyncReply
-		select {
-		case credit = <-creditDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit command reply")
-		}
-		require.NoError(t, credit.err)
-		creditState := credit.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, creditState.StateReply.GetSequenceNumber())
-
-		var got asyncReply
-		select {
-		case got = <-stateDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the deferred GetStateCommand reply")
-		}
-		require.NoError(t, got.err)
-		commandReply := got.reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-		stateReply := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, stateReply.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		require.NoError(t, stateReply.StateReply.GetState().UnmarshalTo(resultingState))
-		assert.Equal(t, 600.00, resultingState.GetAccountBalance())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("two concurrent commands preserve order and correct recipient", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		started := make(chan struct{})
-		release := make(chan struct{})
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-
-		aDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			aDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command A to enter phasePersisting")
-		}
-
-		bDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 5*time.Second)
-			bDone <- asyncReply{r, e}
-		}()
-
-		// give command B time to arrive and stash behind the in-flight write.
-		pause.For(300 * time.Millisecond)
-		close(release)
-
-		var a, b asyncReply
-		select {
-		case a = <-aDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command A's reply")
-		}
-		select {
-		case b = <-bDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for command B's reply")
-		}
-
-		require.NoError(t, a.err)
-		aState := a.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, aState.StateReply.GetSequenceNumber())
-		aAccount := new(testpb.Account)
-		require.NoError(t, aState.StateReply.GetState().UnmarshalTo(aAccount))
-		assert.Equal(t, 600.00, aAccount.GetAccountBalance())
-
-		require.NoError(t, b.err)
-		bState := b.reply.(*egopb.CommandReply).GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 3, bState.StateReply.GetSequenceNumber())
-		bAccount := new(testpb.Account)
-		require.NoError(t, bState.StateReply.GetState().UnmarshalTo(bAccount))
-		assert.Equal(t, 650.00, bAccount.GetAccountBalance())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("persistence error reaches the originating command only", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		started := make(chan struct{})
-		release := make(chan struct{})
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).
-			Run(func(_ context.Context, _ persistence.Scope, _ []*egopb.Event, _ persistence.WritePrecondition) {
-				close(started)
-				<-release
-			}).
-			Return(assert.AnError).Once()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		_, err = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-
-		creditDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-			creditDone <- asyncReply{r, e}
-		}()
-
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit write to enter phasePersisting")
-		}
-
-		stateDone := make(chan asyncReply, 1)
-		go func() {
-			r, e := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-			stateDone <- asyncReply{r, e}
-		}()
-
-		// give the deferred read time to arrive and stash behind the failing write.
-		pause.For(300 * time.Millisecond)
-		close(release)
-
-		var credit asyncReply
-		select {
-		case credit = <-creditDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for the credit command reply")
-		}
-		require.NoError(t, credit.err)
-		creditReply := credit.reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), creditReply.GetReply())
-		errorReply := creditReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Contains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error())
-
-		// The originating command's persist failure sets directShutdown, so the
-		// actor stops itself (pre-existing fail-fast behavior, unrelated to this
-		// fix) before it can dispatch the redelivered, deferred GetStateCommand.
-		// The contract this test protects is narrower than "the deferred read
-		// gets a normal reply": it must never receive the error reply meant for
-		// the command that actually failed. An Ask timeout against a
-		// now-stopped actor satisfies that (it is clearly not the mistaken
-		// error), whereas an ErrorReply carrying assert.AnError's message would
-		// prove the two commands' responses got cross-wired.
-		var deferred asyncReply
-		select {
-		case deferred = <-stateDone:
-		case <-time.After(8 * time.Second):
-			t.Fatal("timed out waiting for the deferred GetStateCommand to settle")
-		}
-		if deferred.err == nil {
-			deferredReply := deferred.reply.(*egopb.CommandReply)
-			if errorReply, ok := deferredReply.GetReply().(*egopb.CommandReply_ErrorReply); ok {
-				assert.NotContains(t, errorReply.ErrorReply.GetMessage(), assert.AnError.Error(),
-					"deferred GetStateCommand must not receive the originating command's persist error")
+			select {
+			case <-read.done:
+				ctx.T.Fatal("GetStateCommand replied before the in-flight persist write was confirmed")
+			default:
 			}
-		}
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			gate.open()
+
+			credit.awaitWithin(ctx, askTimeout, "the credit command reply")
+			creditState := stateReplyOf(ctx, credit.await(ctx))
+			ctx.Expect(creditState.GetSequenceNumber()).ToEqual(uint64(2))
+
+			read.awaitWithin(ctx, askTimeout, "the deferred GetStateCommand reply")
+			readState := stateReplyOf(ctx, read.await(ctx))
+			expectAccountState(ctx, readState, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 600.00})
+		})
+
+		s.It("two concurrent commands preserve order and correct recipient", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			// The create is confirmed at once, command A is held in flight, and
+			// command B writes after it.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(nil)).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
+
+			ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+
+			a := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "command A to enter phasePersisting")
+
+			b := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50})
+
+			// Wait until command B has stashed behind the in-flight write: the stash
+			// then holds command A and command B.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			gate.open()
+
+			a.awaitWithin(ctx, askTimeout, "command A's reply")
+			b.awaitWithin(ctx, askTimeout, "command B's reply")
+
+			aState := stateReplyOf(ctx, a.await(ctx))
+			expectAccountState(ctx, aState, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 600.00})
+
+			bState := stateReplyOf(ctx, b.await(ctx))
+			expectAccountState(ctx, bState, 3, &testpb.Account{AccountId: persistenceID, AccountBalance: 650.00})
+		})
+
+		s.It("persistence error reaches the originating command only", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			// The create is confirmed at once, the credit write is held in flight and
+			// then fails.
+			gate := newWriteGate()
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
+			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Do(gate.hold(assert.AnError)).Times(1)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			gate.openOnCleanup(ctx)
+			pid := rig.spawn(ctx, behavior)
+
+			ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+
+			credit := askInBackground(context.Background(), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			gate.awaitStarted(ctx, "the credit write to enter phasePersisting")
+
+			read := askInBackground(context.Background(), pid, &egopb.GetStateCommand{})
+
+			// Wait until the deferred read has stashed behind the failing write: the
+			// stash then holds the credit command and the read.
+			ctx.Eventually(stashSize(pid), specs.Equal(uint64(2)),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			gate.open()
+
+			credit.awaitWithin(ctx, askTimeout, "the credit command reply")
+			creditMessage := errorReplyMessage(ctx, credit.await(ctx))
+			ctx.Expect(creditMessage).To(containsText(assert.AnError.Error()))
+
+			// The originating command's persist failure sets directShutdown, so the
+			// actor stops itself (pre-existing fail-fast behavior, unrelated to this
+			// fix) before it can dispatch the redelivered, deferred GetStateCommand.
+			// The contract this test protects is narrower than "the deferred read
+			// gets a normal reply": it must never receive the error reply meant for
+			// the command that actually failed. An Ask timeout against a
+			// now-stopped actor satisfies that (it is clearly not the mistaken
+			// error), whereas an ErrorReply carrying assert.AnError's message would
+			// prove the two commands' responses got cross-wired.
+			read.awaitWithin(ctx, 8*time.Second, "the deferred GetStateCommand to settle")
+			if read.err == nil {
+				deferred := read.await(ctx)
+				if _, ok := deferred.GetReply().(*egopb.CommandReply_ErrorReply); ok {
+					// the deferred GetStateCommand must not receive the originating command's persist error
+					ctx.Expect(deferred.GetErrorReply().GetMessage()).To(specs.Not(containsText(assert.AnError.Error())))
+				}
+			}
+		})
 	})
 }
 
 func TestEventSourcedActorBatch(t *testing.T) {
-	t.Run("sequential commands flush by timer", func(t *testing.T) {
-		ctx := context.TODO()
+	// These cases need the actor system: they spawn the real actor and its child
+	// writers in batch mode. They never sleep: a spawn waits until the actor
+	// reports itself running, a command waits for its reply (which batch mode
+	// defers until the cycle flushes), and what a child actor does after the
+	// reply (a snapshot) is polled. The empty Describe name keeps the old
+	// subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("sequential commands flush by timer", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		require.NoError(t, eventStore.Connect(ctx))
+			// the threshold is never reached, so each reply waits for the flush timer
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500})
 
-		eventStream := eventstream.New()
+			state = stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750})
+		})
 
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
+		s.It("concurrent commands flush by threshold", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   2,
+				BatchFlushWindow: 10 * time.Second,
+			})
+
+			// the flush window is far longer than the reply timeout: only the
+			// threshold can flush the two commands
+			replies := askAll(ctx, pid,
+				&testpb.CreateAccount{AccountBalance: 500},
+				&testpb.CreateAccount{AccountBalance: 300})
+			for _, reply := range replies {
+				stateReplyOf(ctx, reply)
+			}
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(2))
+		})
+
+		s.It("no-event command replies immediately in batch mode", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.TestNoEvent{}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(0))
+		})
+
+		s.It("error command replies immediately in batch mode", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			reply := ask(ctx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100})
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal("command sent to the wrong entity"))
+		})
+
+		s.It("batch with snapshot boundary crossing", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			snapshotStore := connectedSnapshotStore(ctx)
+
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewSnapshotStore(snapshotStore))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval: 2,
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(2))
+
+			// the snapshot writer child persists after the reply
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(2),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+		})
+
+		s.It("commands arriving during flush are stashed and processed", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   1,
+				BatchFlushWindow: time.Second,
+			})
+
+			const numCommands = 5
+
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 100}))
+
+			credits := make([]proto.Message, numCommands)
+			for i := range credits {
+				credits[i] = &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}
+			}
+			for _, reply := range askAll(ctx, pid, credits...) {
+				stateReplyOf(ctx, reply)
+			}
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, numCommands+1,
+				&testpb.Account{AccountId: persistenceID, AccountBalance: 100 + float64(numCommands)*10})
+		})
+
+		s.It("batch persist failure returns error replies and shuts down actor", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Return(assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   1,
+				BatchFlushWindow: time.Second,
+			})
+
+			errorReplyMessage(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
+
+		s.It("batch persist failure with telemetry records metrics and ends spans", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
+
+			ctrl := specmock.NewController(ctx)
+			expectStoreStartup(ctrl, persistenceID)
+			ctrl.Method("WriteEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Return(assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   1,
+				BatchFlushWindow: time.Second,
+			})
+
+			errorReplyMessage(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
+
+		s.It("batch mode with encryption failure in processAndBatch", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			eventStore := connectedEventsStore(ctx)
+
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Encrypt").
+				Expect(specmock.Any(), persistenceID, specmock.Any()).
+				Return(nil, "", assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
+				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
+			errorReplyMessage(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+		s.It("batch mode with telemetry traces commands", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		pause.For(time.Second)
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
+		})
 
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
+		s.It("batch mode with telemetry handles no-event command", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		resultingState := new(testpb.Account)
-		require.NoError(t, state.StateReply.GetState().UnmarshalTo(resultingState))
-		assert.EqualValues(t, 500, resultingState.GetAccountBalance())
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.TestNoEvent{}))
+		})
 
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
+		s.It("batch mode with telemetry handles error command", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		resultingState = new(testpb.Account)
-		require.NoError(t, state.StateReply.GetState().UnmarshalTo(resultingState))
-		assert.EqualValues(t, 750, resultingState.GetAccountBalance())
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("concurrent commands flush by threshold", func(t *testing.T) {
-		ctx := context.TODO()
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			errorReplyMessage(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100}))
+		})
 
-		require.NoError(t, eventStore.Connect(ctx))
+		s.It("batch mode with default flush window when only threshold is set", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		eventStream := eventstream.New()
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{BatchThreshold: 100})
 
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   2,
-			BatchFlushWindow: 10 * time.Second,
-		}
+			// one command never reaches the threshold: the default flush window flushes it
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
+		})
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+		s.It("unhandled non-command message in batch mode", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			ctx.Expect(goakt.Tell(context.Background(), pid, new(egopb.NoReply))).To(specs.BeNil())
+
+			// The mailbox is ordered: the command below is read after the unhandled
+			// message, so its reply proves the actor survived it.
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
+
+		s.It("batch mode with encryption failure and telemetry ends span", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
+
+			eventStore := connectedEventsStore(ctx)
+
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Encrypt").
+				Expect(specmock.Any(), persistenceID, specmock.Any()).
+				Return(nil, "", assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
+				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
+			errorReplyMessage(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+		s.It("multiple commands batch with telemetry covers reply span and timer dedup", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		pause.For(time.Second)
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		var wg sync.WaitGroup
-		replies := make([]any, 2)
-		errs := make([]error, 2)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   3,
+				BatchFlushWindow: 10 * time.Second,
+			})
 
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			replies[0], errs[0] = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[1], errs[1] = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 300}, 10*time.Second)
-		}()
+			replies := askAll(ctx, pid,
+				&testpb.CreateAccount{AccountBalance: 500},
+				&testpb.CreditAccount{AccountId: persistenceID, Balance: 100},
+				&testpb.CreditAccount{AccountId: persistenceID, Balance: 50})
+			for _, reply := range replies {
+				stateReplyOf(ctx, reply)
+			}
 
-		wg.Wait()
+			state := stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(3))
+		})
 
-		require.NoError(t, errs[0])
-		require.NoError(t, errs[1])
+		s.It("batch with snapshot and telemetry", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		for i, r := range replies {
-			cr := r.(*egopb.CommandReply)
-			require.IsType(t, new(egopb.CommandReply_StateReply), cr.GetReply(), "reply %d should be state reply", i)
-		}
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		stateReply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
+			snapshotStore := connectedSnapshotStore(ctx)
 
-		cr := stateReply.(*egopb.CommandReply)
-		sr := cr.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, sr.StateReply.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("no-event command replies immediately in batch mode", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.TestNoEvent{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 0, state.StateReply.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("error command replies immediately in batch mode", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Equal(t, "command sent to the wrong entity", errorReply.ErrorReply.GetMessage())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch with snapshot boundary crossing", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval: 2,
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
 				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		pause.For(time.Second)
-
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, snap)
-		assert.EqualValues(t, 2, snap.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("commands arriving during flush are stashed and processed", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   1,
-			BatchFlushWindow: time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-		pause.For(time.Second)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var wg sync.WaitGroup
-		const numCommands = 5
-		replies := make([]any, numCommands)
-		errs := make([]error, numCommands)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		wg.Add(numCommands)
-		for i := range numCommands {
-			go func(idx int) {
-				defer wg.Done()
-				replies[idx], errs[idx] = goakt.Ask(ctx, pid,
-					&testpb.CreditAccount{AccountId: persistenceID, Balance: 10},
-					10*time.Second)
-			}(i)
-		}
-
-		wg.Wait()
-
-		for i := range numCommands {
-			require.NoError(t, errs[i], "command %d failed", i)
-			cr := replies[i].(*egopb.CommandReply)
-			require.IsType(t, new(egopb.CommandReply_StateReply), cr.GetReply(), "command %d should be state reply", i)
-		}
-
-		stateReply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-
-		cr := stateReply.(*egopb.CommandReply)
-		sr := cr.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, numCommands+1, sr.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		require.NoError(t, sr.StateReply.GetState().UnmarshalTo(resultingState))
-		assert.EqualValues(t, 100+float64(numCommands)*10, resultingState.GetAccountBalance())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch persist failure returns error replies and shuts down actor", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   1,
-			BatchFlushWindow: time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch persist failure with telemetry records metrics and ends spans", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   1,
-			BatchFlushWindow: time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with encryption failure in processAndBatch", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with telemetry traces commands", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with telemetry handles no-event command", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.TestNoEvent{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with telemetry handles error command", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with default flush window when only threshold is set", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold: 100,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("unhandled non-command message in batch mode", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, new(egopb.NoReply))
-		require.NoError(t, err)
-
-		pause.For(500 * time.Millisecond)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch mode with encryption failure and telemetry ends span", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("multiple commands batch with telemetry covers reply span and timer dedup", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   3,
-			BatchFlushWindow: 10 * time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var wg sync.WaitGroup
-		replies := make([]any, 3)
-		errs := make([]error, 3)
-
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			replies[0], errs[0] = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[1], errs[1] = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[2], errs[2] = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 10*time.Second)
-		}()
-
-		wg.Wait()
-
-		for i, e := range errs {
-			require.NoError(t, e, "command %d failed", i)
-			cr := replies[i].(*egopb.CommandReply)
-			require.IsType(t, new(egopb.CommandReply_StateReply), cr.GetReply(), "command %d should be state reply", i)
-		}
-
-		stateReply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-
-		cr := stateReply.(*egopb.CommandReply)
-		sr := cr.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 3, sr.StateReply.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	t.Run("batch with snapshot and telemetry", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval: 2,
-			BatchThreshold:   2,
-			BatchFlushWindow: 10 * time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var wg sync.WaitGroup
-		replies := make([]any, 2)
-		errs := make([]error, 2)
-
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			replies[0], errs[0] = goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[1], errs[1] = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 10*time.Second)
-		}()
-
-		wg.Wait()
-
-		require.NoError(t, errs[0])
-		require.NoError(t, errs[1])
-
-		for i, r := range replies {
-			cr := r.(*egopb.CommandReply)
-			require.IsType(t, new(egopb.CommandReply_StateReply), cr.GetReply(), "reply %d should be state reply", i)
-		}
-
-		pause.For(time.Second)
-
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, snap)
-		assert.EqualValues(t, 2, snap.GetSequenceNumber())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	// Test: batch trace spans are properly connected
-	//
-	// Verifies end-to-end trace context propagation through the batch processing
-	// pipeline when multiple commands are processed as a single batch.
-	//
-	// Setup:
-	//   - A real TracerProvider with an InMemoryExporter captures all emitted spans.
-	//   - The global TextMapPropagator is configured with W3C TraceContext + Baggage,
-	//     mirroring what Engine.Start does for the GoAkt context propagator
-	//     (otelContextPropagator) to inject/extract trace context across actor boundaries.
-	//   - Batch threshold is set to 3 with a long flush window so the batch flushes
-	//     only when the threshold is reached (not by timer).
-	//   - A parent span ("test.batch.parent") is created and its context is passed
-	//     through goakt.Ask to the actor, simulating an inbound traced request.
-	//
-	// Assertions:
-	//   - Exactly 3 "ego.command" spans are produced (one per batched command).
-	//   - Every command span shares the same TraceID as the parent span, proving
-	//     trace context flows from the caller through GoAkt into processAndBatch.
-	//   - Every command span's Parent.SpanID equals the parent span's SpanID,
-	//     proving direct parent-child linkage.
-	//   - Every command span has a non-zero EndTime, proving the span lifecycle
-	//     completes after replyFromBatch sends the pre-computed reply.
-	//   - Every command span carries the ego.persistence_id and ego.command_type
-	//     attributes set by processAndBatch.
-	//   - All command spans have distinct SpanIDs (no accidental reuse).
-	t.Run("batch trace spans are properly connected", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// Set up the global text map propagator the same way the Engine does.
-		// This is required for the GoAkt context propagator (otelContextPropagator)
-		// to correctly inject/extract trace context across actor boundaries.
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
-
-		// Create an in-memory span exporter so we can inspect recorded spans.
-		exporter := tracetest.NewInMemoryExporter()
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithSyncer(exporter),
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		)
-		defer func() { _ = tp.Shutdown(ctx) }()
-
-		tracer := tp.Tracer("ego-test")
-		meter := noop.NewMeterProvider().Meter("test")
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   3,
-			BatchFlushWindow: 10 * time.Second,
-		}
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(tracer, meter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// Create a parent span to verify that child spans are properly linked.
-		parentCtx, parentSpan := tracer.Start(ctx, "test.batch.parent")
-
-		var wg sync.WaitGroup
-		replies := make([]any, 3)
-		errs := make([]error, 3)
-
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			replies[0], errs[0] = goakt.Ask(parentCtx, pid, &testpb.CreateAccount{AccountBalance: 500}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[1], errs[1] = goakt.Ask(parentCtx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 10*time.Second)
-		}()
-		go func() {
-			defer wg.Done()
-			replies[2], errs[2] = goakt.Ask(parentCtx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 10*time.Second)
-		}()
-
-		wg.Wait()
-		parentSpan.End()
-
-		for i, e := range errs {
-			require.NoError(t, e, "command %d failed", i)
-			cr := replies[i].(*egopb.CommandReply)
-			require.IsType(t, new(egopb.CommandReply_StateReply), cr.GetReply(), "command %d should be state reply", i)
-		}
-
-		// Force-flush so all ended spans are exported.
-		require.NoError(t, tp.ForceFlush(ctx))
-
-		spans := exporter.GetSpans()
-
-		// Collect "ego.command" spans (one per batched command).
-		var commandSpans []tracetest.SpanStub
-		var parentStub *tracetest.SpanStub
-		for i := range spans {
-			switch spans[i].Name {
-			case "ego.command":
-				commandSpans = append(commandSpans, spans[i])
-			case "test.batch.parent":
-				parentStub = &spans[i]
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval: 2,
+				BatchThreshold:   2,
+				BatchFlushWindow: 10 * time.Second,
+			})
+
+			replies := askAll(ctx, pid,
+				&testpb.CreateAccount{AccountBalance: 500},
+				&testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
+			for _, reply := range replies {
+				stateReplyOf(ctx, reply)
 			}
-		}
 
-		require.NotNil(t, parentStub, "parent span should be exported")
-		require.Len(t, commandSpans, 3, "each command in the batch should produce an ego.command span")
+			// the snapshot writer child persists after the replies
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(2),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+		})
 
-		parentTraceID := parentStub.SpanContext.TraceID()
-		parentSpanID := parentStub.SpanContext.SpanID()
+		// Test: batch trace spans are properly connected
+		//
+		// Verifies end-to-end trace context propagation through the batch processing
+		// pipeline when multiple commands are processed as a single batch.
+		//
+		// Setup:
+		//   - A real TracerProvider with an InMemoryExporter captures all emitted spans.
+		//   - The global TextMapPropagator is configured with W3C TraceContext + Baggage,
+		//     mirroring what Engine.Start does for the GoAkt context propagator
+		//     (otelContextPropagator) to inject/extract trace context across actor boundaries.
+		//   - Batch threshold is set to 3 with a long flush window so the batch flushes
+		//     only when the threshold is reached (not by timer).
+		//   - A parent span ("test.batch.parent") is created and its context is passed
+		//     through goakt.Ask to the actor, simulating an inbound traced request.
+		//
+		// Assertions:
+		//   - Exactly 3 "ego.command" spans are produced (one per batched command).
+		//   - Every command span shares the same TraceID as the parent span, proving
+		//     trace context flows from the caller through GoAkt into processAndBatch.
+		//   - Every command span's Parent.SpanID equals the parent span's SpanID,
+		//     proving direct parent-child linkage.
+		//   - Every command span has a non-zero EndTime, proving the span lifecycle
+		//     completes after replyFromBatch sends the pre-computed reply.
+		//   - Every command span carries the ego.persistence_id and ego.command_type
+		//     attributes set by processAndBatch.
+		//   - All command spans have distinct SpanIDs (no accidental reuse).
+		s.It("batch trace spans are properly connected", func(ctx *specs.Context) {
+			recorder := newSpanRecorder(ctx)
 
-		for i, cs := range commandSpans {
-			// Assert: all command spans belong to the same trace as the parent.
-			assert.Equal(t, parentTraceID, cs.SpanContext.TraceID(),
-				"command span %d should share the parent trace ID", i)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-			// Assert: each command span is a direct child of the parent span.
-			assert.Equal(t, parentSpanID, cs.Parent.SpanID(),
-				"command span %d should be a child of the parent span", i)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(recorder.tracer, noop.NewMeterProvider().Meter("test")))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   3,
+				BatchFlushWindow: 10 * time.Second,
+			})
 
-			// Assert: the span has been ended (EndTime is set) after replyFromBatch.
-			assert.False(t, cs.EndTime.IsZero(),
-				"command span %d should be ended", i)
+			// Create a parent span to verify that child spans are properly linked.
+			parentCtx, parentSpan := recorder.tracer.Start(context.Background(), "test.batch.parent")
 
-			// Assert: required observability attributes are present.
-			attrMap := make(map[string]string)
-			for _, attr := range cs.Attributes {
-				attrMap[string(attr.Key)] = attr.Value.AsString()
+			replies := askAllWith(ctx, parentCtx, pid,
+				&testpb.CreateAccount{AccountBalance: 500},
+				&testpb.CreditAccount{AccountId: persistenceID, Balance: 100},
+				&testpb.CreditAccount{AccountId: persistenceID, Balance: 50})
+			parentSpan.End()
+			for _, reply := range replies {
+				stateReplyOf(ctx, reply)
 			}
-			assert.Equal(t, persistenceID, attrMap["ego.persistence_id"],
-				"command span %d should have ego.persistence_id attribute", i)
-			assert.NotEmpty(t, attrMap["ego.command_type"],
-				"command span %d should have ego.command_type attribute", i)
-		}
 
-		// Assert: each command span has a unique span ID (no accidental reuse).
-		spanIDs := make(map[trace.SpanID]struct{})
-		for _, cs := range commandSpans {
-			_, exists := spanIDs[cs.SpanContext.SpanID()]
-			assert.False(t, exists, "command spans should have unique span IDs")
-			spanIDs[cs.SpanContext.SpanID()] = struct{}{}
-		}
+			spans := recorder.spans(ctx)
 
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-	// Test: batch trace spans are ended on error
-	//
-	// Verifies that when HandleCommand returns an error the "ego.command" span
-	// is still created and properly ended, rather than being leaked.
-	//
-	// Setup:
-	//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
-	//   - A single CreditAccount command is sent with a wrong account ID,
-	//     causing HandleCommand to return an error inside processAndBatch.
-	//   - The parent span ("test.error.parent") provides the trace context.
-	//
-	// Assertions:
-	//   - Exactly 1 "ego.command" span is produced despite the error.
-	//   - The span has a non-zero EndTime, proving processAndBatch called
-	//     span.End() on the error path before sendErrorReply.
-	//   - The span shares the parent's TraceID (trace context propagated).
-	//   - The span's Parent.SpanID equals the parent span's SpanID
-	//     (direct parent-child linkage preserved even on failure).
-	t.Run("batch trace spans are ended on error", func(t *testing.T) {
-		ctx := context.TODO()
+			// Collect "ego.command" spans (one per batched command).
+			commandSpans := spansNamed(spans, "ego.command")
 
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
+			parent := findSpan(spans, "test.batch.parent")
+			ctx.Expect(parent).To(specs.Not(specs.BeNil()))
+			// each command in the batch should produce an ego.command span
+			ctx.Expect(commandSpans).To(specs.HaveLen(3))
 
-		exporter := tracetest.NewInMemoryExporter()
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithSyncer(exporter),
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		)
-		defer func() { _ = tp.Shutdown(ctx) }()
+			// all command spans belong to the same trace as the parent
+			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("shares the parent trace ID",
+				func(cs tracetest.SpanStub) bool { return cs.SpanContext.TraceID() == parent.SpanContext.TraceID() })))
 
-		tracer := tp.Tracer("ego-test")
-		meter := noop.NewMeterProvider().Meter("test")
+			// each command span is a direct child of the parent span
+			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("is a child of the parent span",
+				func(cs tracetest.SpanStub) bool { return cs.Parent.SpanID() == parent.SpanContext.SpanID() })))
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			// the span has been ended (EndTime is set) after replyFromBatch
+			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("is ended",
+				func(cs tracetest.SpanStub) bool { return !cs.EndTime.IsZero() })))
 
-		require.NoError(t, eventStore.Connect(ctx))
+			// required observability attributes are present
+			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("has the ego.persistence_id attribute",
+				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "ego.persistence_id") == persistenceID })))
+			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("has the ego.command_type attribute",
+				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "ego.command_type") != "" })))
 
-		eventStream := eventstream.New()
+			// each command span has a unique span ID (no accidental reuse)
+			spanIDs := make(map[trace.SpanID]struct{})
+			for _, cs := range commandSpans {
+				spanIDs[cs.SpanContext.SpanID()] = struct{}{}
+			}
+			ctx.Expect(spanIDs).To(specs.HaveLen(len(commandSpans)))
+		})
 
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
-		}
+		// Test: batch trace spans are ended on error
+		//
+		// Verifies that when HandleCommand returns an error the "ego.command" span
+		// is still created and properly ended, rather than being leaked.
+		//
+		// Setup:
+		//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
+		//   - A single CreditAccount command is sent with a wrong account ID,
+		//     causing HandleCommand to return an error inside processAndBatch.
+		//   - The parent span ("test.error.parent") provides the trace context.
+		//
+		// Assertions:
+		//   - Exactly 1 "ego.command" span is produced despite the error.
+		//   - The span has a non-zero EndTime, proving processAndBatch called
+		//     span.End() on the error path before sendErrorReply.
+		//   - The span shares the parent's TraceID (trace context propagated).
+		//   - The span's Parent.SpanID equals the parent span's SpanID
+		//     (direct parent-child linkage preserved even on failure).
+		s.It("batch trace spans are ended on error", func(ctx *specs.Context) {
+			recorder := newSpanRecorder(ctx)
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(recorder.tracer, noop.NewMeterProvider().Meter("test")))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			parentCtx, parentSpan := recorder.tracer.Start(context.Background(), "test.error.parent")
+
+			// Send a command that will fail (CreditAccount on non-existent account).
+			reply := askWith(ctx, parentCtx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100})
+			parentSpan.End()
+
+			errorReplyMessage(ctx, reply)
+
+			expectOneEndedCommandSpan(ctx, recorder.spans(ctx), "test.error.parent")
+		})
+
+		// Test: batch trace spans with no-event command are ended immediately
+		//
+		// Verifies that when HandleCommand returns zero events the "ego.command"
+		// span is ended immediately inside processAndBatch — it must not be
+		// deferred to the batch flush cycle, because the command is answered
+		// inline without entering the batch buffer.
+		//
+		// Setup:
+		//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
+		//   - A TestNoEvent command is sent, which the behavior handles by
+		//     returning an empty event slice.
+		//   - The parent span ("test.noevent.parent") provides the trace context.
+		//
+		// Assertions:
+		//   - Exactly 1 "ego.command" span is produced for the no-event command.
+		//   - The span has a non-zero EndTime, proving processAndBatch called
+		//     span.End() immediately when len(events) == 0.
+		//   - The span shares the parent's TraceID (trace context propagated).
+		//   - The span's Parent.SpanID equals the parent span's SpanID
+		//     (direct parent-child linkage).
+		s.It("batch trace spans with no-event command are ended immediately", func(ctx *specs.Context) {
+			recorder := newSpanRecorder(ctx)
+
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(recorder.tracer, noop.NewMeterProvider().Meter("test")))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
+
+			parentCtx, parentSpan := recorder.tracer.Start(context.Background(), "test.noevent.parent")
+
+			reply := askWith(ctx, parentCtx, pid, &testpb.TestNoEvent{})
+			parentSpan.End()
+
+			stateReplyOf(ctx, reply)
+
+			expectOneEndedCommandSpan(ctx, recorder.spans(ctx), "test.noevent.parent")
+		})
+
+		// Test: batch trace spans with encryption failure are ended
+		//
+		// Verifies that when buildEnvelopes fails due to an encryption error the
+		// "ego.command" span is still ended, preventing span leaks on the
+		// encryption-failure path inside processAndBatch.
+		//
+		// Setup:
+		//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
+		//   - A mock Encryptor is wired to return an error for any Encrypt call.
+		//   - A CreateAccount command (which produces events) triggers buildEnvelopes,
+		//     which calls the encryptor and fails.
+		//   - The parent span ("test.encrypt.parent") provides the trace context.
+		//
+		// Assertions:
+		//   - Exactly 1 "ego.command" span is produced despite the encryption failure.
+		//   - The span has a non-zero EndTime, proving processAndBatch called
+		//     span.End() on the buildEnvelopes error path before sendErrorReply.
+		//   - The span shares the parent's TraceID (trace context propagated).
+		//   - The span's Parent.SpanID equals the parent span's SpanID
+		//     (direct parent-child linkage preserved on encryption failure).
+		s.It("batch trace spans with encryption failure are ended", func(ctx *specs.Context) {
+			recorder := newSpanRecorder(ctx)
+
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			eventStore := connectedEventsStore(ctx)
+
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Encrypt").
+				Expect(specmock.Any(), persistenceID, specmock.Any()).
+				Return(nil, "", assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(tracer, meter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
+				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)),
+				extensions.NewTelemetryExtension(recorder.tracer, noop.NewMeterProvider().Meter("test")))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				BatchThreshold:   100,
+				BatchFlushWindow: 100 * time.Millisecond,
+			})
 
-		require.NoError(t, actorSystem.Start(ctx))
+			parentCtx, parentSpan := recorder.tracer.Start(context.Background(), "test.encrypt.parent")
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+			reply := askWith(ctx, parentCtx, pid, &testpb.CreateAccount{AccountBalance: 500})
+			parentSpan.End()
 
-		pause.For(time.Second)
+			errorReplyMessage(ctx, reply)
 
-		parentCtx, parentSpan := tracer.Start(ctx, "test.error.parent")
-
-		// Send a command that will fail (CreditAccount on non-existent account).
-		reply, err := goakt.Ask(parentCtx, pid, &testpb.CreditAccount{AccountId: "wrong-id", Balance: 100}, 5*time.Second)
-		parentSpan.End()
-
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, tp.ForceFlush(ctx))
-
-		spans := exporter.GetSpans()
-
-		var commandSpans []tracetest.SpanStub
-		for i := range spans {
-			if spans[i].Name == "ego.command" {
-				commandSpans = append(commandSpans, spans[i])
-			}
-		}
-
-		// Assert: a span is still produced even though the command failed.
-		require.Len(t, commandSpans, 1, "error command should still produce a span")
-
-		cs := commandSpans[0]
-
-		// Assert: the span was ended on the error path in processAndBatch.
-		assert.False(t, cs.EndTime.IsZero(), "error span should be ended")
-
-		parentStub := findSpan(spans, "test.error.parent")
-		require.NotNil(t, parentStub)
-
-		// Assert: trace context propagated through GoAkt into the actor.
-		assert.Equal(t, parentStub.SpanContext.TraceID(), cs.SpanContext.TraceID(),
-			"error span should share the parent trace ID")
-
-		// Assert: direct parent-child linkage preserved on the error path.
-		assert.Equal(t, parentStub.SpanContext.SpanID(), cs.Parent.SpanID(),
-			"error span should be a child of the parent span")
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+			expectOneEndedCommandSpan(ctx, recorder.spans(ctx), "test.encrypt.parent")
+		})
 	})
-	// Test: batch trace spans with no-event command are ended immediately
-	//
-	// Verifies that when HandleCommand returns zero events the "ego.command"
-	// span is ended immediately inside processAndBatch — it must not be
-	// deferred to the batch flush cycle, because the command is answered
-	// inline without entering the batch buffer.
-	//
-	// Setup:
-	//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
-	//   - A TestNoEvent command is sent, which the behavior handles by
-	//     returning an empty event slice.
-	//   - The parent span ("test.noevent.parent") provides the trace context.
-	//
-	// Assertions:
-	//   - Exactly 1 "ego.command" span is produced for the no-event command.
-	//   - The span has a non-zero EndTime, proving processAndBatch called
-	//     span.End() immediately when len(events) == 0.
-	//   - The span shares the parent's TraceID (trace context propagated).
-	//   - The span's Parent.SpanID equals the parent span's SpanID
-	//     (direct parent-child linkage).
-	t.Run("batch trace spans with no-event command are ended immediately", func(t *testing.T) {
-		ctx := context.TODO()
+}
 
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
+// spanRecorder is a real tracer provider that exports every ended span to an
+// in-memory exporter, with the global propagator set the way Engine.Start sets
+// it so trace context crosses the actor boundary. Create it before the rig of
+// its case: cleanups run last registered first, so the system stops before the
+// provider shuts down.
+type spanRecorder struct {
+	exporter *tracetest.InMemoryExporter
+	provider *sdktrace.TracerProvider
+	tracer   trace.Tracer
+}
 
-		exporter := tracetest.NewInMemoryExporter()
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithSyncer(exporter),
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		)
-		defer func() { _ = tp.Shutdown(ctx) }()
+func newSpanRecorder(ctx *specs.Context) *spanRecorder {
+	// This is required for the GoAkt context propagator (otelContextPropagator)
+	// to correctly inject/extract trace context across actor boundaries.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
-		tracer := tp.Tracer("ego-test")
-		meter := noop.NewMeterProvider().Meter("test")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	ctx.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+	return &spanRecorder{exporter: exporter, provider: provider, tracer: provider.Tracer("ego-test")}
+}
 
-		require.NoError(t, eventStore.Connect(ctx))
+// spans force-flushes the provider so every ended span is exported, and returns
+// them.
+func (r *spanRecorder) spans(ctx *specs.Context) tracetest.SpanStubs {
+	ctx.Expect(r.provider.ForceFlush(context.Background())).To(specs.BeNil())
+	return r.exporter.GetSpans()
+}
 
-		eventStream := eventstream.New()
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
+// spansNamed returns the spans with the given name.
+func spansNamed(spans tracetest.SpanStubs, name string) []tracetest.SpanStub {
+	var named []tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == name {
+			named = append(named, spans[i])
 		}
+	}
+	return named
+}
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(tracer, meter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		parentCtx, parentSpan := tracer.Start(ctx, "test.noevent.parent")
-
-		reply, err := goakt.Ask(parentCtx, pid, &testpb.TestNoEvent{}, 5*time.Second)
-		parentSpan.End()
-
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		require.NoError(t, tp.ForceFlush(ctx))
-
-		spans := exporter.GetSpans()
-
-		var commandSpans []tracetest.SpanStub
-		for i := range spans {
-			if spans[i].Name == "ego.command" {
-				commandSpans = append(commandSpans, spans[i])
-			}
-		}
-
-		// Assert: a span is produced even for a no-event command.
-		require.Len(t, commandSpans, 1, "no-event command should produce a span")
-
-		cs := commandSpans[0]
-
-		// Assert: the span was ended immediately (not deferred to batch flush).
-		assert.False(t, cs.EndTime.IsZero(), "no-event span should be ended immediately")
-
-		parentStub := findSpan(spans, "test.noevent.parent")
-		require.NotNil(t, parentStub)
-
-		// Assert: trace context propagated through GoAkt into the actor.
-		assert.Equal(t, parentStub.SpanContext.TraceID(), cs.SpanContext.TraceID(),
-			"no-event span should share the parent trace ID")
-
-		// Assert: direct parent-child linkage.
-		assert.Equal(t, parentStub.SpanContext.SpanID(), cs.Parent.SpanID(),
-			"no-event span should be a child of the parent span")
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		pause.For(time.Second)
-		require.NoError(t, actorSystem.Stop(ctx))
+// spanSatisfies matches a span that satisfies ok.
+func spanSatisfies(description string, ok func(tracetest.SpanStub) bool) specs.Matcher {
+	return specs.Satisfy(description, func(v any) bool {
+		span, isSpan := v.(tracetest.SpanStub)
+		return isSpan && ok(span)
 	})
-	// Test: batch trace spans with encryption failure are ended
-	//
-	// Verifies that when buildEnvelopes fails due to an encryption error the
-	// "ego.command" span is still ended, preventing span leaks on the
-	// encryption-failure path inside processAndBatch.
-	//
-	// Setup:
-	//   - Real TracerProvider + InMemoryExporter + global TextMapPropagator.
-	//   - A mock Encryptor is wired to return an error for any Encrypt call.
-	//   - A CreateAccount command (which produces events) triggers buildEnvelopes,
-	//     which calls the encryptor and fails.
-	//   - The parent span ("test.encrypt.parent") provides the trace context.
-	//
-	// Assertions:
-	//   - Exactly 1 "ego.command" span is produced despite the encryption failure.
-	//   - The span has a non-zero EndTime, proving processAndBatch called
-	//     span.End() on the buildEnvelopes error path before sendErrorReply.
-	//   - The span shares the parent's TraceID (trace context propagated).
-	//   - The span's Parent.SpanID equals the parent span's SpanID
-	//     (direct parent-child linkage preserved on encryption failure).
-	t.Run("batch trace spans with encryption failure are ended", func(t *testing.T) {
-		ctx := context.TODO()
+}
 
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
-
-		exporter := tracetest.NewInMemoryExporter()
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithSyncer(exporter),
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		)
-		defer func() { _ = tp.Shutdown(ctx) }()
-
-		tracer := tp.Tracer("ego-test")
-		meter := noop.NewMeterProvider().Meter("test")
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
-
-		entityCfg := &extensions.EntityConfig{
-			BatchThreshold:   100,
-			BatchFlushWindow: 100 * time.Millisecond,
+// spanAttribute returns the string value of the span attribute key, or "".
+func spanAttribute(span tracetest.SpanStub, key string) string {
+	for _, attr := range span.Attributes {
+		if string(attr.Key) == key {
+			return attr.Value.AsString()
 		}
+	}
+	return ""
+}
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-				extensions.NewTelemetryExtension(tracer, meter),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
+// expectOneEndedCommandSpan requires exactly one ego.command span among spans,
+// ended, and a direct child of the span called parentName, in the same trace.
+func expectOneEndedCommandSpan(ctx *specs.Context, spans tracetest.SpanStubs, parentName string) {
+	commandSpans := spansNamed(spans, "ego.command")
 
-		require.NoError(t, actorSystem.Start(ctx))
+	// a span is still produced, whatever way the command ended
+	ctx.Expect(commandSpans).To(specs.HaveLen(1))
+	cs := commandSpans[0]
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, entityCfg),
-			goakt.WithLongLived(),
-			goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+	// the span was ended
+	ctx.Expect(cs.EndTime.IsZero()).To(specs.BeFalse())
 
-		pause.For(time.Second)
+	parent := findSpan(spans, parentName)
+	ctx.Expect(parent).To(specs.Not(specs.BeNil()))
 
-		parentCtx, parentSpan := tracer.Start(ctx, "test.encrypt.parent")
+	// trace context propagated through GoAkt into the actor
+	ctx.Expect(cs.SpanContext.TraceID()).ToEqual(parent.SpanContext.TraceID())
 
-		reply, err := goakt.Ask(parentCtx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		parentSpan.End()
-
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, tp.ForceFlush(ctx))
-
-		spans := exporter.GetSpans()
-
-		var commandSpans []tracetest.SpanStub
-		for i := range spans {
-			if spans[i].Name == "ego.command" {
-				commandSpans = append(commandSpans, spans[i])
-			}
-		}
-
-		// Assert: a span is produced despite the encryption failure.
-		require.Len(t, commandSpans, 1, "encryption-failure command should produce a span")
-
-		cs := commandSpans[0]
-
-		// Assert: the span was ended on the buildEnvelopes error path.
-		assert.False(t, cs.EndTime.IsZero(), "encryption-failure span should be ended")
-
-		parentStub := findSpan(spans, "test.encrypt.parent")
-		require.NotNil(t, parentStub)
-
-		// Assert: trace context propagated through GoAkt into the actor.
-		assert.Equal(t, parentStub.SpanContext.TraceID(), cs.SpanContext.TraceID(),
-			"encryption-failure span should share the parent trace ID")
-
-		// Assert: direct parent-child linkage preserved on encryption failure.
-		assert.Equal(t, parentStub.SpanContext.SpanID(), cs.Parent.SpanID(),
-			"encryption-failure span should be a child of the parent span")
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+	// direct parent-child linkage preserved
+	ctx.Expect(cs.Parent.SpanID()).ToEqual(parent.SpanContext.SpanID())
 }
 
 // findSpan returns the first SpanStub with the given name, or nil.
