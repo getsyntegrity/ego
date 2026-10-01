@@ -70,6 +70,10 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 - [x] T3 Reconcile with develop after #241 and #240 merged: take develop's option/logger/runtime-compat tests,
       re-apply T1 and T2. Verify and deliver (see Progress).
 
+- [x] T4 Drop testify from `engine_test.go` and `publisher_test.go` (scripted conversion, reviewed by running
+      the package). RED: made `SendCommand` and `SagaStatus` return the wrong error for an empty id; the new
+      `MatchError` assertions failed with `expected error ... to match eGo entity id is not defined`.
+
 ## Follow-up (not in this document)
 
 - `engine-no-testify`: the 28 other `engine/*_test.go` files still import testify: `behavior_dependency`,
