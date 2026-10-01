@@ -45,7 +45,7 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 - [x] **D1 Move the fixture.** `example/examplepb` becomes `internal/samplepb` (or the closest existing internal fixture location), regenerated, with every importer updated. Check: root `go build ./... && go vet ./...`, plus the affected root tests and `benchmark`. Route: delegated writer.
 - [x] **D2 `example` module.** `example/go.mod` holds `durablestate`, `eventssourced` and `saga`, and the root Makefile `run-*` targets are updated. Check: `go build ./... && go vet ./... && go test ./...` in `example`; root `go list ./... | rg example` is empty; `go mod tidy -diff` is clean everywhere. Route: delegated writer.
 - [x] **D3 `examples` job.** Add the job with the `inttest` triggers, list it in `ci-ok`, remove `example/cluster` from `modules`, and add `/example` to Dependabot. Check: `actionlint`. Route: delegated writer.
-- [ ] **D4 Docs.** Update `docs/ci.md` and the example READMEs. Check: structural readback. Route: delegated writer.
+- [x] **D4 Docs.** Update `docs/ci.md` and the example READMEs. Check: structural readback. Route: delegated writer.
 
 ## Progress and evidence
 
@@ -72,6 +72,15 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 - `.github/dependabot.yml` gets `/example`. `tidy` discovers every `go.mod` by itself. `.github/scripts/test-matrix.sh` builds its list from root `go list ./...`, which no longer has an example package, and `security.yml` builds every `go.mod` already, so neither changed.
 - Check: `actionlint .github/workflows/ci.yml` exits 0.
 
+### D4 (route: delegated writer)
+
+- `docs/ci.md`: the `modules` row no longer names `example/cluster`; a new `examples (dir)` row; a new "Examples" section (why the programs are outside the everyday build, the triggers, how to check them locally, how to run one); the local-equivalents paragraph names the exception. `readme.md`, `contributing.md` and `example/cluster/README.md` explain that the examples are their own module and that the `make run-*` targets start from `example/`.
+- Check: structural readback of the four documents.
+
+### Commits
+
+- D1 `a21025b`, D2 `70db2b6`, D3 `95167ac`, D4 the commit that holds this line.
+
 ## Next step
 
-D4.
+Open the pull request for `ci/examples-job` (it carries the A, B and C commits until those are merged), and check in its run that the `examples` job is skipped on the feature pull request by design. It runs for the first time on the push to `develop` after the merge.

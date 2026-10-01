@@ -68,4 +68,5 @@ and `ego-go-mod-cache`.
 If you have the toolchain installed locally, the convenience targets
 `make run-eventsourced`, `make run-durablestate`, `make run-saga`, and
 `make proto` are still available and execute directly on the host without
-Docker.
+Docker. The examples are their own Go module in `example/`, so the run targets
+start `go run` from that directory.
