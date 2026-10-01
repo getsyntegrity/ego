@@ -297,14 +297,21 @@ func (engine *Engine) migrateSchemas(ctx context.Context) error {
 		{"offset store", engine.offsetStore},
 		{"snapshot store", engine.snapshotStore},
 	}
+	migrated := false
 	for _, s := range stores {
 		migrator, ok := s.store.(persistence.SchemaMigrator)
 		if !ok {
 			continue
 		}
+		migrated = true
 		if err := migrator.Migrate(ctx); err != nil {
 			return fmt.Errorf("engine: migrate the schema of the %s: %w", s.kind, err)
 		}
+	}
+	if !migrated {
+		// The option was asked for but did nothing: most likely the stores in use
+		// are not the ones that own a schema. Start still succeeds.
+		engine.logger.Warn("schema migration enabled but no store implements persistence.SchemaMigrator")
 	}
 	return nil
 }

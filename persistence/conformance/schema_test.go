@@ -152,12 +152,12 @@ func failedChecks(results []CheckResult) []string {
 }
 
 func TestRunSchemaMigratorConformance(t *testing.T) {
-	specs.Describe(t, "RunSchemaMigratorConformance accepts a correct migrator", func(s *specs.Spec) {
-		s.It("runs every check as a subtest and passes", func(ctx *specs.Context) {
+	specs.Describe(t, "conformance.RunSchemaMigratorConformance on a correct migrator", func(s *specs.Spec) {
+		s.It("runs every check as a subtest and all of them pass", func(ctx *specs.Context) {
 			RunSchemaMigratorConformance(ctx.T, fakeHarness(fakeFlaws{}))
 		})
 
-		s.It("passes every captured check", func(ctx *specs.Context) {
+		s.It("captures no failed check", func(ctx *specs.Context) {
 			ctx.Expect(failedChecks(CaptureSchemaMigratorChecks(fakeHarness(fakeFlaws{})))).To(specs.BeEmpty())
 		})
 	})
@@ -170,24 +170,24 @@ type flawCase struct {
 }
 
 func TestSchemaMigratorConformanceCatchesFlawedMigrators(t *testing.T) {
-	specs.Describe(t, "the schema migrator suite fails a migrator with a defect", func(s *specs.Spec) {
+	specs.Describe(t, "conformance.CaptureSchemaMigratorChecks on a migrator with a defect", func(s *specs.Spec) {
 		specs.Table(s, []flawCase{
-			{name: "Migrate that is not idempotent", flaws: fakeFlaws{failsWhenAlreadyLatest: true},
+			{name: "fails the checks that a non-idempotent Migrate breaks", flaws: fakeFlaws{failsWhenAlreadyLatest: true},
 				failed: []string{"Migrate/IsIdempotent", "Migrate/ConcurrentCallersAllSucceed", "Legacy/BeforeVersioning"}},
-			{name: "Migrate that is not safe under concurrent callers", flaws: fakeFlaws{failsUnderContention: true},
+			{name: "fails the concurrency check when Migrate is not safe under concurrent callers", flaws: fakeFlaws{failsUnderContention: true},
 				failed: []string{"Migrate/ConcurrentCallersAllSucceed"}},
-			{name: "SchemaVersion that lags behind", flaws: fakeFlaws{reportsOneVersionShort: true},
+			{name: "fails every check that reads a SchemaVersion lagging behind the latest", flaws: fakeFlaws{reportsOneVersionShort: true},
 				failed: []string{"Migrate/ReportsLatestVersion", "Migrate/IsIdempotent", "Migrate/ConcurrentCallersAllSucceed",
 					"Migrate/NewMigratorSeesAppliedSchema", "Legacy/BeforeVersioning"}},
-			{name: "SchemaVersion of an empty backend that is not 0", flaws: fakeFlaws{reportsVersionBefore: true},
+			{name: "fails the empty-backend check when SchemaVersion is not 0", flaws: fakeFlaws{reportsVersionBefore: true},
 				failed: []string{"EmptyBackend/VersionIsZero"}},
-			{name: "Migrate that cannot upgrade a legacy schema", flaws: fakeFlaws{failsOnLegacy: true},
+			{name: "fails the legacy check when Migrate cannot upgrade a legacy schema", flaws: fakeFlaws{failsOnLegacy: true},
 				failed: []string{"Legacy/BeforeVersioning"}},
 		}, func(c flawCase) string { return c.name }, func(ctx *specs.Context, c flawCase) {
 			ctx.Expect(failedChecks(CaptureSchemaMigratorChecks(fakeHarness(c.flaws)))).To(specs.ContainTheSameElementsAs(c.failed))
 		})
 
-		s.It("fails when the harness does not say which version is the latest", func(ctx *specs.Context) {
+		s.It("fails Migrate/ReportsLatestVersion when the harness does not say which version is the latest", func(ctx *specs.Context) {
 			h := fakeHarness(fakeFlaws{})
 			h.LatestVersion = 0
 			ctx.Expect(failedChecks(CaptureSchemaMigratorChecks(h))).To(specs.Contain("Migrate/ReportsLatestVersion"))

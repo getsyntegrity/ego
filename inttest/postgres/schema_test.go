@@ -65,8 +65,8 @@ CREATE TABLE events_store
 func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 	t.Parallel()
 	dsn := shared.NewDatabase(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("schema migrates legacy database", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.Migrate on a database without a revisions table", func(s *specs.Spec) {
+		s.It("backfills each revision from the highest retained sequence number and is idempotent", func(sc *specs.Context) {
 			ctx := context.Background()
 
 			pool, err := pgxpool.New(ctx, dsn)
@@ -144,8 +144,8 @@ CREATE TABLE events_store_revisions
 func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 	t.Parallel()
 	dsn := shared.NewDatabase(t)
-	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
-		s.It("schema migrates legacy tenant metadata", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.EventStore.Migrate on a database without the tenant_metadata column", func(s *specs.Spec) {
+		s.It("adds the column without a backfill, leaves the legacy row unchanged and is idempotent", func(sc *specs.Context) {
 			ctx := context.Background()
 
 			pool, err := pgxpool.New(ctx, dsn)
@@ -247,7 +247,7 @@ func postgresSchemaHarness() conformance.SchemaMigratorHarness {
 					if err := open(t).Migrate(ctx); err != nil {
 						fatal(t, "build the current shape", err)
 					}
-					return "DROP TABLE schema_migrations"
+					return "DROP TABLE ego_schema_migrations"
 				}),
 			},
 		},

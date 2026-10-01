@@ -25,10 +25,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
+	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 
 	"github.com/getsyntegrity/ego/testkit"
 )
@@ -86,15 +88,15 @@ func expectMigrate(ctrl *mock.Controller, times int, err error) {
 // It needs no actor system: Start only checks that one is attached, so an empty
 // reference stands in for it.
 func schemaEngine(migrate bool, build func(e *Engine)) *Engine {
-	e := &Engine{schemaMigration: migrate}
+	e := &Engine{schemaMigration: migrate, logger: DiscardLogger}
 	build(e)
 	e.actorSystem.Store(&actorSystemRef{})
 	return e
 }
 
 func TestWithSchemaMigrationSetsTheConfig(t *testing.T) {
-	specs.Describe(t, "WithSchemaMigration", func(s *specs.Spec) {
-		s.It("is off unless the option is given", func(ctx *specs.Context) {
+	specs.Describe(t, "engine.WithSchemaMigration option", func(s *specs.Spec) {
+		s.It("leaves schema migration off unless the option is given", func(ctx *specs.Context) {
 			ctx.Expect(NewConfig(nil).schemaMigration).To(specs.BeFalse())
 		})
 
@@ -106,7 +108,7 @@ func TestWithSchemaMigrationSetsTheConfig(t *testing.T) {
 
 func TestEngineStartMigratesTheSchema(t *testing.T) {
 	bg := context.Background()
-	specs.Describe(t, "Engine.Start with and without WithSchemaMigration", func(s *specs.Spec) {
+	specs.Describe(t, "Engine.Start schema migration of the configured stores", func(s *specs.Spec) {
 		s.It("does not call Migrate when the option is not given", func(ctx *specs.Context) {
 			ctrl := mock.NewController(ctx)
 			expectMigrate(ctrl, 0, nil)
@@ -151,7 +153,7 @@ func TestEngineStartMigratesTheSchema(t *testing.T) {
 			ctx.Expect(engine.Started()).To(specs.BeTrue())
 		})
 
-		s.It("starts when no configured store can migrate", func(ctx *specs.Context) {
+		s.It("starts without migrating when no configured store can migrate", func(ctx *specs.Context) {
 			engine := schemaEngine(true, func(e *Engine) { e.eventsStore = testkit.NewEventsStore() })
 
 			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
@@ -176,8 +178,64 @@ func TestEngineStartMigratesTheSchema(t *testing.T) {
 	})
 }
 
+const noSchemaMigratorWarning = "schema migration enabled but no store implements persistence.SchemaMigrator"
+
+// warningsAbout counts the Warn records of logger that carry msg.
+func warningsAbout(logger *kitlogtest.MockLogger, msg string) int {
+	count := 0
+	for _, entry := range logger.Entries {
+		if entry.Level == slog.LevelWarn && entry.Message == msg {
+			count++
+		}
+	}
+	return count
+}
+
+func TestEngineStartWarnsWhenNothingCanMigrate(t *testing.T) {
+	bg := context.Background()
+	specs.Describe(t, "Engine.Start warning when WithSchemaMigration has nothing to migrate", func(s *specs.Spec) {
+		s.It("warns exactly once and still starts when no configured store implements SchemaMigrator", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			engine := schemaEngine(true, func(e *Engine) {
+				e.logger = logger
+				e.eventsStore = testkit.NewEventsStore()
+				e.offsetStore = testkit.NewOffsetStore()
+			})
+
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+			ctx.Expect(engine.Started()).To(specs.BeTrue())
+			ctx.Expect(warningsAbout(logger, noSchemaMigratorWarning)).To(specs.Equal(1))
+		})
+
+		s.It("does not warn when at least one configured store migrates", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			ctrl := mock.NewController(ctx)
+			expectMigrate(ctrl, 1, nil)
+			engine := schemaEngine(true, func(e *Engine) {
+				e.logger = logger
+				e.eventsStore = testkit.NewEventsStore() // cannot migrate
+				e.offsetStore = migratingOffsetStore{testkit.NewOffsetStore(), schemaMigratorMock{ctrl}}
+			})
+
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+			ctx.Expect(warningsAbout(logger, noSchemaMigratorWarning)).To(specs.Equal(0))
+		})
+
+		s.It("does not warn when the option is off", func(ctx *specs.Context) {
+			logger := kitlogtest.NewMockLogger()
+			engine := schemaEngine(false, func(e *Engine) {
+				e.logger = logger
+				e.eventsStore = testkit.NewEventsStore()
+			})
+
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+			ctx.Expect(warningsAbout(logger, noSchemaMigratorWarning)).To(specs.Equal(0))
+		})
+	})
+}
+
 func TestEngineStartMigratesThroughNewEngine(t *testing.T) {
-	specs.Describe(t, "WithSchemaMigration through NewConfig and NewEngine", func(s *specs.Spec) {
+	specs.Describe(t, "engine.NewEngine wiring of WithSchemaMigration", func(s *specs.Spec) {
 		s.It("migrates the configured stores when the engine starts", func(ctx *specs.Context) {
 			ctrl := mock.NewController(ctx)
 			expectMigrate(ctrl, 1, nil)
