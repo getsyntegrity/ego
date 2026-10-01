@@ -23,7 +23,6 @@
 package syncmap
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -94,9 +93,8 @@ func TestForEach(t *testing.T) {
 				keys = append(keys, k)
 			})
 
-			ctx.Expect(len(keys)).ToEqual(2)
-			// Check if keys 1 and 2 are present
-			ctx.Expect(slices.Contains(keys, 1) && slices.Contains(keys, 2)).To(specs.BeTrue())
+			// Order-insensitive, and a key visited twice or missed fails.
+			ctx.Expect(keys).To(specs.ContainTheSameElementsAs([]int{1, 2}))
 		})
 	})
 }
@@ -109,10 +107,7 @@ func TestValues(t *testing.T) {
 			sm.Set(2, "two")
 			sm.Set(3, "three")
 
-			values := sm.Values()
-			ctx.Expect(len(values)).ToEqual(3)
-			slices.Sort(values)
-			ctx.Expect(values).ToEqual([]string{"one", "three", "two"})
+			ctx.Expect(sm.Values()).To(specs.ContainTheSameElementsAs([]string{"one", "two", "three"}))
 		})
 	})
 }
