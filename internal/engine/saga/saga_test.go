@@ -324,821 +324,320 @@ func TestSagaActor(t *testing.T) {
 			// ApplyEvent must run while PreStart replays the stored event.
 			awaitCalls(ctx, &applied, 1, 2*time.Second)
 		})
-	})
 
-	t.Run("Receive: GetStateCommand returns current state", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
+		s.It("Receive: GetStateCommand returns current state", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			pid := rig.spawnSaga(ctx, sagaID, &enginetest.CallbackSagaBehavior{SagaID: sagaID}, extensions.NewSagaConfig(0))
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
+			reply, err := goakt.Ask(context.Background(), pid, new(egopb.GetStateCommand), 3*time.Second)
 
-		stream := eventstream.New()
-		defer stream.Close()
+			ctx.Expect(err).To(specs.BeNil())
+			commandReply, ok := reply.(*egopb.CommandReply)
+			ctx.Expect(ok).To(specs.BeTrue())
+			state := commandReply.GetStateReply()
+			ctx.Expect(state).To(specs.Not(specs.BeNil()))
+			ctx.Expect(state.GetPersistenceId()).ToEqual(sagaID)
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(0))
+		})
 
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		reply, err := goakt.Ask(ctx, pid, new(egopb.GetStateCommand), 3*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		stateReply := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		require.NotNil(t, stateReply)
-		assert.EqualValues(t, sagaID, stateReply.StateReply.GetPersistenceId())
-		assert.EqualValues(t, 0, stateReply.StateReply.GetSequenceNumber())
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("Receive: PostStart with timeout triggers compensation", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		compensated := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
-				select {
-				case compensated <- struct{}{}:
-				default:
-				}
-				return nil, nil
-			},
-		}
-		// 200ms timeout so the test runs quickly
-		sagaCfg := extensions.NewSagaConfig(200 * time.Millisecond)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		select {
-		case <-compensated:
-		case <-time.After(3 * time.Second):
-			t.Fatal("compensation was not triggered after timeout")
-		}
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("Receive: sagaTimeoutMsg when not running is no-op", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		compensateCalled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
-				select {
-				case compensateCalled <- struct{}{}:
-				default:
-				}
-				return nil, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// Manually send sagaTimeoutMsg twice: first triggers compensation (status → Compensating),
-		// second should be a no-op because status is no longer runtimeport.SagaRunning.
-		require.NoError(t, goakt.Tell(ctx, pid, &sagaTimeoutMsg{}))
-
-		// Drain first compensation signal
-		select {
-		case <-compensateCalled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("first compensation not triggered")
-		}
-
-		// Second sagaTimeoutMsg – must not call Compensate again
-		require.NoError(t, goakt.Tell(ctx, pid, &sagaTimeoutMsg{}))
-
-		require.Never(t, func() bool {
-			select {
-			case <-compensateCalled:
-				return true
-			default:
-				return false
+		s.It("Receive: PostStart with timeout triggers compensation", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var compensated atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
+					bump(&compensated)
+					return nil, nil
+				},
 			}
-		}, 500*time.Millisecond, 20*time.Millisecond, "Compensate was called again but saga is no longer running")
 
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			// 200ms timeout so the test runs quickly
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(200*time.Millisecond))
 
-	t.Run("Receive: unknown message is unhandled", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
+			awaitCalls(ctx, &compensated, 1, signalTimeout)
+		})
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		behavior := &enginetest.CallbackSagaBehavior{SagaID: sagaID}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// Send an unknown message type – the actor should call ctx.Unhandled() without panicking.
-		require.NoError(t, goakt.Tell(ctx, pid, new(emptypb.Empty)))
-
-		// The actor is still alive: poll for the duration instead of a blind
-		// sleep so a delayed crash is still caught.
-		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: skips non-egopb-Event payloads", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		handleEventCalled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalled <- struct{}{}
-				return &sagaAction{}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// Publish a non-*egopb.Event payload
-		stream.Publish(protocol.EventsTopic, new(emptypb.Empty))
-
-		require.Never(t, func() bool {
-			select {
-			case <-handleEventCalled:
-				return true
-			default:
-				return false
+		s.It("Receive: sagaTimeoutMsg when not running is no-op", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var compensated atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				CompensateFn: func(_ context.Context, _ State) ([]sagaCommand, error) {
+					bump(&compensated)
+					return nil, nil
+				},
 			}
-		}, 500*time.Millisecond, 20*time.Millisecond, "HandleEvent should not be called for non-Event payload")
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
 
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			// Send sagaTimeoutMsg twice: the first triggers compensation (status
+			// becomes Compensating), the second must be a no-op because the status
+			// is no longer runtimeport.SagaRunning.
+			ctx.Expect(goakt.Tell(context.Background(), pid, &sagaTimeoutMsg{})).To(specs.BeNil())
+			awaitCalls(ctx, &compensated, 1, 2*time.Second)
+			ctx.Expect(goakt.Tell(context.Background(), pid, &sagaTimeoutMsg{})).To(specs.BeNil())
 
-	t.Run("consumeEvents: skips own saga events", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
+			// Compensate must not run again
+			expectCallsStay(ctx, &compensated, 1, quietWindow)
+		})
 
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
+		s.It("Receive: unknown message is unhandled", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			pid := rig.spawnSaga(ctx, sagaID, &enginetest.CallbackSagaBehavior{SagaID: sagaID}, extensions.NewSagaConfig(0))
 
-		stream := eventstream.New()
-		defer stream.Close()
+			// An unknown message type: the actor calls ctx.Unhandled() without panicking.
+			ctx.Expect(goakt.Tell(context.Background(), pid, new(emptypb.Empty))).To(specs.BeNil())
 
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			// The actor stays alive; polling catches a delayed crash.
+			expectStaysRunning(ctx, pid, quietWindow)
+		})
 
-		handleEventCalled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handleEventCalled <- struct{}{}
-				return &sagaAction{}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: sagaID})
-		ownEvent := &egopb.Event{
-			PersistenceId:  sagaID, // same as saga ID → should be skipped
-			SequenceNumber: 1,
-			Event:          eventAny,
-		}
-		topic := protocol.EventsTopic
-		stream.Publish(topic, ownEvent)
-
-		require.Never(t, func() bool {
-			select {
-			case <-handleEventCalled:
-				return true
-			default:
-				return false
+		s.It("consumeEvents: skips non-egopb-Event payloads", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{}, nil
+				},
 			}
-		}, 500*time.Millisecond, 20*time.Millisecond, "HandleEvent should not be called for own saga events")
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: skips events when saga is not running", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		// the saga processes events on its own goroutine, so the counter must
-		// be atomic for the test goroutine to read it safely
-		var callCount atomic.Int32
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				callCount.Add(1)
-				return &sagaAction{Complete: true}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		domainEvent := &egopb.Event{
-			PersistenceId:  uuid.NewString(),
-			SequenceNumber: 1,
-			Event:          eventAny,
-		}
-		topic := protocol.EventsTopic
-
-		// First event: triggers Complete → saga status becomes runtimeport.SagaCompleted
-		stream.Publish(topic, domainEvent)
-		require.Eventually(t, func() bool { return callCount.Load() >= 1 }, 2*time.Second, 10*time.Millisecond,
-			"HandleEvent was not called for the first event")
-
-		countAfterFirst := callCount.Load()
-
-		// Subsequent events should be ignored
-		stream.Publish(topic, domainEvent)
-		stream.Publish(topic, domainEvent)
-
-		assert.Never(t, func() bool { return callCount.Load() != countAfterFirst }, 500*time.Millisecond, 20*time.Millisecond,
-			"HandleEvent should not be called after saga completes")
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: UnmarshalNew error is logged and skipped", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		secondEventHandled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				select {
-				case secondEventHandled <- struct{}{}:
-				default:
-				}
-				return &sagaAction{}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-
-		// First event: bad type URL → UnmarshalNew fails → logged and skipped
-		badEvent := &egopb.Event{
-			PersistenceId:  uuid.NewString(),
-			SequenceNumber: 1,
-			Event:          &anypb.Any{TypeUrl: "type.googleapis.com/nonexistent.Type", Value: []byte("bad")},
-		}
-		stream.Publish(topic, badEvent)
-
-		// Second event: valid → HandleEvent is called, proving the saga continues
-		goodEventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		goodEvent := &egopb.Event{
-			PersistenceId:  uuid.NewString(),
-			SequenceNumber: 1,
-			Event:          goodEventAny,
-		}
-		stream.Publish(topic, goodEvent)
-
-		select {
-		case <-secondEventHandled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("saga did not continue processing after UnmarshalNew error")
-		}
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: HandleEvent error is logged and skipped", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		callCount := 0
-		secondHandled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				callCount++
-				if callCount == 1 {
-					return nil, assert.AnError
-				}
-				select {
-				case secondHandled <- struct{}{}:
-				default:
-				}
-				return &sagaAction{}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-
-		stream.Publish(topic, event)
-		stream.Publish(topic, event)
-
-		select {
-		case <-secondHandled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("saga did not continue processing after HandleEvent error")
-		}
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: HandleEvent returns nil action is no-op", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		handled := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				handled <- struct{}{}
-				return nil, nil // nil action
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
-
-		select {
-		case <-handled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("HandleEvent was not called")
-		}
-		// Actor must still be alive
-		require.Never(t, func() bool { return !pid.IsRunning() }, 300*time.Millisecond, 20*time.Millisecond)
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: HandleEvent Complete action marks saga completed", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
-				return &sagaAction{Complete: true}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
-
-		// Actor is still alive but status is Completed
-		require.Never(t, func() bool { return !pid.IsRunning() }, 500*time.Millisecond, 20*time.Millisecond)
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: persistAndApplyEvents ApplyEvent error is logged", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		ctrl := mock.NewController(t)
-		eventStore := sagaStoreMock{c: ctrl}
-		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
-		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		handled := make(chan struct{}, 1)
-		// the saga processes events on its own goroutine, so the counter must
-		// be atomic for the test goroutine to read it safely
-		var applyCallCount atomic.Int32
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
-				handled <- struct{}{}
-				return &sagaAction{Events: []Event{event}}, nil
-			},
-			ApplyEventFn: func(_ context.Context, _ Event, state State) (State, error) {
-				applyCallCount.Add(1)
-				return nil, assert.AnError
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
-
-		select {
-		case <-handled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("HandleEvent was not called")
-		}
-
-		// ApplyEvent runs after HandleEvent returns, within the same actor
-		// message turn, so wait for the actual condition instead of guessing
-		// a settle time.
-		require.Eventually(t, func() bool { return applyCallCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond,
-			"ApplyEvent was not called")
-
-		// Actor must still be alive despite the error
-		require.True(t, pid.IsRunning())
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: persistAndApplyEvents WriteEvents error is logged", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		writeEventsCalled := make(chan struct{}, 1)
-		ctrl := mock.NewController(t)
-		eventStore := sagaStoreMock{c: ctrl}
-		ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
-		ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
-		ctrl.Method("WriteEvents").Expect(mock.Any(), persistence.Unscoped(), mock.Any(), mock.Any()).
-			Do(func([]any) []any {
-				select {
-				case writeEventsCalled <- struct{}{}:
-				default:
-				}
-				return []any{assert.AnError}
-			}).
-			AnyTimes()
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
-				return &sagaAction{Events: []Event{event}}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
-
-		select {
-		case <-writeEventsCalled:
-		case <-time.After(2 * time.Second):
-			t.Fatal("WriteEvents was not called")
-		}
-
-		require.True(t, pid.IsRunning())
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("consumeEvents: HandleEvent with events persists state", func(t *testing.T) {
-		ctx := context.TODO()
-		sagaID := uuid.NewString()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		defer eventStore.Disconnect(ctx) //nolint:errcheck
-
-		stream := eventstream.New()
-		defer stream.Close()
-
-		actorSystem, err := goakt.NewActorSystem("TestSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		applied := make(chan struct{}, 1)
-		behavior := &enginetest.CallbackSagaBehavior{
-			SagaID:         sagaID,
-			InitialStateFn: func() State { return &samplepb.Account{} },
-			HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
-				return &sagaAction{Events: []Event{event}}, nil
-			},
-			ApplyEventFn: func(_ context.Context, _ Event, _ State) (State, error) {
-				select {
-				case applied <- struct{}{}:
-				default:
-				}
-				return &samplepb.Account{AccountBalance: 100}, nil
-			},
-		}
-		sagaCfg := extensions.NewSagaConfig(0)
-
-		pid, err := actorSystem.Spawn(ctx, sagaID, New(),
-			goakt.WithLongLived(),
-			goakt.WithDependencies(behavior, sagaCfg))
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		topic := protocol.EventsTopic
-		eventAny, _ := anypb.New(&testpb.AccountCreated{AccountId: uuid.NewString()})
-		event := &egopb.Event{PersistenceId: uuid.NewString(), SequenceNumber: 1, Event: eventAny}
-		stream.Publish(topic, event)
-
-		select {
-		case <-applied:
-		case <-time.After(2 * time.Second):
-			t.Fatal("ApplyEvent was not called")
-		}
-
-		// State should have been updated. No extra wait is needed here: Ask
-		// is dispatched through the same actor mailbox that is still
-		// finishing the event turn that sent the applied signal above, so it
-		// is only serviced once that turn (including the state update) is
-		// complete.
-		reply, err := goakt.Ask(ctx, pid, new(egopb.GetStateCommand), 3*time.Second)
-		require.NoError(t, err)
-		commandReply := reply.(*egopb.CommandReply)
-		stateReply := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, stateReply.StateReply.GetSequenceNumber())
-
-		stream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			// Publish a non-*egopb.Event payload
+			rig.stream.Publish(protocol.EventsTopic, new(emptypb.Empty))
+
+			expectCallsStay(ctx, &handled, 0, quietWindow)
+		})
+
+		s.It("consumeEvents: skips own saga events", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{}, nil
+				},
+			}
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			// Same persistence ID as the saga, so the saga must skip it.
+			rig.stream.Publish(protocol.EventsTopic,
+				newAnyEvent(ctx, sagaID, 1, &testpb.AccountCreated{AccountId: sagaID}, nil))
+
+			expectCallsStay(ctx, &handled, 0, quietWindow)
+		})
+
+		s.It("consumeEvents: skips events when saga is not running", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{Complete: true}, nil
+				},
+			}
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+			event := foreignEvent(ctx)
+
+			// First event: triggers Complete, so the saga status becomes runtimeport.SagaCompleted
+			rig.stream.Publish(protocol.EventsTopic, event)
+			awaitCalls(ctx, &handled, 1, 2*time.Second)
+			afterFirst := handled.Load()
+
+			// Later events must be ignored
+			rig.stream.Publish(protocol.EventsTopic, event)
+			rig.stream.Publish(protocol.EventsTopic, event)
+
+			expectCallsStay(ctx, &handled, afterFirst, quietWindow)
+		})
+
+		s.It("consumeEvents: UnmarshalNew error is logged and skipped", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{}, nil
+				},
+			}
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			// First event: bad type URL, so UnmarshalNew fails and the event is skipped
+			rig.stream.Publish(protocol.EventsTopic, &egopb.Event{
+				PersistenceId:  uuid.NewString(),
+				SequenceNumber: 1,
+				Event:          &anypb.Any{TypeUrl: "type.googleapis.com/nonexistent.Type", Value: []byte("bad")},
+			})
+			// Second event: valid, so HandleEvent runs and proves the saga went on
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+
+			awaitCalls(ctx, &handled, 1, 2*time.Second)
+		})
+
+		s.It("consumeEvents: HandleEvent error is logged and skipped", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var calls atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					if calls.Add(1) == 1 {
+						return nil, errSagaBoom
+					}
+					return &sagaAction{}, nil
+				},
+			}
+			rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+			event := foreignEvent(ctx)
+
+			rig.stream.Publish(protocol.EventsTopic, event)
+			rig.stream.Publish(protocol.EventsTopic, event)
+
+			// The second call proves the saga went on after the first one failed.
+			awaitCalls(ctx, &calls, 2, 2*time.Second)
+		})
+
+		s.It("consumeEvents: HandleEvent returns nil action is no-op", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return nil, nil // nil action
+				},
+			}
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+
+			awaitCalls(ctx, &handled, 1, 2*time.Second)
+			// Actor must still be alive
+			expectStaysRunning(ctx, pid, 300*time.Millisecond)
+		})
+
+		s.It("consumeEvents: HandleEvent Complete action marks saga completed", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var handled atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, _ Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{Complete: true}, nil
+				},
+			}
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+
+			// Actor is still alive but the status is Completed
+			awaitCalls(ctx, &handled, 1, 2*time.Second)
+			expectStaysRunning(ctx, pid, quietWindow)
+		})
+
+		s.It("consumeEvents: persistAndApplyEvents ApplyEvent error is logged", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+			ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
+			rig := newSagaRig(ctx, sagaStoreMock{c: ctrl})
+			var handled, applied atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+					bump(&handled)
+					return &sagaAction{Events: []Event{event}}, nil
+				},
+				ApplyEventFn: func(_ context.Context, _ Event, _ State) (State, error) {
+					bump(&applied)
+					return nil, errSagaBoom
+				},
+			}
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+
+			awaitCalls(ctx, &handled, 1, 2*time.Second)
+			// ApplyEvent runs after HandleEvent returns, within the same actor
+			// message turn, so wait for the actual condition.
+			awaitCalls(ctx, &applied, 1, 2*time.Second)
+			// Actor must still be alive despite the error
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
+
+		s.It("consumeEvents: persistAndApplyEvents WriteEvents error is logged", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			var writes atomic.Int32
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("Ping").Expect(mock.Any()).Return(nil)
+			ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), sagaID).Return(nil, nil)
+			ctrl.Method("WriteEvents").Expect(mock.Any(), persistence.Unscoped(), mock.Any(), mock.Any()).
+				Do(func([]any) []any {
+					bump(&writes)
+					return []any{errSagaBoom}
+				}).
+				AnyTimes()
+			rig := newSagaRig(ctx, sagaStoreMock{c: ctrl})
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+					return &sagaAction{Events: []Event{event}}, nil
+				},
+			}
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+
+			awaitCalls(ctx, &writes, 1, 2*time.Second)
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
+
+		s.It("consumeEvents: HandleEvent with events persists state", func(ctx *specs.Context) {
+			sagaID := uuid.NewString()
+			rig := newSagaRig(ctx, newTestkitStore(ctx))
+			var applied atomic.Int32
+			behavior := &enginetest.CallbackSagaBehavior{
+				SagaID:         sagaID,
+				InitialStateFn: func() State { return &samplepb.Account{} },
+				HandleEventFn: func(_ context.Context, event Event, _ State) (*sagaAction, error) {
+					return &sagaAction{Events: []Event{event}}, nil
+				},
+				ApplyEventFn: func(_ context.Context, _ Event, _ State) (State, error) {
+					bump(&applied)
+					return &samplepb.Account{AccountBalance: 100}, nil
+				},
+			}
+			pid := rig.spawnSaga(ctx, sagaID, behavior, extensions.NewSagaConfig(0))
+
+			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
+			awaitCalls(ctx, &applied, 1, 2*time.Second)
+
+			// The state must have been updated. Ask goes through the same actor
+			// mailbox that is still finishing the event turn that signalled
+			// applied above, so it is only served once that turn, including the
+			// state update, is complete.
+			reply, err := goakt.Ask(context.Background(), pid, new(egopb.GetStateCommand), 3*time.Second)
+
+			ctx.Expect(err).To(specs.BeNil())
+			commandReply, ok := reply.(*egopb.CommandReply)
+			ctx.Expect(ok).To(specs.BeTrue())
+			state := commandReply.GetStateReply()
+			ctx.Expect(state).To(specs.Not(specs.BeNil()))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
+		})
 	})
 
 	t.Run("compensate: behavior failure sets runtimeport.SagaFailed", func(t *testing.T) {
