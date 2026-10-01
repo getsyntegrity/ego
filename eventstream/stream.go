@@ -140,8 +140,12 @@ func (b *EventsStream) Close() {
 }
 
 // publishToTopic delivers the message to active subscribers of the given topic.
-// It performs a single message allocation per topic publish and signals
-// asynchronously to avoid blocking the caller.
+// It performs a single message allocation per topic publish. Delivery is
+// synchronous: signal only enqueues on a lock-free queue and does a
+// non-blocking wake-up, so it never blocks the caller, and enqueueing before
+// Publish returns keeps the order of consecutive Publish calls from one
+// producer. Handing each delivery to its own goroutine let two messages
+// published in order be enqueued swapped.
 func (b *EventsStream) publishToTopic(topic string, msg any) {
 	subscribers, ok := b.topics.Get(topic)
 	if !ok || subscribers.Len() == 0 {
@@ -149,10 +153,9 @@ func (b *EventsStream) publishToTopic(topic string, msg any) {
 	}
 
 	message := NewMessage(topic, msg)
-	// fan-out concurrently so subscribers are signaled at roughly the same time.
 	subscribers.Range(func(_ string, sub Subscriber) {
 		if sub.Active() {
-			go sub.signal(message)
+			sub.signal(message)
 		}
 	})
 }
