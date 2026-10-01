@@ -26,7 +26,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/persistence"
 )
@@ -39,43 +39,47 @@ import (
 // -----------------------------------------------------------------------
 
 func TestShouldStayAliveAfterConflict(t *testing.T) {
-	t.Run("non-conflict error never stays alive", func(t *testing.T) {
-		entity := &Actor{eventsCounter: 3}
-		assert.False(t, entity.shouldStayAliveAfterConflict(errors.New("boom")))
-	})
+	specs.Describe(t, "shouldStayAliveAfterConflict keeps the actor alive only when a conflict proves it is in sync with the store", func(s *specs.Spec) {
+		s.It("non-conflict error never stays alive", func(ctx *specs.Context) {
+			entity := &Actor{eventsCounter: 3}
+			ctx.Expect(entity.shouldStayAliveAfterConflict(errors.New("boom"))).To(specs.BeFalse())
+		})
 
-	t.Run("actual revision matches in-memory counter: provably in sync, stays alive", func(t *testing.T) {
-		entity := &Actor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
-		assert.True(t, entity.shouldStayAliveAfterConflict(conflictErr))
-	})
+		s.It("actual revision matches in-memory counter: provably in sync, stays alive", func(ctx *specs.Context) {
+			entity := &Actor{eventsCounter: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
+			ctx.Expect(entity.shouldStayAliveAfterConflict(conflictErr)).To(specs.BeTrue())
+		})
 
-	t.Run("actual revision diverges from in-memory counter: not provably in sync, shuts down", func(t *testing.T) {
-		entity := &Actor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
-		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
-	})
+		s.It("actual revision diverges from in-memory counter: not provably in sync, shuts down", func(ctx *specs.Context) {
+			entity := &Actor{eventsCounter: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
+			ctx.Expect(entity.shouldStayAliveAfterConflict(conflictErr)).To(specs.BeFalse())
+		})
 
-	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
-		entity := &Actor{eventsCounter: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
-		assert.False(t, entity.shouldStayAliveAfterConflict(conflictErr))
+		s.It("conflict without an actual revision cannot be proven in sync", func(ctx *specs.Context) {
+			entity := &Actor{eventsCounter: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
+			ctx.Expect(entity.shouldStayAliveAfterConflict(conflictErr)).To(specs.BeFalse())
+		})
 	})
 }
 
 func TestResolveBatchPrecondition(t *testing.T) {
-	t.Run("no admitted command declared a revision: unconditional", func(t *testing.T) {
-		entity := &Actor{batchHasPrecondition: false, batchBase: 7}
-		assert.Equal(t, persistence.Unconditional(), entity.resolveBatchPrecondition())
-	})
+	specs.Describe(t, "resolveBatchPrecondition maps the batch's declared revision to a write precondition", func(s *specs.Spec) {
+		s.It("no admitted command declared a revision: unconditional", func(ctx *specs.Context) {
+			entity := &Actor{batchHasPrecondition: false, batchBase: 7}
+			ctx.Expect(entity.resolveBatchPrecondition()).ToEqual(persistence.Unconditional())
+		})
 
-	t.Run("declared, base is empty store: genesis", func(t *testing.T) {
-		entity := &Actor{batchHasPrecondition: true, batchBase: 0}
-		assert.Equal(t, persistence.ExpectGenesis(), entity.resolveBatchPrecondition())
-	})
+		s.It("declared, base is empty store: genesis", func(ctx *specs.Context) {
+			entity := &Actor{batchHasPrecondition: true, batchBase: 0}
+			ctx.Expect(entity.resolveBatchPrecondition()).ToEqual(persistence.ExpectGenesis())
+		})
 
-	t.Run("declared, non-empty base: exact revision", func(t *testing.T) {
-		entity := &Actor{batchHasPrecondition: true, batchBase: 4}
-		assert.Equal(t, persistence.ExpectRevision(4), entity.resolveBatchPrecondition())
+		s.It("declared, non-empty base: exact revision", func(ctx *specs.Context) {
+			entity := &Actor{batchHasPrecondition: true, batchBase: 4}
+			ctx.Expect(entity.resolveBatchPrecondition()).ToEqual(persistence.ExpectRevision(4))
+		})
 	})
 }

@@ -181,7 +181,7 @@ func TestStoreDescriptors(t *testing.T) {
 // CaptureSnapshotStoreChecks run the exact same named checks that
 // RunEventsStoreConformance/RunStateStoreConformance/
 // RunSnapshotStoreConformance run above, but capture pass/fail via a
-// require.TestingT that records failures instead of calling t.FailNow(), so
+// conformance.TestingT that records failures instead of calling t.FailNow(), so
 // the detected (expected) failure can be asserted on here instead of
 // propagating into this test's own result.
 // ---------------------------------------------------------------------------

@@ -25,10 +25,10 @@ package durablestate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -730,43 +730,44 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 // holds no resolver field at all — see Actor.tenantAware's doc
 // comment) when one is already attached.
 func TestDurableStateActorVerifyTenantForPersist(t *testing.T) {
-	t.Run("legacy mode is always a no-op", func(t *testing.T) {
-		entity := &Actor{}
-		assert.NoError(t, entity.verifyTenantForPersist(context.Background()))
-	})
+	specs.Describe(t, "verifyTenantForPersist fails closed in tenant-aware mode when no valid TenantContext is attached", func(s *specs.Spec) {
+		s.It("legacy mode is always a no-op", func(ctx *specs.Context) {
+			entity := &Actor{}
+			ctx.Expect(entity.verifyTenantForPersist(context.Background())).To(specs.BeNil())
+		})
 
-	t.Run("tenant-aware mode fails closed when no TenantContext is attached", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
-		err := entity.verifyTenantForPersist(context.Background())
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
-	})
+		s.It("tenant-aware mode fails closed when no TenantContext is attached", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
+			err := entity.verifyTenantForPersist(context.Background())
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 
-	t.Run("tenant-aware mode succeeds against an already-attached TenantContext", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
-		tc, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		ctx, err := tenancy.Attach(context.Background(), tc)
-		require.NoError(t, err)
-		assert.NoError(t, entity.verifyTenantForPersist(ctx))
-	})
+		s.It("tenant-aware mode succeeds against an already-attached TenantContext", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
+			tc := tenantContextFor(ctx, "acme")
+			attached, err := tenancy.Attach(context.Background(), tc)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(entity.verifyTenantForPersist(attached)).To(specs.BeNil())
+		})
 
-	// Blocker 2 inheritance (EGO-TENANT-006 review fix): a resolver
-	// returning the zero-value tenancy.TenantContext{} (Blocker 1) is now
-	// rejected by tenancy.Attach itself (design.md Decision D8) before the
-	// command ever reaches this actor, so ctx here ends up with nothing
-	// attached — the same "missing" case this gate already covered. No
-	// code change to verifyTenantForPersist was needed to inherit this
-	// protection; it fails closed purely because tenancy.Require now
-	// rejects malformed content, and Attach never let one through.
-	t.Run("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
+		// Blocker 2 inheritance (EGO-TENANT-006 review fix): a resolver
+		// returning the zero-value tenancy.TenantContext{} (Blocker 1) is now
+		// rejected by tenancy.Attach itself (design.md Decision D8) before the
+		// command ever reaches this actor, so ctx here ends up with nothing
+		// attached — the same "missing" case this gate already covered. No
+		// code change to verifyTenantForPersist was needed to inherit this
+		// protection; it fails closed purely because tenancy.Require now
+		// rejects malformed content, and Attach never let one through.
+		s.It("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
 
-		ctx, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
-		require.Error(t, attachErr)
-		assert.True(t, errors.Is(attachErr, tenancy.ErrInvalid))
+			attached, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
+			ctx.Expect(attachErr).To(specs.Not(specs.BeNil()))
+			ctx.Expect(attachErr).To(specs.MatchError(tenancy.ErrInvalid))
 
-		err := entity.verifyTenantForPersist(ctx)
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
+			err := entity.verifyTenantForPersist(attached)
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 	})
 }
 

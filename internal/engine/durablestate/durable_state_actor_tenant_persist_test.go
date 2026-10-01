@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -124,6 +125,14 @@ func (x *flakyFirstCommandDurableStateBehavior) UnmarshalBinary(data []byte) err
 	return nil
 }
 
+// tenantContextFor builds the named tenant's TenantContext for a spec, failing
+// the running case when the name is not a valid tenant.
+func tenantContextFor(ctx *specs.Context, name tenancy.TenantID) tenancy.TenantContext {
+	tc, err := tenancy.NewTenantContext(name)
+	ctx.Expect(err).To(specs.BeNil())
+	return tc
+}
+
 // TestDurableStateActorRecoverFromStoreSeedsActorTenant covers tasks.md
 // Phase 1 (DS2): recoverFromStore must seed entity.actorTenant from the
 // recovered record's carried tenant metadata before its state payload is
@@ -131,107 +140,108 @@ func (x *flakyFirstCommandDurableStateBehavior) UnmarshalBinary(data []byte) err
 // (ErrInvalid) when a tenant-aware actor recovers a non-genesis record whose
 // tenant metadata is absent or malformed. Legacy mode never seeds.
 func TestDurableStateActorRecoverFromStoreSeedsActorTenant(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := "acct-1"
+	specs.Describe(t, "recoverFromStore seeds the actor's tenant from the recovered record and fails closed on missing or malformed metadata", func(s *specs.Spec) {
+		bg := context.Background()
+		persistenceID := "acct-1"
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-
-	newDurableState := func(md tenancy.Metadata) *egopb.DurableState {
-		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		return &egopb.DurableState{
-			PersistenceId:  persistenceID,
-			VersionNumber:  1,
-			ResultingState: stateAny,
-			Timestamp:      time.Now().UnixNano(),
-			TenantMetadata: md,
-		}
-	}
-
-	t.Run("seeds actorTenant from valid persisted metadata", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
-
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
+		newDurableState := func(ctx *specs.Context, md tenancy.Metadata) *egopb.DurableState {
+			stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			return &egopb.DurableState{
+				PersistenceId:  persistenceID,
+				VersionNumber:  1,
+				ResultingState: stateAny,
+				Timestamp:      time.Now().UnixNano(),
+				TenantMetadata: md,
+			}
 		}
 
-		require.NoError(t, entity.recoverFromStore(ctx))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
+		s.It("seeds actorTenant from valid persisted metadata", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newDurableState(ctx, tenancy.MarshalMetadata(tenantA)), persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("genesis leaves actorTenant unseeded without error", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recoverFromStore(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-		require.NoError(t, entity.recoverFromStore(ctx))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
-	})
+		s.It("genesis leaves actorTenant unseeded without error", func(ctx *specs.Context) {
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
 
-	t.Run("fails closed when tenant-aware and persisted metadata is absent", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(nil), persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recoverFromStore(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+		})
 
-		err := entity.recoverFromStore(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-	})
+		s.It("fails closed when tenant-aware and persisted metadata is absent", func(ctx *specs.Context) {
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newDurableState(ctx, nil), persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("fails closed when tenant-aware and persisted metadata is malformed", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"}), persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 
-		err := entity.recoverFromStore(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-	})
+		s.It("fails closed when tenant-aware and persisted metadata is malformed", func(ctx *specs.Context) {
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newDurableState(ctx, tenancy.Metadata{"ego.tenant.scope": "not-a-real-scope"}), persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("legacy mode never seeds actorTenant, even when metadata is present", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		require.NoError(t, durableStore.WriteState(ctx, persistence.Unscoped(), newDurableState(tenancy.MarshalMetadata(tenantA)), persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
-			stateStore:    durableStore,
-			scope:         persistence.Unscoped(),
-		}
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 
-		require.NoError(t, entity.recoverFromStore(ctx))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
+		s.It("legacy mode never seeds actorTenant, even when metadata is present", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(durableStore.WriteState(bg, persistence.Unscoped(), newDurableState(ctx, tenancy.MarshalMetadata(tenantA)), persistence.Unconditional())).To(specs.BeNil())
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    durableStore,
+				scope:         persistence.Unscoped(),
+			}
+
+			ctx.Expect(entity.recoverFromStore(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+		})
 	})
 }
 
@@ -309,69 +319,70 @@ func TestDurableStateActorProcessCommandRejectsCrossTenant(t *testing.T) {
 // tenancy.MarshalMetadata's exact ego.tenant.* keys, and write nothing in
 // legacy mode.
 func TestDurableStateActorPersistStateAndPublishWritesTenantMetadata(t *testing.T) {
-	ctx := context.TODO()
-	persistenceID := "acct-1"
+	specs.Describe(t, "persistStateAndPublish writes the actor's established tenant onto the persisted state in tenant-aware mode only", func(s *specs.Spec) {
+		bg := context.Background()
+		persistenceID := "acct-1"
 
-	newEntity := func(tenantAware bool, tc tenancy.TenantContext, scope persistence.Scope, store *testkit.DurableStore, stream eventstream.Stream) *Actor {
-		state := &testpb.Account{AccountId: persistenceID, AccountBalance: 100}
-		cachedAny, err := anypb.New(state)
-		require.NoError(t, err)
-		return &Actor{
-			persistenceID:   persistenceID,
-			currentState:    state,
-			cachedStateAny:  cachedAny,
-			currentVersion:  1,
-			lastCommandTime: time.Now(),
-			stateStore:      store,
-			eventsStream:    stream,
-			tenantAware:     tenantAware,
-			actorTenant:     tc,
-			scope:           scope,
+		newEntity := func(ctx *specs.Context, tenantAware bool, tc tenancy.TenantContext, scope persistence.Scope, store *testkit.DurableStore, stream eventstream.Stream) *Actor {
+			state := &testpb.Account{AccountId: persistenceID, AccountBalance: 100}
+			cachedAny, err := anypb.New(state)
+			ctx.Expect(err).To(specs.BeNil())
+			return &Actor{
+				persistenceID:   persistenceID,
+				currentState:    state,
+				cachedStateAny:  cachedAny,
+				currentVersion:  1,
+				lastCommandTime: time.Now(),
+				stateStore:      store,
+				eventsStream:    stream,
+				tenantAware:     tenantAware,
+				actorTenant:     tc,
+				scope:           scope,
+			}
 		}
-	}
 
-	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		eventStream := eventstream.New()
+		s.It("legacy mode writes no tenant metadata", func(ctx *specs.Context) {
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			eventStream := eventstream.New()
 
-		entity := newEntity(false, noTenantContext, persistence.Unscoped(), durableStore, eventStream)
-		require.NoError(t, entity.persistStateAndPublish(ctx))
+			entity := newEntity(ctx, false, noTenantContext, persistence.Unscoped(), durableStore, eventStream)
+			ctx.Expect(entity.persistStateAndPublish(bg)).To(specs.BeNil())
 
-		latest, err := durableStore.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.Empty(t, latest.GetTenantMetadata())
+			latest, err := durableStore.GetLatestState(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest == nil).To(specs.BeFalse())
+			ctx.Expect(len(latest.GetTenantMetadata())).ToEqual(0)
 
-		eventStream.Close()
-		require.NoError(t, durableStore.Disconnect(ctx))
-	})
+			eventStream.Close()
+			ctx.Expect(durableStore.Disconnect(bg)).To(specs.BeNil())
+		})
 
-	t.Run("tenant-aware mode writes the actor's established tenant", func(t *testing.T) {
-		tenantA, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
+		s.It("tenant-aware mode writes the actor's established tenant", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			scopeA, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-		eventStream := eventstream.New()
+			durableStore := testkit.NewDurableStore()
+			ctx.Expect(durableStore.Connect(bg)).To(specs.BeNil())
+			eventStream := eventstream.New()
 
-		entity := newEntity(true, tenantA, scopeA, durableStore, eventStream)
-		require.NoError(t, entity.persistStateAndPublish(ctx))
+			entity := newEntity(ctx, true, tenantA, scopeA, durableStore, eventStream)
+			ctx.Expect(entity.persistStateAndPublish(bg)).To(specs.BeNil())
 
-		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		require.NotEmpty(t, latest.GetTenantMetadata())
-		assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tenantA)), latest.GetTenantMetadata())
+			latest, err := durableStore.GetLatestState(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest == nil).To(specs.BeFalse())
+			ctx.Expect(len(latest.GetTenantMetadata()) > 0).To(specs.BeTrue())
+			ctx.Expect(latest.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tenantA)))
 
-		roundTripped, err := tenancy.UnmarshalMetadata(latest.GetTenantMetadata())
-		require.NoError(t, err)
-		assert.Equal(t, tenantA, roundTripped)
+			roundTripped, err := tenancy.UnmarshalMetadata(latest.GetTenantMetadata())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(roundTripped).ToEqual(tenantA)
 
-		eventStream.Close()
-		require.NoError(t, durableStore.Disconnect(ctx))
+			eventStream.Close()
+			ctx.Expect(durableStore.Disconnect(bg)).To(specs.BeNil())
+		})
 	})
 }
 

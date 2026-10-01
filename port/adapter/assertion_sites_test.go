@@ -66,60 +66,74 @@ var allowedAssertionSites = []string{
 // tenancy.AsFixedTenantResolver. The set of sites found must equal the
 // allowed set exactly, so the scan also proves it sees the four accessors.
 func TestOptionalInterfacesAreAssertedOnlyInTheirAccessors(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sites []string
-	var scanned int
-	walkErr := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if path != repoRoot && skipDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !isProductionGoFile(path) {
-			return nil
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			return err
-		}
-		found, err := assertionSites(filepath.ToSlash(rel), src)
-		if err != nil {
-			return err
-		}
-		scanned++
-		sites = append(sites, found...)
-		return nil
-	})
-	if walkErr != nil {
-		t.Fatal(walkErr)
-	}
-	if scanned == 0 {
-		t.Fatal("the scan found no Go sources, so it proves nothing")
-	}
+	specs.Describe(t, "type assertions of the optional adapter interfaces in production code", func(s *specs.Spec) {
+		var sites []string
+		s.BeforeEach(func(ctx *specs.Context) {
+			repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+			ctx.Expect(err).To(specs.BeNil())
+			sites = nil
+			var scanned int
+			walkErr := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if path != repoRoot && skipDir(entry.Name()) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if !isProductionGoFile(path) {
+					return nil
+				}
+				src, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				rel, err := filepath.Rel(repoRoot, path)
+				if err != nil {
+					return err
+				}
+				found, err := assertionSites(filepath.ToSlash(rel), src)
+				if err != nil {
+					return err
+				}
+				scanned++
+				sites = append(sites, found...)
+				return nil
+			})
+			ctx.Expect(walkErr).To(specs.BeNil())
+			// A scan that found no Go source proves nothing.
+			ctx.Expect(scanned).To(specs.BeGreaterThan(0))
 
-	slices.Sort(sites)
-	sites = slices.Compact(sites)
-	for _, site := range sites {
-		if !slices.Contains(allowedAssertionSites, site) {
-			t.Errorf("%s type-asserts an optional adapter interface; call adapter.Describe, StarterOf, PingerOf or tenancy.AsFixedTenantResolver instead (openspec/changes/ego-arch-004/design.md §D3)", site)
-		}
-	}
-	for _, site := range allowedAssertionSites {
-		if !slices.Contains(sites, site) {
-			t.Errorf("the scan did not find the accessor %s; either it moved or the scan is broken", site)
-		}
-	}
+			slices.Sort(sites)
+			sites = slices.Compact(sites)
+		})
+
+		s.It("appear only inside the four accessors", func(ctx *specs.Context) {
+			// A site outside the allowed set is named in the failure. Fix it by calling
+			// adapter.Describe, StarterOf, PingerOf or tenancy.AsFixedTenantResolver
+			// instead (openspec/changes/ego-arch-004/design.md section D3).
+			var unexpected []string
+			for _, site := range sites {
+				if !slices.Contains(allowedAssertionSites, site) {
+					unexpected = append(unexpected, site)
+				}
+			}
+			ctx.Expect(unexpected).To(specs.BeEmpty())
+		})
+
+		s.It("are all found by the scan, so the scan itself is proven to see them", func(ctx *specs.Context) {
+			// An accessor the scan did not find either moved or the scan is broken.
+			var missing []string
+			for _, site := range allowedAssertionSites {
+				if !slices.Contains(sites, site) {
+					missing = append(missing, site)
+				}
+			}
+			ctx.Expect(missing).To(specs.BeEmpty())
+		})
+	})
 }
 
 // TestNoPrivateCopiesOfOptionalInterfaces requires that no production file
@@ -129,44 +143,44 @@ func TestOptionalInterfacesAreAssertedOnlyInTheirAccessors(t *testing.T) {
 // problem in another form. Only port/adapter/adapter.go declares such
 // interfaces (Describer, Starter, Pinger).
 func TestNoPrivateCopiesOfOptionalInterfaces(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var owners []string
-	walkErr := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if path != repoRoot && skipDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !isProductionGoFile(path) {
-			return nil
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return err
-		}
-		if len(localOptionalInterfaces(file)) == 0 {
-			return nil
-		}
-		rel, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			return err
-		}
-		owners = append(owners, filepath.ToSlash(rel))
-		return nil
+	specs.Describe(t, "interfaces made only of the optional methods", func(s *specs.Spec) {
+		s.It("are declared only by the adapter file, never privately elsewhere", func(ctx *specs.Context) {
+			repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+			ctx.Expect(err).To(specs.BeNil())
+			var owners []string
+			walkErr := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if path != repoRoot && skipDir(entry.Name()) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if !isProductionGoFile(path) {
+					return nil
+				}
+				file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+				if err != nil {
+					return err
+				}
+				if len(localOptionalInterfaces(file)) == 0 {
+					return nil
+				}
+				rel, err := filepath.Rel(repoRoot, path)
+				if err != nil {
+					return err
+				}
+				owners = append(owners, filepath.ToSlash(rel))
+				return nil
+			})
+			ctx.Expect(walkErr).To(specs.BeNil())
+			// Any other owner is a private copy: use adapter.Describer, Starter or
+			// Pinger through their accessors instead.
+			ctx.Expect(owners).To(specs.Equal([]string{"port/adapter/adapter.go"}))
+		})
 	})
-	if walkErr != nil {
-		t.Fatal(walkErr)
-	}
-	if !slices.Equal(owners, []string{"port/adapter/adapter.go"}) {
-		t.Fatalf("files declaring an interface made only of %v = %v, want only port/adapter/adapter.go: use adapter.Describer, Starter or Pinger through their accessors", optionalMethods, owners)
-	}
 }
 
 // TestAssertionSitesNegativeControl proves the scan reports every form of

@@ -24,13 +24,16 @@ package enginetest
 
 import (
 	"context"
+	"errors"
 
-	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/egopb"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
+
+// ErrHandleEvent is the error FailingHandleEventBehavior.HandleEvent returns.
+var ErrHandleEvent = errors.New("failing handle event behavior: HandleEvent always fails")
 
 // FailingHandleEventBehavior is a test behavior whose HandleEvent always returns an error.
 type FailingHandleEventBehavior struct {
@@ -57,7 +60,7 @@ func (f *FailingHandleEventBehavior) HandleCommand(_ context.Context, command pr
 }
 
 func (f *FailingHandleEventBehavior) HandleEvent(_ context.Context, _ proto.Message, _ proto.Message) (proto.Message, error) {
-	return nil, assert.AnError
+	return nil, ErrHandleEvent
 }
 
 func (f *FailingHandleEventBehavior) MarshalBinary() ([]byte, error) {
