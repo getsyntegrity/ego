@@ -394,6 +394,26 @@ func askWith(ctx *specs.Context, callCtx context.Context, pid *goakt.PID, msg pr
 	return commandReply
 }
 
+// askAll sends every msg to pid at once, each from its own goroutine, and
+// returns the replies in the order of msgs. A case that sends the commands of one
+// batch cycle uses it: no command is replied to before the cycle flushes.
+func askAll(ctx *specs.Context, pid *goakt.PID, msgs ...proto.Message) []*egopb.CommandReply {
+	return askAllWith(ctx, context.Background(), pid, msgs...)
+}
+
+// askAllWith is askAll with the context the commands travel in.
+func askAllWith(ctx *specs.Context, callCtx context.Context, pid *goakt.PID, msgs ...proto.Message) []*egopb.CommandReply {
+	pending := make([]*backgroundAsk, len(msgs))
+	for i, msg := range msgs {
+		pending[i] = askInBackground(callCtx, pid, msg)
+	}
+	replies := make([]*egopb.CommandReply, len(msgs))
+	for i, p := range pending {
+		replies[i] = p.await(ctx)
+	}
+	return replies
+}
+
 // backgroundAsk is a command whose reply is deferred until its batch cycle
 // flushes, sent from its own goroutine so the case can send another command
 // into the same open cycle.
