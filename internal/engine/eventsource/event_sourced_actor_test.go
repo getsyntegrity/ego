@@ -63,625 +63,375 @@ import (
 )
 
 func TestEventSourcedActor(t *testing.T) {
-	t.Run("with state reply", func(t *testing.T) {
-		ctx := context.TODO()
+	// These cases need the actor system: they spawn the real actor and its child
+	// writers. They never sleep: a spawn waits until the actor reports itself
+	// running, a command waits for its reply, and what a child actor does after
+	// the reply (a snapshot, a delete) is polled. The empty Describe name keeps
+	// the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("with state reply", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
 
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
 
-		pause.For(time.Second)
+			// send another command to credit the balance
+			state = stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
+		})
 
-		// create an instance of events stream
-		eventStream := eventstream.New()
+		s.It("with error reply", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
+
+			// a command for another entity is rejected
+			reply := ask(ctx, pid, &testpb.CreditAccount{AccountId: "different-id", Balance: 250})
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal("command sent to the wrong entity"))
+		})
+
+		s.It("with unhandled command", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, pid, &testpb.TestSend{})
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal("unhandled command"))
+		})
+
+		s.It("with state recovery from event store", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
+
+			state = stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
+
+			// restart the actor: it rebuilds its state from the events store
+			pid, err := rig.system.ReSpawn(context.Background(), behavior.ID())
+			ctx.Expect(err).To(specs.BeNil())
+			waitRunning(ctx, pid)
+
+			// fetch the current state
+			state = stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
+		})
+
+		s.It("with no event to persist", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
+
+			state = stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
+
+			// a command that produces no event leaves the sequence number and the state alone
+			state = stateReplyOf(ctx, ask(ctx, pid, new(testpb.TestNoEvent)))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
+		})
+
+		s.It("with unhandled event", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
+
+			reply := ask(ctx, pid, new(emptypb.Empty))
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal("unhandled event"))
+		})
+
+		s.It("with snapshot store recovery", func(ctx *specs.Context) {
+			bg := context.Background()
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			eventStore := connectedEventsStore(ctx)
+			snapshotStore := connectedSnapshotStore(ctx)
+
+			// pre-write a snapshot
+			stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snapshotStore.WriteSnapshot(bg, persistence.Unscoped(), &egopb.Snapshot{
+				PersistenceId:  persistenceID,
+				SequenceNumber: 1,
+				State:          stateAny,
+				Timestamp:      time.Now().Unix(),
+			})).To(specs.BeNil())
+
+			// pre-write an event after the snapshot
+			eventAny, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{{
+				PersistenceId:  persistenceID,
+				SequenceNumber: 2,
+				Event:          eventAny,
+				Timestamp:      time.Now().Unix(),
+				Shard:          0,
+			}}, persistence.Unconditional())).To(specs.BeNil())
+
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewSnapshotStore(snapshotStore))
+			pid := rig.spawn(ctx, behavior)
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			// the state is the snapshot with the later event applied
+			state := stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 150.00})
+		})
 
-		pause.For(time.Second)
+		s.It("with telemetry extension", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NotNil(t, pid)
+			// create noop tracer and meter for telemetry
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
 
-		pause.For(time.Second)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior)
 
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
 
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			// stop the actor system (exercises PostStop metrics decrement)
+			rig.stop(ctx)
+		})
 
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
+		s.It("with encryption during command processing", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
+			encryptor := encryption.NewAESEncryptor(testkit.NewKeyStore())
 
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewEncryptor(encryptor))
+			pid := rig.spawn(ctx, behavior)
 
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: persistenceID,
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 500.00})
+		})
 
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+		s.It("with snapshot persistence on interval", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
+			snapshotStore := connectedSnapshotStore(ctx)
 
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewSnapshotStore(snapshotStore))
+			// snapshot interval of 1
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{SnapshotInterval: 1})
 
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
 
-		// disconnect the events store
-		err = eventStore.Disconnect(ctx)
-		require.NoError(t, err)
+			// the snapshot writer child persists after the reply
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+		})
 
-		pause.For(time.Second)
+		s.It("with retention policy delete events on snapshot", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with error reply", func(t *testing.T) {
-		ctx := context.TODO()
+			eventStore := connectedEventsStore(ctx)
+			snapshotStore := connectedSnapshotStore(ctx)
 
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewSnapshotStore(snapshotStore))
+			// snapshot interval of 2 and retention policy
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval:       2,
+				HasRetentionPolicy:     true,
+				DeleteEventsOnSnapshot: true,
+				EventsRetentionCount:   0,
+			})
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
 
-		pause.For(time.Second)
+			// the second command hits the snapshot interval
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(2))
 
-		// create the persistence actor using the behavior previously created
-		persistentActor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NotNil(t, pid)
+			// verify snapshot was written
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(2),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-		pause.For(time.Second)
+			// verify events were deleted (deleteUpTo = eventsCounter = 2 since EventsRetentionCount is 0)
+			ctx.Eventually(latestEvent(eventStore, persistenceID), specs.BeNil(),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+		})
 
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
+		s.It("with event adapters during recovery", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			eventStore := connectedEventsStore(ctx)
 
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
+			// pre-write an event to the store
+			eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(context.Background(), persistence.Unscoped(), []*egopb.Event{{
+				PersistenceId:  persistenceID,
+				SequenceNumber: 1,
+				Event:          eventAny,
+				Timestamp:      time.Now().Unix(),
+				Shard:          0,
+			}}, persistence.Unconditional())).To(specs.BeNil())
 
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: "different-id",
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Equal(t, "command sent to the wrong entity", errorReply.ErrorReply.GetMessage())
-
-		// disconnect the event store
-		require.NoError(t, eventStore.Disconnect(ctx))
-		// close the stream
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with unhandled command", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			// a no-op event adapter that passes events through unchanged
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewEventAdapters([]eventadapter.EventAdapter{&noopEventAdapter{}}))
+			pid := rig.spawn(ctx, behavior)
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			// fetch the current state - should have recovered through the adapter chain
+			state := stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, 1, &testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+		})
 
-		pause.For(time.Second)
+		s.It("with snapshot and encryption during recovery", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// create the persistence actor using the behavior previously created
-		persistentActor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NotNil(t, pid)
+			eventStore := connectedEventsStore(ctx)
+			snapshotStore := connectedSnapshotStore(ctx)
+			encryptor := encryption.NewAESEncryptor(testkit.NewKeyStore())
 
-		pause.For(time.Second)
+			// snapshot interval of 2 (snapshot at event 2, event 3 has no snapshot)
+			entityCfg := &extensions.EntityConfig{SnapshotInterval: 2}
 
-		command := &testpb.TestSend{}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Equal(t, "unhandled command", errorReply.ErrorReply.GetMessage())
-
-		// disconnect from the event store
-		require.NoError(t, eventStore.Disconnect(ctx))
-
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with state recovery from event store", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of event stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			// first actor system, with encryption and snapshot store
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewSnapshotStore(snapshotStore),
+				extensions.NewEncryptor(encryptor))
+			pid := rig.spawn(ctx, behavior, entityCfg)
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			// command 1 (event 1, no snapshot yet)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
 
-		pause.For(time.Second)
+			// command 2 (event 2, snapshot taken at seq 2)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 200}))
 
-		// create the persistence actor using the behavior previously created
-		persistentActor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
+			// command 3 (event 3, no snapshot - this encrypted event will need replay after snapshot)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
 
-		pause.For(time.Second)
+			// the snapshot writer child persists after the reply: the second actor
+			// system must find the snapshot at seq 2 and replay only event 3
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(2),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
+			// stop the first actor system
+			rig.stop(ctx)
 
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: persistenceID,
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-
-		assert.True(t, proto.Equal(expected, resultingState))
-		// wait a while
-		pause.For(time.Second)
-
-		// restart the actor
-		pid, err = actorSystem.ReSpawn(ctx, behavior.ID())
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// fetch the current state
-		command = &egopb.GetStateCommand{}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		// close the stream
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with no event to persist", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of event stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			// start a NEW actor system with the same stores and encryption
+			rig2 := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewSnapshotStore(snapshotStore),
+				extensions.NewEncryptor(encryptor))
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			// spawn the actor again - should recover from encrypted snapshot and events
+			behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			pid2 := rig2.spawnWithoutStash(ctx, behavior2, entityCfg)
 
-		pause.For(time.Second)
+			// 500 + 200 + 100 = 800
+			state := stateReplyOf(ctx, ask(ctx, pid2, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, 3, &testpb.Account{AccountId: persistenceID, AccountBalance: 800.00})
+		})
 
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NotNil(t, pid)
+		s.It("with encrypted event replay without snapshot store", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		pause.For(time.Second)
+			eventStore := connectedEventsStore(ctx)
+			encryptor := encryption.NewAESEncryptor(testkit.NewKeyStore())
 
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		// create the expected response
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: persistenceID,
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// test no events to persist
-		command = new(testpb.TestNoEvent)
-		// send a command
-		reply, err = goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		commandReply = reply.(*egopb.CommandReply)
-
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// disconnect from the event store
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		// close the stream
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with unhandled event", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			// first actor system: send commands with encryption (no snapshot store)
+			rig := startActorRig(ctx,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+				extensions.NewEncryptor(encryptor))
+			pid := rig.spawn(ctx, behavior)
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 300.00}))
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 150}))
 
-		pause.For(time.Second)
+			rig.stop(ctx)
 
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NotNil(t, pid)
+			// second actor system: recover from encrypted events (no snapshot)
+			rig2 := startActorRig(ctx,
+				extensions.NewEventsStore(eventStore),
+				extensions.NewEncryptor(encryptor))
+			behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			pid2 := rig2.spawnWithoutStash(ctx, behavior2)
 
-		pause.For(time.Second)
+			state := stateReplyOf(ctx, ask(ctx, pid2, &egopb.GetStateCommand{}))
+			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 450.00})
+		})
 
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
+		s.It("with retention policy delete snapshots on snapshot", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			snapshotStore := connectedSnapshotStore(ctx)
 
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewSnapshotStore(snapshotStore))
+			// snapshot interval of 2 and delete snapshots retention policy
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval:          2,
+				HasRetentionPolicy:        true,
+				DeleteSnapshotsOnSnapshot: true,
+			})
 
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
+			// send 4 commands: snapshots at events 2 and 4
+			// command 1: create account
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			// command 2: credit (triggers first snapshot at seq 2)
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
+			// command 3: credit
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}))
+			// command 4: credit (triggers second snapshot at seq 4, should delete snapshot at seq 2)
+			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 25}))
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(4))
 
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		reply, err = goakt.Ask(ctx, pid, new(emptypb.Empty), 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Equal(t, "unhandled event", errorReply.ErrorReply.GetMessage())
-
-		// disconnect from the event store
-		require.NoError(t, eventStore.Disconnect(ctx))
-
-		pause.For(time.Second)
-
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
+			// verify latest snapshot exists at seq 4
+			ctx.Eventually(latestSnapshot(snapshotStore, persistenceID), beSnapshotAt(4),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+		})
 	})
+
 	specs.Describe(t, "", func(s *specs.Spec) {
 		s.It("With events store ping failed", func(ctx *specs.Context) {
 			persistenceID := uuid.NewString()
@@ -694,8 +444,6 @@ func TestEventSourcedActor(t *testing.T) {
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 3,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
-
-			pause.For(time.Second)
 
 			rig.expectRefusedFor(ctx, nil, behavior)
 		})
@@ -736,869 +484,6 @@ func TestEventSourcedActor(t *testing.T) {
 
 			expectRecoveryFailure(ctx, entity, "failed to replay events", assert.AnError)
 		})
-	})
-	t.Run("with snapshot store recovery", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create the snapshot store
-		snapshotStore := testkit.NewSnapshotStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the stores
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		// pre-write a snapshot
-		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		snapshot := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 1,
-			State:          stateAny,
-			Timestamp:      time.Now().Unix(),
-		}
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
-
-		// pre-write an event after the snapshot
-		eventAny, err := anypb.New(&testpb.AccountCredited{AccountId: persistenceID, AccountBalance: 50})
-		require.NoError(t, err)
-		event := &egopb.Event{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 2,
-			Event:          eventAny,
-			Timestamp:      time.Now().Unix(),
-			Shard:          0,
-		}
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// fetch the current state
-		reply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 150.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		assert.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with telemetry extension", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create noop tracer and meter for telemetry
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		// create an actor system with telemetry extension
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// disconnect the event store
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		// close the stream
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		// stop the actor system (exercises PostStop metrics decrement)
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with encryption during command processing", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		err := eventStore.Connect(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create a key store and encryptor
-		keyStore := testkit.NewKeyStore()
-		encryptor := encryption.NewAESEncryptor(keyStore)
-
-		// create an actor system with encryptor extension
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// disconnect the event store
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		// close the stream
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with snapshot persistence on interval", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the stores
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the stores
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system with snapshot store
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create entity config with snapshot interval of 1
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval: 1,
-		}
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		var command proto.Message = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		pause.For(time.Second)
-
-		// verify snapshot was written
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, snap)
-		assert.EqualValues(t, 1, snap.GetSequenceNumber())
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		assert.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with retention policy delete events on snapshot", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the stores
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the stores
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system with snapshot store
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create entity config with snapshot interval of 2 and retention policy
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval:       2,
-			HasRetentionPolicy:     true,
-			DeleteEventsOnSnapshot: true,
-			EventsRetentionCount:   0,
-		}
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// send first command
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		// send second command to hit snapshot interval
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		pause.For(time.Second)
-
-		// verify snapshot was written
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, snap)
-		assert.EqualValues(t, 2, snap.GetSequenceNumber())
-
-		// verify events were deleted (deleteUpTo = eventsCounter = 2 since EventsRetentionCount is 0)
-		latestEvent, err := eventStore.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latestEvent)
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		assert.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with event adapters during recovery", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the event store
-		eventStore := testkit.NewEventsStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the event store
-		require.NoError(t, eventStore.Connect(ctx))
-
-		// pre-write an event to the store
-		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		event := &egopb.Event{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 1,
-			Event:          eventAny,
-			Timestamp:      time.Now().Unix(),
-			Shard:          0,
-		}
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create a no-op event adapter that passes events through unchanged
-		adapter := &noopEventAdapter{}
-
-		// create an actor system with event adapters extension
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEventAdapters([]eventadapter.EventAdapter{adapter}),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// fetch the current state - should have recovered through the adapter chain
-		reply, err := goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 100,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with snapshot and encryption during recovery", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the stores
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the stores
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create a key store and encryptor
-		keyStore := testkit.NewKeyStore()
-		encryptor := encryption.NewAESEncryptor(keyStore)
-
-		// create entity config with snapshot interval of 2 (snapshot at event 2, event 3 has no snapshot)
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval: 2,
-		}
-
-		// create an actor system with encryption and snapshot store
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor with behavior and entity config
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// send command 1 (event 1, no snapshot yet)
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		// send command 2 (event 2, snapshot taken at seq 2)
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 200}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// send command 3 (event 3, no snapshot - this encrypted event will need replay after snapshot)
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		pause.For(time.Second)
-
-		// stop the first actor system
-		eventStream.Close()
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create a new events stream
-		eventStream2 := eventstream.New()
-
-		// start a NEW actor system with the same stores and encryption
-		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream2),
-				extensions.NewSnapshotStore(snapshotStore),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem2)
-
-		err = actorSystem2.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// spawn the actor again - should recover from encrypted snapshot and events
-		behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		actor2 := New()
-		pid2, err := actorSystem2.Spawn(ctx, behavior2.ID(), actor2, goakt.WithDependencies(behavior2, entityCfg), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid2)
-
-		pause.For(time.Second)
-
-		// fetch the current state - should have recovered
-		reply, err = goakt.Ask(ctx, pid2, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 3, state.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		// 500 + 200 + 100 = 800
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 800.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		assert.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream2.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem2.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("with encrypted event replay without snapshot store", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-		keyStore := testkit.NewKeyStore()
-		encryptor := encryption.NewAESEncryptor(keyStore)
-
-		// first actor system: send commands with encryption (no snapshot store)
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 300.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 150}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-		pause.For(time.Second)
-
-		// second actor system: recover from encrypted events (no snapshot)
-		eventStream2 := eventstream.New()
-		actorSystem2, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream2),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem2.Start(ctx))
-
-		behavior2 := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		actor2 := New()
-		pid2, err := actorSystem2.Spawn(ctx, behavior2.ID(), actor2, goakt.WithDependencies(behavior2), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid2)
-		pause.For(time.Second)
-
-		reply, err = goakt.Ask(ctx, pid2, &egopb.GetStateCommand{}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		resultingState := new(testpb.Account)
-		require.NoError(t, state.StateReply.GetState().UnmarshalTo(resultingState))
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 450.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		eventStream2.Close()
-		pause.For(time.Second)
-		assert.NoError(t, actorSystem2.Stop(ctx))
-	})
-	t.Run("with retention policy delete snapshots on snapshot", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create the stores
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		// connect the stores
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system with snapshot store
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create entity config with snapshot interval of 2 and delete snapshots retention policy
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval:          2,
-			HasRetentionPolicy:        true,
-			DeleteSnapshotsOnSnapshot: true,
-		}
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor with behavior and entity config dependencies
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// send 4 commands: snapshots at events 2 and 4
-		// command 1: create account
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// command 2: credit (triggers first snapshot at seq 2)
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// command 3: credit
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// command 4: credit (triggers second snapshot at seq 4, should delete snapshot at seq 2)
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 25}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 4, state.StateReply.GetSequenceNumber())
-
-		pause.For(time.Second)
-
-		// verify latest snapshot exists at seq 4
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, snap)
-		assert.EqualValues(t, 4, snap.GetSequenceNumber())
-
-		// free resources
-		assert.NoError(t, eventStore.Disconnect(ctx))
-		assert.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-
-		pause.For(time.Second)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
 	})
 }
 
@@ -2266,8 +1151,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)))
 			pid := rig.spawn(ctx, behavior)
 
-			pause.For(time.Second)
-
 			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
 			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.StartWith("failed to encrypt event"))
 
@@ -2300,19 +1183,18 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)))
 			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{SnapshotInterval: 1})
 
-			pause.For(time.Second)
-
 			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
 			state := stateReplyOf(ctx, reply)
 			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
 
-			// allow time for the child snapshot writer to process
-			pause.For(time.Second)
+			// the child snapshot writer encrypts after the reply: wait for its call,
+			// the second one, which fails
+			ctx.Eventually(callCount(encrypt), specs.BeGreaterThanOrEqual(2),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
 			// verify no snapshot was written since encryption failed
-			snap, err := snapshotStore.GetLatestSnapshot(context.Background(), persistence.Unscoped(), persistenceID)
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(snap).To(specs.BeNil())
+			ctx.Consistently(latestSnapshot(snapshotStore, persistenceID), specs.BeNil(),
+				specs.WithTimeout(quietPeriod), specs.WithInterval(pollInterval))
 		})
 
 		s.It("with DeleteEvents error in retention policy does not crash", func(ctx *specs.Context) {
@@ -2352,8 +1234,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				DeleteEventsOnSnapshot: true,
 				EventsRetentionCount:   0,
 			})
-
-			pause.For(time.Second)
 
 			// first command
 			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
@@ -2408,8 +1288,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				DeleteSnapshotsOnSnapshot: true,
 			})
 
-			pause.For(time.Second)
-
 			// commands 1 and 2: first snapshot at seq 2
 			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
 			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
@@ -2426,6 +1304,23 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			ctx.Eventually(callCount(deleteSnapshots), specs.BeGreaterThanOrEqual(1),
 				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
+
+		s.It("with unhandled non-command message does not crash", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 3,
+				extensions.NewEventsStore(connectedEventsStore(ctx)))
+			pid := rig.spawn(ctx, behavior)
+
+			ctx.Expect(goakt.Tell(context.Background(), pid, new(egopb.NoReply))).To(specs.BeNil())
+
+			// The mailbox is ordered: the command below is only handled once the
+			// unhandled message ahead of it is, so its state reply proves the actor
+			// survived it.
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+			stateReplyOf(ctx, reply)
 		})
 
 		s.It("with persistEvents write failure shuts down actor", func(ctx *specs.Context) {
@@ -2445,10 +1340,11 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
 			pid := rig.spawn(ctx, behavior)
 
-			pause.For(time.Second)
-
 			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
 			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(assert.AnError.Error()))
+
+			// the write failure leaves the actor's view of the store stale, so it stops
+			waitStopped(ctx, pid)
 		})
 	})
 
@@ -2657,54 +1553,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 
 			expectRecoveryFailure(ctx, entity, "failed to handle event at sequence 1", assert.AnError)
 		})
-	})
-
-	t.Run("with unhandled non-command message does not crash", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior),
-			goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		err = goakt.Tell(ctx, pid, new(egopb.NoReply))
-		require.NoError(t, err)
-
-		pause.For(500 * time.Millisecond)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
 }

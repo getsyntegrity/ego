@@ -24,6 +24,7 @@ package eventsource
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	specmock "github.com/getsyntegrity/go-specs/mock"
@@ -39,6 +40,7 @@ import (
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 
@@ -75,6 +77,9 @@ const (
 	pollTimeout  = 5 * time.Second
 	pollInterval = 10 * time.Millisecond
 	askTimeout   = 5 * time.Second
+
+	// quietPeriod is how long a case watches that something does NOT happen.
+	quietPeriod = 200 * time.Millisecond
 )
 
 // eventSourcedBehavior is an event sourced behavior that can also travel as a
@@ -101,6 +106,13 @@ type actorRig struct {
 	system  goakt.ActorSystem
 	stream  eventstream.Stream
 	stopped bool
+}
+
+// startActorRig starts an actor system whose actors retry PreStart three times,
+// the setting most cases use. The events stream extension is always added to
+// exts.
+func startActorRig(ctx *specs.Context, exts ...extension.Extension) *actorRig {
+	return startActorRigWith(ctx, "TestActorSystem", 3, exts...)
 }
 
 // startActorRigWith starts an actor system called name whose actors retry
@@ -209,9 +221,76 @@ func (r *actorRig) spawn(ctx *specs.Context, behavior eventSourcedBehavior, deps
 	return pid
 }
 
+// spawnWithoutStash is spawn for an actor that does not stash, the way the cases
+// that restart the system on the same stores spawn their second actor.
+func (r *actorRig) spawnWithoutStash(ctx *specs.Context, behavior eventSourcedBehavior, deps ...extension.Dependency) *goakt.PID {
+	pid, err := r.trySpawn(behavior.ID(),
+		goakt.WithDependencies(append([]extension.Dependency{behavior}, deps...)...),
+		goakt.WithLongLived())
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(pid).To(specs.Not(specs.BeNil()))
+	waitRunning(ctx, pid)
+	return pid
+}
+
 func waitRunning(ctx *specs.Context, pid *goakt.PID) {
 	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeTrue(),
 		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+}
+
+func waitStopped(ctx *specs.Context, pid *goakt.PID) {
+	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeFalse(),
+		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+}
+
+// latestSnapshot reads the newest snapshot the store holds for id. A store error
+// is returned as the observed value so a failing poll reports it.
+func latestSnapshot(store persistence.SnapshotStore, id string) func() any {
+	return func() any {
+		snapshot, err := store.GetLatestSnapshot(context.Background(), persistence.Unscoped(), id)
+		if err != nil {
+			return err
+		}
+		return snapshot
+	}
+}
+
+// latestEvent reads the newest event the store holds for id, or the store error.
+func latestEvent(store persistence.EventsStore, id string) func() any {
+	return func() any {
+		event, err := store.GetLatestEvent(context.Background(), persistence.Unscoped(), id)
+		if err != nil {
+			return err
+		}
+		return event
+	}
+}
+
+// beSnapshotAt matches the value latestSnapshot observes once the store holds a
+// snapshot at sequence number seq. A missing snapshot or a store error does not
+// match, and a failing poll reports the last value it saw.
+func beSnapshotAt(seq uint64) specs.Matcher {
+	return specs.Satisfy(fmt.Sprintf("is a snapshot at sequence %d", seq), func(v any) bool {
+		snapshot, ok := v.(*egopb.Snapshot)
+		return ok && snapshot != nil && snapshot.GetSequenceNumber() == seq
+	})
+}
+
+// beProto matches a message that proto.Equal considers equal to want.
+func beProto(want proto.Message) specs.Matcher {
+	return specs.Satisfy(fmt.Sprintf("is proto-equal to %v", want), func(v any) bool {
+		got, ok := v.(proto.Message)
+		return ok && proto.Equal(want, got)
+	})
+}
+
+// expectAccountState requires state to be at sequence number seq and to carry
+// the account want.
+func expectAccountState(ctx *specs.Context, state *egopb.StateReply, seq uint64, want *testpb.Account) {
+	ctx.Expect(state.GetSequenceNumber()).ToEqual(seq)
+	got := new(testpb.Account)
+	ctx.Expect(state.GetState().UnmarshalTo(got)).To(specs.BeNil())
+	ctx.Expect(got).To(beProto(want))
 }
 
 // callCount reports how many calls method has received so far. A poll on it
