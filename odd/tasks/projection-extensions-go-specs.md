@@ -25,7 +25,7 @@ Only `*_test.go` files change.
   the stored offset reaching the last journal event, or the dead-letter count reaching 1. The four cases
   that used to wait two seconds and assert nothing (dead letter handler, event adapters, encryptor,
   telemetry) now check the offset too, so they prove the batch was consumed.
-- The five near-identical "mistyped extension" cases in the projection test and the setup repeated in each
+- The four near-identical "mistyped extension" cases in the projection test and the setup repeated in each
   case became a `specs.Table` and small helpers (`startSystem`, `newProjectionFixture`). The actor system
   is stopped through `ctx.Cleanup`, so it also stops when an expectation fails.
 - Assertions use `specs.MatchError`, `specs.BeNil`, `specs.Contain` and `specs.Equal`. The `ResetOffset`
