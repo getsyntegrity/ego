@@ -51,14 +51,22 @@ Only `*_test.go` files and the go.mod/go.sum files of the nested modules change.
 ## Tasks
 
 - [x] T1 Merge `origin/develop` and move the nested modules to v0.3.3. Route: inline. Evidence: merge commit
-      MERGE_HASH, `go mod tidy` in the five nested modules, clean build and vet.
-- [ ] T2 `eventstream/stream_test.go`: no `time.Sleep`, `Eventually`, specific matchers. Route: inline.
-      Evidence: T2_HASH.
-- [ ] T3 Descriptor tests (`egopb`, `testpb`, `publisher/websocket`): specific matchers. Route: inline.
-      Evidence: T3_HASH.
-- [ ] T4 `closure_test.go` in the four publishers: `specs.Table` and `StartWith`. Route: inline. Evidence:
-      T4_HASH.
-- [ ] T5 Verify and deliver. Route: inline. Evidence: below.
+      `80f8f7e`, `go mod tidy` in the five nested modules, clean build and vet.
+- [x] T2 `eventstream/stream_test.go`: no `time.Sleep`, `Eventually`, specific matchers. Route: inline.
+      Evidence: `6f8268a`. RED mutation: `publishToTopic` never delivered; the test failed with
+      `Eventually: timed out ... expected 0 to be greater than or equal to 1`.
+- [x] T3 Descriptor tests (`egopb`, `testpb`, `publisher/websocket`): specific matchers, and a `specs.Table`
+      for the websocket descriptors. Route: inline. Evidence: `4b6eda0`. RED mutation: websocket
+      `Describe` declared a capability; the test failed with `expected [x] to be empty, got length 1`.
+- [x] T4 `closure_test.go` in the four publishers: `specs.Table` and `StartWith`. Route: inline. Evidence:
+      `e235c15`. RED mutation: `closureViolation` stopped rejecting the engine package; the test failed with
+      `expected "" to start with "unit-test closure regressed: "`.
+- [x] T5 Verify and deliver. Route: inline. Evidence: `--- PASS` counts and names are identical before and
+      after (root packages 42, kafka/nats/pulsar 13 each, websocket 32, compat 4). Coverage is unchanged:
+      `egopb` 43.6%, `eventstream` 100%, `testpb` 63.6%, kafka 7.4%, nats 5.3%, pulsar 7.1%, websocket
+      87.9%. `go build`, `go vet`, `gofmt` and `go test -count=5` are clean. `golangci-lint` is clean except
+      two findings in files this PR does not touch: `publisher/pulsar/pulsar.go:41` (unused field) and
+      `publisher/websocket/server_test.go:69` (unchecked `conn.Close`).
 
 ## Follow-up spec (not in this document)
 
@@ -67,4 +75,4 @@ conformance tests can drop their dependence on real time.
 
 ## Progress
 
-- 2026-09-30: T1 done. Engram mirror: pending.
+- 2026-09-30: T1 to T5 done. Engram mirror: pending.
