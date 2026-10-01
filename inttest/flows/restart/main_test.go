@@ -20,33 +20,33 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package flows_test
+package restart_test
 
 import (
 	"context"
 	"os"
 	"testing"
 
-	"github.com/getsyntegrity/ego/inttest/infra"
+	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
 )
 
 // shared is the one Postgres container of this package. TestMain starts it before the first test and terminates
 // it after the last one. Tests never read it before m.Run, and they only call NewDatabase on it.
-var shared *infra.Postgres
+var shared *pginfra.Postgres
 
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 // run exists so the container is terminated by a defer even when m.Run panics, before os.Exit ends the process.
 func run(m *testing.M) int {
 	ctx := context.Background()
-	pg, err := infra.StartPostgres(ctx)
+	pg, err := pginfra.StartPostgres(ctx)
 	if err != nil {
-		_, _ = os.Stderr.WriteString("inttest/flows: cannot start the Postgres container, the tests cannot run without it: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/flows/restart: cannot start the Postgres container, the tests cannot run without it: " + err.Error() + "\n")
 		return 1
 	}
 	defer func() {
 		if err := pg.Terminate(ctx); err != nil {
-			_, _ = os.Stderr.WriteString("inttest/flows: cannot terminate the Postgres container: " + err.Error() + "\n")
+			_, _ = os.Stderr.WriteString("inttest/flows/restart: cannot terminate the Postgres container: " + err.Error() + "\n")
 		}
 	}()
 	shared = pg
