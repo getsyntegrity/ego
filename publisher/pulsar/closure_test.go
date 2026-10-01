@@ -23,6 +23,7 @@
 package pulsar
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -90,18 +91,31 @@ func closureViolation(dep string) string {
 // hermeticGoEnv() so a stray root go.work file or an inherited GOFLAGS can
 // never change the result, independently of the CI job's own GOWORK=off.
 func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", "-test", "./...")
-	cmd.Env = hermeticGoEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list -deps -test ./...: %v\n%s", err, out)
-	}
+	specs.Describe(t, "the unit-test closure of this module", func(s *specs.Spec) {
+		var deps []string
+		s.BeforeEach(func(ctx *specs.Context) {
+			cmd := exec.Command("go", "list", "-deps", "-test", "./...")
+			cmd.Env = hermeticGoEnv()
+			out, err := cmd.CombinedOutput()
+			var runErr error
+			if err != nil {
+				runErr = fmt.Errorf("go list -deps -test ./...: %w\n%s", err, out)
+			}
+			ctx.Expect(runErr).To(specs.BeNil())
+			deps = strings.Fields(string(out))
+		})
 
-	for _, dep := range strings.Fields(string(out)) {
-		if msg := closureViolation(dep); msg != "" {
-			t.Error(msg)
-		}
-	}
+		s.It("never reaches the GoAkt runtime, the engine package or the composition root", func(ctx *specs.Context) {
+			// Each violation is its own message, so the failure names every offending package.
+			var violations []string
+			for _, dep := range deps {
+				if msg := closureViolation(dep); msg != "" {
+					violations = append(violations, msg)
+				}
+			}
+			ctx.Expect(violations).To(specs.BeEmpty())
+		})
+	})
 }
 
 // TestClosureGuardRejectsCompositionRoot pins what the closure guard
