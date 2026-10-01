@@ -28,9 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -38,10 +37,8 @@ import (
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
 // writeSequence records, in order, the observable steps of an event write:
@@ -65,6 +62,8 @@ func (s *writeSequence) snapshot() []string {
 }
 
 // sequenceEventsStore records every WriteEvents call and optionally fails it.
+// It wraps a real in-memory store, because what the case checks is the order
+// of observable steps around the write, not the arguments of the call.
 type sequenceEventsStore struct {
 	persistence.EventsStore
 	seq    *writeSequence
@@ -82,6 +81,12 @@ func (x *sequenceEventsStore) WriteEvents(ctx context.Context, scope persistence
 		return x.failed
 	}
 	return x.EventsStore.WriteEvents(ctx, scope, events, precondition)
+}
+
+func (x *sequenceEventsStore) writtenScopes() []persistence.Scope {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return append([]persistence.Scope(nil), x.scopes...)
 }
 
 // sequenceEventsStream records every publication on the events stream.
@@ -102,78 +107,63 @@ func (x *sequenceEventsStream) Publish(topic string, msg any) {
 // events are published only after the write succeeds, and the reply comes
 // last. A failed write publishes nothing and replies with the store error.
 func TestEventWriteObservableSequence(t *testing.T) {
-	spawn := func(t *testing.T, storeErr error) (*writeSequence, *sequenceEventsStore, *goakt.PID, goakt.ActorSystem) {
-		t.Helper()
-		ctx := context.Background()
-
+	spawn := func(ctx *specs.Context, storeErr error) (*writeSequence, *sequenceEventsStore, *goakt.PID) {
 		seq := new(writeSequence)
-		base := testkit.NewEventsStore()
-		require.NoError(t, base.Connect(ctx))
+		base := newConnectedTestkitStore(ctx)
 		store := &sequenceEventsStore{EventsStore: base, seq: seq, failed: storeErr}
-		stream := &sequenceEventsStream{Stream: eventstream.New(), seq: seq}
-
-		actorSystem, err := goakt.NewActorSystem("SequenceSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(store),
-				extensions.NewEventsStream(stream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-		t.Cleanup(func() {
-			_ = actorSystem.Stop(ctx)
-			_ = base.Disconnect(ctx)
-		})
+		stream := &sequenceEventsStream{Stream: newClosingEventStream(ctx), seq: seq}
+		system := startEventsSystem(ctx, "SequenceSystem", 3,
+			extensions.NewEventsStore(store), extensions.NewEventsStream(stream))
 
 		behavior := enginetest.NewAccountEventSourcedBehavior(uuid.NewString())
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), New(),
+		pid, err := system.Spawn(context.Background(), behavior.ID(), New(),
 			goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		return seq, store, pid, actorSystem
+		ctx.Expect(err).To(specs.BeNil())
+		return seq, store, pid
 	}
 
-	ask := func(t *testing.T, seq *writeSequence, pid *goakt.PID) *egopb.CommandReply {
-		t.Helper()
+	ask := func(ctx *specs.Context, seq *writeSequence, pid *goakt.PID) *egopb.CommandReply {
 		reply, err := goakt.Ask(context.Background(), pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
+		ctx.Expect(err).To(specs.BeNil())
 		seq.add("reply")
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		return commandReply
+		ctx.Expect(reply).To(beOfType[*egopb.CommandReply]())
+		return reply.(*egopb.CommandReply)
 	}
 
-	t.Run("writes, then publishes, then replies", func(t *testing.T) {
-		seq, store, pid, _ := spawn(t, nil)
+	specs.Describe(t, "one command's event write is observed as store write, then stream publication, then reply", func(s *specs.Spec) {
+		s.It("writes, then publishes, then replies", func(ctx *specs.Context) {
+			seq, store, pid := spawn(ctx, nil)
 
-		reply := ask(t, seq, pid)
+			reply := ask(ctx, seq, pid)
 
-		require.IsType(t, new(egopb.CommandReply_StateReply), reply.GetReply())
-		assert.Equal(t, []string{"write", "publish", "reply"}, seq.snapshot())
-		assert.Equal(t, []persistence.Scope{persistence.Unscoped()}, store.scopes)
-	})
+			ctx.Expect(reply.GetReply()).To(beOfType[*egopb.CommandReply_StateReply]())
+			ctx.Expect(seq.snapshot()).To(specs.HaveElementsInOrder(specs.Equal("write"), specs.Equal("publish"), specs.Equal("reply")))
+			ctx.Expect(store.writtenScopes()).ToEqual([]persistence.Scope{persistence.Unscoped()})
+		})
 
-	t.Run("a failed write publishes nothing, replies the error and stops the entity", func(t *testing.T) {
-		seq, _, pid, _ := spawn(t, assert.AnError)
+		s.It("a failed write publishes nothing, replies the error and stops the entity", func(ctx *specs.Context) {
+			seq, _, pid := spawn(ctx, errEventsStoreDown)
 
-		reply := ask(t, seq, pid)
+			reply := ask(ctx, seq, pid)
 
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), reply.GetReply())
-		assert.Contains(t, reply.GetErrorReply().GetMessage(), assert.AnError.Error())
-		assert.Equal(t, []string{"write", "reply"}, seq.snapshot())
-		require.Eventually(t, func() bool { return !pid.IsRunning() }, 5*time.Second, 50*time.Millisecond)
-	})
+			ctx.Expect(reply.GetReply()).To(beOfType[*egopb.CommandReply_ErrorReply]())
+			ctx.Expect(reply.GetErrorReply().GetMessage()).To(specs.Contain(errEventsStoreDown.Error()))
+			ctx.Expect(seq.snapshot()).ToEqual([]string{"write", "reply"})
+			ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeFalse(),
+				specs.WithTimeout(5*time.Second), specs.WithInterval(10*time.Millisecond))
+		})
 
-	t.Run("a revision conflict publishes nothing, replies the conflict and keeps the entity", func(t *testing.T) {
-		conflict := persistence.NewConflictError(persistence.Unscoped(), "account", persistence.ExpectGenesis(),
-			persistence.WithActualRevision(0))
-		seq, _, pid, _ := spawn(t, conflict)
+		s.It("a revision conflict publishes nothing, replies the conflict and keeps the entity", func(ctx *specs.Context) {
+			conflict := persistence.NewConflictError(persistence.Unscoped(), "account", persistence.ExpectGenesis(),
+				persistence.WithActualRevision(0))
+			seq, _, pid := spawn(ctx, conflict)
 
-		reply := ask(t, seq, pid)
+			reply := ask(ctx, seq, pid)
 
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), reply.GetReply())
-		assert.Equal(t, conflict.Error(), reply.GetErrorReply().GetMessage())
-		assert.Equal(t, []string{"write", "reply"}, seq.snapshot())
-		assert.True(t, pid.IsRunning())
+			ctx.Expect(reply.GetReply()).To(beOfType[*egopb.CommandReply_ErrorReply]())
+			ctx.Expect(reply.GetErrorReply().GetMessage()).To(specs.Equal(conflict.Error()))
+			ctx.Expect(seq.snapshot()).ToEqual([]string{"write", "reply"})
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
 	})
 }
