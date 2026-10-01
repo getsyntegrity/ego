@@ -48,7 +48,7 @@ The epic plan is to move such tests behind a build tag later. Before moving anyt
 - [x] **T2 Manifest and reusable workflow.** `.github/integration-suites.txt` with the 19 Postgres tests; `.github/workflows/integration.yml` (push main, dispatch, workflow_call; Postgres service; JSON artifacts; summary; timeouts; gate). Check: the gate tool's stale scan passes locally against the manifest; `actionlint` if available. Route: delegated writer.
 - [x] **T3 `ci.yml` wiring.** `plan` gains an `integration` paths output; the `integration` job calls the reusable workflow under the selection rule above; `ci-ok` needs it. Check: `actionlint`; the YAML parses. Route: delegated writer.
 - [x] **T4 Docs.** `docs/ci.md` (job table, "Other workflows") and the testing docs explain the lane, the manifest format and how to add a suite. Check: structural readback. Route: delegated writer.
-- [ ] **T5 Gate demos.** On the draft PR: one green run where all 19 tests execute, and one red run from a temporary commit that breaks the manifest (a missing suite), then reverted. Record both run URLs here. Route: inline (parent).
+- [x] **T5 Gate demos.** On the draft PR: one green run where all 19 tests execute, and one red run from a temporary commit that unsets the Postgres DSN (every suite skips, the exact failure this lane exists to catch), then reverted. Record both run URLs here. Route: inline (parent).
 
 ## Progress and evidence
 
@@ -57,6 +57,10 @@ The epic plan is to move such tests behind a build tag later. Before moving anyt
 - T3 `b320283`. `actionlint` clean on `ci.yml` and `integration.yml`; YAML parses. The integration paths filter is a separate `paths-filter` step, because the existing one uses `predicate-quantifier: every`. `unit-gate` also runs the gate's tests and `-check-manifest`.
 - T4 `f50c069`. `docs/ci.md` (job table, "Integration tests", "Other workflows") and a link from `docs/testing/go-specs.md`. Structural readback only.
 
+- T5 (inline), PR #278.
+  - Green: run https://github.com/getsyntegrity/ego/actions/runs/36899940417. Every job succeeded, `integration / integration` included, and the gate printed `integration gate: ok (19 suites)`.
+  - Red: temporary commit `831dacd`, which set `EGO_EXAMPLE_POSTGRES_DSN` to an empty string. Run https://github.com/getsyntegrity/ego/actions/runs/36900650299 had the gate print `integration gate: 19 problem(s)`, with all 19 reported as `skipped`. `integration / integration` and `ci-ok` both failed, so the merge was blocked. The commit was reverted by `54d0033`.
+
 ## Next step
 
-T5: gate demos on the draft PR.
+Review of PR #278. Follow-up in the epic: move the real-resource tests behind `//go:build integration` and list each moved test in `.github/integration-suites.txt`. The orphan check fails any tagged test that is not listed.
