@@ -22,6 +22,7 @@ engine/tenancy_architecture_test.go | architecture test: shells out to `go list 
 example/cluster/stores_postgres_test.go | Postgres-backed example tests, skipped unless EGO_EXAMPLE_POSTGRES_DSN is set
 internal/engine/durablestate/durable_state_actor_rig_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 internal/engine/durablestate/durable_state_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/eventsource/event_sourced_actor_rig_test.go | shared rig that starts a real in-process goakt actor system for the eventsource actor specs (component test, outside the unit lane per #201)
 internal/engine/eventsource/event_sourced_actor_tenant_persist_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 internal/engine/eventsource/event_sourced_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
 internal/engine/eventsource/events_writer_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
