@@ -246,7 +246,7 @@ reset:
 	@kubectl exec --context kind-$(CLUSTER) -n $(NAMESPACE) statefulset/postgres -- \
 		psql -U ego -d ego -c \
 		"TRUNCATE events_store, offsets_store, account_balances;"
-	@echo "    Done. Tables are empty — ready for make test / make load-test."
+	@echo "    Done. Tables are empty — ready for make load-test."
 
 status:
 	kubectl get all --context kind-$(CLUSTER) -n $(NAMESPACE)
