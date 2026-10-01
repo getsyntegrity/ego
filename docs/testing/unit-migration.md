@@ -1,38 +1,36 @@
 # Unit tests: migration to go-specs
 
-First phase of epic #201: move every unit test to go-specs, with mocks, stubs or fakes injected in place of real dependencies. This list has one row per unit test, with its status and what it still depends on. Tests that need a real component or resource are listed separately as out of phase and keep running exactly as they do today. Nothing is moved, tagged or skipped and no workflow changes.
+First phase of epic #201 is finished: every unit test now uses go-specs, with mocks, stubs or fakes injected in place of real dependencies, and no file in any module imports testify or the removed generated `mocks/` package. This list has one row per unit test, with its status and the signal it was found with. Tests that need a real component or resource are listed separately as out of phase and are documented exceptions of the unit gate (see "Out of phase").
 
 ## How to read it
 
-A test is a unit test when it needs no real component or resource: no database, broker, socket, subprocess, actor system or cluster. Its status is `migrated` when it already uses go-specs (today only `TestPreconditionFromRevisionMapsPerD4`, from #215) and `pending` otherwise. The migration unit is the test, so unit tests that share a file with actor tests are in the unit list.
+A test is a unit test when it needs no real component or resource: no database, broker, socket, subprocess, actor system or cluster. Its status is `migrated` when it uses go-specs. Every unit test is `migrated`; the `unit-test` gate (`go run ./.github/scripts/unitgate -strict`) keeps it that way by failing any `Test` function file that does not call `specs.Describe`. The migration unit is the test, so unit tests that share a file with actor tests are in the unit list.
 
 The list is recorded at `develop` `0de4249`: 873 `Test` functions in the 8 modules, of which 617 are unit and 256 out of phase. Subtests are not listed; they travel with their parent test.
 
-The dependencies column comes from static signals found in each test body and the local helpers it calls, plus a manual review of 65 ambiguous tests. It is a starting point and may need confirmation in each migration PR. `none` means no signal was found. The labels mean:
+The dependencies column was computed before the migration, from static signals found in each test body and the local helpers it calls, plus a manual review of 65 ambiguous tests. It is kept as the record of what each test used to depend on. `none` means no signal was found. The labels mean:
 
 - `fixed wait`: `pause.For` or `time.Sleep`. Replace with a controllable clock or a fake, or wait on an observable condition.
 - `real timer`: a real ticker. Replace with a fake ticker.
 - `temp file`: writes or reads a file. Replace with an in-memory writer or reader.
 - `env-gated skip`: behavior depends on an environment variable. Inject the value.
 - `local socket`: opens a loopback listener or HTTP test server. Replace with an in-memory transport.
-- `testify mock`: the file uses `testify/mock`. Keep it or map it to a fake.
-- `generated mocks`: the file uses the generated `mocks/*` packages. Keep them or map them to fakes.
 - Stores from `testkit` are in-memory fakes already and are not listed.
-- The mock labels are file-level: they mean the test file imports the package, not that every test in it uses a mock.
+- The `testify mock` and `generated mocks` labels of the first recording are gone: testify and the generated `mocks/` package no longer exist in the repository.
 
 ## Totals
 
 | Module | Unit pending | Unit migrated | Out of phase | Total |
 |---|---|---|---|---|
-| `.` | 607 | 1 | 217 | 825 |
+| `.` | 0 | 608 | 217 | 825 |
 | `benchmark` | 0 | 0 | 0 | 0 |
 | `example/cluster` | 0 | 0 | 30 | 30 |
-| `publisher/kafka` | 2 | 0 | 1 | 3 |
-| `publisher/nats` | 2 | 0 | 1 | 3 |
-| `publisher/pulsar` | 2 | 0 | 1 | 3 |
-| `publisher/websocket` | 2 | 0 | 6 | 8 |
-| `test/compat` | 1 | 0 | 0 | 1 |
-| **Total** | 616 | 1 | 256 | 873 |
+| `publisher/kafka` | 0 | 2 | 1 | 3 |
+| `publisher/nats` | 0 | 2 | 1 | 3 |
+| `publisher/pulsar` | 0 | 2 | 1 | 3 |
+| `publisher/websocket` | 0 | 2 | 6 | 8 |
+| `test/compat` | 0 | 1 | 0 | 1 |
+| **Total** | 0 | 617 | 256 | 873 |
 
 ## Unit tests
 
@@ -42,779 +40,779 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestCarrierDelegatesTenantSerializationToTenancyPackage` | pending | none |
-| `TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent` | pending | none |
-| `TestCarrierRoundTripExpectedRevisionMaxUint64` | pending | none |
-| `TestCarrierRoundTripExpectedRevisionPresent` | pending | none |
-| `TestCarrierRoundTripOptionalFieldsAbsent` | pending | none |
-| `TestCarrierRoundTripOptionalFieldsPresent` | pending | none |
-| `TestCarrierRoundTripPreservesIdentity` | pending | none |
-| `TestEnvelopeDeriveDelegatesToMetadataDerive` | pending | none |
-| `TestEnvelopeDeriveRejectsNilPayload` | pending | none |
-| `TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip` | pending | none |
-| `TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField` | pending | none |
-| `TestErrorAs` | pending | none |
-| `TestErrorClassification` | pending | none |
-| `TestErrorMessage` | pending | none |
-| `TestErrorUnwrap` | pending | none |
-| `TestErrorUnwrapNilCause` | pending | none |
-| `TestFailureWithCode` | pending | none |
-| `TestGenerateOperationID` | pending | none |
-| `TestGenerateOperationIDUniqueness` | pending | none |
-| `TestIdentityDefinedTypesAreDistinct` | pending | none |
-| `TestIntegrationMetadataEnvelopeResultCarrier` | pending | none |
-| `TestIntegrationRejectedResultCarriesReconstructedMetadata` | pending | none |
-| `TestMarshalMetadataUsesCanonicalKeys` | pending | none |
-| `TestMetadataDeriveCustomNotInherited` | pending | none |
-| `TestMetadataDeriveDeadlineMayOnlyShorten` | pending | none |
-| `TestMetadataDeriveDoesNotInheritExpectedRevision` | pending | none |
-| `TestMetadataDeriveInheritsCorrelationAndChainsCausation` | pending | none |
-| `TestMetadataDerivePrincipalInheritedUnlessOverridden` | pending | none |
-| `TestMetadataDeriveRejectsSameOperationID` | pending | none |
-| `TestMetadataDeriveTenantInheritedWhenUnspecified` | pending | none |
-| `TestMetadataDeriveTenantMustNotChange` | pending | none |
-| `TestMetadataElapsedDeadlineIsRecognized` | pending | none |
-| `TestNewCanceledDefaultCause` | pending | none |
-| `TestNewEnvelope` | pending | none |
-| `TestNewEnvelopeRejectsNilPayload` | pending | none |
-| `TestNewFailed` | pending | none |
-| `TestNewFailureRequiresMessage` | pending | none |
-| `TestNewMetadataCustomDefensiveCopy` | pending | none |
-| `TestNewMetadataCustomValue` | pending | none |
-| `TestNewMetadataRoot` | pending | none |
-| `TestNewMetadataWithCorrelationID` | pending | none |
-| `TestNewMetadataWithCustomAcceptsValidKeyValue` | pending | none |
-| `TestNewMetadataWithCustomRejectsCanonicalKey` | pending | none |
-| `TestNewMetadataWithCustomRejectsInvalidValue` | pending | none |
-| `TestNewMetadataWithCustomRejectsReservedPrefix` | pending | none |
-| `TestNewMetadataWithDeadline` | pending | none |
-| `TestNewMetadataWithExpectedRevisionPositive` | pending | none |
-| `TestNewMetadataWithExpectedRevisionZeroIsGenesisNotAbsence` | pending | none |
-| `TestNewMetadataWithPrincipal` | pending | none |
-| `TestNewMetadataWithTenant` | pending | none |
-| `TestNewMetadataWithTimestampDefault` | pending | none |
-| `TestNewMetadataWithTimestampOverride` | pending | none |
-| `TestNewMetadataWithoutDeadline` | pending | none |
-| `TestNewMetadataWithoutExpectedRevision` | pending | none |
-| `TestNewMetadataWithoutTenant` | pending | none |
-| `TestNewOperationID` | pending | none |
-| `TestNewPrincipal` | pending | none |
-| `TestNewRejected` | pending | none |
-| `TestNewRejectedConcurrencyConflictCodeCheckableWithoutStringInspection` | pending | none |
-| `TestNewSuccessNoState` | pending | none |
-| `TestNewSuccessRequiresState` | pending | none |
-| `TestNewSuccessWithState` | pending | none |
-| `TestNewTimedOutDefaultCause` | pending | none |
-| `TestOutcomeKindsMutuallyExclusive` | pending | none |
-| `TestOutcomeStringPerKind` | pending | none |
-| `TestOutcomeZeroValueInvalid` | pending | none |
-| `TestPayloadAsTypedExtraction` | pending | none |
-| `TestPrincipalIsAbstract` | pending | none |
-| `TestResultErrAsCommandError` | pending | none |
-| `TestStateAsFalseWhenNoState` | pending | none |
-| `TestStateAsTypedExtraction` | pending | none |
-| `TestUnmarshalMetadataIgnoresUnknownEgoCmdKey` | pending | none |
-| `TestUnmarshalMetadataRejectsExpectedRevisionOverflow` | pending | none |
-| `TestUnmarshalMetadataRejectsInvalidCustomValue` | pending | none |
-| `TestUnmarshalMetadataRejectsMalformedExpectedRevision` | pending | none |
-| `TestUnmarshalMetadataRejectsMissingOperationID` | pending | none |
-| `TestUnmarshalMetadataRejectsNegativeExpectedRevision` | pending | none |
-| `TestUnmarshalMetadataRejectsReservedBareKey` | pending | none |
-| `TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace` | pending | none |
-| `TestValidationSentinelsAreDistinct` | pending | none |
+| `TestCarrierDelegatesTenantSerializationToTenancyPackage` | migrated | none |
+| `TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent` | migrated | none |
+| `TestCarrierRoundTripExpectedRevisionMaxUint64` | migrated | none |
+| `TestCarrierRoundTripExpectedRevisionPresent` | migrated | none |
+| `TestCarrierRoundTripOptionalFieldsAbsent` | migrated | none |
+| `TestCarrierRoundTripOptionalFieldsPresent` | migrated | none |
+| `TestCarrierRoundTripPreservesIdentity` | migrated | none |
+| `TestEnvelopeDeriveDelegatesToMetadataDerive` | migrated | none |
+| `TestEnvelopeDeriveRejectsNilPayload` | migrated | none |
+| `TestEnvelopeExpectedRevisionAbsentSurvivesCarrierRoundTrip` | migrated | none |
+| `TestEnvelopeWithoutExpectedRevisionUnaffectedByNewField` | migrated | none |
+| `TestErrorAs` | migrated | none |
+| `TestErrorClassification` | migrated | none |
+| `TestErrorMessage` | migrated | none |
+| `TestErrorUnwrap` | migrated | none |
+| `TestErrorUnwrapNilCause` | migrated | none |
+| `TestFailureWithCode` | migrated | none |
+| `TestGenerateOperationID` | migrated | none |
+| `TestGenerateOperationIDUniqueness` | migrated | none |
+| `TestIdentityDefinedTypesAreDistinct` | migrated | none |
+| `TestIntegrationMetadataEnvelopeResultCarrier` | migrated | none |
+| `TestIntegrationRejectedResultCarriesReconstructedMetadata` | migrated | none |
+| `TestMarshalMetadataUsesCanonicalKeys` | migrated | none |
+| `TestMetadataDeriveCustomNotInherited` | migrated | none |
+| `TestMetadataDeriveDeadlineMayOnlyShorten` | migrated | none |
+| `TestMetadataDeriveDoesNotInheritExpectedRevision` | migrated | none |
+| `TestMetadataDeriveInheritsCorrelationAndChainsCausation` | migrated | none |
+| `TestMetadataDerivePrincipalInheritedUnlessOverridden` | migrated | none |
+| `TestMetadataDeriveRejectsSameOperationID` | migrated | none |
+| `TestMetadataDeriveTenantInheritedWhenUnspecified` | migrated | none |
+| `TestMetadataDeriveTenantMustNotChange` | migrated | none |
+| `TestMetadataElapsedDeadlineIsRecognized` | migrated | none |
+| `TestNewCanceledDefaultCause` | migrated | none |
+| `TestNewEnvelope` | migrated | none |
+| `TestNewEnvelopeRejectsNilPayload` | migrated | none |
+| `TestNewFailed` | migrated | none |
+| `TestNewFailureRequiresMessage` | migrated | none |
+| `TestNewMetadataCustomDefensiveCopy` | migrated | none |
+| `TestNewMetadataCustomValue` | migrated | none |
+| `TestNewMetadataRoot` | migrated | none |
+| `TestNewMetadataWithCorrelationID` | migrated | none |
+| `TestNewMetadataWithCustomAcceptsValidKeyValue` | migrated | none |
+| `TestNewMetadataWithCustomRejectsCanonicalKey` | migrated | none |
+| `TestNewMetadataWithCustomRejectsInvalidValue` | migrated | none |
+| `TestNewMetadataWithCustomRejectsReservedPrefix` | migrated | none |
+| `TestNewMetadataWithDeadline` | migrated | none |
+| `TestNewMetadataWithExpectedRevisionPositive` | migrated | none |
+| `TestNewMetadataWithExpectedRevisionZeroIsGenesisNotAbsence` | migrated | none |
+| `TestNewMetadataWithPrincipal` | migrated | none |
+| `TestNewMetadataWithTenant` | migrated | none |
+| `TestNewMetadataWithTimestampDefault` | migrated | none |
+| `TestNewMetadataWithTimestampOverride` | migrated | none |
+| `TestNewMetadataWithoutDeadline` | migrated | none |
+| `TestNewMetadataWithoutExpectedRevision` | migrated | none |
+| `TestNewMetadataWithoutTenant` | migrated | none |
+| `TestNewOperationID` | migrated | none |
+| `TestNewPrincipal` | migrated | none |
+| `TestNewRejected` | migrated | none |
+| `TestNewRejectedConcurrencyConflictCodeCheckableWithoutStringInspection` | migrated | none |
+| `TestNewSuccessNoState` | migrated | none |
+| `TestNewSuccessRequiresState` | migrated | none |
+| `TestNewSuccessWithState` | migrated | none |
+| `TestNewTimedOutDefaultCause` | migrated | none |
+| `TestOutcomeKindsMutuallyExclusive` | migrated | none |
+| `TestOutcomeStringPerKind` | migrated | none |
+| `TestOutcomeZeroValueInvalid` | migrated | none |
+| `TestPayloadAsTypedExtraction` | migrated | none |
+| `TestPrincipalIsAbstract` | migrated | none |
+| `TestResultErrAsCommandError` | migrated | none |
+| `TestStateAsFalseWhenNoState` | migrated | none |
+| `TestStateAsTypedExtraction` | migrated | none |
+| `TestUnmarshalMetadataIgnoresUnknownEgoCmdKey` | migrated | none |
+| `TestUnmarshalMetadataRejectsExpectedRevisionOverflow` | migrated | none |
+| `TestUnmarshalMetadataRejectsInvalidCustomValue` | migrated | none |
+| `TestUnmarshalMetadataRejectsMalformedExpectedRevision` | migrated | none |
+| `TestUnmarshalMetadataRejectsMissingOperationID` | migrated | none |
+| `TestUnmarshalMetadataRejectsNegativeExpectedRevision` | migrated | none |
+| `TestUnmarshalMetadataRejectsReservedBareKey` | migrated | none |
+| `TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace` | migrated | none |
+| `TestValidationSentinelsAreDistinct` | migrated | none |
 
 #### `compose`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestSpecValidate_MinimalSpecsPass` | pending | none |
-| `TestSpecValidate_ReportsEveryProblem` | pending | none |
-| `TestSpecValidate_V1_ZeroFamilies` | pending | none |
-| `TestSpecValidate_V2_EventsStoreRequired` | pending | none |
-| `TestSpecValidate_V2_NotRequiredForDurableStateOnly` | pending | none |
-| `TestSpecValidate_V3_NotRequiredWithoutDurableState` | pending | none |
-| `TestSpecValidate_V3_StateStoreRequired` | pending | none |
-| `TestSpecValidate_V4_Projections` | pending | none |
-| `TestSpecValidate_V5_NilEventAdapterElement` | pending | none |
-| `TestSpecValidate_V5_TypedNilPerInterfaceField` | pending | none |
-| `TestSpecValidate_V6_DuplicatePublisherIDsPerKind` | pending | none |
-| `TestSpecValidate_V6_NilPublisher` | pending | none |
-| `TestSpecValidate_V7_NegativeShutdownTimeout` | pending | none |
-| `TestSpecValidate_V8_ReportsInFieldOrder` | pending | none |
-| `TestSpecValidate_V8_SkipsValuesV5AndV6Rejected` | pending | none |
-| `TestSpecValidate_V8_TruthfulDeclarationsPass` | pending | none |
-| `TestSpecValidate_V8_UndeclaredAdaptersAreNotInspected` | pending | none |
-| `TestSpecValidate_V8a_SlotPortMustBeDeclared` | pending | none |
-| `TestSpecValidate_V8b_DeclarationMatchesMethods` | pending | none |
-| `TestSpecValidate_V8b_DeclarationOnlyCapabilityIsOneDirectional` | pending | none |
-| `TestSpecValidate_V8b_ImpliedCapabilitiesAreSkipped` | pending | none |
-| `TestSpecValidate_V8b_UnknownCapabilityIsAccepted` | pending | none |
-| `TestSpecValidate_V8c_RequiredCapabilities` | pending | none |
-| `TestSpecValidate_ValidSpecPasses` | pending | none |
-| `TestStartError` | pending | none |
+| `TestSpecValidate_MinimalSpecsPass` | migrated | none |
+| `TestSpecValidate_ReportsEveryProblem` | migrated | none |
+| `TestSpecValidate_V1_ZeroFamilies` | migrated | none |
+| `TestSpecValidate_V2_EventsStoreRequired` | migrated | none |
+| `TestSpecValidate_V2_NotRequiredForDurableStateOnly` | migrated | none |
+| `TestSpecValidate_V3_NotRequiredWithoutDurableState` | migrated | none |
+| `TestSpecValidate_V3_StateStoreRequired` | migrated | none |
+| `TestSpecValidate_V4_Projections` | migrated | none |
+| `TestSpecValidate_V5_NilEventAdapterElement` | migrated | none |
+| `TestSpecValidate_V5_TypedNilPerInterfaceField` | migrated | none |
+| `TestSpecValidate_V6_DuplicatePublisherIDsPerKind` | migrated | none |
+| `TestSpecValidate_V6_NilPublisher` | migrated | none |
+| `TestSpecValidate_V7_NegativeShutdownTimeout` | migrated | none |
+| `TestSpecValidate_V8_ReportsInFieldOrder` | migrated | none |
+| `TestSpecValidate_V8_SkipsValuesV5AndV6Rejected` | migrated | none |
+| `TestSpecValidate_V8_TruthfulDeclarationsPass` | migrated | none |
+| `TestSpecValidate_V8_UndeclaredAdaptersAreNotInspected` | migrated | none |
+| `TestSpecValidate_V8a_SlotPortMustBeDeclared` | migrated | none |
+| `TestSpecValidate_V8b_DeclarationMatchesMethods` | migrated | none |
+| `TestSpecValidate_V8b_DeclarationOnlyCapabilityIsOneDirectional` | migrated | none |
+| `TestSpecValidate_V8b_ImpliedCapabilitiesAreSkipped` | migrated | none |
+| `TestSpecValidate_V8b_UnknownCapabilityIsAccepted` | migrated | none |
+| `TestSpecValidate_V8c_RequiredCapabilities` | migrated | none |
+| `TestSpecValidate_ValidSpecPasses` | migrated | none |
+| `TestStartError` | migrated | none |
 
 #### `compose/goakt`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestNew_G1_ClusterRequiresEntityKinds` | pending | none |
-| `TestNew_MissingRequiredDependencyFailsWithNothingStarted` | pending | none |
-| `TestNew_NegativeShutdownTimeoutFailsAtNew` | pending | none |
-| `TestNew_ReportsEveryProblem` | pending | none |
-| `TestNew_StartsNothing` | pending | none |
-| `TestNew_V8RejectsALyingPublisherWithNothingStarted` | pending | none |
-| `TestRuntime_NilBeforeStart` | pending | none |
-| `TestStart_CancelledContextStartsNothing` | pending | none |
-| `TestStart_ProbeFailureNamesTheStore` | pending | none |
-| `TestStop_NeverStartedClosesPublishers` | pending | none |
+| `TestNew_G1_ClusterRequiresEntityKinds` | migrated | none |
+| `TestNew_MissingRequiredDependencyFailsWithNothingStarted` | migrated | none |
+| `TestNew_NegativeShutdownTimeoutFailsAtNew` | migrated | none |
+| `TestNew_ReportsEveryProblem` | migrated | none |
+| `TestNew_StartsNothing` | migrated | none |
+| `TestNew_V8RejectsALyingPublisherWithNothingStarted` | migrated | none |
+| `TestRuntime_NilBeforeStart` | migrated | none |
+| `TestStart_CancelledContextStartsNothing` | migrated | none |
+| `TestStart_ProbeFailureNamesTheStore` | migrated | none |
+| `TestStop_NeverStartedClosesPublishers` | migrated | none |
 
 #### `compose/internal/adapters`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestStartAndProbe_Empty` | pending | none |
-| `TestStartAndProbe_SkipsTypedNil` | pending | none |
-| `TestStartAndProbe_StartsThenPingsEachInOrder` | pending | none |
-| `TestStartAndProbe_StopsAtFirstFailure` | pending | none |
+| `TestStartAndProbe_Empty` | migrated | none |
+| `TestStartAndProbe_SkipsTypedNil` | migrated | none |
+| `TestStartAndProbe_StartsThenPingsEachInOrder` | migrated | none |
+| `TestStartAndProbe_StopsAtFirstFailure` | migrated | none |
 
 #### `compose/internal/lifecycle`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestCleanup_RunsUnderWithoutCancelAndTimeout` | pending | none |
-| `TestNew_RejectsIncompleteSteps` | pending | none |
-| `TestNew_RejectsNegativeShutdownTimeout` | pending | none |
-| `TestStartAndStop_AreSerialized` | pending | none |
-| `TestStart_ChecksContextBeforeEachStep` | pending | none |
-| `TestStart_FailureAtEachStepRollsBackInReverseThenReleases` | pending | none |
-| `TestStart_IsSingleUse` | pending | none |
-| `TestStart_PanickingStepRollsBackReleasesAndFails` | pending | none |
-| `TestStart_RollbackAttemptsEveryUndoAndReportsEveryError` | pending | none |
-| `TestStart_RunsStepsInOrder` | pending | none |
-| `TestStart_StepsWithoutStopAreSkippedOnRollback` | pending | none |
-| `TestState_TransitionsAreVisibleInsideSteps` | pending | none |
-| `TestStop_AfterFailedStartIsNoOp` | pending | none |
-| `TestStop_FailureAtEachStepStillRunsTheRest` | pending | none |
-| `TestStop_IsIdempotent` | pending | none |
-| `TestStop_JoinsEveryError` | pending | none |
-| `TestStop_NeverStartedOnlyReleases` | pending | none |
-| `TestStop_UndoesEveryStepInReverseOrder` | pending | none |
+| `TestCleanup_RunsUnderWithoutCancelAndTimeout` | migrated | none |
+| `TestNew_RejectsIncompleteSteps` | migrated | none |
+| `TestNew_RejectsNegativeShutdownTimeout` | migrated | none |
+| `TestStartAndStop_AreSerialized` | migrated | none |
+| `TestStart_ChecksContextBeforeEachStep` | migrated | none |
+| `TestStart_FailureAtEachStepRollsBackInReverseThenReleases` | migrated | none |
+| `TestStart_IsSingleUse` | migrated | none |
+| `TestStart_PanickingStepRollsBackReleasesAndFails` | migrated | none |
+| `TestStart_RollbackAttemptsEveryUndoAndReportsEveryError` | migrated | none |
+| `TestStart_RunsStepsInOrder` | migrated | none |
+| `TestStart_StepsWithoutStopAreSkippedOnRollback` | migrated | none |
+| `TestState_TransitionsAreVisibleInsideSteps` | migrated | none |
+| `TestStop_AfterFailedStartIsNoOp` | migrated | none |
+| `TestStop_FailureAtEachStepStillRunsTheRest` | migrated | none |
+| `TestStop_IsIdempotent` | migrated | none |
+| `TestStop_JoinsEveryError` | migrated | none |
+| `TestStop_NeverStartedOnlyReleases` | migrated | none |
+| `TestStop_UndoesEveryStepInReverseOrder` | migrated | none |
 
 #### `egopb`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDescriptor_IsSoundAndCarriesTheModulePath` | pending | none |
+| `TestDescriptor_IsSoundAndCarriesTheModulePath` | migrated | none |
 
 #### `encryption`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAESEncryptor_DecryptShortCiphertext` | pending | none |
-| `TestAESEncryptor_DecryptWithWrongKeyID` | pending | none |
-| `TestAESEncryptor_EncryptDecryptRoundTrip` | pending | none |
-| `TestAESEncryptor_EncryptProducesDifferentCiphertext` | pending | none |
+| `TestAESEncryptor_DecryptShortCiphertext` | migrated | none |
+| `TestAESEncryptor_DecryptWithWrongKeyID` | migrated | none |
+| `TestAESEncryptor_EncryptDecryptRoundTrip` | migrated | none |
+| `TestAESEncryptor_EncryptProducesDifferentCiphertext` | migrated | none |
 
 #### `engine`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestBehaviorFrom` | pending | none |
-| `TestBehaviorKindAssignability` | pending | none |
-| `TestBehaviorPlacementError` | pending | none |
-| `TestBuildSpawnOptionsFromConfig` | pending | testify mock, generated mocks |
-| `TestClassifyTenantBinding` | pending | none |
-| `TestClusterKindsExposesEgoActors` | pending | none |
-| `TestDefaultLoggerIsKitLoggerGlobal` | pending | none |
-| `TestDiscardLoggerDisablesEveryLevel` | pending | none |
-| `TestEgoSpawnOptionsResolveThroughRuntime` | pending | none |
-| `TestEngineEraseEntityStoreErrors` | pending | testify mock, generated mocks |
-| `TestEngineHotPathGuards` | pending | testify mock, generated mocks |
-| `TestEngineProjectionLagComputation` | pending | testify mock, generated mocks |
-| `TestEngineProjectionLagStoreErrors` | pending | testify mock, generated mocks |
-| `TestEngineStartWithoutActorSystem` | pending | testify mock, generated mocks |
-| `TestEntityFamily_String` | pending | none |
-| `TestErrBehaviorNotPointerMessage` | pending | none |
-| `TestMissingRequiredExtensionsSentinel` | pending | none |
-| `TestNewSpawnConfigRoundTrip` | pending | none |
-| `TestNewSpawnConfigSkipsNilOption` | pending | none |
-| `TestOptionWithEncryptor` | pending | none |
-| `TestOptionWithEventAdapters` | pending | none |
-| `TestOptionWithEventAdaptersMultiple` | pending | none |
-| `TestOptionWithLogger` | pending | none |
-| `TestOptionWithLoggerNilFallback` | pending | none |
-| `TestOptionWithOffsetStore` | pending | none |
-| `TestOptionWithProjection` | pending | none |
-| `TestOptionWithProjectionMultiple` | pending | none |
-| `TestOptionWithProjectionNil` | pending | none |
-| `TestOptionWithSnapshotStore` | pending | none |
-| `TestOptionWithStateStore` | pending | none |
-| `TestOptionWithTelemetry` | pending | none |
-| `TestOptionWithTelemetryNil` | pending | none |
-| `TestOptionWithTenantResolver` | pending | none |
-| `TestOptionWithTenantResolverAmbiguousCount` | pending | none |
-| `TestOptionWithTenantResolverCountsOnlyNonNilRegistrations` | pending | none |
-| `TestOptionWithTenantResolverFuncTypedNil` | pending | none |
-| `TestOptionWithTenantResolverNil` | pending | none |
-| `TestOptionWithTenantResolverNilAfterNonNil` | pending | none |
-| `TestOptionWithTenantResolverTypedNil` | pending | none |
-| `TestOptionWithTenantResolverTypedNilThenValid` | pending | none |
-| `TestOptionWithTenantResolverValidThenTypedNil` | pending | none |
-| `TestParseCommandReply` | pending | testify mock, generated mocks |
-| `TestProjectionSupervisorContract` | pending | none |
-| `TestPublisherContractsAliasPortPublishing` | pending | none |
-| `TestRelocationDisabledByDefault` | pending | none |
-| `TestResolveLogger` | pending | none |
-| `TestRuntimeMovedTypesAreAliases` | pending | none |
-| `TestRuntimeSentinelsAreTheSameValues` | pending | none |
-| `TestSagaActionAndSagaCommandAreAliases` | pending | none |
-| `TestSpawnDependency` | pending | none |
-| `TestSpawnOption` | pending | none |
-| `TestTelemetryFields` | pending | none |
-| `TestToSpawnPlacement` | pending | testify mock, generated mocks |
-| `TestToSupervisorDirective` | pending | testify mock, generated mocks |
-| `TestToSupervisorDirectiveStop` | pending | testify mock, generated mocks |
-| `TestTopicConstantsAreFixed` | pending | none |
-| `TestTopicConstantsAreNotPartitionedFormats` | pending | none |
-| `TestWithEventStream_NilKeepsTheDefault` | pending | none |
+| `TestBehaviorFrom` | migrated | none |
+| `TestBehaviorKindAssignability` | migrated | none |
+| `TestBehaviorPlacementError` | migrated | none |
+| `TestBuildSpawnOptionsFromConfig` | migrated | none |
+| `TestClassifyTenantBinding` | migrated | none |
+| `TestClusterKindsExposesEgoActors` | migrated | none |
+| `TestDefaultLoggerIsKitLoggerGlobal` | migrated | none |
+| `TestDiscardLoggerDisablesEveryLevel` | migrated | none |
+| `TestEgoSpawnOptionsResolveThroughRuntime` | migrated | none |
+| `TestEngineEraseEntityStoreErrors` | migrated | none |
+| `TestEngineHotPathGuards` | migrated | none |
+| `TestEngineProjectionLagComputation` | migrated | none |
+| `TestEngineProjectionLagStoreErrors` | migrated | none |
+| `TestEngineStartWithoutActorSystem` | migrated | none |
+| `TestEntityFamily_String` | migrated | none |
+| `TestErrBehaviorNotPointerMessage` | migrated | none |
+| `TestMissingRequiredExtensionsSentinel` | migrated | none |
+| `TestNewSpawnConfigRoundTrip` | migrated | none |
+| `TestNewSpawnConfigSkipsNilOption` | migrated | none |
+| `TestOptionWithEncryptor` | migrated | none |
+| `TestOptionWithEventAdapters` | migrated | none |
+| `TestOptionWithEventAdaptersMultiple` | migrated | none |
+| `TestOptionWithLogger` | migrated | none |
+| `TestOptionWithLoggerNilFallback` | migrated | none |
+| `TestOptionWithOffsetStore` | migrated | none |
+| `TestOptionWithProjection` | migrated | none |
+| `TestOptionWithProjectionMultiple` | migrated | none |
+| `TestOptionWithProjectionNil` | migrated | none |
+| `TestOptionWithSnapshotStore` | migrated | none |
+| `TestOptionWithStateStore` | migrated | none |
+| `TestOptionWithTelemetry` | migrated | none |
+| `TestOptionWithTelemetryNil` | migrated | none |
+| `TestOptionWithTenantResolver` | migrated | none |
+| `TestOptionWithTenantResolverAmbiguousCount` | migrated | none |
+| `TestOptionWithTenantResolverCountsOnlyNonNilRegistrations` | migrated | none |
+| `TestOptionWithTenantResolverFuncTypedNil` | migrated | none |
+| `TestOptionWithTenantResolverNil` | migrated | none |
+| `TestOptionWithTenantResolverNilAfterNonNil` | migrated | none |
+| `TestOptionWithTenantResolverTypedNil` | migrated | none |
+| `TestOptionWithTenantResolverTypedNilThenValid` | migrated | none |
+| `TestOptionWithTenantResolverValidThenTypedNil` | migrated | none |
+| `TestParseCommandReply` | migrated | none |
+| `TestProjectionSupervisorContract` | migrated | none |
+| `TestPublisherContractsAliasPortPublishing` | migrated | none |
+| `TestRelocationDisabledByDefault` | migrated | none |
+| `TestResolveLogger` | migrated | none |
+| `TestRuntimeMovedTypesAreAliases` | migrated | none |
+| `TestRuntimeSentinelsAreTheSameValues` | migrated | none |
+| `TestSagaActionAndSagaCommandAreAliases` | migrated | none |
+| `TestSpawnDependency` | migrated | none |
+| `TestSpawnOption` | migrated | none |
+| `TestTelemetryFields` | migrated | none |
+| `TestToSpawnPlacement` | migrated | none |
+| `TestToSupervisorDirective` | migrated | none |
+| `TestToSupervisorDirectiveStop` | migrated | none |
+| `TestTopicConstantsAreFixed` | migrated | none |
+| `TestTopicConstantsAreNotPartitionedFormats` | migrated | none |
+| `TestWithEventStream_NilKeepsTheDefault` | migrated | none |
 
 #### `eventadapter`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestChainAdapterReturnsError` | pending | none |
-| `TestChainAdapterUsesRevision` | pending | none |
-| `TestChainErrorStopsEarly` | pending | none |
-| `TestChainMixedNoopAndTransform` | pending | none |
-| `TestChainMultipleAdaptersAppliedInOrder` | pending | none |
-| `TestChainNoAdapters` | pending | none |
-| `TestChainNoopAdapter` | pending | none |
-| `TestChainSingleAdapterTransforms` | pending | none |
+| `TestChainAdapterReturnsError` | migrated | none |
+| `TestChainAdapterUsesRevision` | migrated | none |
+| `TestChainErrorStopsEarly` | migrated | none |
+| `TestChainMixedNoopAndTransform` | migrated | none |
+| `TestChainMultipleAdaptersAppliedInOrder` | migrated | none |
+| `TestChainNoAdapters` | migrated | none |
+| `TestChainNoopAdapter` | migrated | none |
+| `TestChainSingleAdapterTransforms` | migrated | none |
 
 #### `eventstream`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestStream` | pending | fixed wait |
+| `TestStream` | migrated | fixed wait |
 
 #### `internal/engine/durablestate`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestActorFallsBackToHandleCommandWithoutMetadata` | pending | none |
-| `TestDurableStateActorPersistStateAndPublishWritesTenantMetadata` | pending | testify mock, generated mocks |
-| `TestDurableStateActorRecoverFromStoreSeedsActorTenant` | pending | testify mock, generated mocks |
-| `TestDurableStateActorVerifyTenantForPersist` | pending | testify mock, generated mocks |
-| `TestProvablyInSyncAfterConflict` | pending | none |
+| `TestActorFallsBackToHandleCommandWithoutMetadata` | migrated | none |
+| `TestDurableStateActorPersistStateAndPublishWritesTenantMetadata` | migrated | none |
+| `TestDurableStateActorRecoverFromStoreSeedsActorTenant` | migrated | none |
+| `TestDurableStateActorVerifyTenantForPersist` | migrated | none |
+| `TestProvablyInSyncAfterConflict` | migrated | none |
 
 #### `internal/engine/eventsource`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata` | pending | none |
-| `TestEventSourcedActorMarshalEventWritesTenantMetadata` | pending | none |
-| `TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata` | pending | none |
-| `TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant` | pending | none |
-| `TestEventSourcedActorRecoverSeedsActorTenant` | pending | none |
-| `TestEventSourcedActorSeedActorTenant` | pending | none |
-| `TestEventSourcedActorVerifyTenantForPersist` | pending | testify mock, generated mocks |
-| `TestResolveBatchPrecondition` | pending | none |
-| `TestRetryWithBackoff` | pending | none |
-| `TestShouldStayAliveAfterConflict` | pending | none |
+| `TestEventSourcedActorFallsBackToHandleCommandWithoutMetadata` | migrated | none |
+| `TestEventSourcedActorMarshalEventWritesTenantMetadata` | migrated | none |
+| `TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata` | migrated | none |
+| `TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant` | migrated | none |
+| `TestEventSourcedActorRecoverSeedsActorTenant` | migrated | none |
+| `TestEventSourcedActorSeedActorTenant` | migrated | none |
+| `TestEventSourcedActorVerifyTenantForPersist` | migrated | none |
+| `TestResolveBatchPrecondition` | migrated | none |
+| `TestRetryWithBackoff` | migrated | none |
+| `TestShouldStayAliveAfterConflict` | migrated | none |
 
 #### `internal/engine/protocol`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAnswerTenantBinding` | pending | none |
-| `TestAttachCarrier_RoundTrip` | pending | none |
-| `TestCarrierFromContext_NoneAttached` | pending | none |
-| `TestClassifierRegistrySentinelsDoNotPrefixEachOther` | pending | none |
-| `TestClassifyErrorReplyConcurrencyConflict` | pending | none |
-| `TestClassifyErrorReplyContextCanceled` | pending | none |
-| `TestClassifyErrorReplyDeadlineExceeded` | pending | none |
-| `TestClassifyErrorReplyDefaultsToFailed` | pending | none |
-| `TestClassifyErrorReplyWrappedConflictDegradesToFailed` | pending | none |
-| `TestMetadataFromContext_InvalidCarrierFailsClosed` | pending | none |
-| `TestMetadataFromContext_NoneAttached` | pending | none |
-| `TestMetadataFromContext_RematerializesMetadata` | pending | none |
+| `TestAnswerTenantBinding` | migrated | none |
+| `TestAttachCarrier_RoundTrip` | migrated | none |
+| `TestCarrierFromContext_NoneAttached` | migrated | none |
+| `TestClassifierRegistrySentinelsDoNotPrefixEachOther` | migrated | none |
+| `TestClassifyErrorReplyConcurrencyConflict` | migrated | none |
+| `TestClassifyErrorReplyContextCanceled` | migrated | none |
+| `TestClassifyErrorReplyDeadlineExceeded` | migrated | none |
+| `TestClassifyErrorReplyDefaultsToFailed` | migrated | none |
+| `TestClassifyErrorReplyWrappedConflictDegradesToFailed` | migrated | none |
+| `TestMetadataFromContext_InvalidCarrierFailsClosed` | migrated | none |
+| `TestMetadataFromContext_NoneAttached` | migrated | none |
+| `TestMetadataFromContext_RematerializesMetadata` | migrated | none |
 | `TestPreconditionFromRevisionMapsPerD4` | migrated | none |
 
 #### `internal/engine/saga`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestActorAttachCommandMetadata` | pending | none |
-| `TestSagaActionIsNoop` | pending | none |
-| `TestSagaActorBindOnFirstEvent` | pending | testify mock, generated mocks |
-| `TestSagaActorCheckStateReadTenant` | pending | testify mock, generated mocks |
-| `TestSagaActorEventContext` | pending | testify mock, generated mocks |
-| `TestSagaActorPersistAndApplyEventsWritesTenantMetadata` | pending | testify mock, generated mocks |
-| `TestSagaActorRecoverReplayTenantValidation` | pending | testify mock, generated mocks |
-| `TestSagaStatusWireRoundTrip` | pending | none |
-| `TestSagaStatus_String` | pending | testify mock, generated mocks |
+| `TestActorAttachCommandMetadata` | migrated | none |
+| `TestSagaActionIsNoop` | migrated | none |
+| `TestSagaActorBindOnFirstEvent` | migrated | none |
+| `TestSagaActorCheckStateReadTenant` | migrated | none |
+| `TestSagaActorEventContext` | migrated | none |
+| `TestSagaActorPersistAndApplyEventsWritesTenantMetadata` | migrated | none |
+| `TestSagaActorRecoverReplayTenantValidation` | migrated | none |
+| `TestSagaStatusWireRoundTrip` | migrated | none |
+| `TestSagaStatus_String` | migrated | none |
 
 #### `internal/extensions`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDurableStateStore` | pending | none |
-| `TestEncryptorExtension` | pending | none |
-| `TestEntityConfig` | pending | none |
-| `TestEventAdapters` | pending | none |
-| `TestEventsStore` | pending | none |
-| `TestEventsStream` | pending | none |
-| `TestLocalBehavior` | pending | none |
-| `TestOffsetStore` | pending | none |
-| `TestProjectionExtension` | pending | none |
-| `TestSagaConfig` | pending | none |
-| `TestSnapshotStoreExt` | pending | none |
-| `TestTelemetryExtension` | pending | none |
-| `TestTenancyMarker` | pending | none |
+| `TestDurableStateStore` | migrated | none |
+| `TestEncryptorExtension` | migrated | none |
+| `TestEntityConfig` | migrated | none |
+| `TestEventAdapters` | migrated | none |
+| `TestEventsStore` | migrated | none |
+| `TestEventsStream` | migrated | none |
+| `TestLocalBehavior` | migrated | none |
+| `TestOffsetStore` | migrated | none |
+| `TestProjectionExtension` | migrated | none |
+| `TestSagaConfig` | migrated | none |
+| `TestSnapshotStoreExt` | migrated | none |
+| `TestTelemetryExtension` | migrated | none |
+| `TestTenancyMarker` | migrated | none |
 
 #### `internal/goaktlog`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestBackend` | pending | none |
-| `TestBackendAttributesRecordsToItsDirectCaller` | pending | none |
-| `TestDiscardingBackendDisablesEveryLevel` | pending | none |
-| `TestGoaktArgsToMsg` | pending | none |
-| `TestGoaktToSlogLevel` | pending | none |
-| `TestLoggerAdapterAttributesRecordsToTheGoaktCallSite` | pending | none |
-| `TestLoggerAdapterFlush` | pending | none |
-| `TestLoggerAdapterFormattedMethodsSkipFormattingWhenDisabled` | pending | none |
-| `TestLoggerAdapterLevelTracksTheBackendAtRuntime` | pending | none |
-| `TestLoggerAdapterNonStringFirstArgumentBecomesTheMessage` | pending | none |
-| `TestLoggerAdapterRoutesEveryLevel` | pending | none |
-| `TestLoggerAdapterStdLogger` | pending | none |
-| `TestLoggerAdapterWithBuildsTheChildInTheBackend` | pending | none |
-| `TestLoggerWriterTrimsLineEndings` | pending | none |
-| `TestNewWrapsTheBackendInAnAdapter` | pending | none |
+| `TestBackend` | migrated | none |
+| `TestBackendAttributesRecordsToItsDirectCaller` | migrated | none |
+| `TestDiscardingBackendDisablesEveryLevel` | migrated | none |
+| `TestGoaktArgsToMsg` | migrated | none |
+| `TestGoaktToSlogLevel` | migrated | none |
+| `TestLoggerAdapterAttributesRecordsToTheGoaktCallSite` | migrated | none |
+| `TestLoggerAdapterFlush` | migrated | none |
+| `TestLoggerAdapterFormattedMethodsSkipFormattingWhenDisabled` | migrated | none |
+| `TestLoggerAdapterLevelTracksTheBackendAtRuntime` | migrated | none |
+| `TestLoggerAdapterNonStringFirstArgumentBecomesTheMessage` | migrated | none |
+| `TestLoggerAdapterRoutesEveryLevel` | migrated | none |
+| `TestLoggerAdapterStdLogger` | migrated | none |
+| `TestLoggerAdapterWithBuildsTheChildInTheBackend` | migrated | none |
+| `TestLoggerWriterTrimsLineEndings` | migrated | none |
+| `TestNewWrapsTheBackendInAnAdapter` | migrated | none |
 
 #### `internal/instrumentation`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestInstallPropagator` | pending | none |
-| `TestNewCreatesTheCatalog` | pending | none |
-| `TestNewWithoutMeterDisablesMetrics` | pending | none |
-| `TestNilInstrumentsRecordNothing` | pending | none |
-| `TestRecordingMethods` | pending | none |
-| `TestSendCommandSpan` | pending | none |
-| `TestShardRecordsTheGaugesWithProjectionAttributes` | pending | none |
-| `TestStartCommandSpan` | pending | none |
+| `TestInstallPropagator` | migrated | none |
+| `TestNewCreatesTheCatalog` | migrated | none |
+| `TestNewWithoutMeterDisablesMetrics` | migrated | none |
+| `TestNilInstrumentsRecordNothing` | migrated | none |
+| `TestRecordingMethods` | migrated | none |
+| `TestSendCommandSpan` | migrated | none |
+| `TestShardRecordsTheGaugesWithProjectionAttributes` | migrated | none |
+| `TestStartCommandSpan` | migrated | none |
 
 #### `internal/logging`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDefaultLoggerIsKitLoggerGlobal` | pending | none |
-| `TestResolveLogger` | pending | none |
+| `TestDefaultLoggerIsKitLoggerGlobal` | migrated | none |
+| `TestResolveLogger` | migrated | none |
 
 #### `internal/projectionrunner`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestOption` | pending | none |
-| `TestProjectionRunnerDefaultLogger` | pending | testify mock, generated mocks |
-| `TestProjectionRunnerErrorPaths` | pending | fixed wait, testify mock, generated mocks |
-| `TestProjectionRunnerFatalPaths` | pending | fixed wait, testify mock, generated mocks |
-| `TestProjectionRunnerLagMetrics` | pending | fixed wait, testify mock, generated mocks |
-| `TestRunner` | pending | fixed wait, testify mock, generated mocks |
-| `TestRunnerPullEfficiency` | pending | fixed wait, testify mock, generated mocks |
-| `TestStoreRetryDelay` | pending | testify mock, generated mocks |
-| `TestWithDeadLetterHandler` | pending | none |
-| `TestWithDeadLetterHandlerNil` | pending | none |
-| `TestWithEncryptor` | pending | none |
-| `TestWithEventAdapters` | pending | none |
-| `TestWithEventAdaptersEmpty` | pending | none |
-| `TestWithMetrics` | pending | none |
+| `TestOption` | migrated | none |
+| `TestProjectionRunnerDefaultLogger` | migrated | none |
+| `TestProjectionRunnerErrorPaths` | migrated | fixed wait |
+| `TestProjectionRunnerFatalPaths` | migrated | fixed wait |
+| `TestProjectionRunnerLagMetrics` | migrated | fixed wait |
+| `TestRunner` | migrated | fixed wait |
+| `TestRunnerPullEfficiency` | migrated | fixed wait |
+| `TestStoreRetryDelay` | migrated | none |
+| `TestWithDeadLetterHandler` | migrated | none |
+| `TestWithDeadLetterHandlerNil` | migrated | none |
+| `TestWithEncryptor` | migrated | none |
+| `TestWithEventAdapters` | migrated | none |
+| `TestWithEventAdaptersEmpty` | migrated | none |
+| `TestWithMetrics` | migrated | none |
 
 #### `internal/queue`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestQueueDequeueEmpty` | pending | none |
-| `TestQueueIsEmpty` | pending | none |
-| `TestQueueLength` | pending | none |
+| `TestQueueDequeueEmpty` | migrated | none |
+| `TestQueueIsEmpty` | migrated | none |
+| `TestQueueLength` | migrated | none |
 
 #### `internal/runner`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAddContextRunner` | pending | none |
-| `TestAddContextRunnerIf` | pending | none |
-| `TestChain` | pending | none |
+| `TestAddContextRunner` | migrated | none |
+| `TestAddContextRunnerIf` | migrated | none |
+| `TestChain` | migrated | none |
 
 #### `internal/syncmap`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDelete` | pending | none |
-| `TestForEach` | pending | none |
-| `TestGet` | pending | none |
-| `TestLen` | pending | none |
-| `TestNewAndSet` | pending | none |
-| `TestReset` | pending | none |
-| `TestValues` | pending | none |
+| `TestDelete` | migrated | none |
+| `TestForEach` | migrated | none |
+| `TestGet` | migrated | none |
+| `TestLen` | migrated | none |
+| `TestNewAndSet` | migrated | none |
+| `TestReset` | migrated | none |
+| `TestValues` | migrated | none |
 
 #### `internal/ticker`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestTicker` | pending | real timer |
+| `TestTicker` | migrated | real timer |
 
 #### `migration`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestConsumeTag` | pending | none |
-| `TestConsumeVarint` | pending | none |
-| `TestExtractLegacyResultingState` | pending | none |
-| `TestMaxReplayLimitFitsInAnInt` | pending | none |
-| `TestMigratorOptions` | pending | none |
-| `TestMigratorReplaysSequencesBeyondTheLimitValue` | pending | none |
-| `TestMigratorRun` | pending | none |
-| `TestMigratorRunWithNilLogger` | pending | none |
-| `TestMigratorScope` | pending | none |
-| `TestMigratorUsesKitLogger` | pending | none |
-| `TestNewRejectsAnInvalidScope` | pending | none |
-| `TestNewTenantAdopter` | pending | none |
-| `TestNewTenantAdopterRejectsAnInvalidSourceScope` | pending | none |
-| `TestNewTenantAdopterRejectsZeroScanPageSize` | pending | none |
-| `TestNewTenantAdopterRequiresAFenceToWrite` | pending | none |
-| `TestScopedMigratorFailsClosedOnUnprovableTenantMetadata` | pending | none |
-| `TestTenantAdopterAcquiresFencesInDeterministicOrder` | pending | none |
-| `TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages` | pending | none |
-| `TestTenantAdopterAlreadyPresentInTargetIsNeverOverwritten` | pending | none |
-| `TestTenantAdopterAssignmentOkFalseLeavesUntouched` | pending | none |
-| `TestTenantAdopterChainedEventReceipts` | pending | none |
-| `TestTenantAdopterCountsSideEffectsOfAFailedAggregate` | pending | none |
-| `TestTenantAdopterDeletesSourceOfVerifiedExistingTarget` | pending | none |
-| `TestTenantAdopterDryRunWritesNothing` | pending | none |
-| `TestTenantAdopterDurableStateTargetRaceIsStoppedByItsPrecondition` | pending | none |
-| `TestTenantAdopterEventsVerificationCatchesCorruptedWrite` | pending | none |
-| `TestTenantAdopterEventsVerificationRejectsDuplicateSequenceRows` | pending | none |
-| `TestTenantAdopterExplicitPersistenceIDsForDurableStateOnly` | pending | none |
-| `TestTenantAdopterFencedSourceWriterCannotInterleaveWithDeletion` | pending | none |
-| `TestTenantAdopterLaterSameTenantTargetIsNotEquivalent` | pending | none |
-| `TestTenantAdopterMissingSourceClassification` | pending | none |
-| `TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot` | pending | none |
-| `TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists` | pending | none |
-| `TestTenantAdopterPerAggregateFailureDoesNotAbortRun` | pending | none |
-| `TestTenantAdopterPreDeleteCheckIgnoresReplayOrder` | pending | none |
-| `TestTenantAdopterReRunIsANoOp` | pending | none |
-| `TestTenantAdopterRealRunCopiesAndKeepsSource` | pending | none |
-| `TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion` | pending | none |
-| `TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot` | pending | none |
-| `TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent` | pending | none |
-| `TestTenantAdopterRejectsATargetEqualToTheSource` | pending | none |
-| `TestTenantAdopterReleasesItsFencesOnEveryPath` | pending | none |
-| `TestTenantAdopterReplaysSequencesBeyondTheLimitValue` | pending | none |
-| `TestTenantAdopterSamePositionTargetClassification` | pending | none |
-| `TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites` | pending | none |
-| `TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent` | pending | none |
-| `TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite` | pending | none |
-| `TestTenantAdopterSourceDeletingReRunIsIdempotent` | pending | none |
-| `TestTenantAdopterSourceDeletionOnlyAfterVerification` | pending | none |
-| `TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites` | pending | none |
-| `TestTenantAdopterStampsTargetTenantMetadata` | pending | none |
-| `TestTenantAdopterStateVerificationCatchesCorruptedWrite` | pending | none |
-| `TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent` | pending | none |
-| `TestTenantAdopterTwoTenantsAreIsolated` | pending | none |
+| `TestConsumeTag` | migrated | none |
+| `TestConsumeVarint` | migrated | none |
+| `TestExtractLegacyResultingState` | migrated | none |
+| `TestMaxReplayLimitFitsInAnInt` | migrated | none |
+| `TestMigratorOptions` | migrated | none |
+| `TestMigratorReplaysSequencesBeyondTheLimitValue` | migrated | none |
+| `TestMigratorRun` | migrated | none |
+| `TestMigratorRunWithNilLogger` | migrated | none |
+| `TestMigratorScope` | migrated | none |
+| `TestMigratorUsesKitLogger` | migrated | none |
+| `TestNewRejectsAnInvalidScope` | migrated | none |
+| `TestNewTenantAdopter` | migrated | none |
+| `TestNewTenantAdopterRejectsAnInvalidSourceScope` | migrated | none |
+| `TestNewTenantAdopterRejectsZeroScanPageSize` | migrated | none |
+| `TestNewTenantAdopterRequiresAFenceToWrite` | migrated | none |
+| `TestScopedMigratorFailsClosedOnUnprovableTenantMetadata` | migrated | none |
+| `TestTenantAdopterAcquiresFencesInDeterministicOrder` | migrated | none |
+| `TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages` | migrated | none |
+| `TestTenantAdopterAlreadyPresentInTargetIsNeverOverwritten` | migrated | none |
+| `TestTenantAdopterAssignmentOkFalseLeavesUntouched` | migrated | none |
+| `TestTenantAdopterChainedEventReceipts` | migrated | none |
+| `TestTenantAdopterCountsSideEffectsOfAFailedAggregate` | migrated | none |
+| `TestTenantAdopterDeletesSourceOfVerifiedExistingTarget` | migrated | none |
+| `TestTenantAdopterDryRunWritesNothing` | migrated | none |
+| `TestTenantAdopterDurableStateTargetRaceIsStoppedByItsPrecondition` | migrated | none |
+| `TestTenantAdopterEventsVerificationCatchesCorruptedWrite` | migrated | none |
+| `TestTenantAdopterEventsVerificationRejectsDuplicateSequenceRows` | migrated | none |
+| `TestTenantAdopterExplicitPersistenceIDsForDurableStateOnly` | migrated | none |
+| `TestTenantAdopterFencedSourceWriterCannotInterleaveWithDeletion` | migrated | none |
+| `TestTenantAdopterLaterSameTenantTargetIsNotEquivalent` | migrated | none |
+| `TestTenantAdopterMissingSourceClassification` | migrated | none |
+| `TestTenantAdopterNeverOverwritesAConcurrentlyCreatedTargetSnapshot` | migrated | none |
+| `TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists` | migrated | none |
+| `TestTenantAdopterPerAggregateFailureDoesNotAbortRun` | migrated | none |
+| `TestTenantAdopterPreDeleteCheckIgnoresReplayOrder` | migrated | none |
+| `TestTenantAdopterReRunIsANoOp` | migrated | none |
+| `TestTenantAdopterRealRunCopiesAndKeepsSource` | migrated | none |
+| `TestTenantAdopterReceiptProvesAdoptionAfterSourceDeletion` | migrated | none |
+| `TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot` | migrated | none |
+| `TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent` | migrated | none |
+| `TestTenantAdopterRejectsATargetEqualToTheSource` | migrated | none |
+| `TestTenantAdopterReleasesItsFencesOnEveryPath` | migrated | none |
+| `TestTenantAdopterReplaysSequencesBeyondTheLimitValue` | migrated | none |
+| `TestTenantAdopterSamePositionTargetClassification` | migrated | none |
+| `TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites` | migrated | none |
+| `TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent` | migrated | none |
+| `TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite` | migrated | none |
+| `TestTenantAdopterSourceDeletingReRunIsIdempotent` | migrated | none |
+| `TestTenantAdopterSourceDeletionOnlyAfterVerification` | migrated | none |
+| `TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites` | migrated | none |
+| `TestTenantAdopterStampsTargetTenantMetadata` | migrated | none |
+| `TestTenantAdopterStateVerificationCatchesCorruptedWrite` | migrated | none |
+| `TestTenantAdopterTargetExtendedByLiveWritesIsAlreadyPresent` | migrated | none |
+| `TestTenantAdopterTwoTenantsAreIsolated` | migrated | none |
 
 #### `persistence`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestConflictErrorActualRevisionUnknownWhenNotSupplied` | pending | none |
-| `TestConflictErrorDoesNotMatchUnrelatedSentinel` | pending | none |
-| `TestConflictErrorErrorMessageCanonicalGrammar` | pending | none |
-| `TestConflictErrorIdentifiableViaErrorsAs` | pending | none |
-| `TestConflictErrorIdentifiableViaErrorsIs` | pending | none |
-| `TestConflictErrorScopeAccessor` | pending | none |
-| `TestConflictErrorWrappedIsStillIdentifiable` | pending | none |
-| `TestNewTenantScopeRejectsEmptyTenantID` | pending | none |
-| `TestParseConflictErrorIsExactInverseOfError` | pending | none |
-| `TestParseConflictErrorRejectsMalformedMessages` | pending | none |
-| `TestParseConflictErrorRoundTripsAdversarialIdentifiers` | pending | none |
-| `TestScopeIsUnscoped` | pending | none |
-| `TestScopeNewTenantScopeIsValid` | pending | none |
-| `TestScopeStringDistinguishesKinds` | pending | none |
-| `TestScopeTenantIDRoundTrips` | pending | none |
-| `TestScopeTenantNamedUnscopedDoesNotEqualUnscoped` | pending | none |
-| `TestScopeTwoTenantScopesWithDifferentIDsAreNotEqual` | pending | none |
-| `TestScopeTwoTenantScopesWithSameIDAreEqual` | pending | none |
-| `TestScopeUnscopedIsValid` | pending | none |
-| `TestScopeUnscopedNotEqualToTenantScope` | pending | none |
-| `TestScopeZeroValueIsInvalid` | pending | none |
-| `TestWritePreconditionComparable` | pending | none |
-| `TestWritePreconditionExpectGenesis` | pending | none |
-| `TestWritePreconditionExpectRevision` | pending | none |
-| `TestWritePreconditionExpectRevisionZeroIsNotGenesisOrUnconditional` | pending | none |
-| `TestWritePreconditionUnconditional` | pending | none |
-| `TestWritePreconditionZeroValueIsInvalid` | pending | none |
+| `TestConflictErrorActualRevisionUnknownWhenNotSupplied` | migrated | none |
+| `TestConflictErrorDoesNotMatchUnrelatedSentinel` | migrated | none |
+| `TestConflictErrorErrorMessageCanonicalGrammar` | migrated | none |
+| `TestConflictErrorIdentifiableViaErrorsAs` | migrated | none |
+| `TestConflictErrorIdentifiableViaErrorsIs` | migrated | none |
+| `TestConflictErrorScopeAccessor` | migrated | none |
+| `TestConflictErrorWrappedIsStillIdentifiable` | migrated | none |
+| `TestNewTenantScopeRejectsEmptyTenantID` | migrated | none |
+| `TestParseConflictErrorIsExactInverseOfError` | migrated | none |
+| `TestParseConflictErrorRejectsMalformedMessages` | migrated | none |
+| `TestParseConflictErrorRoundTripsAdversarialIdentifiers` | migrated | none |
+| `TestScopeIsUnscoped` | migrated | none |
+| `TestScopeNewTenantScopeIsValid` | migrated | none |
+| `TestScopeStringDistinguishesKinds` | migrated | none |
+| `TestScopeTenantIDRoundTrips` | migrated | none |
+| `TestScopeTenantNamedUnscopedDoesNotEqualUnscoped` | migrated | none |
+| `TestScopeTwoTenantScopesWithDifferentIDsAreNotEqual` | migrated | none |
+| `TestScopeTwoTenantScopesWithSameIDAreEqual` | migrated | none |
+| `TestScopeUnscopedIsValid` | migrated | none |
+| `TestScopeUnscopedNotEqualToTenantScope` | migrated | none |
+| `TestScopeZeroValueIsInvalid` | migrated | none |
+| `TestWritePreconditionComparable` | migrated | none |
+| `TestWritePreconditionExpectGenesis` | migrated | none |
+| `TestWritePreconditionExpectRevision` | migrated | none |
+| `TestWritePreconditionExpectRevisionZeroIsNotGenesisOrUnconditional` | migrated | none |
+| `TestWritePreconditionUnconditional` | migrated | none |
+| `TestWritePreconditionZeroValueIsInvalid` | migrated | none |
 
 #### `port/adapter`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAccessors_AreIndependent` | pending | none |
-| `TestAccessors_ImplementingValueIsReturned` | pending | none |
-| `TestAccessors_TypedNilIsTreatedAsAbsent` | pending | none |
-| `TestAccessors_UndeclaredValueReturnsZeroAndFalse` | pending | none |
-| `TestAssertionSitesNegativeControl` | pending | none |
-| `TestDescriptor_DeclaresAndServes` | pending | none |
-| `TestLifecycleCapabilities` | pending | none |
+| `TestAccessors_AreIndependent` | migrated | none |
+| `TestAccessors_ImplementingValueIsReturned` | migrated | none |
+| `TestAccessors_TypedNilIsTreatedAsAbsent` | migrated | none |
+| `TestAccessors_UndeclaredValueReturnsZeroAndFalse` | migrated | none |
+| `TestAssertionSitesNegativeControl` | migrated | none |
+| `TestDescriptor_DeclaresAndServes` | migrated | none |
+| `TestLifecycleCapabilities` | migrated | none |
 
 #### `port/adapter/adaptertest`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestCapture_CapabilityWithoutCheckFailsAT1` | pending | none |
-| `TestCapture_CloseAfterFailedStartFailsAT3` | pending | none |
-| `TestCapture_CloseIgnoringTheDeadlineFailsAT4` | pending | none |
-| `TestCapture_ConstructorAcquireIsNotExercised` | pending | none |
-| `TestCapture_DeclaredReadyWithoutPingFailsAT1` | pending | none |
-| `TestCapture_EmptyNameFailsAT1` | pending | none |
-| `TestCapture_FailStartWhoseAcquireSucceedsFailsAT2` | pending | none |
-| `TestCapture_FailingPingFailsAT5` | pending | none |
-| `TestCapture_ImpliedCapReadyIsNotRequiredForStores` | pending | none |
-| `TestCapture_InvalidTargetFails` | pending | none |
-| `TestCapture_LyingDescriptorFailsAT1NamingCapStart` | pending | none |
-| `TestCapture_NonIdempotentCloseFailsAT3` | pending | none |
-| `TestCapture_OnlyErrUnreachableSkips` | pending | none |
-| `TestCapture_TargetCapabilitiesAreCheckedBothWays` | pending | none |
-| `TestCapture_TargetCapabilitiesMayNotListSuiteCapabilities` | pending | none |
-| `TestCapture_UndeclaredAdapterIsNotExercisedByAT1` | pending | none |
-| `TestCapture_UndeclaredCapabilityFailsAT1` | pending | none |
-| `TestCapture_UnstableDescriptorFailsAT1` | pending | none |
-| `TestCapture_WrongPortFailsAT1` | pending | none |
-| `TestImpliesReadyMatchesTheStorePortConstants` | pending | none |
-| `TestRun_CorrectBorrowedStorePasses` | pending | none |
-| `TestRun_CorrectStarterPassesEveryCheck` | pending | none |
+| `TestCapture_CapabilityWithoutCheckFailsAT1` | migrated | none |
+| `TestCapture_CloseAfterFailedStartFailsAT3` | migrated | none |
+| `TestCapture_CloseIgnoringTheDeadlineFailsAT4` | migrated | none |
+| `TestCapture_ConstructorAcquireIsNotExercised` | migrated | none |
+| `TestCapture_DeclaredReadyWithoutPingFailsAT1` | migrated | none |
+| `TestCapture_EmptyNameFailsAT1` | migrated | none |
+| `TestCapture_FailStartWhoseAcquireSucceedsFailsAT2` | migrated | none |
+| `TestCapture_FailingPingFailsAT5` | migrated | none |
+| `TestCapture_ImpliedCapReadyIsNotRequiredForStores` | migrated | none |
+| `TestCapture_InvalidTargetFails` | migrated | none |
+| `TestCapture_LyingDescriptorFailsAT1NamingCapStart` | migrated | none |
+| `TestCapture_NonIdempotentCloseFailsAT3` | migrated | none |
+| `TestCapture_OnlyErrUnreachableSkips` | migrated | none |
+| `TestCapture_TargetCapabilitiesAreCheckedBothWays` | migrated | none |
+| `TestCapture_TargetCapabilitiesMayNotListSuiteCapabilities` | migrated | none |
+| `TestCapture_UndeclaredAdapterIsNotExercisedByAT1` | migrated | none |
+| `TestCapture_UndeclaredCapabilityFailsAT1` | migrated | none |
+| `TestCapture_UnstableDescriptorFailsAT1` | migrated | none |
+| `TestCapture_WrongPortFailsAT1` | migrated | none |
+| `TestImpliesReadyMatchesTheStorePortConstants` | migrated | none |
+| `TestRun_CorrectBorrowedStorePasses` | migrated | none |
+| `TestRun_CorrectStarterPassesEveryCheck` | migrated | none |
 
 #### `port/behavior`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDomainOnlyBehaviorsRunThroughTheContracts` | pending | none |
+| `TestDomainOnlyBehaviorsRunThroughTheContracts` | migrated | none |
 
 #### `port/publishing/publishingtest`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestCapture_LostEventFailsPT3` | pending | none |
-| `TestCapture_NoObserverIsNotExercised` | pending | none |
-| `TestCapture_OnlyUnreachableSkips` | pending | none |
-| `TestCapture_PublishingAfterCloseFailsPT1` | pending | none |
-| `TestCapture_RealAdaptertestErrUnreachableSkips` | pending | none |
-| `TestCapture_UnstableIDFailsPT2` | pending | none |
-| `TestRunEvents_CorrectPublisherPasses` | pending | none |
-| `TestRunState_CorrectPublisherPasses` | pending | none |
+| `TestCapture_LostEventFailsPT3` | migrated | none |
+| `TestCapture_NoObserverIsNotExercised` | migrated | none |
+| `TestCapture_OnlyUnreachableSkips` | migrated | none |
+| `TestCapture_PublishingAfterCloseFailsPT1` | migrated | none |
+| `TestCapture_RealAdaptertestErrUnreachableSkips` | migrated | none |
+| `TestCapture_UnstableIDFailsPT2` | migrated | none |
+| `TestRunEvents_CorrectPublisherPasses` | migrated | none |
+| `TestRunState_CorrectPublisherPasses` | migrated | none |
 
 #### `port/runtime`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAdapterSettingLastWins` | pending | none |
-| `TestAdapterSettingLookupWithNonComparableKeyIsAbsent` | pending | none |
-| `TestAdapterSettingNilValueIsStored` | pending | none |
-| `TestAdapterSettingRoundTrip` | pending | none |
-| `TestDoubleSendCommandRunsTheBehavior` | pending | none |
-| `TestDoubleSpawnAppliesOptionsInOrderAndSkipsNil` | pending | none |
-| `TestDoubleSpawnResolvesDocumentedDefaults` | pending | none |
-| `TestDoubleUnsupportedOperations` | pending | none |
-| `TestEnumValuesAreUnchanged` | pending | none |
-| `TestErrUnsupportedWrapsStandardError` | pending | none |
-| `TestResolveSpawnOptionsAppliesInOrder` | pending | none |
-| `TestResolveSpawnOptionsDefaults` | pending | none |
-| `TestResolveSpawnOptionsEachOptionReachesItsGetter` | pending | none |
-| `TestResolveSpawnOptionsEmbeddedOptionApplies` | pending | none |
-| `TestResolveSpawnOptionsNonNilWrapperOfNilOptionPanics` | pending | none |
-| `TestResolveSpawnOptionsSkipsNilOption` | pending | none |
-| `TestSagaStatusString` | pending | none |
-| `TestSentinelMessagesAreKept` | pending | none |
-| `TestSpawnSettingsIsolatedFromLaterResolutions` | pending | none |
-| `TestUnsupportedError` | pending | none |
-| `TestWithAdapterSettingPanicsAtBuildTime` | pending | none |
+| `TestAdapterSettingLastWins` | migrated | none |
+| `TestAdapterSettingLookupWithNonComparableKeyIsAbsent` | migrated | none |
+| `TestAdapterSettingNilValueIsStored` | migrated | none |
+| `TestAdapterSettingRoundTrip` | migrated | none |
+| `TestDoubleSendCommandRunsTheBehavior` | migrated | none |
+| `TestDoubleSpawnAppliesOptionsInOrderAndSkipsNil` | migrated | none |
+| `TestDoubleSpawnResolvesDocumentedDefaults` | migrated | none |
+| `TestDoubleUnsupportedOperations` | migrated | none |
+| `TestEnumValuesAreUnchanged` | migrated | none |
+| `TestErrUnsupportedWrapsStandardError` | migrated | none |
+| `TestResolveSpawnOptionsAppliesInOrder` | migrated | none |
+| `TestResolveSpawnOptionsDefaults` | migrated | none |
+| `TestResolveSpawnOptionsEachOptionReachesItsGetter` | migrated | none |
+| `TestResolveSpawnOptionsEmbeddedOptionApplies` | migrated | none |
+| `TestResolveSpawnOptionsNonNilWrapperOfNilOptionPanics` | migrated | none |
+| `TestResolveSpawnOptionsSkipsNilOption` | migrated | none |
+| `TestSagaStatusString` | migrated | none |
+| `TestSentinelMessagesAreKept` | migrated | none |
+| `TestSpawnSettingsIsolatedFromLaterResolutions` | migrated | none |
+| `TestUnsupportedError` | migrated | none |
+| `TestWithAdapterSettingPanicsAtBuildTime` | migrated | none |
 
 #### `projection`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDiscardDeadLetterHandler_Handle` | pending | none |
-| `TestDiscardDeadLetterHandler_InterfaceCompliance` | pending | none |
-| `TestDiscardHandler_Handle` | pending | none |
-| `TestDiscardHandler_InterfaceCompliance` | pending | none |
-| `TestNewDiscardDeadLetterHandler` | pending | none |
-| `TestNewDiscardHandler` | pending | none |
-| `TestNewRecovery_Defaults` | pending | none |
-| `TestNewRecovery_WithAllOptions` | pending | none |
-| `TestRecoveryOption` | pending | none |
+| `TestDiscardDeadLetterHandler_Handle` | migrated | none |
+| `TestDiscardDeadLetterHandler_InterfaceCompliance` | migrated | none |
+| `TestDiscardHandler_Handle` | migrated | none |
+| `TestDiscardHandler_InterfaceCompliance` | migrated | none |
+| `TestNewDiscardDeadLetterHandler` | migrated | none |
+| `TestNewDiscardHandler` | migrated | none |
+| `TestNewRecovery_Defaults` | migrated | none |
+| `TestNewRecovery_WithAllOptions` | migrated | none |
+| `TestRecoveryOption` | migrated | none |
 
 #### `tenancy`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestAdministrative_WithCorrelationIDIsOptional` | pending | none |
-| `TestAsFixedTenantResolver` | pending | none |
-| `TestAttach_BindsTenantContextRetrievableViaFrom` | pending | none |
-| `TestAttach_IsIdempotentForTheSameTenantContext` | pending | none |
-| `TestAttach_RejectsChangingAlreadyBoundTenantContext` | pending | none |
-| `TestAttach_RejectsZeroValueTenantContext` | pending | none |
-| `TestAttach_ValidAdministrativeContextStillFlowsThroughUnchanged` | pending | none |
-| `TestAttach_ValidTenantScopedContextStillFlowsThroughUnchanged` | pending | none |
-| `TestCapFixedTenant_IsAnUntypedConstant` | pending | none |
-| `TestError_ErrorMessage` | pending | none |
-| `TestError_IsDoesNotMatchOtherSentinels` | pending | none |
-| `TestError_IsMatchesSentinelByReason` | pending | none |
-| `TestError_ReasonAccessor` | pending | none |
-| `TestError_TenantAccessorWithAttribution` | pending | none |
-| `TestError_TenantAccessorWithoutAttribution` | pending | none |
-| `TestError_UnwrapReturnsCause` | pending | none |
-| `TestError_UnwrapReturnsNilWithoutCause` | pending | none |
-| `TestFixedTenantAccessors_NeverResolve` | pending | none |
-| `TestFixedTenantOf` | pending | none |
-| `TestFrom_ReturnsFalseWhenNothingAttached` | pending | none |
-| `TestInvocation_EntrypointResolvesAndAttaches_BehaviorOnlyRequires` | pending | none |
-| `TestInvocation_SkippingEntrypointAttachMeansBehaviorFails` | pending | none |
-| `TestMarshalMetadata_AdministrativeScope_OmitsCorrelationIDWhenAbsent` | pending | none |
-| `TestMarshalMetadata_AdministrativeScope_UsesEgoTenantKeys` | pending | none |
-| `TestMarshalMetadata_TenantScope_UsesEgoTenantKeys` | pending | none |
-| `TestMetadata_RoundTrip_AdministrativeScope` | pending | none |
-| `TestMetadata_RoundTrip_TenantScope` | pending | none |
-| `TestNewAdministrativeContext_IsTypeDistinctAndAttributed` | pending | none |
-| `TestNewAdministrativeContext_RejectsZeroValueAdministrative` | pending | none |
-| `TestNewAdministrative_AcceptsActorAndReason` | pending | none |
-| `TestNewAdministrative_RequiresActorAndReason` | pending | none |
-| `TestNewTenantContext_DifferentTenantsProduceDifferentContexts` | pending | none |
-| `TestNewTenantContext_ProducesTenantScopedContext` | pending | none |
-| `TestNewTenantContext_RejectsEmptyTenantID` | pending | none |
-| `TestNewTenantContext_RejectsZeroValueTenantID` | pending | none |
-| `TestNewTenantContext_RevalidatesTenantIDBypassingConstructor` | pending | none |
-| `TestNewTenantID_AcceptsArbitraryNonUUIDIdentifiers` | pending | none |
-| `TestNewTenantID_AcceptsInteriorWhitespace` | pending | none |
-| `TestNewTenantID_AcceptsMaxLength` | pending | none |
-| `TestNewTenantID_DoesNotNormalizeCase` | pending | none |
-| `TestNewTenantID_RejectsControlRune` | pending | none |
-| `TestNewTenantID_RejectsEmpty` | pending | none |
-| `TestNewTenantID_RejectsInvalidUTF8` | pending | none |
-| `TestNewTenantID_RejectsLeadingOrTrailingWhitespace` | pending | none |
-| `TestNewTenantID_RejectsTabAndNewline` | pending | none |
-| `TestNewTenantID_RejectsTooLong` | pending | none |
-| `TestNewTenantID_RejectsWhitespaceOnly` | pending | none |
-| `TestRequire_AcceptsValidTenantContextBoundDirectly` | pending | none |
-| `TestRequire_RejectsInvalidTenantContextEvenIfSomehowBound` | pending | none |
-| `TestRequire_ReturnsBoundTenantContext` | pending | none |
-| `TestRequire_ReturnsErrMissingWhenNothingAttached` | pending | none |
-| `TestSagaBoundary_ReconstructsTenantIdentityFromCarriedMetadata` | pending | none |
-| `TestSagaBoundary_SkippingMetadataReconstructionFailsClosed` | pending | none |
-| `TestSentinels_AreDistinctFromEachOther` | pending | none |
-| `TestTenantContext_ZeroValueIsNeitherScope` | pending | none |
-| `TestUnmarshalMetadata_RejectsAdministrativeScopeMissingAttribution` | pending | none |
-| `TestUnmarshalMetadata_RejectsMissingScope` | pending | none |
-| `TestUnmarshalMetadata_RejectsTenantScopeWithInvalidID` | pending | none |
-| `TestUnmarshalMetadata_RejectsUnrecognizedScope` | pending | none |
-| `TestVerifyUnchanged_ReturnsErrDeniedWhenDifferent` | pending | none |
-| `TestVerifyUnchanged_ReturnsNilWhenEqual` | pending | none |
-| `TestWithSingleTenant_IgnoresIncomingContext` | pending | none |
-| `TestWithSingleTenant_IndistinguishableFromAnyResolver` | pending | none |
-| `TestWithSingleTenant_ProducesTenantScopedContext` | pending | none |
-| `TestWithSingleTenant_RejectsInvalidTenantID` | pending | none |
+| `TestAdministrative_WithCorrelationIDIsOptional` | migrated | none |
+| `TestAsFixedTenantResolver` | migrated | none |
+| `TestAttach_BindsTenantContextRetrievableViaFrom` | migrated | none |
+| `TestAttach_IsIdempotentForTheSameTenantContext` | migrated | none |
+| `TestAttach_RejectsChangingAlreadyBoundTenantContext` | migrated | none |
+| `TestAttach_RejectsZeroValueTenantContext` | migrated | none |
+| `TestAttach_ValidAdministrativeContextStillFlowsThroughUnchanged` | migrated | none |
+| `TestAttach_ValidTenantScopedContextStillFlowsThroughUnchanged` | migrated | none |
+| `TestCapFixedTenant_IsAnUntypedConstant` | migrated | none |
+| `TestError_ErrorMessage` | migrated | none |
+| `TestError_IsDoesNotMatchOtherSentinels` | migrated | none |
+| `TestError_IsMatchesSentinelByReason` | migrated | none |
+| `TestError_ReasonAccessor` | migrated | none |
+| `TestError_TenantAccessorWithAttribution` | migrated | none |
+| `TestError_TenantAccessorWithoutAttribution` | migrated | none |
+| `TestError_UnwrapReturnsCause` | migrated | none |
+| `TestError_UnwrapReturnsNilWithoutCause` | migrated | none |
+| `TestFixedTenantAccessors_NeverResolve` | migrated | none |
+| `TestFixedTenantOf` | migrated | none |
+| `TestFrom_ReturnsFalseWhenNothingAttached` | migrated | none |
+| `TestInvocation_EntrypointResolvesAndAttaches_BehaviorOnlyRequires` | migrated | none |
+| `TestInvocation_SkippingEntrypointAttachMeansBehaviorFails` | migrated | none |
+| `TestMarshalMetadata_AdministrativeScope_OmitsCorrelationIDWhenAbsent` | migrated | none |
+| `TestMarshalMetadata_AdministrativeScope_UsesEgoTenantKeys` | migrated | none |
+| `TestMarshalMetadata_TenantScope_UsesEgoTenantKeys` | migrated | none |
+| `TestMetadata_RoundTrip_AdministrativeScope` | migrated | none |
+| `TestMetadata_RoundTrip_TenantScope` | migrated | none |
+| `TestNewAdministrativeContext_IsTypeDistinctAndAttributed` | migrated | none |
+| `TestNewAdministrativeContext_RejectsZeroValueAdministrative` | migrated | none |
+| `TestNewAdministrative_AcceptsActorAndReason` | migrated | none |
+| `TestNewAdministrative_RequiresActorAndReason` | migrated | none |
+| `TestNewTenantContext_DifferentTenantsProduceDifferentContexts` | migrated | none |
+| `TestNewTenantContext_ProducesTenantScopedContext` | migrated | none |
+| `TestNewTenantContext_RejectsEmptyTenantID` | migrated | none |
+| `TestNewTenantContext_RejectsZeroValueTenantID` | migrated | none |
+| `TestNewTenantContext_RevalidatesTenantIDBypassingConstructor` | migrated | none |
+| `TestNewTenantID_AcceptsArbitraryNonUUIDIdentifiers` | migrated | none |
+| `TestNewTenantID_AcceptsInteriorWhitespace` | migrated | none |
+| `TestNewTenantID_AcceptsMaxLength` | migrated | none |
+| `TestNewTenantID_DoesNotNormalizeCase` | migrated | none |
+| `TestNewTenantID_RejectsControlRune` | migrated | none |
+| `TestNewTenantID_RejectsEmpty` | migrated | none |
+| `TestNewTenantID_RejectsInvalidUTF8` | migrated | none |
+| `TestNewTenantID_RejectsLeadingOrTrailingWhitespace` | migrated | none |
+| `TestNewTenantID_RejectsTabAndNewline` | migrated | none |
+| `TestNewTenantID_RejectsTooLong` | migrated | none |
+| `TestNewTenantID_RejectsWhitespaceOnly` | migrated | none |
+| `TestRequire_AcceptsValidTenantContextBoundDirectly` | migrated | none |
+| `TestRequire_RejectsInvalidTenantContextEvenIfSomehowBound` | migrated | none |
+| `TestRequire_ReturnsBoundTenantContext` | migrated | none |
+| `TestRequire_ReturnsErrMissingWhenNothingAttached` | migrated | none |
+| `TestSagaBoundary_ReconstructsTenantIdentityFromCarriedMetadata` | migrated | none |
+| `TestSagaBoundary_SkippingMetadataReconstructionFailsClosed` | migrated | none |
+| `TestSentinels_AreDistinctFromEachOther` | migrated | none |
+| `TestTenantContext_ZeroValueIsNeitherScope` | migrated | none |
+| `TestUnmarshalMetadata_RejectsAdministrativeScopeMissingAttribution` | migrated | none |
+| `TestUnmarshalMetadata_RejectsMissingScope` | migrated | none |
+| `TestUnmarshalMetadata_RejectsTenantScopeWithInvalidID` | migrated | none |
+| `TestUnmarshalMetadata_RejectsUnrecognizedScope` | migrated | none |
+| `TestVerifyUnchanged_ReturnsErrDeniedWhenDifferent` | migrated | none |
+| `TestVerifyUnchanged_ReturnsNilWhenEqual` | migrated | none |
+| `TestWithSingleTenant_IgnoresIncomingContext` | migrated | none |
+| `TestWithSingleTenant_IndistinguishableFromAnyResolver` | migrated | none |
+| `TestWithSingleTenant_ProducesTenantScopedContext` | migrated | none |
+| `TestWithSingleTenant_RejectsInvalidTenantID` | migrated | none |
 
 #### `test/data/testpb`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestDescriptor_IsSoundAndCarriesTheModulePath` | pending | none |
+| `TestDescriptor_IsSoundAndCarriesTheModulePath` | migrated | none |
 
 #### `testkit`
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestConformanceCatchesNonIsolatingStore` | pending | none |
-| `TestDurableStateScenario_GivenStateWhenCommandThenStateAndVersion` | pending | none |
-| `TestDurableStateScenario_UnhandledCommandReturnsError` | pending | none |
-| `TestDurableStateScenario_WhenCommandFromInitialState` | pending | none |
-| `TestDurableStateScenario_WhenCommandReturnsError` | pending | none |
-| `TestDurableStoreConformance` | pending | none |
-| `TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict` | pending | none |
-| `TestDurableStore_Connect` | pending | none |
-| `TestDurableStore_Disconnect` | pending | none |
-| `TestDurableStore_GetLatestState_NotConnected` | pending | none |
-| `TestDurableStore_InvalidScopeRejected` | pending | none |
-| `TestDurableStore_NewDurableStore` | pending | none |
-| `TestDurableStore_Ping` | pending | none |
-| `TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner` | pending | none |
-| `TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner` | pending | none |
-| `TestDurableStore_WriteAndGetState` | pending | none |
-| `TestDurableStore_WriteState_ExactRevisionSucceedsWhenCurrent` | pending | none |
-| `TestDurableStore_WriteState_GenesisConflictsOnExisting` | pending | none |
-| `TestDurableStore_WriteState_GenesisSucceedsOnEmpty` | pending | none |
-| `TestDurableStore_WriteState_InvalidPreconditionIsRejected` | pending | none |
-| `TestDurableStore_WriteState_NotConnected` | pending | none |
-| `TestDurableStore_WriteState_StaleRevisionIsConflict` | pending | none |
-| `TestDurableStore_WriteState_UnconditionalIsLegacyBehavior` | pending | none |
-| `TestEventSourcedScenario_GivenEventsApplyOnTopOfGivenState` | pending | none |
-| `TestEventSourcedScenario_GivenEventsBuildTheState` | pending | none |
-| `TestEventSourcedScenario_GivenEventsFailureIsReportedAsArrangementFailure` | pending | none |
-| `TestEventSourcedScenario_GivenStateIsPassedToCommandHandler` | pending | none |
-| `TestEventSourcedScenario_GivenStateWhenCommandThenEventsAndState` | pending | none |
-| `TestEventSourcedScenario_HandleEventFailsOnProducedEvent` | pending | none |
-| `TestEventSourcedScenario_UnhandledCommandReturnsError` | pending | none |
-| `TestEventSourcedScenario_WhenCommandFromInitialState` | pending | none |
-| `TestEventSourcedScenario_WhenCommandProducesNoEvents` | pending | none |
-| `TestEventSourcedScenario_WhenCommandReturnsError` | pending | none |
-| `TestEventStoreConformance` | pending | none |
-| `TestEventStoreReplayEventsAcceptsTheMigrationReplayBounds` | pending | none |
-| `TestEventStore_Connect` | pending | none |
-| `TestEventStore_DeleteEvents` | pending | none |
-| `TestEventStore_Disconnect` | pending | none |
-| `TestEventStore_GetLatestEvent` | pending | none |
-| `TestEventStore_GetShardEvents` | pending | none |
-| `TestEventStore_InvalidScopeRejected` | pending | none |
-| `TestEventStore_NewEventsStore` | pending | none |
-| `TestEventStore_PersistenceIDs` | pending | none |
-| `TestEventStore_PersistenceIDsPaginationExhaustive` | pending | none |
-| `TestEventStore_Ping` | pending | none |
-| `TestEventStore_ShardOffsets` | pending | none |
-| `TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner` | pending | none |
-| `TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner` | pending | none |
-| `TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates` | pending | none |
-| `TestEventStore_UnscopedDoesNotCollideWithTenantScope` | pending | none |
-| `TestEventStore_WriteAndReplayEvents` | pending | none |
-| `TestEventStore_WriteEvents_ConditionalBatchMustShareOnePersistenceID` | pending | none |
-| `TestEventStore_WriteEvents_DuplicateSequenceNumberDoesNotDuplicateShardEventsOrOffsets` | pending | none |
-| `TestEventStore_WriteEvents_DuplicateSequenceNumberOverwritesNotAccumulates` | pending | none |
-| `TestEventStore_WriteEvents_DuplicateSequenceNumberThenDeleteEventsLeavesNoResidual` | pending | none |
-| `TestEventStore_WriteEvents_DuplicateSequenceNumberWithinConditionalWriteOverwrites` | pending | none |
-| `TestEventStore_WriteEvents_ExactRevisionSucceedsWhenCurrent` | pending | none |
-| `TestEventStore_WriteEvents_GenesisConflictsOnExisting` | pending | none |
-| `TestEventStore_WriteEvents_GenesisSucceedsOnEmpty` | pending | none |
-| `TestEventStore_WriteEvents_InvalidPreconditionIsRejected` | pending | none |
-| `TestEventStore_WriteEvents_StaleRevisionIsConflict` | pending | none |
-| `TestEventStore_WriteEvents_UnconditionalIsLegacyBehavior` | pending | none |
-| `TestKeyStore_DeleteKey` | pending | none |
-| `TestKeyStore_GetKey` | pending | none |
-| `TestKeyStore_GetOrCreateKey` | pending | none |
-| `TestKeyStore_NewKeyStore` | pending | none |
-| `TestOffsetStore_Connect` | pending | none |
-| `TestOffsetStore_Disconnect` | pending | none |
-| `TestOffsetStore_NewOffsetStore` | pending | none |
-| `TestOffsetStore_Ping` | pending | none |
-| `TestOffsetStore_WriteAndGetOffset` | pending | none |
-| `TestSnapshotStoreConformance` | pending | none |
-| `TestSnapshotStore_Connect` | pending | none |
-| `TestSnapshotStore_DeleteSnapshots` | pending | none |
-| `TestSnapshotStore_Disconnect` | pending | none |
-| `TestSnapshotStore_InvalidScopeRejected` | pending | none |
-| `TestSnapshotStore_NewSnapshotStore` | pending | none |
-| `TestSnapshotStore_Ping` | pending | none |
-| `TestSnapshotStore_WriteAndGetSnapshot` | pending | none |
-| `TestStoreDescriptors` | pending | none |
-| `TestStoresAdapterConformance` | pending | none |
+| `TestConformanceCatchesNonIsolatingStore` | migrated | none |
+| `TestDurableStateScenario_GivenStateWhenCommandThenStateAndVersion` | migrated | none |
+| `TestDurableStateScenario_UnhandledCommandReturnsError` | migrated | none |
+| `TestDurableStateScenario_WhenCommandFromInitialState` | migrated | none |
+| `TestDurableStateScenario_WhenCommandReturnsError` | migrated | none |
+| `TestDurableStoreConformance` | migrated | none |
+| `TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict` | migrated | none |
+| `TestDurableStore_Connect` | migrated | none |
+| `TestDurableStore_Disconnect` | migrated | none |
+| `TestDurableStore_GetLatestState_NotConnected` | migrated | none |
+| `TestDurableStore_InvalidScopeRejected` | migrated | none |
+| `TestDurableStore_NewDurableStore` | migrated | none |
+| `TestDurableStore_Ping` | migrated | none |
+| `TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner` | migrated | none |
+| `TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner` | migrated | none |
+| `TestDurableStore_WriteAndGetState` | migrated | none |
+| `TestDurableStore_WriteState_ExactRevisionSucceedsWhenCurrent` | migrated | none |
+| `TestDurableStore_WriteState_GenesisConflictsOnExisting` | migrated | none |
+| `TestDurableStore_WriteState_GenesisSucceedsOnEmpty` | migrated | none |
+| `TestDurableStore_WriteState_InvalidPreconditionIsRejected` | migrated | none |
+| `TestDurableStore_WriteState_NotConnected` | migrated | none |
+| `TestDurableStore_WriteState_StaleRevisionIsConflict` | migrated | none |
+| `TestDurableStore_WriteState_UnconditionalIsLegacyBehavior` | migrated | none |
+| `TestEventSourcedScenario_GivenEventsApplyOnTopOfGivenState` | migrated | none |
+| `TestEventSourcedScenario_GivenEventsBuildTheState` | migrated | none |
+| `TestEventSourcedScenario_GivenEventsFailureIsReportedAsArrangementFailure` | migrated | none |
+| `TestEventSourcedScenario_GivenStateIsPassedToCommandHandler` | migrated | none |
+| `TestEventSourcedScenario_GivenStateWhenCommandThenEventsAndState` | migrated | none |
+| `TestEventSourcedScenario_HandleEventFailsOnProducedEvent` | migrated | none |
+| `TestEventSourcedScenario_UnhandledCommandReturnsError` | migrated | none |
+| `TestEventSourcedScenario_WhenCommandFromInitialState` | migrated | none |
+| `TestEventSourcedScenario_WhenCommandProducesNoEvents` | migrated | none |
+| `TestEventSourcedScenario_WhenCommandReturnsError` | migrated | none |
+| `TestEventStoreConformance` | migrated | none |
+| `TestEventStoreReplayEventsAcceptsTheMigrationReplayBounds` | migrated | none |
+| `TestEventStore_Connect` | migrated | none |
+| `TestEventStore_DeleteEvents` | migrated | none |
+| `TestEventStore_Disconnect` | migrated | none |
+| `TestEventStore_GetLatestEvent` | migrated | none |
+| `TestEventStore_GetShardEvents` | migrated | none |
+| `TestEventStore_InvalidScopeRejected` | migrated | none |
+| `TestEventStore_NewEventsStore` | migrated | none |
+| `TestEventStore_PersistenceIDs` | migrated | none |
+| `TestEventStore_PersistenceIDsPaginationExhaustive` | migrated | none |
+| `TestEventStore_Ping` | migrated | none |
+| `TestEventStore_ShardOffsets` | migrated | none |
+| `TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner` | migrated | none |
+| `TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner` | migrated | none |
+| `TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates` | migrated | none |
+| `TestEventStore_UnscopedDoesNotCollideWithTenantScope` | migrated | none |
+| `TestEventStore_WriteAndReplayEvents` | migrated | none |
+| `TestEventStore_WriteEvents_ConditionalBatchMustShareOnePersistenceID` | migrated | none |
+| `TestEventStore_WriteEvents_DuplicateSequenceNumberDoesNotDuplicateShardEventsOrOffsets` | migrated | none |
+| `TestEventStore_WriteEvents_DuplicateSequenceNumberOverwritesNotAccumulates` | migrated | none |
+| `TestEventStore_WriteEvents_DuplicateSequenceNumberThenDeleteEventsLeavesNoResidual` | migrated | none |
+| `TestEventStore_WriteEvents_DuplicateSequenceNumberWithinConditionalWriteOverwrites` | migrated | none |
+| `TestEventStore_WriteEvents_ExactRevisionSucceedsWhenCurrent` | migrated | none |
+| `TestEventStore_WriteEvents_GenesisConflictsOnExisting` | migrated | none |
+| `TestEventStore_WriteEvents_GenesisSucceedsOnEmpty` | migrated | none |
+| `TestEventStore_WriteEvents_InvalidPreconditionIsRejected` | migrated | none |
+| `TestEventStore_WriteEvents_StaleRevisionIsConflict` | migrated | none |
+| `TestEventStore_WriteEvents_UnconditionalIsLegacyBehavior` | migrated | none |
+| `TestKeyStore_DeleteKey` | migrated | none |
+| `TestKeyStore_GetKey` | migrated | none |
+| `TestKeyStore_GetOrCreateKey` | migrated | none |
+| `TestKeyStore_NewKeyStore` | migrated | none |
+| `TestOffsetStore_Connect` | migrated | none |
+| `TestOffsetStore_Disconnect` | migrated | none |
+| `TestOffsetStore_NewOffsetStore` | migrated | none |
+| `TestOffsetStore_Ping` | migrated | none |
+| `TestOffsetStore_WriteAndGetOffset` | migrated | none |
+| `TestSnapshotStoreConformance` | migrated | none |
+| `TestSnapshotStore_Connect` | migrated | none |
+| `TestSnapshotStore_DeleteSnapshots` | migrated | none |
+| `TestSnapshotStore_Disconnect` | migrated | none |
+| `TestSnapshotStore_InvalidScopeRejected` | migrated | none |
+| `TestSnapshotStore_NewSnapshotStore` | migrated | none |
+| `TestSnapshotStore_Ping` | migrated | none |
+| `TestSnapshotStore_WriteAndGetSnapshot` | migrated | none |
+| `TestStoreDescriptors` | migrated | none |
+| `TestStoresAdapterConformance` | migrated | none |
 
 ### Module `publisher/kafka`
 
@@ -822,8 +820,8 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestClosureGuardRejectsCompositionRoot` | pending | none |
-| `TestPublishBeforeStartMatchesPublishingSentinel` | pending | none |
+| `TestClosureGuardRejectsCompositionRoot` | migrated | none |
+| `TestPublishBeforeStartMatchesPublishingSentinel` | migrated | none |
 
 ### Module `publisher/nats`
 
@@ -831,8 +829,8 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestClosureGuardRejectsCompositionRoot` | pending | none |
-| `TestPublishBeforeStartMatchesPublishingSentinel` | pending | none |
+| `TestClosureGuardRejectsCompositionRoot` | migrated | none |
+| `TestPublishBeforeStartMatchesPublishingSentinel` | migrated | none |
 
 ### Module `publisher/pulsar`
 
@@ -840,8 +838,8 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestClosureGuardRejectsCompositionRoot` | pending | none |
-| `TestPublishBeforeStartMatchesPublishingSentinel` | pending | none |
+| `TestClosureGuardRejectsCompositionRoot` | migrated | none |
+| `TestPublishBeforeStartMatchesPublishingSentinel` | migrated | none |
 
 ### Module `publisher/websocket`
 
@@ -849,8 +847,8 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestClosureGuardRejectsCompositionRoot` | pending | none |
-| `TestDescriptors` | pending | none |
+| `TestClosureGuardRejectsCompositionRoot` | migrated | none |
+| `TestDescriptors` | migrated | none |
 
 ### Module `test/compat`
 
@@ -858,11 +856,11 @@ The dependencies column comes from static signals found in each test body and th
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestEgoSentinelIsThePublishingSentinel` | pending | none |
+| `TestEgoSentinelIsThePublishingSentinel` | migrated | none |
 
 ## Out of phase
 
-256 tests need a real component or resource, so they are not part of this phase and keep their current execution. Each one is listed with the real dependency that keeps it out. The 19 Postgres tests skip today because `EGO_EXAMPLE_POSTGRES_DSN` is not set. Twenty-five of these tests (12 in `engine`, 13 in `compose/goakt`) look like unit tests but start an actor system through a helper or through `App.Start`.
+256 tests need a real component or resource, so they are not part of this phase and keep their current execution. They are the documented exceptions of the unit gate: a test file that starts a real goakt actor system, runs `go list`, opens an `httptest` server or a loopback socket, or reaches the Postgres example is listed, one line and one reason each, in `.github/unit-test-gate-resources.txt`, which the gate checks in `-strict` mode so a line that no longer applies fails CI. Each one is listed with the real dependency that keeps it out. The 19 Postgres tests skip today because `EGO_EXAMPLE_POSTGRES_DSN` is not set. Twenty-five of these tests (12 in `engine`, 13 in `compose/goakt`) look like unit tests but start an actor system through a helper or through `App.Start`.
 
 ### Module `.`
 

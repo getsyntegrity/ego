@@ -32,8 +32,8 @@ calls made to it.
 
 ## Mocks: `mock.Controller`
 
-Mocks use go-specs' `mock` package. `testify/mock` and the generated `mocks/*` packages are not used in new
-or migrated unit tests: they verify only when the test remembers to call `AssertExpectations`, and their
+Mocks use go-specs' `mock` package. `testify/mock` and the generated mockery `mocks/*` packages no longer exist in the
+repository, and the gate rejects both. They were dropped because they verify only when the test remembers to call `AssertExpectations`, and their
 failures do not go through the spec. A `mock.Controller` is bound to the case. It checks every expectation
 when the case ends, including after a failed assertion or a panic, and it reports an unexpected call
 immediately, naming the method, its arguments and the line where the expectation was declared.
@@ -244,16 +244,14 @@ Two plain-text lists hold the exceptions, one `path | note` per line, and the no
   the unit lane (architecture tests that run `go list`, the loopback websocket server, the Postgres-gated
   example tests, the real actor-system tests), each with its reason. Add a line only with a reason a reviewer
   can argue with.
-- `.github/unit-test-gate-pending.txt` is temporary. It lists the files that still break rules 1 to 3 while the
-  pull request named on the line migrates them. A listed file that no longer violates is reported as a
-  **warning** in the job log (stale entry), because migration PRs merge in parallel and a hard failure would turn
-  `develop` red after each one; the PR that migrates a file should still delete its lines. A stale line in the
-  resources list warns the same way. `-strict` turns every stale entry into an error: CI switches it on when the
-  pending list is empty, and the file is then deleted. A new violation that is not listed always fails.
+- `.github/unit-test-gate-pending.txt` was the temporary list used while the migration PRs were in flight. It is
+  now empty and only its header stays, because the gate reads the file. CI runs the gate with `-strict`, so a
+  stale line in either list is an error, and a new violation always fails: there is no way left to park a
+  testify import or a test file without `specs.Describe`.
 
 The gate's own tests are in `.github/scripts/unitgate` and use an in-memory file tree, so they touch no disk.
-Run it locally with `go test ./.github/scripts/unitgate && go run ./.github/scripts/unitgate` (add `-strict` to
-see stale entries as errors).
+Run it locally with `go test ./.github/scripts/unitgate && go run ./.github/scripts/unitgate` (CI adds
+`-strict`, which turns stale list entries into errors).
 
 ## Pilot validation (#203)
 
