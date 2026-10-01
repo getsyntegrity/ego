@@ -10,6 +10,7 @@
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
 #   modules     -> build, vet and test of every nested module (benchmark, example, publishers, compat)
+#   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 name: ci
 
 on:
@@ -275,6 +276,20 @@ jobs:
           go vet ./...
           go test $TESTFLAGS ./...
 
+  # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
+  # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
+  unit-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: The gate's own tests
+        run: go test ./.github/scripts/unitgate
+      - name: Scan the repository
+        # Stale allowlist entries only warn while migration PRs merge in parallel. Add -strict when the pending list is empty.
+        run: go run ./.github/scripts/unitgate
+
   # go.mod/go.sum sorted, for the root module and every nested module (a cheap job of its own).
   tidy:
     needs: plan
@@ -342,7 +357,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, unit-gate, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:
