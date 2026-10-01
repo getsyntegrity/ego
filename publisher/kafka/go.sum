@@ -10,8 +10,8 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/eapache/go-resiliency v1.7.0 h1:n3NRTnBn5N0Cbi/IeOHuQn9s2UwVUH7Ga0ZWcP+9JTA=
 github.com/eapache/go-resiliency v1.7.0/go.mod h1:5yPzW0MIvSe0JDsv0v+DvcjEv2FyD6iZYSs1ZI+iQho=
-github.com/getsyntegrity/go-specs v0.3.1 h1:TbWw7dppqRvLRaSkQfQ4oIMTUsJi2aOR7ZLO7WKHrRA=
-github.com/getsyntegrity/go-specs v0.3.1/go.mod h1:aCL4z/2SIwyuC4f4VxIU2EuycJMt+K7tSc/I0C7oqGI=
+github.com/getsyntegrity/go-specs v0.3.3 h1:jP1E71uhvz29fgDZbb5QyGgxJYipZojHBF8IHZMIDps=
+github.com/getsyntegrity/go-specs v0.3.3/go.mod h1:aCL4z/2SIwyuC4f4VxIU2EuycJMt+K7tSc/I0C7oqGI=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/gorilla/securecookie v1.1.1/go.mod h1:ra0sb63/xPlUeL+yeDciTfxMRAA+MP+HVt/4epWDjd4=

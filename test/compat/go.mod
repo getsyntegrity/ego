@@ -8,7 +8,7 @@ require (
 	github.com/getsyntegrity/ego/publisher/nats v0.0.0
 	github.com/getsyntegrity/ego/publisher/pulsar v0.0.0
 	github.com/getsyntegrity/ego/publisher/websocket v0.0.0
-	github.com/getsyntegrity/go-specs v0.3.1
+	github.com/getsyntegrity/go-specs v0.3.3
 )
 
 require (
