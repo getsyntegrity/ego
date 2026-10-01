@@ -95,7 +95,7 @@ manual. The `ALTER` recipe is in the [cluster example README](../../example/clus
 4. Add the object the file creates to `baselineMarkers` in `schema.go`, so a database created by hand can be
    recognised at that version. A test fails if the two lists have different lengths.
 5. Raise the latest version in the tests that name it (`postgresLatestSchemaVersion` in
-   `example/cluster/stores_postgres_test.go`) and run the Postgres-backed tests.
+   `inttest/flows/eventstore/schema_test.go`) and run the Postgres-backed tests.
 
 ## Testing
 
@@ -107,10 +107,10 @@ go test ./...
 ```
 
 What the SQL does to a real Postgres is checked with `conformance.RunSchemaMigratorConformance` and the store
-conformance suites, which run from `example/cluster` when `EGO_EXAMPLE_POSTGRES_DSN` is set:
+conformance suites, which run in `inttest/flows/eventstore`. That package starts its own Postgres with
+Testcontainers (`inttest/infra/postgres`) and gives every test a database of its own, so it needs Docker and
+no environment variable:
 
 ```sh
-docker run -d --rm --name ego-pg -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:17-alpine
-export EGO_EXAMPLE_POSTGRES_DSN="postgres://postgres:pg@localhost:55432/postgres?sslmode=disable"
-(cd ../../example/cluster && go test -count=1 ./...)
+(cd ../../inttest && go test -count=1 ./...)
 ```

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package infra_test
+package postgres_test
 
 import (
 	"context"
@@ -30,22 +30,22 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/getsyntegrity/ego/inttest/infra"
+	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
 )
 
-var shared *infra.Postgres
+var shared *pginfra.Postgres
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	pg, err := infra.StartPostgres(ctx)
+	pg, err := pginfra.StartPostgres(ctx)
 	if err != nil {
-		_, _ = os.Stderr.WriteString("inttest/infra: cannot start the Postgres container: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/infra/postgres: cannot start the Postgres container: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	shared = pg
 	code := m.Run()
 	if err := pg.Terminate(ctx); err != nil {
-		_, _ = os.Stderr.WriteString("inttest/infra: cannot terminate the Postgres container: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/infra/postgres: cannot terminate the Postgres container: " + err.Error() + "\n")
 		if code == 0 {
 			code = 1
 		}

@@ -20,20 +20,26 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package infra starts the real infrastructure the integration tests of the inttest module run against.
+// Package postgres starts a real Postgres for the integration tests of the inttest module. It is an
+// infrastructure package: it knows how to start one backend and nothing about the flows that use it.
+//
+// Importers alias it (pginfra) because persistence/postgres, the package under test, has the same name.
+//
+// The inttest module is split in two kinds of packages only. Infrastructure packages live in inttest/infra/<backend>
+// and start a container; flow-validation packages live in inttest/flows/<area> and check a behavior against it.
+// infra/kafka, infra/nats and infra/pulsar will sit beside this package when a flow needs them.
 //
 // Every helper starts one container with Testcontainers and returns a handle. A package starts its container
 // once, from TestMain, and ends it after m.Run, so the cost is paid once per package and not once per test. A
 // helper never skips: when Docker or the container is not available it returns an error and TestMain exits
 // non-zero, so a missing environment is a red run and not a green one.
 //
-// Only Postgres exists today (StartPostgres). The sibling helpers follow the same shape and live next to it in
-// this package, one file per system, once a test needs them:
+// Only Postgres exists today (StartPostgres). The other backends follow the same shape, each in its own package:
 //
-//   - StartKafka(ctx) (*Kafka, error), for the Kafka publisher;
-//   - StartNATS(ctx) (*NATS, error), for the NATS publisher;
-//   - StartPulsar(ctx) (*Pulsar, error), for the Pulsar publisher.
-package infra
+//   - inttest/infra/kafka, StartKafka(ctx) (*Kafka, error), for the Kafka publisher;
+//   - inttest/infra/nats, StartNATS(ctx) (*NATS, error), for the NATS publisher;
+//   - inttest/infra/pulsar, StartPulsar(ctx) (*Pulsar, error), for the Pulsar publisher.
+package postgres
 
 import (
 	"context"

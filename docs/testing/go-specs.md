@@ -238,7 +238,10 @@ module, nested ones included, and fails on:
    `exec.Command*`, `httptest.NewServer*`, a real goakt `actor.NewActorSystem`, `os.Create` in a file with no
    `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file. Files under `inttest/` are
    outside this rule, because that module exists to run against real infrastructure started with
-   Testcontainers; rules 1 to 3 still apply there.
+   Testcontainers; rules 1 to 3 still apply there. The module has two kinds of packages and no others:
+   `inttest/infra/<backend>` starts a container (today `infra/postgres`; `infra/kafka`, `infra/nats` and
+   `infra/pulsar` will sit beside it), and `inttest/flows/<area>` checks a behavior against it (today
+   `flows/eventstore`).
 
 Two plain-text lists hold the exceptions, one `path | note` per line, and the note is required:
 

@@ -23,7 +23,7 @@
 // These tests exercise postgres.EventStore against a real PostgreSQL instance started by TestMain with
 // Testcontainers. Each test gets its own database on that container, so tests run in parallel without seeing
 // each other's rows. They never skip: when Docker is not available the package fails to start.
-package postgres_test
+package eventstore_test
 
 import (
 	"context"
@@ -59,7 +59,7 @@ func TestPostgresEventStore_Conformance(t *testing.T) {
 }
 
 // newPostgresTestStore migrates the schema of an empty database to the latest version. Every test owns its
-// database (infra.Postgres.NewDatabase), so there is nothing to truncate. The returned store is not yet
+// database (pginfra.Postgres.NewDatabase), so there is nothing to truncate. The returned store is not yet
 // Connect()-ed; the conformance runner and the tests below do that themselves.
 func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
 	sc.Helper()

@@ -61,13 +61,13 @@ func TestScanFlagsRealResourcesInTestFiles(t *testing.T) {
 
 		s.It("does not apply the resource rule to the inttest module", func(ctx *specs.Context) {
 			src := resourceSource(resourceImports, "_, _ = net.Dial(\"tcp\", \"x:1\")\n_ = os.Getenv(\"EGO_POSTGRES_DSN\")")
-			ctx.Expect(scanFiles(ctx, map[string]string{"inttest/postgres/a_test.go": src})).To(specs.BeEmpty())
+			ctx.Expect(scanFiles(ctx, map[string]string{"inttest/flows/eventstore/a_test.go": src})).To(specs.BeEmpty())
 		})
 
 		s.It("keeps the other rules on in the inttest module", func(ctx *specs.Context) {
 			src := "package x\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/require\"\n)\nfunc TestThing(t *testing.T) { require.True(t, true) }\n"
 			var rules []Rule
-			for _, f := range scanFiles(ctx, map[string]string{"inttest/postgres/a_test.go": src}) {
+			for _, f := range scanFiles(ctx, map[string]string{"inttest/flows/eventstore/a_test.go": src}) {
 				rules = append(rules, f.Rule)
 			}
 			ctx.Expect(rules).ToEqual([]Rule{RuleNoSpecs, RuleTestify})
