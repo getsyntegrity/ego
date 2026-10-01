@@ -45,21 +45,81 @@ lives in a new `*_test.go` file.
 
 ## Tasks
 
-- [ ] T1 Move the `ErrorPaths` recovery-failure cases to unit tests on the S1 adapters. Route: delegated
-      writer. Check: green, and a mutation that swallows an error in `recover` is caught.
-- [ ] T2 Move the remaining testify mocks in `ErrorPaths` to the S1 adapters. Route: the same writer.
-      Check: green, and an encryption-failure mutation is caught.
-- [ ] T3 Move the testify mocks in `TestEventSourcedActor` to the S1 adapters. Route: the same writer.
-      Check: green, and a snapshot/encryption mutation is caught.
-- [ ] T4 Replace the `pause.For` waits in both functions with `ctx.Eventually` or a synchronizing `Ask`.
-      Route: the same writer. Check: `-count=3` is green, the package time drops, and a persist mutation
-      fails within the poll timeout without hanging.
-- [ ] T5 Record the component cases, verify, run the assessment (plus an independent verifier if the
-      result is `high`), push, and open the stacked PR. Route: inline.
+- [x] T1 Move the `ErrorPaths` recovery-failure cases to unit tests on the S1 adapters. Route: delegated
+      writer. Evidence: `30ff50a`. Nine cases now call `recover` on a directly built `Actor`. RED: making
+      `recoverFromSnapshot` swallow the load error was caught.
+- [x] T2 Move the remaining testify mocks in `ErrorPaths` to the S1 adapters. Route: the same writer.
+      Evidence: `d7ce6f9`. The four mistyped-extension cases became one `specs.Table`. RED: letting the
+      snapshot writer write plaintext after an encryption error was caught.
+- [x] T3 Move the testify mocks in `TestEventSourcedActor` to the S1 adapters. Route: the same writer.
+      Evidence: `7a1ac63`. Two more cases became unit tests. RED: both a ping runner mutation and a
+      GetLatestEvent swallow were caught.
+- [x] T4 Replace the `pause.For` waits in both functions with `ctx.Eventually` or a synchronizing `Ask`.
+      Route: the same writer. Evidence: `03f64c8`, which adds the shared rig
+      `event_sourced_actor_rig_test.go`.
+      - RED: skipping `WriteEvents` and skipping `WriteSnapshot` were both caught, and the snapshot case
+        fails within 5 s without hanging.
+      - `-count=30` was stable.
+- [x] T5 Deliver. Route: inline.
+      - Names: 40 `--- PASS` before and after, identical.
+      - Time: the two functions went from 215.6 s (`-count=3`) to 1.1 s, and the parent confirmed
+        0.33 s on an uncached run. The full package went from 223.5 s to 152.2 s.
+      - Coverage: 92.0%, unchanged.
+      - vet, lint and gofmt are clean.
+      - The native assessment was `medium` with RDD off, so the writer's self-verification stands.
 
-## Component cases (filled in by T5)
+## Findings from the rework
 
-_pending_
+- The old `DeleteEvents`/`DeleteSnapshots` retention cases never proved that the asynchronous delete
+  happened. The old testify expectations were also never checked with `AssertExpectations`. Both are now
+  enforced, with exact counts where the count is deterministic.
+- `with state recovery from event store` does not prove recovery from the store, before or after this
+  change. It passes even when the events write is skipped, because `ReSpawn` keeps in-memory state.
+  Proving it needs a second actor system on the same store, as the encryption recovery cases do. That fix
+  is left for S3b or a follow-up.
+
+## Component cases (they still start a real goakt actor system)
+
+`TestEventSourcedActor` has 16:
+- with state reply
+- with error reply
+- with unhandled command
+- with state recovery from event store
+- with no event to persist
+- with unhandled event
+- with snapshot store recovery
+- with telemetry extension
+- with encryption during command processing
+- with snapshot persistence on interval
+- with retention policy delete events on snapshot
+- with event adapters during recovery
+- with snapshot and encryption during recovery
+- with encrypted event replay without snapshot store
+- with retention policy delete snapshots on snapshot
+- With events store ping failed
+
+`TestEventSourcedActorErrorPaths` has 11:
+- with missing behavior fails to start
+- the four mistyped-extension cases
+- with event encryption failure during command processing
+- with snapshot encryption failure during command processing
+- with DeleteEvents error in retention policy does not crash
+- with DeleteSnapshots error in retention policy does not crash
+- with unhandled non-command message does not crash
+- with persistEvents write failure shuts down actor
+
+## Left for S3b
+
+There are 68 `pause.For` left:
+- `TenancyGate`: 5
+- `BatchTenantHomogeneity`: 3
+- `ResetBatchDoesNotClearActorTenant`: 2
+- `ZeroEventCrossTenant`: 3
+- `ZeroEventSameTenant`: 3
+- `GetStateDuringPersist`: 6
+- `Batch`: 46
+
+The `ego/mocks` imports and the testify `mock` imports remain only in `GetStateDuringPersist` and `Batch`.
 
 ## Progress
 
