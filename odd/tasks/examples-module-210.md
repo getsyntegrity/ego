@@ -44,7 +44,7 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 
 - [x] **D1 Move the fixture.** `example/examplepb` becomes `internal/samplepb` (or the closest existing internal fixture location), regenerated, with every importer updated. Check: root `go build ./... && go vet ./...`, plus the affected root tests and `benchmark`. Route: delegated writer.
 - [x] **D2 `example` module.** `example/go.mod` holds `durablestate`, `eventssourced` and `saga`, and the root Makefile `run-*` targets are updated. Check: `go build ./... && go vet ./... && go test ./...` in `example`; root `go list ./... | rg example` is empty; `go mod tidy -diff` is clean everywhere. Route: delegated writer.
-- [ ] **D3 `examples` job.** Add the job with the `inttest` triggers, list it in `ci-ok`, remove `example/cluster` from `modules`, and add `/example` to Dependabot. Check: `actionlint`. Route: delegated writer.
+- [x] **D3 `examples` job.** Add the job with the `inttest` triggers, list it in `ci-ok`, remove `example/cluster` from `modules`, and add `/example` to Dependabot. Check: `actionlint`. Route: delegated writer.
 - [ ] **D4 Docs.** Update `docs/ci.md` and the example READMEs. Check: structural readback. Route: delegated writer.
 
 ## Progress and evidence
@@ -65,6 +65,13 @@ Branch: `ci/examples-job`, from `ci/inttest-job` (spec C, PR #281). The PR targe
 - The Makefile `run-eventsourced`, `run-durablestate` and `run-saga` targets run `cd example && go run ./<name>`.
 - Checks: `example`: `go build ./... && go vet ./... && go test -count=1 ./...` ok (no test files); `example/cluster`: `go vet ./... && go test -count=1 ./...` ok; root `go list ./... | rg example` is empty; `go mod tidy -diff` clean in root, `example`, `example/cluster`, `benchmark` and `inttest`; `gofmt -l` empty.
 
+### D3 (route: delegated writer)
+
+- Job `examples` in `.github/workflows/ci.yml`: `needs: plan`, the same `if:` as `inttest` (push, workflow_dispatch, or a pull request from `develop` to `main`), `ubuntu-latest`, `timeout-minutes: 15`, a matrix over `example` and `example/cluster` (`fail-fast: false`), and one step that runs `go build ./...`, `go vet ./...` and `go test $TESTFLAGS ./...` in the matrix directory. It is listed in `ci-ok` `needs`.
+- `example/cluster` left the `modules` matrix; the header comment and the nested-modules comment were updated.
+- `.github/dependabot.yml` gets `/example`. `tidy` discovers every `go.mod` by itself. `.github/scripts/test-matrix.sh` builds its list from root `go list ./...`, which no longer has an example package, and `security.yml` builds every `go.mod` already, so neither changed.
+- Check: `actionlint .github/workflows/ci.yml` exits 0.
+
 ## Next step
 
-D3.
+D4.

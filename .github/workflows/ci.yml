@@ -9,11 +9,13 @@
 #   test (N)    -> each shard on its own runner, in parallel
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
-#   modules     -> build, vet and test of every nested module (benchmark, example, persistence/postgres,
+#   modules     -> build, vet and test of every nested module (benchmark, persistence/postgres,
 #                  publishers, compat); inttest is only built and vetted here, its tests run in the inttest job
 #   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
 #                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
 #                  never on feature or hotfix PRs
+#   examples    -> build, vet and test of the example module and example/cluster, with the same triggers
+#                  as inttest: they are not part of the everyday build
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -251,7 +253,7 @@ jobs:
       - if: github.base_ref == 'main'
         run: go test $TESTFLAGS ./...
 
-  # Nested modules (benchmark, example/cluster, persistence/postgres, publisher/*, test/compat, inttest) are
+  # Nested modules (benchmark, persistence/postgres, publisher/*, test/compat, inttest) are
   # separate Go modules: `./...` at the root does not reach them, so each one is built, vetted and tested on
   # its own. No race detector. inttest is built and vetted only (go vet compiles its test files): its tests
   # need Docker and run in the inttest job, so the unit lanes never start a container.
@@ -266,7 +268,6 @@ jobs:
       matrix:
         dir:
           - benchmark
-          - example/cluster
           - persistence/postgres
           - publisher/kafka
           - publisher/nats
@@ -311,6 +312,36 @@ jobs:
       - name: Integration tests
         working-directory: inttest
         run: go test -count=1 -timeout=15m ./...
+
+  # The examples: the example module (durablestate, eventssourced, saga) and example/cluster are separate Go
+  # modules, so the root shards and the modules job never compile them. They run on the same triggers as
+  # inttest (every push to develop, the develop -> main release PR, manual runs) and never on feature or
+  # hotfix PRs. ci-ok accepts "skipped". No race detector.
+  examples:
+    name: examples (${{ matrix.dir }})
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.base_ref == 'main' && github.head_ref == 'develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - example
+          - example/cluster
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Build, vet and test
+        working-directory: ${{ matrix.dir }}
+        run: |
+          go build ./...
+          go vet ./...
+          go test $TESTFLAGS ./...
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
@@ -393,7 +424,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, unit-gate, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, examples, unit-gate, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:
