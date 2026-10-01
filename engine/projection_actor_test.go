@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/supervisor"
@@ -197,27 +197,29 @@ func TestProjectionActorRunnerFailure(t *testing.T) {
 }
 
 func TestProjectionSupervisorContract(t *testing.T) {
-	t.Run("keys the stop directive by the engine error type name", func(t *testing.T) {
-		// goakt ships directive rules to peer nodes by type name with
-		// singleton spawns: the name must not change across versions.
-		var rule *supervisor.DirectiveRule
-		for _, candidate := range newProjectionSupervisor().Rules() {
-			if candidate.ErrorType == "engine.projectionRunnerError" {
-				rule = &candidate
+	specs.Describe(t, "the projection supervisor stops the actor when the runner fails", func(s *specs.Spec) {
+		s.It("keys the stop directive by the engine error type name", func(ctx *specs.Context) {
+			// goakt ships directive rules to peer nodes by type name with
+			// singleton spawns: the name must not change across versions.
+			var rule *supervisor.DirectiveRule
+			for _, candidate := range newProjectionSupervisor().Rules() {
+				if candidate.ErrorType == "engine.projectionRunnerError" {
+					rule = &candidate
+				}
 			}
-		}
-		require.NotNil(t, rule)
-		assert.Equal(t, supervisor.StopDirective, rule.Directive)
-	})
-	t.Run("stops on the error the runner failure is escalated with", func(t *testing.T) {
-		cause := errors.New("damn")
-		err := &projectionRunnerError{err: cause}
+			ctx.Expect(rule != nil).To(specs.BeTrue())
+			ctx.Expect(rule.Directive).ToEqual(supervisor.StopDirective)
+		})
+		s.It("stops on the error the runner failure is escalated with", func(ctx *specs.Context) {
+			cause := errors.New("damn")
+			err := &projectionRunnerError{err: cause}
 
-		directive, ok := newProjectionSupervisor().Directive(err)
-		require.True(t, ok)
-		assert.Equal(t, supervisor.StopDirective, directive)
-		assert.EqualError(t, err, "damn")
-		assert.ErrorIs(t, err, cause)
+			directive, ok := newProjectionSupervisor().Directive(err)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(directive).ToEqual(supervisor.StopDirective)
+			ctx.Expect(engRestErrText(err)).ToEqual("damn")
+			ctx.Expect(err).To(specs.MatchError(cause))
+		})
 	})
 }
 

@@ -66,7 +66,7 @@ func newTestServer(t *testing.T) *testServer {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for {
 			select {
 			case <-s.stalled:

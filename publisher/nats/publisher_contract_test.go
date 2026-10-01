@@ -24,9 +24,9 @@ package nats
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"go.uber.org/atomic"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -54,15 +54,14 @@ var (
 // historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).
 func TestPublishBeforeStartMatchesPublishingSentinel(t *testing.T) {
-	ctx := context.Background()
-	errs := map[string]error{
-		"events": (&EventsPublisher{started: atomic.NewBool(false)}).Publish(ctx, &egopb.Event{}),
-		"state":  (&DurableStatePublisher{started: atomic.NewBool(false)}).Publish(ctx, &egopb.DurableState{}),
-	}
-
-	for name, err := range errs {
-		if !errors.Is(err, publishing.ErrPublisherNotStarted) {
-			t.Errorf("%s: errors.Is(%v, publishing.ErrPublisherNotStarted) = false", name, err)
-		}
-	}
+	specs.Describe(t, "a publisher that was never started rejects Publish with the publishing sentinel", func(s *specs.Spec) {
+		s.It("events", func(ctx *specs.Context) {
+			err := (&EventsPublisher{started: atomic.NewBool(false)}).Publish(context.Background(), &egopb.Event{})
+			ctx.Expect(err).To(specs.MatchError(publishing.ErrPublisherNotStarted))
+		})
+		s.It("state", func(ctx *specs.Context) {
+			err := (&DurableStatePublisher{started: atomic.NewBool(false)}).Publish(context.Background(), &egopb.DurableState{})
+			ctx.Expect(err).To(specs.MatchError(publishing.ErrPublisherNotStarted))
+		})
+	})
 }

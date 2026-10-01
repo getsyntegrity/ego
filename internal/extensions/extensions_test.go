@@ -26,8 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/tochemey/goakt/v4/extension"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
@@ -39,162 +38,228 @@ import (
 	"github.com/getsyntegrity/ego/testkit"
 )
 
-func TestEventsStore(t *testing.T) {
-	store := testkit.NewEventsStore()
-	ext := NewEventsStore(store)
+// beTheSamePointer matches a value that is the very pointer want. ToEqual
+// compares deeply, so it would also accept a copy with the same contents.
+func beTheSamePointer[T any](want *T) specs.Matcher {
+	return specs.Satisfy("be the same pointer as the registered value", func(got any) bool {
+		p, ok := got.(*T)
+		return ok && p == want
+	})
+}
 
-	require.NotNil(t, ext)
-	assert.Equal(t, EventsStoreExtensionID, ext.ID())
-	assert.Equal(t, store, ext.Underlying())
+func TestEventsStore(t *testing.T) {
+	specs.Describe(t, "NewEventsStore wraps an events store as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped store", func(ctx *specs.Context) {
+			store := testkit.NewEventsStore()
+			ext := NewEventsStore(store)
+
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(EventsStoreExtensionID)
+			ctx.Expect(ext.Underlying()).ToEqual(store)
+		})
+	})
 }
 
 func TestDurableStateStore(t *testing.T) {
-	store := testkit.NewDurableStore()
-	ext := NewDurableStateStore(store)
+	specs.Describe(t, "NewDurableStateStore wraps a durable state store as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped store", func(ctx *specs.Context) {
+			store := testkit.NewDurableStore()
+			ext := NewDurableStateStore(store)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, DurableStateStoreExtensionID, ext.ID())
-	assert.Equal(t, store, ext.Underlying())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(DurableStateStoreExtensionID)
+			ctx.Expect(ext.Underlying()).ToEqual(store)
+		})
+	})
 }
 
 func TestEventsStream(t *testing.T) {
-	stream := eventstream.New()
-	ext := NewEventsStream(stream)
+	specs.Describe(t, "NewEventsStream wraps an events stream as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped stream", func(ctx *specs.Context) {
+			stream := eventstream.New()
+			ext := NewEventsStream(stream)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, EventsStreamExtensionID, ext.ID())
-	assert.Equal(t, stream, ext.Underlying())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(EventsStreamExtensionID)
+			ctx.Expect(ext.Underlying()).ToEqual(stream)
+		})
+	})
 }
 
 func TestOffsetStore(t *testing.T) {
-	store := testkit.NewOffsetStore()
-	ext := NewOffsetStore(store)
+	specs.Describe(t, "NewOffsetStore wraps an offset store as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped store", func(ctx *specs.Context) {
+			store := testkit.NewOffsetStore()
+			ext := NewOffsetStore(store)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, OffsetStoreExtensionID, ext.ID())
-	assert.Equal(t, store, ext.Underlying())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(OffsetStoreExtensionID)
+			ctx.Expect(ext.Underlying()).ToEqual(store)
+		})
+	})
 }
 
 func TestProjectionExtension(t *testing.T) {
-	accounts := &projection.Options{
-		Handler:           projection.NewDiscardHandler(),
-		BufferSize:        100,
-		StartOffset:       time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-		ResetOffset:       time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
-		PullInterval:      500 * time.Millisecond,
-		Recovery:          projection.NewRecovery(),
-		DeadLetterHandler: projection.NewDiscardDeadLetterHandler(),
-	}
-	audit := &projection.Options{
-		Handler: projection.NewDiscardHandler(),
-	}
+	specs.Describe(t, "NewProjectionExtension serves projection options by name", func(s *specs.Spec) {
+		s.It("returns the registered options and nil for an unknown name", func(ctx *specs.Context) {
+			accounts := &projection.Options{
+				Handler:           projection.NewDiscardHandler(),
+				BufferSize:        100,
+				StartOffset:       time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+				ResetOffset:       time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+				PullInterval:      500 * time.Millisecond,
+				Recovery:          projection.NewRecovery(),
+				DeadLetterHandler: projection.NewDiscardDeadLetterHandler(),
+			}
+			audit := &projection.Options{
+				Handler: projection.NewDiscardHandler(),
+			}
 
-	ext := NewProjectionExtension(map[string]*projection.Options{
-		"accounts": accounts,
-		"audit":    audit,
+			ext := NewProjectionExtension(map[string]*projection.Options{
+				"accounts": accounts,
+				"audit":    audit,
+			})
+
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(ProjectionExtensionID)
+			ctx.Expect(ext.Get("accounts")).To(beTheSamePointer(accounts))
+			ctx.Expect(ext.Get("audit")).To(beTheSamePointer(audit))
+			ctx.Expect(ext.Get("unknown")).To(specs.BeNil())
+		})
 	})
-
-	require.NotNil(t, ext)
-	assert.Equal(t, ProjectionExtensionID, ext.ID())
-	assert.Same(t, accounts, ext.Get("accounts"))
-	assert.Same(t, audit, ext.Get("audit"))
-	assert.Nil(t, ext.Get("unknown"))
 }
 
 func TestEventAdapters(t *testing.T) {
-	t.Run("with nil adapters", func(t *testing.T) {
-		ext := NewEventAdapters(nil)
+	specs.Describe(t, "NewEventAdapters wraps event adapters as a GoAkt extension", func(s *specs.Spec) {
+		s.It("with nil adapters", func(ctx *specs.Context) {
+			ext := NewEventAdapters(nil)
 
-		require.NotNil(t, ext)
-		assert.Equal(t, EventAdaptersExtensionID, ext.ID())
-		assert.Nil(t, ext.Adapters())
-	})
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(EventAdaptersExtensionID)
+			ctx.Expect(ext.Adapters()).To(specs.BeNil())
+		})
 
-	t.Run("with empty adapters", func(t *testing.T) {
-		adapters := []eventadapter.EventAdapter{}
-		ext := NewEventAdapters(adapters)
+		s.It("with empty adapters", func(ctx *specs.Context) {
+			adapters := []eventadapter.EventAdapter{}
+			ext := NewEventAdapters(adapters)
 
-		require.NotNil(t, ext)
-		assert.Equal(t, EventAdaptersExtensionID, ext.ID())
-		assert.Empty(t, ext.Adapters())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(EventAdaptersExtensionID)
+			ctx.Expect(ext.Adapters()).To(specs.BeEmpty())
+		})
 	})
 }
 
 func TestSnapshotStoreExt(t *testing.T) {
-	store := testkit.NewSnapshotStore()
-	ext := NewSnapshotStore(store)
+	specs.Describe(t, "NewSnapshotStore wraps a snapshot store as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped store", func(ctx *specs.Context) {
+			store := testkit.NewSnapshotStore()
+			ext := NewSnapshotStore(store)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, SnapshotStoreExtensionID, ext.ID())
-	assert.Equal(t, store, ext.Underlying())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(SnapshotStoreExtensionID)
+			ctx.Expect(ext.Underlying()).ToEqual(store)
+		})
+	})
 }
 
 func TestEncryptorExtension(t *testing.T) {
-	ks := testkit.NewKeyStore()
-	enc := encryption.NewAESEncryptor(ks)
-	ext := NewEncryptor(enc)
+	specs.Describe(t, "NewEncryptor wraps an encryptor as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID and the wrapped encryptor", func(ctx *specs.Context) {
+			ks := testkit.NewKeyStore()
+			enc := encryption.NewAESEncryptor(ks)
+			ext := NewEncryptor(enc)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, EncryptorExtensionID, ext.ID())
-	assert.Equal(t, enc, ext.Encryptor())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(EncryptorExtensionID)
+			ctx.Expect(ext.Encryptor()).ToEqual(enc)
+		})
+	})
 }
 
 func TestTenancyMarker(t *testing.T) {
-	ext := NewTenancyMarker()
+	specs.Describe(t, "NewTenancyMarker builds the tenancy marker extension", func(s *specs.Spec) {
+		s.It("exposes the tenancy extension ID", func(ctx *specs.Context) {
+			ext := NewTenancyMarker()
 
-	require.NotNil(t, ext)
-	assert.Equal(t, TenancyExtensionID, ext.ID())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(TenancyExtensionID)
+		})
+	})
 }
 
 func TestEntityConfig(t *testing.T) {
-	cfg := NewEntityConfig(10)
-	require.NotNil(t, cfg)
-	assert.Equal(t, EntityConfigID, cfg.ID())
-	assert.EqualValues(t, 10, cfg.SnapshotInterval)
+	specs.Describe(t, "NewEntityConfig builds the entity configuration extension", func(s *specs.Spec) {
+		var cfg *EntityConfig
 
-	t.Run("marshal and unmarshal round-trip", func(t *testing.T) {
-		cfg.DeleteEventsOnSnapshot = true
-		cfg.DeleteSnapshotsOnSnapshot = true
-		cfg.EventsRetentionCount = 50
-		cfg.HasRetentionPolicy = true
+		// Shared setup: the round-trip case mutates cfg, so each case gets a fresh one.
+		s.BeforeEach(func(ctx *specs.Context) {
+			cfg = NewEntityConfig(10)
+		})
 
-		data, err := cfg.MarshalBinary()
-		require.NoError(t, err)
+		s.It("exposes its ID and snapshot interval", func(ctx *specs.Context) {
+			ctx.Expect(cfg).To(specs.Not(specs.BeNil()))
+			ctx.Expect(cfg.ID()).ToEqual(EntityConfigID)
+			ctx.Expect(cfg.SnapshotInterval).ToEqual(uint64(10))
+		})
 
-		cfg2 := &EntityConfig{}
-		err = cfg2.UnmarshalBinary(data)
-		require.NoError(t, err)
-		assert.Equal(t, cfg, cfg2)
+		s.It("marshal and unmarshal round-trip", func(ctx *specs.Context) {
+			cfg.DeleteEventsOnSnapshot = true
+			cfg.DeleteSnapshotsOnSnapshot = true
+			cfg.EventsRetentionCount = 50
+			cfg.HasRetentionPolicy = true
+
+			data, err := cfg.MarshalBinary()
+			ctx.Expect(err).To(specs.BeNil())
+
+			cfg2 := &EntityConfig{}
+			err = cfg2.UnmarshalBinary(data)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(cfg2).ToEqual(cfg)
+		})
 	})
 }
 
 func TestSagaConfig(t *testing.T) {
-	cfg := NewSagaConfig(5 * time.Second)
-	require.NotNil(t, cfg)
-	assert.Equal(t, SagaConfigID, cfg.ID())
-	assert.Equal(t, 5*time.Second, cfg.Timeout)
+	specs.Describe(t, "NewSagaConfig builds the saga configuration extension", func(s *specs.Spec) {
+		var cfg *SagaConfig
 
-	t.Run("marshal and unmarshal round-trip", func(t *testing.T) {
-		data, err := cfg.MarshalBinary()
-		require.NoError(t, err)
+		s.BeforeEach(func(ctx *specs.Context) {
+			cfg = NewSagaConfig(5 * time.Second)
+		})
 
-		cfg2 := &SagaConfig{}
-		err = cfg2.UnmarshalBinary(data)
-		require.NoError(t, err)
-		assert.Equal(t, cfg, cfg2)
+		s.It("exposes its ID and timeout", func(ctx *specs.Context) {
+			ctx.Expect(cfg).To(specs.Not(specs.BeNil()))
+			ctx.Expect(cfg.ID()).ToEqual(SagaConfigID)
+			ctx.Expect(cfg.Timeout).ToEqual(5 * time.Second)
+		})
+
+		s.It("marshal and unmarshal round-trip", func(ctx *specs.Context) {
+			data, err := cfg.MarshalBinary()
+			ctx.Expect(err).To(specs.BeNil())
+
+			cfg2 := &SagaConfig{}
+			err = cfg2.UnmarshalBinary(data)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(cfg2).ToEqual(cfg)
+		})
 	})
 }
 
 func TestTelemetryExtension(t *testing.T) {
-	tracer := tracenoop.NewTracerProvider().Tracer("test")
-	meter := noop.NewMeterProvider().Meter("test")
+	specs.Describe(t, "NewTelemetryExtension wraps a tracer and a meter as a GoAkt extension", func(s *specs.Spec) {
+		s.It("exposes its ID, tracer and meter", func(ctx *specs.Context) {
+			tracer := tracenoop.NewTracerProvider().Tracer("test")
+			meter := noop.NewMeterProvider().Meter("test")
 
-	ext := NewTelemetryExtension(tracer, meter)
+			ext := NewTelemetryExtension(tracer, meter)
 
-	require.NotNil(t, ext)
-	assert.Equal(t, TelemetryExtensionID, ext.ID())
-	assert.Equal(t, tracer, ext.Tracer())
-	assert.Equal(t, meter, ext.Meter())
+			ctx.Expect(ext).To(specs.Not(specs.BeNil()))
+			ctx.Expect(ext.ID()).ToEqual(TelemetryExtensionID)
+			ctx.Expect(ext.Tracer()).ToEqual(tracer)
+			ctx.Expect(ext.Meter()).ToEqual(meter)
+		})
+	})
 }
 
 // localBehaviorProbe is a behavior with only an ID, standing in for a
@@ -204,17 +269,22 @@ type localBehaviorProbe struct{ id string }
 func (p localBehaviorProbe) ID() string { return p.id }
 
 func TestLocalBehavior(t *testing.T) {
-	probe := localBehaviorProbe{id: "entity-1"}
-	local := NewLocalBehavior(probe)
+	specs.Describe(t, "NewLocalBehavior carries a behavior that is never serialized", func(s *specs.Spec) {
+		s.It("keeps the behavior's ID and refuses serialization", func(ctx *specs.Context) {
+			probe := localBehaviorProbe{id: "entity-1"}
+			local := NewLocalBehavior(probe)
 
-	var dep extension.Dependency = local
-	assert.Equal(t, "entity-1", dep.ID(), "the dependency key must stay the behavior's ID")
-	assert.Equal(t, probe, local.Behavior())
+			// The dependency key must stay the behavior's ID.
+			var dep extension.Dependency = local
+			ctx.Expect(dep.ID()).ToEqual("entity-1")
+			ctx.Expect(local.Behavior()).ToEqual(probe)
 
-	// A LocalBehavior is never serialized: a GoAkt remote dependency query
-	// against an actor carrying one gets this error back instead of bytes.
-	data, err := local.MarshalBinary()
-	require.ErrorIs(t, err, errLocalOnly)
-	assert.Nil(t, data)
-	require.ErrorIs(t, local.UnmarshalBinary([]byte("x")), errLocalOnly)
+			// A LocalBehavior is never serialized: a GoAkt remote dependency query
+			// against an actor carrying one gets this error back instead of bytes.
+			data, err := local.MarshalBinary()
+			ctx.Expect(err).To(specs.MatchError(errLocalOnly))
+			ctx.Expect(data).To(specs.BeNil())
+			ctx.Expect(local.UnmarshalBinary([]byte("x"))).To(specs.MatchError(errLocalOnly))
+		})
+	})
 }

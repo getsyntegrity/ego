@@ -24,6 +24,7 @@ package adapter_test
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -33,6 +34,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 const (
@@ -57,16 +60,17 @@ var contractPorts = map[string]map[string]string{
 // dependencies are checked too. The allowlist of non-standard-library
 // packages is empty (ego-arch-004 design §D1).
 func TestAdapterDependsOnlyOnStdlib(t *testing.T) {
-	deps := goList(t, "list", "-deps", ".")
-	if !slices.Contains(deps, adapterPath) || !slices.Contains(deps, "context") {
-		t.Fatalf("go list -deps . = %v, want it to list %s and context; the test would prove nothing", deps, adapterPath)
-	}
-	for _, dep := range deps {
-		if dep == adapterPath || isStdlib(dep) {
-			continue
-		}
-		t.Errorf("port/adapter must not depend on %q: it may import only the standard library (openspec/changes/ego-arch-004/design.md §D1)", dep)
-	}
+	specs.Describe(t, "the import graph of port/adapter", func(s *specs.Spec) {
+		s.It("holds only the standard library besides the package itself", func(ctx *specs.Context) {
+			deps := goList(ctx, "list", "-deps", ".")
+			// The guard first: an empty or truncated graph would prove nothing.
+			ctx.Expect(deps).To(specs.ContainAllOf(adapterPath, "context"))
+			ctx.Expect(deps).To(specs.EveryElement(specs.Satisfy(
+				"port/adapter itself or a standard library package: it may import only the standard library "+
+					"(openspec/changes/ego-arch-004/design.md §D1)",
+				func(dep any) bool { return dep == adapterPath || isStdlib(dep.(string)) })))
+		})
+	})
 }
 
 // Spec scenario "moving port/publishing stays cycle-free": none of the five
@@ -78,15 +82,25 @@ func TestContractPackagesDoNotImportAdapter(t *testing.T) {
 	}
 	slices.Sort(pkgs)
 
-	for _, pkg := range pkgs {
-		deps := goList(t, "list", "-deps", pkg)
-		if !slices.Contains(deps, pkg) {
-			t.Fatalf("go list -deps %s did not list the package itself: %v", pkg, deps)
-		}
-		if slices.Contains(deps, adapterPath) {
-			t.Errorf("%s depends on %s; contract packages declare port names as untyped constants so they never need it (openspec/changes/ego-arch-004/design.md §D3)", pkg, adapterPath)
-		}
-	}
+	specs.Describe(t, "the contract packages that own a composition slot", func(s *specs.Spec) {
+		specs.Table(s, pkgs, func(pkg string) string { return strings.TrimPrefix(pkg, rootModule+"/") }, func(ctx *specs.Context, pkg string) {
+			deps := goList(ctx, "list", "-deps", pkg)
+			ctx.Expect(deps).To(specs.Contain(pkg)) // the package itself: otherwise the next check proves nothing
+			// Contract packages declare port names as untyped constants so they never need port/adapter
+			// (openspec/changes/ego-arch-004/design.md §D3).
+			ctx.Expect(deps).To(specs.NoElement(specs.Equal(adapterPath)))
+		})
+	})
+}
+
+// portConstants is what a contract package's port.go declares: its package
+// name, the constants with a value that is a string literal (name -> value),
+// the constants that carry a type, and those without a string-literal value.
+type portConstants struct {
+	pkgName    string
+	values     map[string]string
+	typed      []string
+	notLiteral []string
 }
 
 // TestPortNameConstantsAreUntyped reads each contract package's port.go and
@@ -96,91 +110,90 @@ func TestContractPackagesDoNotImportAdapter(t *testing.T) {
 // that the named interface exists in the package.
 func TestPortNameConstantsAreUntyped(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	for dir, want := range contractPorts {
-		t.Run(dir, func(t *testing.T) {
-			fset := token.NewFileSet()
-			pkgDir := filepath.Join(repoRoot, filepath.FromSlash(dir))
-			file, err := parser.ParseFile(fset, filepath.Join(pkgDir, "port.go"), nil, 0)
-			if err != nil {
-				t.Fatalf("parsing %s/port.go: %v", dir, err)
-			}
-			pkgName := file.Name.Name
-
-			got := map[string]string{}
-			for _, decl := range file.Decls {
-				gen, ok := decl.(*ast.GenDecl)
-				if !ok || gen.Tok != token.CONST {
-					continue
-				}
-				for _, spec := range gen.Specs {
-					vs := spec.(*ast.ValueSpec)
-					if vs.Type != nil {
-						t.Errorf("%s/port.go: constant %s has a type; port names must be untyped", dir, vs.Names[0].Name)
-					}
-					for i, name := range vs.Names {
-						if i >= len(vs.Values) {
-							t.Errorf("%s/port.go: constant %s has no explicit value", dir, name.Name)
-							continue
-						}
-						lit, ok := vs.Values[i].(*ast.BasicLit)
-						if !ok || lit.Kind != token.STRING {
-							t.Errorf("%s/port.go: constant %s is not a string literal", dir, name.Name)
-							continue
-						}
-						value, _ := strconv.Unquote(lit.Value)
-						got[name.Name] = value
-					}
-				}
-			}
-
-			if len(got) != len(want) {
-				t.Errorf("%s/port.go declares %v, want exactly the constants %v", dir, got, want)
-			}
-			interfaces := interfacesIn(t, pkgDir)
-			for constName, iface := range want {
-				value, ok := got[constName]
-				if !ok {
-					t.Errorf("%s/port.go does not declare %s", dir, constName)
-					continue
-				}
-				if wantValue := pkgName + "." + iface; value != wantValue {
-					t.Errorf("%s.%s = %q, want %q", pkgName, constName, value, wantValue)
-				}
-				if !interfaces[iface] {
-					t.Errorf("%s.%s names %s, which is not an interface in package %s", pkgName, constName, iface, pkgName)
-				}
-			}
-		})
+	dirs := make([]string, 0, len(contractPorts))
+	for dir := range contractPorts {
+		dirs = append(dirs, dir)
 	}
+	slices.Sort(dirs)
+
+	specs.Describe(t, "the port-name constants of each contract package", func(s *specs.Spec) {
+		specs.Table(s, dirs, func(dir string) string { return dir }, func(ctx *specs.Context, dir string) {
+			want := contractPorts[dir]
+			pkgDir := filepath.Join(repoRoot, filepath.FromSlash(dir))
+			got := portNameConstants(ctx, filepath.Join(pkgDir, "port.go"))
+
+			ctx.Expect(got.typed).To(specs.BeEmpty())      // a typed constant would import port/adapter
+			ctx.Expect(got.notLiteral).To(specs.BeEmpty()) // every constant needs an explicit string literal value
+
+			wantValues := map[string]string{}
+			ifaces := make([]any, 0, len(want))
+			for constName, iface := range want {
+				wantValues[constName] = got.pkgName + "." + iface
+				ifaces = append(ifaces, iface)
+			}
+			ctx.Expect(got.values).To(specs.Equal(wantValues))
+			ctx.Expect(interfacesIn(ctx, pkgDir)).To(specs.ContainAllOf(ifaces...))
+		})
+	})
 }
 
-// interfacesIn returns the names of the interface types declared in the
-// non-test files of dir.
-func interfacesIn(t *testing.T, dir string) map[string]bool {
-	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
-	if err != nil {
-		t.Fatal(err)
+// portNameConstants parses the port.go at path and collects its constants.
+func portNameConstants(ctx *specs.Context, path string) portConstants {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	ctx.Expect(wrapErr("parsing "+path, err)).To(specs.BeNil())
+
+	out := portConstants{pkgName: file.Name.Name, values: map[string]string{}}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			if vs.Type != nil {
+				out.typed = append(out.typed, vs.Names[0].Name)
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					out.notLiteral = append(out.notLiteral, name.Name)
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					out.notLiteral = append(out.notLiteral, name.Name)
+					continue
+				}
+				value, _ := strconv.Unquote(lit.Value)
+				out.values[name.Name] = value
+			}
+		}
 	}
-	out := map[string]bool{}
+	return out
+}
+
+// interfacesIn returns the sorted names of the interface types declared in
+// the non-test files of dir.
+func interfacesIn(ctx *specs.Context, dir string) []string {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	ctx.Expect(err).To(specs.BeNil())
+	var out []string
 	fset := token.NewFileSet()
 	for _, path := range matches {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
 		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", path, err)
-		}
+		ctx.Expect(wrapErr("parsing "+path, err)).To(specs.BeNil())
 		ast.Inspect(file, func(n ast.Node) bool {
 			if ts, ok := n.(*ast.TypeSpec); ok {
 				if _, ok := ts.Type.(*ast.InterfaceType); ok {
-					out[ts.Name.Name] = true
+					out = append(out, ts.Name.Name)
 				}
 			}
 			return true
 		})
 	}
+	slices.Sort(out)
 	return out
 }
 
@@ -191,18 +204,27 @@ func isStdlib(path string) bool {
 	return !strings.Contains(first, ".")
 }
 
-func goList(t *testing.T, args ...string) []string {
-	t.Helper()
-	goBin, err := exec.LookPath("go")
-	if err != nil {
-		t.Fatalf("go toolchain not found on PATH: %v", err)
+// wrapErr adds context to err and keeps a nil error nil, so the result can go
+// straight into a BeNil expectation.
+func wrapErr(what string, err error) error {
+	if err == nil {
+		return nil
 	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+// goList runs the go command with args and returns the fields of its output.
+func goList(ctx *specs.Context, args ...string) []string {
+	goBin, err := exec.LookPath("go")
+	ctx.Expect(wrapErr("go toolchain not found on PATH", err)).To(specs.BeNil())
 	cmd := exec.Command(goBin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	var runErr error
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("go %s failed: %v\n%s", strings.Join(args, " "), err, stderr.String())
+		runErr = fmt.Errorf("go %s failed: %w\n%s", strings.Join(args, " "), err, stderr.String())
 	}
+	ctx.Expect(runErr).To(specs.BeNil())
 	return strings.Fields(stdout.String())
 }
