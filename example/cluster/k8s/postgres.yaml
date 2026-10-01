@@ -5,11 +5,19 @@ metadata:
   namespace: ego-example
 data:
   init.sql: |
-    -- events_store, kept in sync by hand with example/cluster/stores.go's
-    -- eventsStoreSchemaDDL constant, which that module's Postgres-backed tests
-    -- run. The repo-root resources/eventstore_postgres.sql is NOT a source of
+    -- This init script keeps the example working with no extra step, but it is
+    -- not the preferred way to own the schema. Start the engine with
+    -- engine.WithSchemaMigration() instead: persistence/postgres then creates
+    -- and upgrades these tables itself, from versioned SQL files, and a
+    -- database created by this script is recognised and recorded at its
+    -- version on the first Migrate. The files in persistence/postgres/schema/
+    -- are the source of truth; this copy is kept in sync by hand.
+    --
+    -- The repo-root resources/eventstore_postgres.sql is NOT a source of
     -- this schema: it predates tenant_id, events_store_revisions and
     -- tenant_metadata, and is not kept in sync with this file.
+    --
+    -- events_store
     --
     -- tenant_id defaults to '' (Unscoped()); see README.md for the migration
     -- note when adding this column to an existing database.
