@@ -1,0 +1,135 @@
+# `inttest` module on Testcontainers (#210, spec B of 3)
+
+Issue: https://github.com/getsyntegrity/ego/issues/210. Previous spec: `odd/tasks/persistence-postgres-schema-210.md` (spec A, PR #279).
+Branch: `test/inttest-testcontainers`, from `feat/persistence-postgres` (spec A). The PR targets `develop` and carries the spec A commits until #279 is merged; CI only runs on PRs to `develop` and `main`, so a PR stacked on the spec A branch would get no CI.
+Next spec, C (follow-up):
+- an end-to-end restart flow in `inttest/flows`;
+- a `unitgate` rule that rejects `t.Skip`/`testing.Short` under `inttest/`;
+- the `inttest` job in `ci.yml`, with `modules`/`tidy` coverage of the new modules;
+- the docs.
+
+## Problem
+
+The 19 `TestPostgresEventStore_*` tests in `example/cluster/stores_postgres_test.go` depend on infrastructure given from outside, through `EGO_EXAMPLE_POSTGRES_DSN`. When the variable is missing they call `t.Skip`, and `go test` reports the skip as "ok". So they skip in every CI run and still look green. PR #278 tried to audit that after the fact with a manifest and a gate; that design is rejected.
+
+The fix removes the cause instead: each integration test package starts its own Postgres with Testcontainers. If Docker or the container is not available, the test fails. Nothing skips, so nothing needs auditing.
+
+## What changes
+
+1. **The `inttest/` module**, with its own `go.mod` (`github.com/getsyntegrity/ego/inttest`). It has `replace` directives to `../` and `../persistence/postgres`. pgx and Testcontainers live only in `inttest/go.mod` and `persistence/postgres/go.mod`, never in the root.
+2. **`inttest/infra`** helpers.
+   - `StartPostgres(ctx, tb)` is built on `github.com/testcontainers/testcontainers-go/modules/postgres`. It uses the module's readiness wait strategy and an exact image tag (a `postgres:17.x-alpine` tag, never `latest`). It returns a handle that can create a fresh database per test.
+   - It fails with a clear message when the container cannot start.
+   - The package is laid out so `StartKafka`, `StartNATS` and `StartPulsar` can be added later.
+3. **`inttest/postgres`**: the event store tests.
+   - One container per package, started in `TestMain` and terminated at the end.
+   - Each test creates its own database on that container, so every test calls `t.Parallel()`.
+   - It holds the 19 migrated tests with their names and assertions. It also holds `conformance.RunEventsStoreConformance` and `conformance.RunSchemaMigratorConformance` (with its legacy cases), run against `persistence/postgres`.
+4. **`example/cluster/stores_postgres_test.go` is deleted**, together with its entry in `.github/unit-test-gate-resources.txt`.
+5. **`unitgate` treats `inttest/` as outside the unit lane.** Real resources are the point of that module, so the gate's real-resource rule does not apply there. Spec C adds the opposite rule, no skips under `inttest/`.
+
+## Why this shape
+
+- **One container per package, one database per test.** A container per test multiplies startup time by 20. A shared database forces serial tests and invites cross-test leaks. `CREATE DATABASE` on a shared container is cheap and gives full isolation, so `t.Parallel()` is safe.
+- **A nested module, not build tags.** Build tags hide files from the compiler, which is the same "silently not running" failure in another form. A module is opt-in by directory: the root `go test ./...` never reaches it, and `cd inttest && go test ./...` always runs everything in it.
+- **Testcontainers version.** It follows the latest stable `testcontainers-go`, aligned with `publisher/pulsar/go.mod`, which already has it indirectly at v0.44.0.
+
+## Scope and constraints
+
+- No `t.Skip`, no `testing.Short()`, no `os.Getenv` for infrastructure. No `time.Sleep` or fixed waits; event-driven waits use go-specs `Eventually`.
+- go-specs v0.3.3 only, with no testify and no generated mocks. If go-specs cannot express something (for example `t.Parallel()` inside `Describe`), open an issue in `getsyntegrity/go-specs` and work around it.
+- The root `go.mod` gains no pgx and no Testcontainers. No race detector, no workbench.
+- No direct push to `develop`/`main`.
+
+## Execution
+
+- TDD: strict (source: user CLAUDE.md). The runner is `cd inttest && go test -count=1 ./...`, which needs Docker.
+- RDD: off (global).
+
+## Tasks
+
+- [x] **B1 Module, infra and gate scope.** `inttest/go.mod`, `inttest/infra` (`StartPostgres`, per-test database), a smoke spec proving that a database is created and reachable, and `unitgate` excluding `inttest/` from the real-resource rule, with a `unitgate` test. Check: `cd inttest && go test ./infra/...`, `go test ./.github/scripts/unitgate`, `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
+- [x] **B2 Migrate the 19 tests.** Move them into `inttest/postgres`, with `TestMain` owning the container and each test getting its own database and calling `t.Parallel()`. Names and assertions are unchanged. Delete `example/cluster/stores_postgres_test.go` and its allowlist entry. Check: `cd inttest && go test -count=1 ./postgres/...` shows all 19 passed, and `example/cluster` `go test ./...` stays green. Route: delegated writer.
+- [x] **B3 Conformance suites.** In `inttest/postgres`, run `RunEventsStoreConformance` and `RunSchemaMigratorConformance` against `persistence/postgres`, including the legacy cases moved from spec A. Check: same command, with conformance subtests passing. Route: delegated writer.
+- [x] **B4 Evidence.** Record these here:
+  - wall-clock time of `cd inttest && go test -count=1 ./...`;
+  - the run with Docker stopped, which must FAIL, with its error output;
+  - that the root `go test ./...` compiles nothing from `inttest`;
+  - `go mod tidy -diff` clean in every touched module;
+  - that the root `go.mod` has no pgx or Testcontainers.
+
+  Route: delegated writer.
+
+## Progress and evidence
+
+### B1 (route: delegated writer)
+
+- Versions: `testcontainers-go` and `modules/postgres` v0.44.0 (latest stable; `go list -m -versions` ends at v0.44.0, so `publisher/pulsar` already matches). Image `postgres:17.6-alpine`, pulled to check it exists.
+- API of `inttest/infra`: `StartPostgres(ctx) (*Postgres, error)`, `(*Postgres).NewDatabase(tb) (dsn string)` (unique database, dropped with `WITH (FORCE)` in `t.Cleanup`), `(*Postgres).Terminate(ctx) error`. It takes no `testing.TB` because `TestMain` has none.
+- RED: with only `infra/postgres_test.go` written, `go test ./infra/` gave `no non-test Go files ... [build failed]`. GREEN: `ok github.com/getsyntegrity/ego/inttest/infra 5.597s`, both specs pass.
+- RED for the gate: the new `inttest` spec in `resources_test.go` failed with `expected [... calls net.Dial ... reads the DSN variable ...] to be empty`. GREEN after `insideInttest` in `resources.go`; `go test ./.github/scripts/unitgate` ok and `go run ./.github/scripts/unitgate -strict` prints `unit-test gate: ok (0 pending entries, 41 resource entries)`.
+- go-specs: `t.Parallel()` before `specs.Describe` works, so no issue was needed.
+
+### B2 (route: delegated writer)
+
+- Moved to `inttest/postgres` (`event_store_test.go`, `schema_test.go`, `main_test.go`): 18 of the 19 `TestPostgresEventStore_*` tests, which includes the two `SchemaMigratesLegacy*` tests. The 19th, `TestPostgresEventStore_Conformance`, moves in B3 with the schema suite. Names and assertions are unchanged; the package is `postgres_test`.
+- `TestMain` starts one container (`infra.StartPostgres`), runs `m.Run` and terminates it; if the container cannot start it prints why and exits 1. Every test calls `t.Parallel()` and gets `shared.NewDatabase(t)`, so the old `TRUNCATE` and `DROP TABLE` resets are gone.
+- The 20 ms polling loop with `time.Sleep` in `waitForLockWaiters` became `sc.Eventually(...)` (go-specs), since the module has no sleeps.
+- Removed `example/cluster/stores_postgres_test.go` and its line in `.github/unit-test-gate-resources.txt`. `example/cluster`: `go mod tidy` dropped one now-unused `go.mod` line, `go vet ./...` clean, `go test ./...` prints `[no test files]`. `go run ./.github/scripts/unitgate -strict`: `ok (0 pending entries, 40 resource entries)`.
+- RED: before the move the package did not exist, and without a container the run fails at start (see B4(b)). GREEN: `go test -count=1 ./postgres/` shows 18 tests passed, none skipped.
+
+### B3 (route: delegated writer)
+
+- `TestPostgresEventStore_Conformance` (in `event_store_test.go`) runs `RunEventsStoreConformance`: each `newStore` call creates a fresh database, runs the store's own `Migrate`, and returns the store for the runner to connect. `TestPostgresSchemaMigratorConformance` (in `schema_test.go`) runs `RunSchemaMigratorConformance`: `NewBackend` creates a fresh database per check, and the three legacy cases (`EventsStoreWithoutRevisions`, `EventsStoreWithoutTenantMetadata`, `CurrentShapeWithoutVersionRecord`) moved over from `example/cluster` with the same DDL.
+- Design change: `infra.Postgres.NewDatabase` takes a small `infra.T` interface (`Helper`, `Errorf`, `FailNow`, `Cleanup`) instead of `testing.TB`, because the harness hooks receive a `conformance.SchemaT`, which is not a `testing.TB`. Each check therefore drops its database when the check ends.
+- RED: with `TestPostgresSchemaMigratorConformance` calling a missing `postgresSchemaHarness`, `go vet ./postgres/` gave `undefined: postgresSchemaHarness`. GREEN: `go test -count=1 -json ./...` in `inttest` has 21 top-level tests and 60 passes counting subtests, no skips and no failures, in about 4 s.
+
+### B4 (route: delegated writer)
+
+(a) Wall-clock and counts, `cd inttest && go test -count=1 ./...` (Docker running, image already pulled):
+
+```
+ok  	github.com/getsyntegrity/ego/inttest/infra	2.361s
+ok  	github.com/getsyntegrity/ego/inttest/postgres	3.424s
+real 0:03.95
+```
+
+From `go test -count=1 -json ./...`: 21 top-level tests passed, 0 skipped, 0 failed (60 passed, 0 skipped, 0 failed counting subtests).
+
+(b) Docker unavailable. I did not stop the system Docker daemon, because other sessions use it. Pointing `DOCKER_HOST` at a missing socket is not enough: Testcontainers checks each candidate host in turn and falls back to `/var/run/docker.sock`, so the run still passed. Instead I ran the tests in a private mount namespace (`unshare --user --map-root-user --mount`) where `/run/docker.sock` is replaced by `/dev/null`, together with `DOCKER_HOST=unix:///nonexistent.sock`. The host daemon and its containers were untouched (`docker ps` afterwards still lists them). The run FAILS, it does not skip or pass:
+
+```
+inttest/infra: cannot start the Postgres container: start the postgres:17.6-alpine container (is Docker running?): run postgres: generic container: get provider: check host "unix:///nonexistent.sock": docker info: failed to connect to the docker API at unix:///nonexistent.sock; ...
+check host "unix:///var/run/docker.sock": docker info: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+FAIL	github.com/getsyntegrity/ego/inttest/infra	0.050s
+inttest/postgres: cannot start the Postgres container, the tests cannot run without it: ...
+FAIL	github.com/getsyntegrity/ego/inttest/postgres	0.026s
+FAIL
+exit=1
+```
+
+(c) The root module does not see `inttest`: `go list ./... | rg inttest` prints nothing (the root `go list -m` is only `github.com/getsyntegrity/ego`, and there is no `go.work`), and `go list ./inttest/...` fails with `directory prefix inttest does not contain main module or its selected dependencies`. So the root `go test ./...` never compiles it. I did not run the full root suite.
+
+(d) `go mod tidy -diff` is clean in the root, `inttest`, `persistence/postgres` and `example/cluster`.
+
+(e) `git diff origin/develop -- go.mod go.sum` is empty, and `rg "pgx|testcontainers" go.mod` finds nothing.
+
+Other checks: `go run ./.github/scripts/unitgate -strict` ok (0 pending entries, 40 resource entries); `go test ./.github/scripts/unitgate` ok; `gofmt -l inttest .github/scripts/unitgate` empty; `go vet ./...` clean in `inttest` and `example/cluster`; `example/cluster` `go test ./...` prints `[no test files]`.
+
+Follow-ups for spec C: the `inttest` job in `ci.yml` and the `modules`/`tidy` coverage of the new module, the `unitgate` rule against `t.Skip`/`testing.Short` under `inttest/`, and the end-to-end flow in `inttest/flows`.
+
+## Review follow-up (PR #280)
+
+Spec A (PR #279) received review fixes while this branch was open: the version table is now `ego_schema_migrations`, `Migrate` returns `ErrSchemaAhead` for a database newer than the binary, and every Describe/It name was rewritten. This section records how spec B absorbed them. The layout below supersedes the `inttest/infra` and `inttest/postgres` paths named earlier in this document.
+
+- **Merge** (`0522c10`). `origin/feat/persistence-postgres` merged with `--no-ff`. Git saw `example/cluster/stores_postgres_test.go` (modified in A) as the same file as `inttest/postgres/event_store_test.go` and reported a content conflict. The deleted file stays deleted. In its place, I kept this branch's version and applied A's new Describe/It strings to the 18 moved tests (the pairs were taken from A's diff, none missing), and changed the schema harness to `DROP TABLE ego_schema_migrations`. The unit-test gate list has no entry for the deleted file.
+- **Ported specs** (`bec946e`). `TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary` (version row 99, `errors.Is` `ErrSchemaAhead`, nothing changed) and `TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone` now live in `inttest/flows/eventstore/schema_test.go`. Each gets a fresh database from `NewDatabase`, so neither needs `resetPostgresSchema` or a deferred cleanup.
+- **Layout** (`0a613d7`, `git mv`). The module has two kinds of packages only. Infrastructure: `inttest/infra/postgres` (package `postgres`; importers alias it `pginfra` because `persistence/postgres` has the same name; `infra/kafka`, `infra/nats` and `infra/pulsar` will sit beside it). Flows: `inttest/flows/eventstore` (package `eventstore_test`: event store specs, schema specs, both conformance runs, `TestMain`). I kept the package name `postgres` instead of inventing `pgcontainer`, so the directory and the package agree. The README of `persistence/postgres`, `docs/testing/go-specs.md` and the `unitgate` test fixture path were updated; `unitgate` itself matches the `inttest/` prefix and needed no change.
+- **TestMain comment** (`70c3663`). It no longer claims the defer runs when a test panics. It now says `run` exists so Terminate is deferred before `os.Exit`, and that after a panic the process dies and Ryuk removes the container.
+- **Names** (`90f25eb`). Only the infra spec broke the rule: `Postgres.NewDatabase` became `postgres.Postgres.NewDatabase on the shared container`, with children `returns a reachable database that has no tables` and `gives each call a database whose tables the other databases do not see`. Every flow spec already carried A's unit plus behavior names.
+
+Checks: `cd inttest && go vet ./... && go test -count=1 -json ./...` gives 23 top-level tests passed, 0 failed, 0 skipped, in `inttest/flows/eventstore` and `inttest/infra/postgres`. `example/cluster` vet clean (no test files). `persistence/postgres`, root `./persistence/...` and `./engine/` pass. `go mod tidy -diff` is clean in root, `inttest`, `persistence/postgres` and `example/cluster`. `unitgate -strict` ok. `gofmt -l inttest` is empty.
+
+## Next step
+
+Spec C.

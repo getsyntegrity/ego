@@ -20,22 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// These tests exercise PostgresEventStore against a real PostgreSQL instance.
-// They are gated by EGO_EXAMPLE_POSTGRES_DSN and t.Skip when it is unset, so
-// `go test ./...` stays green with no database available (e.g. plain CI).
-//
-// Run a local Postgres and export the DSN before running these tests:
-//
-//	docker run -d --rm --name ego115-pg -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:16-alpine
-//	export EGO_EXAMPLE_POSTGRES_DSN="postgres://postgres:pg@localhost:55432/postgres?sslmode=disable"
-//	go test -count=1 -v ./...
-package main
+// These tests exercise postgres.EventStore against a real PostgreSQL instance started by TestMain with
+// Testcontainers. Each test gets its own database on that container, so tests run in parallel without seeing
+// each other's rows. They never skip: when Docker is not available the package fails to start.
+package eventstore_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -54,22 +47,20 @@ import (
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
-// postgresTestDSN returns the DSN configured for these tests, skipping the
-// calling test when it is unset.
-func postgresTestDSN(t *testing.T) string {
-	t.Helper()
-	dsn := os.Getenv("EGO_EXAMPLE_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("EGO_EXAMPLE_POSTGRES_DSN not set, skipping Postgres-backed test")
-	}
-	return dsn
+func TestPostgresEventStore_Conformance(t *testing.T) {
+	t.Parallel()
+	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
+		store, err := provisionPostgresTestStore(shared.NewDatabase(t))
+		if err != nil { // the runner's callback takes a *testing.T by API
+			t.Fatalf("provision the Postgres test store: %v", err)
+		}
+		return store
+	})
 }
 
-// newPostgresTestStore migrates the schema to the latest version and truncates
-// the event tables, so every call returns a store backed by fresh, empty
-// tables — the contract persistence/conformance.RunEventsStoreConformance
-// requires of newStore. The returned store is not yet Connect()-ed; the
-// conformance runner and the tests below do that themselves.
+// newPostgresTestStore migrates the schema of an empty database to the latest version. Every test owns its
+// database (pginfra.Postgres.NewDatabase), so there is nothing to truncate. The returned store is not yet
+// Connect()-ed; the conformance runner and the tests below do that themselves.
 func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
 	sc.Helper()
 	store, err := provisionPostgresTestStore(dsn)
@@ -77,10 +68,9 @@ func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
 	return store
 }
 
-// provisionPostgresTestStore does the work of newPostgresTestStore and returns the
-// error instead of asserting, for the conformance runner, whose callback has a
-// *testing.T and no spec context. The schema comes from the store's own
-// Migrate, the same path an engine started with WithSchemaMigration takes.
+// provisionPostgresTestStore does the work of newPostgresTestStore and returns the error instead of asserting,
+// for the conformance runner, whose callback has a *testing.T and no spec context. The schema comes from the
+// store's own Migrate, the same path an engine started with WithSchemaMigration takes.
 func provisionPostgresTestStore(dsn string) (*postgres.EventStore, error) {
 	ctx := context.Background()
 
@@ -92,124 +82,9 @@ func provisionPostgresTestStore(dsn string) (*postgres.EventStore, error) {
 	if err := migrating.Migrate(ctx); err != nil {
 		return nil, err
 	}
-
-	setupPool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return nil, err
-	}
-	defer setupPool.Close()
-	if _, err = setupPool.Exec(ctx, "TRUNCATE TABLE events_store, events_store_revisions"); err != nil {
-		return nil, err
-	}
 	return postgres.NewEventStore(dsn), nil
 }
 
-// resetPostgresSchema drops every table the persistence/postgres module owns,
-// together with its version record, leaving a database no one has migrated.
-func resetPostgresSchema(ctx context.Context, dsn string) error {
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
-	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
-	return err
-}
-
-func TestPostgresEventStore_Conformance(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
-		store, err := provisionPostgresTestStore(dsn)
-		if err != nil { // the runner's callback takes a *testing.T by API
-			t.Fatalf("provision the Postgres test store: %v", err)
-		}
-		return store
-	})
-}
-
-// postgresLatestSchemaVersion is the version of the newest file in
-// persistence/postgres/schema. Adding a file means raising it here.
-const postgresLatestSchemaVersion = 5
-
-// openSchemaMigrator is the opener of the schema suite: each call returns a
-// new, connected EventStore, which is the SchemaMigrator under test, with its
-// own pool as a separate cluster node would have.
-type openSchemaMigrator = func(t conformance.SchemaT) persistence.SchemaMigrator
-
-// postgresSchemaHarness wires the schema migrator suite to a real database. A
-// backend is the database itself, reset before each check.
-func postgresSchemaHarness(dsn string) conformance.SchemaMigratorHarness {
-	ctx := context.Background()
-	fatal := func(t conformance.SchemaT, what string, err error) {
-		t.Helper()
-		t.Errorf("%s: %v", what, err)
-		t.FailNow()
-	}
-	open := func(t conformance.SchemaT) persistence.SchemaMigrator {
-		store := postgres.NewEventStore(dsn)
-		if err := store.Connect(ctx); err != nil {
-			fatal(t, "connect a store", err)
-		}
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-		return store
-	}
-	// backendWith resets the database, lets setup leave a legacy shape, and
-	// returns the opener. setup returns SQL to run afterwards, or "".
-	backendWith := func(setup func(t conformance.SchemaT) string) func(conformance.SchemaT) openSchemaMigrator {
-		return func(t conformance.SchemaT) openSchemaMigrator {
-			if err := resetPostgresSchema(ctx, dsn); err != nil {
-				fatal(t, "reset the database", err)
-			}
-			if setup == nil {
-				return open
-			}
-			ddl := setup(t)
-			if ddl == "" {
-				return open
-			}
-			pool, err := pgxpool.New(ctx, dsn)
-			if err != nil {
-				fatal(t, "open a setup pool", err)
-			}
-			defer pool.Close()
-			if _, err = pool.Exec(ctx, ddl); err != nil {
-				fatal(t, "apply the legacy shape", err)
-			}
-			return open
-		}
-	}
-	legacy := func(ddl string) func(conformance.SchemaT) openSchemaMigrator {
-		return backendWith(func(conformance.SchemaT) string { return ddl })
-	}
-	return conformance.SchemaMigratorHarness{
-		NewBackend:    backendWith(nil),
-		LatestVersion: postgresLatestSchemaVersion,
-		Legacy: []conformance.LegacySchema{
-			{Name: "EventsStoreWithoutRevisions", Prepare: legacy(legacyEventsStoreDDL)},
-			{Name: "EventsStoreWithoutTenantMetadata", Prepare: legacy(legacyEventsStoreDDLBeforeTenantMetadata)},
-			{
-				// A database that is already at the latest shape, created by hand
-				// (the k8s init.sql) and so without a version record.
-				Name: "CurrentShapeWithoutVersionRecord",
-				Prepare: backendWith(func(t conformance.SchemaT) string {
-					if err := open(t).Migrate(ctx); err != nil {
-						fatal(t, "build the current shape", err)
-					}
-					return "DROP TABLE ego_schema_migrations"
-				}),
-			},
-		},
-	}
-}
-
-func TestPostgresSchemaMigratorConformance(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	conformance.RunSchemaMigratorConformance(t, postgresSchemaHarness(dsn))
-}
-
-// countEventRows returns how many events_store rows an unscoped record has at
-// one sequence number, read through a connection of its own so the check does
-// not depend on the store under test.
 func countEventRows(sc *specs.Context, ctx context.Context, dsn, persistenceID string, sequenceNumber int) int {
 	sc.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
@@ -323,7 +198,8 @@ func countOutcomes(sc *specs.Context, errA, errB error) (successes, conflicts in
 // ExpectRevision(1) against the same persistence id, driving the store
 // directly (no actor, no mailbox), and exactly one of them must commit.
 func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.WriteEvents racing expect-revision writers", func(s *specs.Spec) {
 		s.It("commits exactly one of two writers that race ExpectRevision(1) on the same persistence id", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -373,7 +249,8 @@ func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testi
 // closed with a *persistence.ConflictError carrying the actual revision,
 // without touching the existing row.
 func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.WriteEvents genesis precondition", func(s *specs.Spec) {
 		s.It("fails ExpectGenesis on an existing persistence id with a ConflictError carrying the actual revision", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -409,7 +286,8 @@ func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
 // Postgres (persistence/conformance's own matrix already covers this in
 // depth; this test pins it once more at the SQL layer specifically).
 func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore tenant scope isolation", func(s *specs.Spec) {
 		s.It("keeps revisions and records of two tenants with the same persistence id independent", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -456,7 +334,8 @@ func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
 // primary-key error instead of a conflict. The race is repeated to make that
 // window observable.
 func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.WriteEvents unconditional write racing a conditional one", func(s *specs.Spec) {
 		s.It("never turns the race into a primary-key error: the loser gets a typed conflict or a no-op", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -510,7 +389,8 @@ func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testi
 // order, so neither batch can wait on the other in a cycle; PostgreSQL would
 // otherwise abort one of them with a deadlock error.
 func TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.WriteEvents unconditional batches in opposite id order", func(s *specs.Spec) {
 		s.It("lets concurrent batches over the same two persistence ids finish without a deadlock", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -598,25 +478,20 @@ func waitForLockWaiters(sc *specs.Context, dsn, applicationName string, want int
 	sc.Expect(err).To(specs.BeNil())
 	defer adminPool.Close()
 
-	deadline := time.Now().Add(timeout)
-	var lastCount int
-	for {
+	sc.Eventually(func() any {
+		var count int
 		err := adminPool.QueryRow(ctx, `
 			SELECT count(*)
 			FROM pg_locks l
 			JOIN pg_stat_activity a ON a.pid = l.pid
 			WHERE a.application_name = $1 AND a.datname = current_database() AND NOT l.granted`,
 			applicationName,
-		).Scan(&lastCount)
-		sc.Expect(err).To(specs.BeNil())
-		if lastCount >= want {
-			return
+		).Scan(&count)
+		if err != nil {
+			return err // a query error is never a number, so the matcher reports it
 		}
-		if time.Now().After(deadline) {
-			sc.Expect(lastCount).To(specs.BeGreaterThanOrEqual(want)) // timed out waiting for the lock waiters tagged applicationName
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return count
+	}, specs.BeGreaterThanOrEqual(want), specs.WithTimeout(timeout), specs.WithInterval(20*time.Millisecond))
 }
 
 // rawLockTable opens a dedicated connection outside any store's pool, begins
@@ -667,7 +542,8 @@ func rawLockRow(sc *specs.Context, ctx context.Context, dsn, query string, args 
 // and proves the revision a conditional write compares against is still the
 // highest committed sequence number.
 func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.DeleteEvents partial delete", func(s *specs.Spec) {
 		s.It("keeps the revision at the highest committed sequence number", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -697,7 +573,8 @@ func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
 // revision must not be accepted: the revision stays at the highest sequence
 // number ever committed.
 func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.DeleteEvents total delete", func(s *specs.Spec) {
 		s.It("keeps the revision so ExpectGenesis stays invalid and a stale revision is refused", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -731,7 +608,8 @@ func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
 // marker is scoped: deleting a tenant's events keeps that tenant's revision
 // and leaves another tenant's same persistence id untouched.
 func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.DeleteEvents revision marker per tenant", func(s *specs.Spec) {
 		s.It("keeps the deleting tenant's revision and leaves another tenant's record untouched", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -763,7 +641,8 @@ func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 // short circuit is proven to return an empty page and an empty token even
 // when there is real data it could otherwise have paged over.
 func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.PersistenceIDs zero page size on a scope with data", func(s *specs.Spec) {
 		s.It("returns an empty page and an empty token even though persistence ids exist", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -799,7 +678,8 @@ func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
 // revision (1), "successfully" insert sequence 2, and never learn that
 // revision 7 already won.
 func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore revision lock between an unconditional write and ExpectRevision, distinct sequences", func(s *specs.Spec) {
 		s.It("makes the conditional writer queue behind the revision row and fail with a typed conflict", func(sc *specs.Context) {
 			const appName = "pg-race-distinct"
@@ -867,7 +747,8 @@ func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing
 // TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision already
 // guards against under timing luck; this test pins it deterministically.
 func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore revision lock between an unconditional write and ExpectRevision, same sequence", func(s *specs.Spec) {
 		s.It("returns a typed conflict instead of a raw primary-key violation", func(sc *specs.Context) {
 			const appName = "pg-race-same"
@@ -936,7 +817,8 @@ func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) 
 // never have touched the revision, and the newly written sequence 3 becomes
 // the record's new frontier.
 func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.DeleteEvents locking of the revision row", func(s *specs.Spec) {
 		s.It("makes a concurrent ExpectRevision write wait for the delete, then both succeed and sequence 3 becomes the frontier", func(sc *specs.Context) {
 			const appName = "pg-race-delete"
@@ -999,7 +881,8 @@ func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *t
 // events after a restart — see event_sourced_actor.go:572 and
 // tenancy.UnmarshalMetadata).
 func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore tenant metadata on an unconditional write", func(s *specs.Spec) {
 		s.It("persists the metadata exactly and returns it unchanged from GetLatestEvent and ReplayEvents", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -1038,7 +921,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testi
 // against writeConditional's insertEventSQL path instead of
 // writeUnconditional's insertEventIgnoreDuplicateSQL (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore tenant metadata on a conditional write", func(s *specs.Spec) {
 		s.It("persists the metadata exactly and returns it unchanged from GetLatestEvent and ReplayEvents", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -1076,7 +960,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing
 // GetShardEvents — the third scanEvents call site — also recovers
 // egopb.Event.TenantMetadata exactly (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore.GetShardEvents tenant metadata", func(s *specs.Spec) {
 		s.It("returns the stored tenant metadata unchanged", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -1118,7 +1003,8 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T
 // a nil map from an empty one, so this is the same wire shape a legacy row
 // produces (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone(t *testing.T) {
-	dsn := postgresTestDSN(t)
+	t.Parallel()
+	dsn := shared.NewDatabase(t)
 	specs.Describe(t, "postgres.EventStore tenant metadata when none was written", func(s *specs.Spec) {
 		s.It("reads the event back with no tenant metadata", func(sc *specs.Context) {
 			store := newPostgresTestStore(sc, dsn)
@@ -1135,239 +1021,6 @@ func TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone(t *testing.T) {
 			sc.Expect(err).To(specs.BeNil())
 			sc.Expect(latest).To(specs.Not(specs.BeNil()))
 			sc.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty()) // an event written with no tenant metadata must read back with none
-		})
-	})
-}
-
-// legacyEventsStoreDDL is events_store as it existed before
-// events_store_revisions: the revision was derived from MAX(sequence_number).
-const legacyEventsStoreDDL = `
-CREATE TABLE events_store
-(
-    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id    VARCHAR(255)          NOT NULL,
-    sequence_number   BIGINT                NOT NULL,
-    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
-    event_payload     BYTEA                 NOT NULL,
-    event_manifest    VARCHAR(255)          NOT NULL,
-    timestamp         BIGINT                NOT NULL,
-    shard_number      BIGINT                NOT NULL,
-    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
-    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
-);
-`
-
-// TestPostgresEventStore_SchemaMigratesLegacyDatabase starts from a database
-// that has events but no revision table, applies eventsStoreSchemaDDL (the
-// same idempotent script the k8s init and README use), and proves each
-// existing (tenant_id, persistence_id) gets its revision backfilled from its
-// highest retained sequence number. Applying the script twice is a no-op.
-func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	specs.Describe(t, "postgres.EventStore.Migrate on a database without a revisions table", func(s *specs.Spec) {
-		s.It("backfills each revision from the highest retained sequence number and is idempotent", func(sc *specs.Context) {
-			ctx := context.Background()
-
-			pool, err := pgxpool.New(ctx, dsn)
-			sc.Expect(err).To(specs.BeNil())
-			defer pool.Close()
-
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
-			sc.Expect(err).To(specs.BeNil())
-			_, err = pool.Exec(ctx, legacyEventsStoreDDL)
-			sc.Expect(err).To(specs.BeNil())
-			for _, row := range []struct {
-				tenantID string
-				seq      int
-			}{{"", 1}, {"", 2}, {"", 3}, {"tenant-a", 1}} {
-				_, err = pool.Exec(ctx, `
-					INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
-					VALUES ($1, 'pg-legacy', $2, ''::bytea, '', 0, 1)`, row.tenantID, row.seq)
-				sc.Expect(err).To(specs.BeNil())
-			}
-
-			store := postgres.NewEventStore(dsn)
-			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
-			defer store.Disconnect(ctx)
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil()) // Migrate must be idempotent
-			version, err := store.SchemaVersion(ctx)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
-
-			tenantA, err := persistence.NewTenantScope("tenant-a")
-			sc.Expect(err).To(specs.BeNil())
-
-			requireConflictAt(sc, store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent("pg-legacy", 1, 0), persistence.ExpectGenesis()), 3)
-			sc.Expect(store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent("pg-legacy", 4, 4), persistence.ExpectRevision(3))).To(specs.BeNil())
-			requireConflictAt(sc, store.WriteEvents(ctx, tenantA, pgMarkedEvent("pg-legacy", 1, 0), persistence.ExpectGenesis()), 1)
-			sc.Expect(store.WriteEvents(ctx, tenantA, pgMarkedEvent("pg-legacy", 2, 2), persistence.ExpectRevision(1))).To(specs.BeNil())
-		})
-	})
-}
-
-// legacyEventsStoreDDLBeforeTenantMetadata is events_store and
-// events_store_revisions as they existed right after #115's scoped-store
-// migration but before tenant_metadata existed: everything
-// eventsStoreSchemaDDL creates today except that column.
-const legacyEventsStoreDDLBeforeTenantMetadata = `
-CREATE TABLE events_store
-(
-    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id    VARCHAR(255)          NOT NULL,
-    sequence_number   BIGINT                NOT NULL,
-    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
-    event_payload     BYTEA                 NOT NULL,
-    event_manifest    VARCHAR(255)          NOT NULL,
-    timestamp         BIGINT                NOT NULL,
-    shard_number      BIGINT                NOT NULL,
-    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
-    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
-);
-CREATE TABLE events_store_revisions
-(
-    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id VARCHAR(255)            NOT NULL,
-    revision       BIGINT                  NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id)
-);
-`
-
-// TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata starts from a
-// database that has events_store and events_store_revisions but no
-// tenant_metadata column, inserts an event row the old way with plain SQL
-// (no such column to write to), applies eventsStoreSchemaDDL (the same
-// idempotent script the k8s init and README use), and proves the column is
-// added with NO backfill: the pre-existing row's tenant_metadata is NULL —
-// never an invented tenant identity — and the row is otherwise unchanged.
-// Applying the script twice is a no-op (#115 Codex P2).
-func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	specs.Describe(t, "postgres.EventStore.Migrate on a database without the tenant_metadata column", func(s *specs.Spec) {
-		s.It("adds the column without a backfill, leaves the legacy row unchanged and is idempotent", func(sc *specs.Context) {
-			ctx := context.Background()
-
-			pool, err := pgxpool.New(ctx, dsn)
-			sc.Expect(err).To(specs.BeNil())
-			defer pool.Close()
-
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
-			sc.Expect(err).To(specs.BeNil())
-			_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
-			sc.Expect(err).To(specs.BeNil())
-
-			const persistenceID = "pg-legacy-tenant-metadata"
-			_, err = pool.Exec(ctx, `
-				INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
-				VALUES ('', $1, 1, ''::bytea, '', 1000, 1)`, persistenceID)
-			sc.Expect(err).To(specs.BeNil())
-
-			store := postgres.NewEventStore(dsn)
-			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
-			defer store.Disconnect(ctx)
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil()) // Migrate must be idempotent
-			version, err := store.SchemaVersion(ctx)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
-
-			var tenantMetadataIsNull bool
-			sc.Expect(pool.QueryRow(ctx,
-				`SELECT tenant_metadata IS NULL FROM events_store WHERE tenant_id='' AND persistence_id=$1 AND sequence_number=1`,
-				persistenceID,
-			).Scan(&tenantMetadataIsNull)).To(specs.BeNil())
-			sc.Expect(tenantMetadataIsNull).To(specs.BeTrue()) // the migration must not backfill or invent tenant metadata for a pre-existing row
-
-			latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(latest).To(specs.Not(specs.BeNil()))
-			sc.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty())     // a pre-existing row must read back with no tenant metadata, never an invented identity
-			sc.Expect(latest.GetTimestamp()).To(specs.Equal(int64(1000))) // the legacy row's other columns must be unaffected by the migration
-		})
-	})
-}
-
-// TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary records a
-// version no embedded file has, as a newer build would have, and expects an
-// older binary to refuse instead of running on a schema it does not know.
-func TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	specs.Describe(t, "postgres.EventStore.Migrate on a database migrated by a newer binary", func(s *specs.Spec) {
-		s.It("fails with ErrSchemaAhead and changes nothing", func(sc *specs.Context) {
-			ctx := context.Background()
-			sc.Expect(resetPostgresSchema(ctx, dsn)).To(specs.BeNil())
-			// Leave no version 99 behind for the tests that run next.
-			defer func() { _ = resetPostgresSchema(ctx, dsn) }()
-
-			store := postgres.NewEventStore(dsn)
-			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
-			defer func() { _ = store.Disconnect(ctx) }()
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
-
-			pool, err := pgxpool.New(ctx, dsn)
-			sc.Expect(err).To(specs.BeNil())
-			defer pool.Close()
-			_, err = pool.Exec(ctx, `INSERT INTO ego_schema_migrations (version) VALUES (99)`)
-			sc.Expect(err).To(specs.BeNil())
-
-			err = store.Migrate(ctx)
-			sc.Expect(err).To(specs.MatchError(postgres.ErrSchemaAhead))
-			sc.Expect(err.Error()).To(specs.MatchRegex("database is at version 99, this binary knows up to 5"))
-
-			version, err := store.SchemaVersion(ctx)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(version).To(specs.Equal(uint(99)))
-		})
-	})
-}
-
-// TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone starts
-// from a database that another tool already manages: it holds a
-// schema_migrations table in golang-migrate's shape. ego must neither read that
-// table as its own version line nor change it.
-func TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone(t *testing.T) {
-	dsn := postgresTestDSN(t)
-	specs.Describe(t, "postgres.EventStore.Migrate next to a foreign schema_migrations table", func(s *specs.Spec) {
-		s.It("creates its own tables, reports its own latest version and leaves the foreign table untouched", func(sc *specs.Context) {
-			ctx := context.Background()
-			sc.Expect(resetPostgresSchema(ctx, dsn)).To(specs.BeNil())
-
-			pool, err := pgxpool.New(ctx, dsn)
-			sc.Expect(err).To(specs.BeNil())
-			defer pool.Close()
-
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS schema_migrations`)
-			sc.Expect(err).To(specs.BeNil())
-			defer func() { _, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS schema_migrations`) }()
-			_, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`)
-			sc.Expect(err).To(specs.BeNil())
-			_, err = pool.Exec(ctx, `INSERT INTO schema_migrations (version, dirty) VALUES (20240101120000, false)`)
-			sc.Expect(err).To(specs.BeNil())
-
-			store := postgres.NewEventStore(dsn)
-			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
-			defer func() { _ = store.Disconnect(ctx) }()
-			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
-
-			version, err := store.SchemaVersion(ctx)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
-
-			var eventsTable, offsetsTable bool
-			sc.Expect(pool.QueryRow(ctx, `SELECT to_regclass('events_store') IS NOT NULL, to_regclass('offsets_store') IS NOT NULL`).Scan(&eventsTable, &offsetsTable)).To(specs.BeNil())
-			sc.Expect(eventsTable).To(specs.BeTrue())
-			sc.Expect(offsetsTable).To(specs.BeTrue())
-
-			var foreignVersion int64
-			var foreignDirty bool
-			var foreignRows int
-			sc.Expect(pool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&foreignVersion, &foreignDirty)).To(specs.BeNil())
-			sc.Expect(pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&foreignRows)).To(specs.BeNil())
-			sc.Expect(foreignVersion).To(specs.Equal(int64(20240101120000)))
-			sc.Expect(foreignDirty).To(specs.BeFalse())
-			sc.Expect(foreignRows).To(specs.Equal(1))
 		})
 	})
 }
