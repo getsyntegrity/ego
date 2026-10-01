@@ -682,146 +682,60 @@ func TestEventSourcedActor(t *testing.T) {
 		err = actorSystem.Stop(ctx)
 		assert.NoError(t, err)
 	})
-	t.Run("With events store ping failed", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("With events store ping failed", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		// create an instance of events stream
-		eventStream := eventstream.New()
+			// GoAkt retries PreStart before it gives up on the actor, so Ping runs at
+			// least once. Recovery never starts: any other events store call is unexpected.
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Ping").Expect(specmock.Any()).Return(assert.AnError).AtLeast(1)
 
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRigWith(ctx, "TestActorSystem", 3,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(assert.AnError)
+			pause.For(time.Second)
 
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
+			rig.expectRefusedFor(ctx, nil, behavior)
+		})
 
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
+		// The two recovery failures below need no actor system: recover is the
+		// whole behavior under test, so they run on an Actor built directly.
+		s.It("With events store GetLatestEvent failed", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
 
-		pause.For(time.Second)
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("GetLatestEvent").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, assert.AnError)
 
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithLongLived(), goakt.WithDependencies(behavior), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
+			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
+			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("With events store GetLatestEvent failed", func(t *testing.T) {
-		ctx := context.TODO()
+			expectRecoveryFailure(ctx, entity, "failed to get latest event", assert.AnError)
+		})
 
-		// create an instance of events stream
-		eventStream := eventstream.New()
+		s.It("With replay events failure during recovery", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			latestEvent := &egopb.Event{
+				PersistenceId:  persistenceID,
+				SequenceNumber: 1,
+			}
 
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("GetLatestEvent").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(latestEvent, nil)
+			ctrl.Method("ReplayEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(1), uint64(1), specmock.Any()).
+				Return(nil, assert.AnError)
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, assert.AnError)
+			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
+			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-	})
-	t.Run("With replay events failure during recovery", func(t *testing.T) {
-		ctx := context.TODO()
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		latestEvent := &egopb.Event{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 1,
-		}
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(latestEvent, nil)
-		eventStore.EXPECT().ReplayEvents(mock.Anything, persistence.Unscoped(), persistenceID, uint64(1), uint64(1), mock.AnythingOfType("uint64")).
-			Return(nil, assert.AnError)
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		pause.For(time.Second)
-
-		// create the persistence actor using the behavior previously created
-		actor := New()
-		// spawn the actor
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		// close the stream
-		eventStream.Close()
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
+			expectRecoveryFailure(ctx, entity, "failed to replay events", assert.AnError)
+		})
 	})
 	t.Run("with snapshot store recovery", func(t *testing.T) {
 		ctx := context.TODO()

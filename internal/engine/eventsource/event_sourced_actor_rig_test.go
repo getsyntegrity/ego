@@ -189,6 +189,14 @@ func (r *actorRig) expectRefused(ctx *specs.Context, cause error, name string, o
 	ctx.Expect(pid).To(specs.BeNil())
 }
 
+// expectRefusedFor is expectRefused for a long lived, stashing actor of behavior
+// with the given extra dependencies.
+func (r *actorRig) expectRefusedFor(ctx *specs.Context, cause error, behavior eventSourcedBehavior, deps ...extension.Dependency) {
+	r.expectRefused(ctx, cause, behavior.ID(),
+		goakt.WithDependencies(append([]extension.Dependency{behavior}, deps...)...),
+		goakt.WithLongLived(), goakt.WithStashing())
+}
+
 // spawn spawns a long lived, stashing actor for behavior with the given extra
 // dependencies, and waits until it reports itself running.
 func (r *actorRig) spawn(ctx *specs.Context, behavior eventSourcedBehavior, deps ...extension.Dependency) *goakt.PID {
