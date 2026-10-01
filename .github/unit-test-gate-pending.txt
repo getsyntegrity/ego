@@ -2,11 +2,13 @@
 #
 # Each line is a file that still breaks rule 1, 2 or 3 (testify, generated mocks, no specs.Describe) because
 # the pull request named after the "|" is migrating it. A trailing "/" covers a whole directory.
-# The gate FAILS when a listed file no longer violates (migrated or deleted), so the PR that migrates a file
-# must delete its line, and this file can only shrink. Delete it once it is empty.
+# A listed file that no longer violates (migrated or deleted) is reported as a WARNING in the job log; the gate
+# only fails on it with -strict, which CI switches on once this list is empty. Migration PRs merge in parallel,
+# so each one should still delete its own lines. New violations that are not listed always fail.
+# Delete this file once it is empty.
 #
 # Format: path | owner (PR number, or what is pending when no PR is open yet)
-mocks/ | generated mockery output (imports testify/mock); delete mocks/ with its last consumers: #245, #246, #264 and the snapshots follow-up
+mocks/ | generated mockery output (imports testify/mock); delete mocks/ with its last consumers (#246 and the remainders below)
 engine/behavior_dependency_test.go | engine remainder left after #252, no PR open yet
 engine/behavior_kind_test.go | engine remainder left after #252, no PR open yet
 engine/behavior_value_type_test.go | engine remainder left after #252, no PR open yet
@@ -35,15 +37,6 @@ engine/saga_status_test.go | engine remainder left after #252, no PR open yet
 engine/telemetry_contract_test.go | engine remainder left after #252, no PR open yet
 engine/tenancy_architecture_test.go | engine remainder left after #252, no PR open yet
 engine/tenant_write_path_e2e_test.go | engine remainder left after #252, no PR open yet
-internal/engine/durablestate/durable_state_actor_tenant_persist_test.go | PR #245
-internal/engine/durablestate/durable_state_actor_test.go | PR #245
-internal/engine/eventsource/event_sourced_actor_scope_test.go | PR #264
+internal/engine/durablestate/durable_state_actor_test.go | durablestate remainder left after #245, no PR open yet
 internal/engine/eventsource/event_sourced_actor_tenant_persist_test.go | PR #246
 internal/engine/eventsource/event_sourced_actor_test.go | PR #246
-internal/engine/eventsource/events_janitor_actor_test.go | PR #264
-internal/engine/eventsource/events_write_sequence_test.go | PR #264
-internal/engine/eventsource/events_writer_actor_test.go | PR #264
-internal/engine/eventsource/events_writer_contract_test.go | PR #264
-internal/engine/eventsource/snapshots_sequence_test.go | branch test/eventsource-snapshot-retention-contract, no PR open yet
-internal/engine/eventsource/snapshots_writer_actor_test.go | eventsource snapshots writer, no PR open yet
-internal/engine/eventsource/snapshots_writer_contract_test.go | branch test/eventsource-snapshot-retention-contract, no PR open yet

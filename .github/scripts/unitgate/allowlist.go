@@ -46,11 +46,12 @@ func ParseAllowlist(text string) ([]Entry, error) {
 	return out, nil
 }
 
-// Evaluate returns one line per problem: a violation nobody excused, and every allowlist entry that excuses
-// nothing any more. The pending list covers the import and go-specs rules; the resources list covers rule 4.
-// Stale entries are errors so that both lists can only shrink.
-func Evaluate(findings []Finding, pending, resources []Entry) []string {
-	var problems []string
+// Evaluate returns one line per problem (a violation nobody excused) and one per warning (an allowlist entry
+// that excuses nothing any more). The pending list covers the import and go-specs rules; the resources list
+// covers rule 4. Stale entries are only warnings, because migration PRs merge in parallel and each one would
+// turn develop red until the lists were edited; with strict they become problems, which is the mode to use
+// once the lists are meant to be kept exact.
+func Evaluate(findings []Finding, pending, resources []Entry, strict bool) (problems, warnings []string) {
 	pendingUsed := make([]bool, len(pending))
 	resourcesUsed := make([]bool, len(resources))
 
@@ -64,17 +65,21 @@ func Evaluate(findings []Finding, pending, resources []Entry) []string {
 		}
 		problems = append(problems, fmt.Sprintf("%s: %s: %s", f.Path, f.Rule, f.Detail))
 	}
+	stale := &warnings
+	if strict {
+		stale = &problems
+	}
 	for i, e := range pending {
 		if !pendingUsed[i] {
-			problems = append(problems, fmt.Sprintf("%s: stale pending entry (%s): the file no longer violates the unit-test rules, remove the line", e.Path, e.Note))
+			*stale = append(*stale, fmt.Sprintf("%s: stale pending entry (%s): the file no longer violates the unit-test rules, remove the line", e.Path, e.Note))
 		}
 	}
 	for i, e := range resources {
 		if !resourcesUsed[i] {
-			problems = append(problems, fmt.Sprintf("%s: stale resources entry (%s): the file no longer uses a real resource, remove the line", e.Path, e.Note))
+			*stale = append(*stale, fmt.Sprintf("%s: stale resources entry (%s): the file no longer uses a real resource, remove the line", e.Path, e.Note))
 		}
 	}
-	return problems
+	return problems, warnings
 }
 
 // markCovered marks every entry that covers p and reports whether there was one.

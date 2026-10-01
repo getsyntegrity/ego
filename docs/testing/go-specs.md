@@ -245,12 +245,15 @@ Two plain-text lists hold the exceptions, one `path | note` per line, and the no
   example tests, the real actor-system tests), each with its reason. Add a line only with a reason a reviewer
   can argue with.
 - `.github/unit-test-gate-pending.txt` is temporary. It lists the files that still break rules 1 to 3 while the
-  pull request named on the line migrates them. **A listed file that no longer violates is an error**, so the PR
-  that migrates a file must delete its line. A stale line in the resources list fails the same way. The pending
-  list is empty when #205 is done, and the file is then deleted.
+  pull request named on the line migrates them. A listed file that no longer violates is reported as a
+  **warning** in the job log (stale entry), because migration PRs merge in parallel and a hard failure would turn
+  `develop` red after each one; the PR that migrates a file should still delete its lines. A stale line in the
+  resources list warns the same way. `-strict` turns every stale entry into an error: CI switches it on when the
+  pending list is empty, and the file is then deleted. A new violation that is not listed always fails.
 
 The gate's own tests are in `.github/scripts/unitgate` and use an in-memory file tree, so they touch no disk.
-Run it locally with `go test ./.github/scripts/unitgate && go run ./.github/scripts/unitgate`.
+Run it locally with `go test ./.github/scripts/unitgate && go run ./.github/scripts/unitgate` (add `-strict` to
+see stale entries as errors).
 
 ## Pilot validation (#203)
 

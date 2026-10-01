@@ -24,7 +24,9 @@ Two plain-text lists hold the exceptions, one entry per line as `path | note`:
 
 - `.github/unit-test-gate-pending.txt`: the temporary list. Files that still violate 1-3 because an open PR is
   migrating them. Each line names the owning PR. An entry whose file no longer violates (migrated, or deleted)
-  is itself an error, so the list can only shrink.
+  is a warning in the job log; with `-strict` it is an error. CI runs without `-strict` until the list is empty,
+  because migration PRs merge in parallel and a hard failure would turn develop red after each merge. Rejected
+  first design: stale entry always fails (it forced every migration PR to edit the same file and conflict).
 - `.github/unit-test-gate-resources.txt`: the permanent list for rule 4. Tests that are legitimately outside the
   unit lane, each with a one-line reason. A stale entry is an error here too.
 
@@ -56,7 +58,7 @@ runner `go test`, source: the standing rule of epic #201.
 - [x] T3 Allowlist parsing, stale-entry detection and the command line. RED: stubs, 15 cases failed; GREEN
   after; REFACTOR: tests share one in-memory tree helper. Commit 2e18227.
 - [x] T4 Real allowlists computed from `origin/develop` (41 pending entries including the `mocks/` directory,
-  47 resource entries), `unit-gate` job in `ci.yml` and listed in `ci-ok`, docs section. RED on the real
+  47 resource entries; recomputed after the `-strict` change, see Progress), `unit-gate` job in `ci.yml` and listed in `ci-ok`, docs section. RED on the real
   repository: a testify import added to `internal/queue/queue_test.go` made the gate exit 1 with
   `internal/queue/queue_test.go: testify: imports github.com/stretchr/testify/require`; a pending line for a
   clean file exited 1 with `stale pending entry`; both reverted. Commit c044c21.
@@ -73,3 +75,9 @@ issues on it, `actionlint` is clean on `ci.yml`. No existing package changed, so
 The pending list names the owners found on `origin/develop` when it was computed: #245, #246, #264, and, for
 files with no open PR yet (engine remainder after #252, eventsource snapshots), the work that is still pending.
 Delivery strategy: single PR, about 700 authored lines, most of them tests and the two data files.
+
+Design change (coordinator request): stale entries warn, `-strict` makes them errors, new violations always
+fail. Merged `origin/develop` (no rebase) and recomputed the lists: 32 pending entries (1 is the `mocks/`
+directory) and 42 resource entries. RED for the change: the tests for warn/strict failed against stubs (7
+cases), GREEN after. The first version of the gate was already red on the merged tree (16 stale entries after
+#245, #264 and #265 landed), which is the problem this change removes.
