@@ -29,8 +29,20 @@ import (
 
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/go-specs/assert"
 	"github.com/getsyntegrity/go-specs/specs"
 )
+
+// mustTenantScopeFor builds a tenant scope for a fixture id. A fixture id that is not a valid tenant id is a
+// bug in the test table, so it panics at registration instead of failing a single case.
+func mustTenantScopeFor(id string) persistence.Scope {
+	scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
+	if err != nil {
+		panic(fmt.Sprintf("fixture tenant id must be valid: %q: %v", id, err))
+	}
+
+	return scope
+}
 
 func TestConflictErrorIdentifiableViaErrorsIs(t *testing.T) {
 	specs.Describe(t, "ConflictError is identifiable with errors.Is", func(s *specs.Spec) {
@@ -48,7 +60,7 @@ func TestConflictErrorIdentifiableViaErrorsAs(t *testing.T) {
 			var err error = persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 
 			var conflict *persistence.ConflictError
-			ctx.Expect(errors.As(err, &conflict)).To(specs.BeTrue())
+			ctx.Expect(err).To(specs.MatchErrorAs(&conflict))
 			ctx.Expect(conflict.PersistenceID()).ToEqual("agg-1")
 			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectRevision(3))
 
@@ -68,7 +80,7 @@ func TestConflictErrorWrappedIsStillIdentifiable(t *testing.T) {
 			ctx.Expect(wrapped).To(specs.MatchError(persistence.ErrConcurrencyConflict))
 
 			var conflict *persistence.ConflictError
-			ctx.Expect(errors.As(wrapped, &conflict)).To(specs.BeTrue())
+			ctx.Expect(wrapped).To(specs.MatchErrorAs(&conflict))
 			ctx.Expect(conflict.PersistenceID()).ToEqual("agg-1")
 		})
 	})
@@ -92,26 +104,25 @@ func TestConflictErrorScopeAccessor(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			unscopedErr := persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.ExpectRevision(3))
-			ctx.Expect(unscopedErr.Scope().IsUnscoped()).To(specs.BeTrue())
+			ctx.Expect(unscopedErr.Scope()).ToEqual(persistence.Unscoped())
 
 			tenantErr := persistence.NewConflictError(tenantScope, "agg-1", persistence.ExpectRevision(3))
-			ctx.Expect(tenantErr.Scope().Equal(tenantScope)).To(specs.BeTrue())
+			ctx.Expect(tenantErr.Scope()).ToEqual(tenantScope)
 		})
 	})
 }
 
 func TestConflictErrorErrorMessageCanonicalGrammar(t *testing.T) {
-	specs.Describe(t, "ConflictError.Error renders the canonical grammar", func(s *specs.Spec) {
-		tenantScope, err := persistence.NewTenantScope("tenant-a")
-		if err != nil {
-			t.Fatal(err)
-		}
+	type grammarCase struct {
+		name     string
+		err      *persistence.ConflictError
+		expected string
+	}
 
-		tests := []struct {
-			name     string
-			err      *persistence.ConflictError
-			expected string
-		}{
+	specs.Describe(t, "ConflictError.Error renders the canonical grammar", func(s *specs.Spec) {
+		tenantScope := mustTenantScopeFor("tenant-a")
+
+		specs.Table(s, []grammarCase{
 			{
 				name:     "unscoped, unconditional with unknown actual",
 				err:      persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.Unconditional()),
@@ -132,24 +143,17 @@ func TestConflictErrorErrorMessageCanonicalGrammar(t *testing.T) {
 				err:      persistence.NewConflictError(tenantScope, "agg-4", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
 				expected: "ego: concurrency conflict: grammar=v1, scope=tenant:\"tenant-a\", persistence_id=\"agg-4\", expected=4, actual=9",
 			},
-		}
-
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				ctx.Expect(tt.err.Error()).ToEqual(tt.expected)
-			})
-		}
+		}, func(c grammarCase) string { return c.name }, func(ctx *specs.Context, c grammarCase) {
+			ctx.Expect(c.err.Error()).ToEqual(c.expected)
+		})
 	})
 }
 
 func TestParseConflictErrorIsExactInverseOfError(t *testing.T) {
 	specs.Describe(t, "ParseConflictError is the exact inverse of ConflictError.Error", func(s *specs.Spec) {
-		tenantScope, err := persistence.NewTenantScope("tenant-a")
-		if err != nil {
-			t.Fatal(err)
-		}
+		tenantScope := mustTenantScopeFor("tenant-a")
 
-		tests := []*persistence.ConflictError{
+		originals := []*persistence.ConflictError{
 			persistence.NewConflictError(persistence.Unscoped(), "agg-1", persistence.Unconditional()),
 			persistence.NewConflictError(persistence.Unscoped(), "agg-2", persistence.ExpectGenesis()),
 			persistence.NewConflictError(persistence.Unscoped(), "agg-3", persistence.ExpectGenesis(), persistence.WithActualRevision(0)),
@@ -158,29 +162,28 @@ func TestParseConflictErrorIsExactInverseOfError(t *testing.T) {
 			persistence.NewConflictError(tenantScope, "agg-6", persistence.ExpectRevision(4), persistence.WithActualRevision(9)),
 		}
 
-		for _, original := range tests {
-			s.It(original.Error(), func(ctx *specs.Context) {
-				parsed, ok := persistence.ParseConflictError(original.Error())
-				ctx.Expect(ok).To(specs.BeTrue())
-				ctx.Expect(original.Scope().Equal(parsed.Scope())).To(specs.BeTrue())
-				ctx.Expect(parsed.PersistenceID()).ToEqual(original.PersistenceID())
-				ctx.Expect(parsed.Expected()).ToEqual(original.Expected())
+		specs.Table(s, originals, func(original *persistence.ConflictError) string {
+			return original.Error()
+		}, func(ctx *specs.Context, original *persistence.ConflictError) {
+			parsed, ok := persistence.ParseConflictError(original.Error())
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(parsed.Scope()).ToEqual(original.Scope())
+			ctx.Expect(parsed.PersistenceID()).ToEqual(original.PersistenceID())
+			ctx.Expect(parsed.Expected()).ToEqual(original.Expected())
 
-				wantActual, wantOK := original.ActualRevision()
-				gotActual, gotOK := parsed.ActualRevision()
-				ctx.Expect(gotOK).ToEqual(wantOK)
-				ctx.Expect(gotActual).ToEqual(wantActual)
+			wantActual, wantOK := original.ActualRevision()
+			gotActual, gotOK := parsed.ActualRevision()
+			ctx.Expect(gotOK).ToEqual(wantOK)
+			ctx.Expect(gotActual).ToEqual(wantActual)
 
-				ctx.Expect(parsed.Error()).ToEqual(original.Error())
-			})
-		}
+			ctx.Expect(parsed.Error()).ToEqual(original.Error())
+		})
 	})
 }
 
 func TestParseConflictErrorRejectsMalformedMessages(t *testing.T) {
 	specs.Describe(t, "ParseConflictError rejects malformed messages", func(s *specs.Spec) {
-		tests := []string{
-			"",
+		malformed := []string{
 			"not a conflict message",
 			// Compatibility policy: neither earlier rendering is reconstructed.
 			// The pre-TENANT-003 grammar carried no scope, and the unversioned
@@ -224,12 +227,16 @@ func TestParseConflictErrorRejectsMalformedMessages(t *testing.T) {
 			"ego: concurrency conflict: scope=unscoped, persistence_id=agg-1, expected=unconditional, actual=not-a-number",
 		}
 
-		for _, msg := range tests {
-			s.It(msg, func(ctx *specs.Context) {
-				_, ok := persistence.ParseConflictError(msg)
-				ctx.Expect(ok).To(specs.BeFalse())
-			})
-		}
+		// specs.Table refuses an empty row name, so the empty message stays a plain It.
+		s.It("", func(ctx *specs.Context) {
+			_, ok := persistence.ParseConflictError("")
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+
+		specs.Table(s, malformed, func(msg string) string { return msg }, func(ctx *specs.Context, msg string) {
+			_, ok := persistence.ParseConflictError(msg)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
 	})
 }
 
@@ -264,31 +271,39 @@ var adversarialConflictIDs = []string{
 func TestParseConflictErrorRoundTripsAdversarialIdentifiers(t *testing.T) {
 	persistenceIDs := append([]string{"", "line\nbreak", "nul\x00byte", "bad utf8 \xff\xfe", "\t leading tab"}, adversarialConflictIDs...)
 
+	type roundTripCase struct {
+		persistenceID string
+		original      *persistence.ConflictError
+	}
+
 	scopes := []persistence.Scope{persistence.Unscoped()}
 	for _, id := range adversarialConflictIDs {
-		scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
-		if err != nil {
-			t.Fatalf("fixture tenant id must be valid: %q: %v", id, err)
+		scopes = append(scopes, mustTenantScopeFor(id))
+	}
+
+	var cases []roundTripCase
+	for _, scope := range scopes {
+		for _, persistenceID := range persistenceIDs {
+			cases = append(cases, roundTripCase{
+				persistenceID: persistenceID,
+				original:      persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(7), persistence.WithActualRevision(8)),
+			})
 		}
-		scopes = append(scopes, scope)
 	}
 
 	// One case per scope and persistence id, named by the quoted error text, so a failure says which
 	// combination did not round-trip.
 	specs.Describe(t, "ParseConflictError round-trips adversarial identifiers", func(s *specs.Spec) {
-		for _, scope := range scopes {
-			for _, persistenceID := range persistenceIDs {
-				original := persistence.NewConflictError(scope, persistenceID, persistence.ExpectRevision(7), persistence.WithActualRevision(8))
-				s.It(fmt.Sprintf("%q", original.Error()), func(ctx *specs.Context) {
-					parsed, ok := persistence.ParseConflictError(original.Error())
-					ctx.Expect(ok).To(specs.BeTrue())
-					ctx.Expect(original.Scope().Equal(parsed.Scope())).To(specs.BeTrue())
-					ctx.Expect(parsed.PersistenceID()).ToEqual(persistenceID)
-					ctx.Expect(parsed.Error()).ToEqual(original.Error())
-					ctx.Expect(parsed).To(specs.MatchError(persistence.ErrConcurrencyConflict))
-				})
-			}
-		}
+		specs.Table(s, cases, func(c roundTripCase) string {
+			return fmt.Sprintf("%q", c.original.Error())
+		}, func(ctx *specs.Context, c roundTripCase) {
+			parsed, ok := persistence.ParseConflictError(c.original.Error())
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(parsed.Scope()).ToEqual(c.original.Scope())
+			ctx.Expect(parsed.PersistenceID()).ToEqual(c.persistenceID)
+			ctx.Expect(parsed.Error()).ToEqual(c.original.Error())
+			ctx.Expect(parsed).To(specs.MatchError(persistence.ErrConcurrencyConflict))
+		})
 	})
 }
 
@@ -315,8 +330,17 @@ func FuzzParseConflictErrorRoundTrip(f *testing.F) {
 		if !ok {
 			t.Fatalf("did not parse: %q", original.Error())
 		}
-		if !original.Scope().Equal(parsed.Scope()) || parsed.PersistenceID() != persistenceID || parsed.Error() != original.Error() {
-			t.Fatalf("round trip mismatch: %q -> %q", original.Error(), parsed.Error())
+		for _, check := range []struct {
+			got  any
+			want assert.Matcher
+		}{
+			{parsed.Scope(), assert.Equal(original.Scope())},
+			{parsed.PersistenceID(), assert.Equal(persistenceID)},
+			{parsed.Error(), assert.Equal(original.Error())},
+		} {
+			if !check.want.Match(check.got) {
+				t.Fatal(check.want.FailureMessage(check.got))
+			}
 		}
 	})
 }
