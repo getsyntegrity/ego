@@ -47,24 +47,21 @@ func TestClassifierRegistrySentinelsDoNotPrefixEachOther(t *testing.T) {
 					}
 				}
 			}
-			ctx.Expect(offenders).To(specs.BeNil())
+			ctx.Expect(offenders).To(specs.BeEmpty())
 		})
 	})
 }
 
-func newTestMetadata(t *testing.T) command.Metadata {
-	t.Helper()
+func newTestMetadata(ctx *specs.Context) command.Metadata {
 	md, err := command.NewMetadata("op-1")
-	if err != nil {
-		t.Fatalf("command.NewMetadata: %v", err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return md
 }
 
 func TestClassifyErrorReplyContextCanceled(t *testing.T) {
 	specs.Describe(t, "ClassifyErrorReply classifies an actor context cancellation as canceled", func(s *specs.Spec) {
 		s.It("returns OutcomeCanceled wrapping command.ErrCanceled", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 			message := errActorContextCanceled.Error() + ": dispatchToBehavior"
 
 			result, err := ClassifyErrorReply(md, message)
@@ -78,7 +75,7 @@ func TestClassifyErrorReplyContextCanceled(t *testing.T) {
 func TestClassifyErrorReplyDeadlineExceeded(t *testing.T) {
 	specs.Describe(t, "ClassifyErrorReply classifies an actor deadline as timed out", func(s *specs.Spec) {
 		s.It("returns OutcomeTimedOut wrapping command.ErrTimedOut", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 			message := errActorDeadlineExceeded.Error() + ": dispatchToBehavior"
 
 			result, err := ClassifyErrorReply(md, message)
@@ -92,7 +89,7 @@ func TestClassifyErrorReplyDeadlineExceeded(t *testing.T) {
 func TestClassifyErrorReplyConcurrencyConflict(t *testing.T) {
 	specs.Describe(t, "ClassifyErrorReply classifies a persistence conflict as a rejected concurrency conflict", func(s *specs.Spec) {
 		s.It("returns OutcomeRejected with the conflict code and a recoverable ConflictError", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 			message := conflictErr.Error()
 
@@ -135,7 +132,7 @@ func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(3), persistence.WithActualRevision(5))
 
 		s.It("unwrapped conflict classifies as concurrency_conflict", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 
 			result, err := ClassifyErrorReply(md, conflictErr.Error())
 			ctx.Expect(err).To(specs.BeNil())
@@ -148,7 +145,7 @@ func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 		})
 
 		s.It("prefix-wrapped conflict degrades to OutcomeFailed, not OutcomeRejected", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 			wrapped := fmt.Errorf("actor: %w", conflictErr)
 			message := wrapped.Error()
 
@@ -170,7 +167,7 @@ func TestClassifyErrorReplyWrappedConflictDegradesToFailed(t *testing.T) {
 func TestClassifyErrorReplyDefaultsToFailed(t *testing.T) {
 	specs.Describe(t, "ClassifyErrorReply classifies an unrecognized message as failed", func(s *specs.Spec) {
 		s.It("returns OutcomeFailed wrapping command.ErrFailed", func(ctx *specs.Context) {
-			md := newTestMetadata(ctx.T)
+			md := newTestMetadata(ctx)
 			message := "some unrelated application error"
 
 			result, err := ClassifyErrorReply(md, message)
