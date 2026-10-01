@@ -723,6 +723,7 @@ func TestSagaActor(t *testing.T) {
 			name       string
 			errorReply bool
 			timeout    time.Duration
+			effective  time.Duration
 			outcome    func() (*sagaAction, error)
 			wait       time.Duration
 			survive    time.Duration
@@ -730,16 +731,19 @@ func TestSagaActor(t *testing.T) {
 		complete := func() (*sagaAction, error) { return &sagaAction{Complete: true}, nil }
 		fails := func() (*sagaAction, error) { return nil, errSagaBoom }
 		specs.Table(s, []commandFailure{
-			{"sendCommand: SendSync error triggers HandleError with compensate", false, 500 * time.Millisecond, complete, signalTimeout, 0},
-			{"sendCommand: HandleError failure is logged", false, 500 * time.Millisecond, fails, signalTimeout, 300 * time.Millisecond},
-			{"sendCommand: error reply triggers HandleError", true, 3 * time.Second, complete, signalTimeout, 0},
-			{"sendCommand: error reply HandleError failure is logged", true, 3 * time.Second, fails, signalTimeout, 300 * time.Millisecond},
-			// Timeout 0 defaults to 5s in sendCommand (saga_actor.go). The target does
-			// not exist, so SendSync fails at once and the 5s never elapses: this row
-			// proves that a zero timeout still dispatches and reports the failure, as
-			// the old case did. Exercising the 5s itself needs a seam for the default.
-			{"sendCommand: default timeout when zero", false, 0, complete, 10 * time.Second, 0},
+			{"sendCommand: SendSync error triggers HandleError with compensate", false, 500 * time.Millisecond, 500 * time.Millisecond, complete, signalTimeout, 0},
+			{"sendCommand: HandleError failure is logged", false, 500 * time.Millisecond, 500 * time.Millisecond, fails, signalTimeout, 300 * time.Millisecond},
+			{"sendCommand: error reply triggers HandleError", true, 3 * time.Second, 3 * time.Second, complete, signalTimeout, 0},
+			{"sendCommand: error reply HandleError failure is logged", true, 3 * time.Second, 3 * time.Second, fails, signalTimeout, 300 * time.Millisecond},
+			// Timeout 0 defaults to 5s. The target does not exist, so SendSync fails at
+			// once; the effective timeout is read from the commandTimeoutObserver seam
+			// instead of waiting for it.
+			{"sendCommand: default timeout when zero", false, 0, 5 * time.Second, complete, signalTimeout, 0},
 		}, func(c commandFailure) string { return c.name }, func(ctx *specs.Context, c commandFailure) {
+			var observed atomic.Int64
+			observe := func(d time.Duration) { observed.Store(int64(d)) }
+			commandTimeoutObserver.Store(&observe)
+			ctx.Cleanup(func() { commandTimeoutObserver.Store(nil) })
 			sagaID := uuid.NewString()
 			targetID := "nonexistent-entity"
 			rig := newSagaRig(ctx, newTestkitStore(ctx))
@@ -765,6 +769,7 @@ func TestSagaActor(t *testing.T) {
 			rig.stream.Publish(protocol.EventsTopic, foreignEvent(ctx))
 
 			awaitCalls(ctx, &handledError, 1, c.wait)
+			ctx.Expect(time.Duration(observed.Load())).ToEqual(c.effective)
 			if c.survive > 0 {
 				expectStaysRunning(ctx, pid, c.survive)
 			}
