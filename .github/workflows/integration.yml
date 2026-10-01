@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      EGO_EXAMPLE_POSTGRES_DSN: ""  # DEMO (reverted next commit): every Postgres test skips
+      EGO_EXAMPLE_POSTGRES_DSN: postgres://postgres:pg@localhost:5432/postgres?sslmode=disable
     services:
       postgres:
         image: postgres:17-alpine
