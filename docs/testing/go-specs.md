@@ -236,13 +236,15 @@ module, nested ones included, and fails on:
    targets, benchmarks and `TestMain` do not count as tests here;
 4. a test file that calls something outside the process: `sql.Open`, `net.Dial*`, `net.Listen*`,
    `exec.Command*`, `httptest.NewServer*`, a real goakt `actor.NewActorSystem`, `os.Create` in a file with no
-   `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file.
+   `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file. Files under `inttest/` are
+   outside this rule, because that module exists to run against real infrastructure started with
+   Testcontainers; rules 1 to 3 still apply there.
 
 Two plain-text lists hold the exceptions, one `path | note` per line, and the note is required:
 
 - `.github/unit-test-gate-resources.txt` is permanent. It lists the test files that are legitimately outside
-  the unit lane (architecture tests that run `go list`, the loopback websocket server, the Postgres-gated
-  example tests, the real actor-system tests), each with its reason. Add a line only with a reason a reviewer
+  the unit lane (architecture tests that run `go list`, the loopback websocket server, the real actor-system
+  tests), each with its reason. Add a line only with a reason a reviewer
   can argue with.
 - `.github/unit-test-gate-pending.txt` was the temporary list used while the migration PRs were in flight. It is
   now empty and only its header stays, because the gate reads the file. CI runs the gate with `-strict`, so a

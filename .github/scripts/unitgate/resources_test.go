@@ -59,6 +59,25 @@ func TestScanFlagsRealResourcesInTestFiles(t *testing.T) {
 			ctx.Expect(details).ToEqual(c.want)
 		})
 
+		s.It("does not apply the resource rule to the inttest module", func(ctx *specs.Context) {
+			src := resourceSource(resourceImports, "_, _ = net.Dial(\"tcp\", \"x:1\")\n_ = os.Getenv(\"EGO_POSTGRES_DSN\")")
+			ctx.Expect(scanFiles(ctx, map[string]string{"inttest/postgres/a_test.go": src})).To(specs.BeEmpty())
+		})
+
+		s.It("keeps the other rules on in the inttest module", func(ctx *specs.Context) {
+			src := "package x\nimport (\n\t\"testing\"\n\t\"github.com/stretchr/testify/require\"\n)\nfunc TestThing(t *testing.T) { require.True(t, true) }\n"
+			var rules []Rule
+			for _, f := range scanFiles(ctx, map[string]string{"inttest/postgres/a_test.go": src}) {
+				rules = append(rules, f.Rule)
+			}
+			ctx.Expect(rules).ToEqual([]Rule{RuleNoSpecs, RuleTestify})
+		})
+
+		s.It("does not mistake a path that only starts with the same letters for inttest", func(ctx *specs.Context) {
+			src := resourceSource(resourceImports, "_, _ = net.Dial(\"tcp\", \"x:1\")")
+			ctx.Expect(scanFiles(ctx, map[string]string{"inttestx/a_test.go": src})).To(specs.HaveLen(1))
+		})
+
 		s.It("ignores the same calls in a non-test file", func(ctx *specs.Context) {
 			src := "package x\nimport \"net\"\nfunc f() { _, _ = net.Listen(\"tcp\", \":0\") }\n"
 			ctx.Expect(scanFiles(ctx, map[string]string{"a/a.go": src})).To(specs.BeEmpty())

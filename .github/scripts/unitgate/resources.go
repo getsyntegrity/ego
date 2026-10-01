@@ -12,8 +12,12 @@ const goaktActorPrefix = "github.com/tochemey/goakt/"
 
 // resourceFindings reports the calls in a test file that reach something outside the process. It is a static,
 // per-file check: it names the call, it does not prove the call runs. A file that is legitimately outside the
-// unit lane goes in the resources allowlist with a reason.
+// unit lane goes in the resources allowlist with a reason, except the inttest module, which is outside the rule
+// as a whole.
 func resourceFindings(p string, f *ast.File, imports map[string]string) []Finding {
+	if insideInttest(p) {
+		return nil
+	}
 	hasTempDir := false
 	details := map[string]bool{}
 
@@ -41,6 +45,11 @@ func resourceFindings(p string, f *ast.File, imports map[string]string) []Findin
 	sort.Slice(out, func(i, j int) bool { return out[i].Detail < out[j].Detail })
 	return out
 }
+
+// insideInttest reports whether p is a file of the inttest module. Its tests exist to reach real
+// infrastructure (containers started with Testcontainers), so the real-resource rule does not apply there. The
+// other rules (no testify, no generated mocks, go-specs) still do.
+func insideInttest(p string) bool { return strings.HasPrefix(p, "inttest/") }
 
 const osCreateDetail = "calls os.Create outside t.TempDir"
 
