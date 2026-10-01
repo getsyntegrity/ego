@@ -112,7 +112,7 @@ func resetPostgresSchema(ctx context.Context, dsn string) error {
 		return err
 	}
 	defer pool.Close()
-	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
+	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
 	return err
 }
 
@@ -195,7 +195,7 @@ func postgresSchemaHarness(dsn string) conformance.SchemaMigratorHarness {
 					if err := open(t).Migrate(ctx); err != nil {
 						fatal(t, "build the current shape", err)
 					}
-					return "DROP TABLE schema_migrations"
+					return "DROP TABLE ego_schema_migrations"
 				}),
 			},
 		},
@@ -1173,7 +1173,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 			sc.Expect(err).To(specs.BeNil())
 			defer pool.Close()
 
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
 			sc.Expect(err).To(specs.BeNil())
 			_, err = pool.Exec(ctx, legacyEventsStoreDDL)
 			sc.Expect(err).To(specs.BeNil())
@@ -1253,7 +1253,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 			sc.Expect(err).To(specs.BeNil())
 			defer pool.Close()
 
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, ego_schema_migrations`)
 			sc.Expect(err).To(specs.BeNil())
 			_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
 			sc.Expect(err).To(specs.BeNil())
@@ -1285,6 +1285,55 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 			sc.Expect(latest).To(specs.Not(specs.BeNil()))
 			sc.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty())     // a pre-existing row must read back with no tenant metadata, never an invented identity
 			sc.Expect(latest.GetTimestamp()).To(specs.Equal(int64(1000))) // the legacy row's other columns must be unaffected by the migration
+		})
+	})
+}
+
+// TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone starts
+// from a database that another tool already manages: it holds a
+// schema_migrations table in golang-migrate's shape. ego must neither read that
+// table as its own version line nor change it.
+func TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	specs.Describe(t, "postgres.EventStore.Migrate next to a foreign schema_migrations table", func(s *specs.Spec) {
+		s.It("creates its own tables, reports its own latest version and leaves the foreign table untouched", func(sc *specs.Context) {
+			ctx := context.Background()
+			sc.Expect(resetPostgresSchema(ctx, dsn)).To(specs.BeNil())
+
+			pool, err := pgxpool.New(ctx, dsn)
+			sc.Expect(err).To(specs.BeNil())
+			defer pool.Close()
+
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS schema_migrations`)
+			sc.Expect(err).To(specs.BeNil())
+			defer func() { _, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS schema_migrations`) }()
+			_, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`)
+			sc.Expect(err).To(specs.BeNil())
+			_, err = pool.Exec(ctx, `INSERT INTO schema_migrations (version, dirty) VALUES (20240101120000, false)`)
+			sc.Expect(err).To(specs.BeNil())
+
+			store := postgres.NewEventStore(dsn)
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer func() { _ = store.Disconnect(ctx) }()
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
+
+			version, err := store.SchemaVersion(ctx)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
+
+			var eventsTable, offsetsTable bool
+			sc.Expect(pool.QueryRow(ctx, `SELECT to_regclass('events_store') IS NOT NULL, to_regclass('offsets_store') IS NOT NULL`).Scan(&eventsTable, &offsetsTable)).To(specs.BeNil())
+			sc.Expect(eventsTable).To(specs.BeTrue())
+			sc.Expect(offsetsTable).To(specs.BeTrue())
+
+			var foreignVersion int64
+			var foreignDirty bool
+			var foreignRows int
+			sc.Expect(pool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&foreignVersion, &foreignDirty)).To(specs.BeNil())
+			sc.Expect(pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&foreignRows)).To(specs.BeNil())
+			sc.Expect(foreignVersion).To(specs.Equal(int64(20240101120000)))
+			sc.Expect(foreignDirty).To(specs.BeFalse())
+			sc.Expect(foreignRows).To(specs.Equal(1))
 		})
 	})
 }

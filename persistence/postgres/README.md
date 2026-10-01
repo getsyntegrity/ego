@@ -48,7 +48,7 @@ The schema is a list of numbered SQL files embedded in the module, in [`schema/`
 
 1. takes a Postgres advisory lock (`pg_advisory_lock`), so several nodes that start together queue up
    instead of racing, and the ones that arrive late find nothing left to do;
-2. creates the `schema_migrations` table if it is missing, one row per version already applied;
+2. creates the `ego_schema_migrations` table if it is missing, one row per version already applied;
 3. applies each file above the recorded version, in order. Every file runs in its own transaction together
    with the row that records it, so a failure leaves the database at the last complete version, and the next
    `Migrate` resumes from there.
@@ -68,7 +68,7 @@ The schema is a list of numbered SQL files embedded in the module, in [`schema/`
 ### A database created by hand
 
 A database created from the old `init.sql` or from the earlier DDL has the tables but no
-`schema_migrations`. `Migrate` does not apply the files again: it inspects the tables, columns and indexes,
+`ego_schema_migrations`. `Migrate` does not apply the files again: it inspects the tables, columns and indexes,
 works out the longest run of versions from 1 that are already there, records them, and applies only the
 rest. Because every file is idempotent, a version it cannot prove (an index that was never created, say) is
 simply applied again.

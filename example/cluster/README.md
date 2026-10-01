@@ -341,7 +341,7 @@ A separate headless service (`ego-cluster-headless`) is kept for gossip-based pe
 ## Schema migrations
 
 The tables of this example belong to the `persistence/postgres` module, which
-versions them: five SQL files, a `schema_migrations` table that records which
+versions them: five SQL files, an `ego_schema_migrations` table that records which
 ones a database has, and a Postgres advisory lock so that several nodes can
 start at once. An engine opts in with `engine.WithSchemaMigration()`; the
 stores are connected first, and `Engine.Start` then migrates them before the

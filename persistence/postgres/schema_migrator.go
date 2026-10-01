@@ -39,10 +39,11 @@ import (
 const schemaLockKey int64 = 0x65676f5f73636865
 
 // createSchemaVersionsSQL creates the bookkeeping table: one row per applied
-// schema file. The table keeps the name schema_migrations that other Postgres
-// tooling uses for the same job, so a DBA recognises it.
+// schema file. The name is prefixed on purpose: a bare schema_migrations is what
+// golang-migrate and other tools create, and ego must not read or write a table
+// that belongs to them.
 const createSchemaVersionsSQL = `
-CREATE TABLE IF NOT EXISTS schema_migrations
+CREATE TABLE IF NOT EXISTS ego_schema_migrations
 (
     version    BIGINT      PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -70,12 +71,12 @@ var embeddedSchemaFiles = sync.OnceValues(func() ([]schemaFile, error) {
 //
 // Migrate applies the embedded schema/NNN_*.sql files in order. Each file runs
 // in its own transaction together with the row that records its version in
-// schema_migrations, so a failure leaves the database at the last complete
+// ego_schema_migrations, so a failure leaves the database at the last complete
 // version. A session-level advisory lock serializes concurrent callers: a node
 // that arrives while another is migrating waits, then finds nothing to do.
 //
 // A database created by hand before versions were recorded has no
-// schema_migrations rows. Migrate inspects its tables, columns and indexes,
+// ego_schema_migrations rows. Migrate inspects its tables, columns and indexes,
 // records the versions it already has and applies only the rest.
 type SchemaMigrator struct {
 	pool *pgxpool.Pool
@@ -124,7 +125,7 @@ func (m *SchemaMigrator) Migrate(ctx context.Context) (err error) {
 	}()
 
 	if _, err = conn.Exec(ctx, createSchemaVersionsSQL); err != nil {
-		return fmt.Errorf("postgres: schema: create schema_migrations: %w", err)
+		return fmt.Errorf("postgres: schema: create ego_schema_migrations: %w", err)
 	}
 	current, recorded, err := recordedVersion(ctx, conn)
 	if err != nil {
@@ -144,15 +145,15 @@ func (m *SchemaMigrator) Migrate(ctx context.Context) (err error) {
 	return nil
 }
 
-// SchemaVersion returns the highest version recorded in schema_migrations, or
+// SchemaVersion returns the highest version recorded in ego_schema_migrations, or
 // 0 when the table does not exist or has no rows. It changes nothing.
 func (m *SchemaMigrator) SchemaVersion(ctx context.Context) (uint, error) {
 	if m.pool == nil {
 		return 0, ErrNotConnected
 	}
 	var tableExists bool
-	if err := m.pool.QueryRow(ctx, "SELECT to_regclass('schema_migrations') IS NOT NULL").Scan(&tableExists); err != nil {
-		return 0, fmt.Errorf("postgres: schema: look for schema_migrations: %w", err)
+	if err := m.pool.QueryRow(ctx, "SELECT to_regclass('ego_schema_migrations') IS NOT NULL").Scan(&tableExists); err != nil {
+		return 0, fmt.Errorf("postgres: schema: look for ego_schema_migrations: %w", err)
 	}
 	if !tableExists {
 		return 0, nil
@@ -171,7 +172,7 @@ type queryer interface {
 // is recorded at all.
 func recordedVersion(ctx context.Context, q queryer) (version uint, recorded bool, err error) {
 	var highest *int64
-	if err = q.QueryRow(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&highest); err != nil {
+	if err = q.QueryRow(ctx, "SELECT MAX(version) FROM ego_schema_migrations").Scan(&highest); err != nil {
 		return 0, false, fmt.Errorf("postgres: schema: read the recorded version: %w", err)
 	}
 	if highest == nil {
@@ -195,7 +196,7 @@ func recordBaseline(ctx context.Context, conn *pgxpool.Conn) (uint, error) {
 		return 0, nil
 	}
 	if _, err = conn.Exec(ctx,
-		"INSERT INTO schema_migrations (version) SELECT generate_series(1, $1::bigint) ON CONFLICT DO NOTHING",
+		"INSERT INTO ego_schema_migrations (version) SELECT generate_series(1, $1::bigint) ON CONFLICT DO NOTHING",
 		int64(version)); err != nil {
 		return 0, fmt.Errorf("postgres: schema: record the baseline version %d: %w", version, err)
 	}
@@ -233,7 +234,7 @@ func applySchemaFile(ctx context.Context, conn *pgxpool.Conn, file schemaFile) e
 	if _, err = tx.Exec(ctx, file.sql); err != nil {
 		return fmt.Errorf("postgres: schema: apply %s: %w", file.name, err)
 	}
-	if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", int64(file.version)); err != nil {
+	if _, err = tx.Exec(ctx, "INSERT INTO ego_schema_migrations (version) VALUES ($1)", int64(file.version)); err != nil {
 		return fmt.Errorf("postgres: schema: record %s: %w", file.name, err)
 	}
 	if err = tx.Commit(ctx); err != nil {
