@@ -29,18 +29,12 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -509,66 +503,33 @@ func TestEventSourcedActorSeedActorTenant(t *testing.T) {
 // net-new enforcement per design.md risk #3 (this gate previously only
 // proved presence via tenancy.Require, never identity match).
 func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	// The empty Describe name keeps the old test name.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a command of another tenant on the non-batched path", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// tenant A's first command must succeed and establish actorTenant
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's first command must succeed and establish actorTenant")
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a cross-tenant command on the non-batched path must be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// a cross-tenant command on the non-batched path must be rejected with
+			// the fail-closed tenant error VerifyUnchanged produces, not an invented
+			// error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }
 
 // TestEventSourcedActorGetStateCommandRejectsCrossTenant is a PR1
@@ -580,66 +541,32 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 // require a resolved TenantContext and reject one that mismatches the
 // actor's already-established actorTenant.
 func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a GetStateCommand of another tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// tenant A's command must succeed and establish actorTenant
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &egopb.GetStateCommand{})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's command must succeed and establish actorTenant")
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &egopb.GetStateCommand{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "GetStateCommand from a different tenant must be rejected, not return tenant A's state")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// the GetStateCommand from a different tenant must be rejected, not
+			// return tenant A's state, with the fail-closed tenant error
+			// VerifyUnchanged produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }
 
 // TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware is a
@@ -648,57 +575,25 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 // rejected (tenancy.Require's absence path), matching
 // processCommandAndReply's T4-A gate rather than silently returning state.
 func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a GetStateCommand with no resolved tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantContextFor(ctx, "acme")), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	eventStream := eventstream.New()
-
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
-
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-	reply, err = goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "GetStateCommand with no resolved tenant must be rejected on a tenant-aware actor")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// Ask itself must not fail; the rejection is carried in the
+			// CommandReply. A GetStateCommand with no resolved tenant must be
+			// rejected on a tenant-aware actor.
+			reply := ask(ctx, pid, &egopb.GetStateCommand{})
+			errorReplyMessage(ctx, reply)
+		})
+	})
 }
 
 // TestEventSourcedActorTenantIdentitySurvivesRestart covers task 4.6: a
@@ -706,79 +601,48 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 // recovers its tenant identity from persisted event metadata (Phase 3),
 // not only while the original in-memory actorTenant is still warm.
 func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a cross-tenant command after the actor restarts", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// First actor instance: tenant A persists, establishing actorTenant,
+			// then is stopped so no in-memory state survives.
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			ctx.Expect(rig.system.Kill(context.Background(), behavior.ID())).To(specs.BeNil())
+			waitStopped(ctx, pid)
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// the name is free again once the system forgets the stopped actor
+			ctx.Eventually(func() any {
+				exists, err := rig.system.ActorExists(context.Background(), behavior.ID())
+				if err != nil {
+					return err
+				}
+				return exists
+			}, specs.BeFalse(), specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	// First actor instance: tenant A persists, establishing actorTenant,
-	// then is stopped so no in-memory state survives.
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// Second actor instance under the same persistence ID: recover() must
+			// seed actorTenant from the persisted event before this new in-process
+			// actor accepts any command.
+			restarted := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), restarted, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10})
 
-	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-	pause.For(time.Second)
-
-	// Second actor instance under the same persistence ID: recover() must
-	// seed actorTenant from the persisted event before this new in-process
-	// actor accepts any command.
-	restarted := New()
-	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant identity recovered from persisted event metadata must survive actor restart")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// tenant identity recovered from persisted event metadata must survive
+			// the actor restart, and the rejection must be the fail-closed tenant
+			// error VerifyUnchanged produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }
