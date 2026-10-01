@@ -375,26 +375,29 @@ func TestEventSourcedScenario_GivenEventsFailureIsReportedAsArrangementFailure(t
 			})
 
 		s.It("records the arrangement error and no command error", func(ctx *specs.Context) {
-			ctx.Expect(result.arrangeErr).To(specs.Not(specs.BeNil()))
-			ctx.Expect(result.arrangeErr.Error()).To(specs.Contain("given events could not be applied"))
+			ctx.Expect(result.arrangeErr).To(specs.Project("message", func(err error) string {
+				if err == nil {
+					return ""
+				}
+				return err.Error()
+			}, specs.Contain("given events could not be applied")))
 			ctx.Expect(result.err).To(specs.BeNil())
 		})
 
-		assertions := []struct {
+		type row struct {
 			name   string
 			assert func(t testing.TB)
-		}{
+		}
+		rows := []row{
 			{"ThenEvents", func(t testing.TB) { result.ThenEvents(t, &testpb.AccountCreated{}) }},
 			{"ThenState", func(t testing.TB) { result.ThenState(t, &testpb.Account{}) }},
 			{"ThenNoEvents", func(t testing.TB) { result.ThenNoEvents(t) }},
 			{"ThenError", func(t testing.TB) { result.ThenError(t, "unhandled event") }},
 		}
 
-		for _, assertion := range assertions {
-			s.It(assertion.name+" fails when the arrangement failed", func(ctx *specs.Context) {
-				ctx.Expect(recordFailure(ctx.T, assertion.assert)).To(specs.BeTrue())
-			})
-		}
+		specs.Table(s, rows, func(r row) string { return r.name + " fails when the arrangement failed" }, func(ctx *specs.Context, r row) {
+			ctx.Expect(recordFailure(ctx.T, r.assert)).To(specs.BeTrue())
+		})
 	})
 }
 
