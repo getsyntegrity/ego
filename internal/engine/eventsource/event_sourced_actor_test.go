@@ -24,13 +24,13 @@ package eventsource
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	specmock "github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -432,7 +432,7 @@ func TestEventSourcedActor(t *testing.T) {
 			// GoAkt retries PreStart before it gives up on the actor, so Ping runs at
 			// least once. Recovery never starts: any other events store call is unexpected.
 			ctrl := specmock.NewController(ctx)
-			ctrl.Method("Ping").Expect(specmock.Any()).Return(assert.AnError).AtLeast(1)
+			ctrl.Method("Ping").Expect(specmock.Any()).Return(errStoreFailure).AtLeast(1)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 3,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
@@ -448,12 +448,12 @@ func TestEventSourcedActor(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("GetLatestEvent").
 				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to get latest event", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to get latest event", errStoreFailure)
 		})
 
 		s.It("With replay events failure during recovery", func(ctx *specs.Context) {
@@ -469,12 +469,12 @@ func TestEventSourcedActor(t *testing.T) {
 				Return(latestEvent, nil)
 			ctrl.Method("ReplayEvents").
 				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(1), uint64(1), specmock.Any()).
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to replay events", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to replay events", errStoreFailure)
 		})
 	})
 }
@@ -904,7 +904,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("Encrypt").
 				Expect(specmock.Any(), persistenceID, specmock.Any()).
-				Return(nil, "", assert.AnError)
+				Return(nil, "", errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
@@ -935,7 +935,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			encrypt := ctrl.Method("Encrypt")
 			encrypt.Expect(specmock.Any(), persistenceID, specmock.Any()).Return([]byte("ciphertext"), "key-1", nil)
-			encrypt.Expect(specmock.Any(), persistenceID, specmock.Any()).Return(nil, "", assert.AnError)
+			encrypt.Expect(specmock.Any(), persistenceID, specmock.Any()).Return(nil, "", errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
@@ -974,7 +974,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			deleteEvents := eventsCtrl.Method("DeleteEvents")
 			deleteEvents.
 				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(2)).
-				Return(assert.AnError).AtLeast(1)
+				Return(errStoreFailure).AtLeast(1)
 
 			snapshotCtrl := specmock.NewController(ctx)
 			snapshotCtrl.Method("Ping").Expect(specmock.Any()).Return(nil)
@@ -1037,7 +1037,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			deleteSnapshots := snapshotCtrl.Method("DeleteSnapshots")
 			deleteSnapshots.
 				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(2)).
-				Return(assert.AnError).AtLeast(1)
+				Return(errStoreFailure).AtLeast(1)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(eventsCtrl)),
@@ -1094,14 +1094,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				Return(nil, nil)
 			ctrl.Method("WriteEvents").
 				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
-				Return(assert.AnError)
+				Return(errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
 			pid := rig.spawn(ctx, behavior)
 
 			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
-			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(assert.AnError.Error()))
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(errStoreFailure.Error()))
 
 			// the write failure leaves the actor's view of the store stale, so it stops
 			waitStopped(ctx, pid)
@@ -1158,14 +1158,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("GetLatestSnapshot").
 				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.snapshotStore = enginetest.NewSnapshotStoreMock(ctrl)
 			// recover must stop at the snapshot failure: any events store call is unexpected.
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to load snapshot", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to load snapshot", errStoreFailure)
 		})
 
 		s.It("with snapshot decryption failure during recovery", func(ctx *specs.Context) {
@@ -1176,14 +1176,14 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 				Return(encryptedSnapshot(ctx, persistenceID, &testpb.Account{AccountId: persistenceID, AccountBalance: 100}), nil)
 			ctrl.Method("Decrypt").
 				Expect(specmock.Any(), persistenceID, []byte("fake-ciphertext"), "key-1").
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.snapshotStore = enginetest.NewSnapshotStoreMock(ctrl)
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 			entity.encryptor = enginetest.NewEncryptorMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to decrypt snapshot", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to decrypt snapshot", errStoreFailure)
 		})
 
 		s.It("with snapshot unmarshal failure after decryption during recovery", func(ctx *specs.Context) {
@@ -1240,13 +1240,13 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			holdEvent(ctrl, persistenceID, event)
 			ctrl.Method("Decrypt").
 				Expect(specmock.Any(), persistenceID, []byte("fake-cipher"), "key-1").
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 			entity.encryptor = enginetest.NewEncryptorMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to decrypt event at sequence 1", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to decrypt event at sequence 1", errStoreFailure)
 		})
 
 		s.It("with event unmarshal failure after decryption during recovery", func(ctx *specs.Context) {
@@ -1278,13 +1278,13 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			holdEvent(ctrl, persistenceID, persistedEvent(persistenceID, payload))
 			ctrl.Method("Adapt").
 				Expect(specmock.Any(), uint64(1)).
-				Return(nil, assert.AnError)
+				Return(nil, errStoreFailure)
 
 			entity := newRecoveringActor(persistenceID, enginetest.NewAccountEventSourcedBehavior(persistenceID))
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 			entity.eventAdapters = []eventadapter.EventAdapter{enginetest.NewEventAdapterMock(ctrl)}
 
-			expectRecoveryFailure(ctx, entity, "failed to adapt event at sequence 1", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to adapt event at sequence 1", errStoreFailure)
 		})
 
 		s.It("with event UnmarshalNew failure during recovery", func(ctx *specs.Context) {
@@ -1311,7 +1311,7 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 			entity := newRecoveringActor(persistenceID, enginetest.NewFailingHandleEventBehavior(persistenceID))
 			entity.eventsStore = enginetest.NewEventsStoreMock(ctrl)
 
-			expectRecoveryFailure(ctx, entity, "failed to handle event at sequence 1", assert.AnError)
+			expectRecoveryFailure(ctx, entity, "failed to handle event at sequence 1", enginetest.ErrHandleEvent)
 		})
 	})
 
@@ -1437,7 +1437,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 			expectStoreStartup(ctrl, persistenceID)
 			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).Times(1)
 			ctrl.Method("WriteEvents").Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
-				Do(gate.hold(assert.AnError)).Times(1)
+				Do(gate.hold(errStoreFailure)).Times(1)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
@@ -1459,7 +1459,7 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 
 			credit.awaitWithin(ctx, askTimeout, "the credit command reply")
 			creditMessage := errorReplyMessage(ctx, credit.await(ctx))
-			ctx.Expect(creditMessage).To(containsText(assert.AnError.Error()))
+			ctx.Expect(creditMessage).To(containsText(errStoreFailure.Error()))
 
 			// The originating command's persist failure sets directShutdown, so the
 			// actor stops itself (pre-existing fail-fast behavior, unrelated to this
@@ -1468,14 +1468,14 @@ func TestEventSourcedActorGetStateDuringPersist(t *testing.T) {
 			// gets a normal reply": it must never receive the error reply meant for
 			// the command that actually failed. An Ask timeout against a
 			// now-stopped actor satisfies that (it is clearly not the mistaken
-			// error), whereas an ErrorReply carrying assert.AnError's message would
+			// error), whereas an ErrorReply carrying errStoreFailure's message would
 			// prove the two commands' responses got cross-wired.
 			read.awaitWithin(ctx, 8*time.Second, "the deferred GetStateCommand to settle")
 			if read.err == nil {
 				deferred := read.await(ctx)
 				if _, ok := deferred.GetReply().(*egopb.CommandReply_ErrorReply); ok {
 					// the deferred GetStateCommand must not receive the originating command's persist error
-					ctx.Expect(deferred.GetErrorReply().GetMessage()).To(specs.Not(containsText(assert.AnError.Error())))
+					ctx.Expect(deferred.GetErrorReply().GetMessage()).To(specs.Not(containsText(errStoreFailure.Error())))
 				}
 			}
 		})
@@ -1619,7 +1619,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			expectStoreStartup(ctrl, persistenceID)
 			ctrl.Method("WriteEvents").
 				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
-				Return(assert.AnError)
+				Return(errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
@@ -1642,7 +1642,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			expectStoreStartup(ctrl, persistenceID)
 			ctrl.Method("WriteEvents").
 				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
-				Return(assert.AnError)
+				Return(errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)),
@@ -1664,7 +1664,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("Encrypt").
 				Expect(specmock.Any(), persistenceID, specmock.Any()).
-				Return(nil, "", assert.AnError)
+				Return(nil, "", errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
@@ -1773,7 +1773,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("Encrypt").
 				Expect(specmock.Any(), persistenceID, specmock.Any()).
-				Return(nil, "", assert.AnError)
+				Return(nil, "", errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
@@ -2051,7 +2051,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			ctrl := specmock.NewController(ctx)
 			ctrl.Method("Encrypt").
 				Expect(specmock.Any(), persistenceID, specmock.Any()).
-				Return(nil, "", assert.AnError)
+				Return(nil, "", errStoreFailure)
 
 			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
@@ -2170,3 +2170,6 @@ func findSpan(spans tracetest.SpanStubs, name string) *tracetest.SpanStub {
 	}
 	return nil
 }
+
+// errStoreFailure is the error the mocked ports return in the failure cases.
+var errStoreFailure = errors.New("event sourced actor test: port failure")
