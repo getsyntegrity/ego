@@ -24,147 +24,116 @@ package eventsource
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
+// askCreateAccount sends a CreateAccount command and expects it to succeed with a state reply.
+func askCreateAccount(ctx *specs.Context, askCtx context.Context, pid *goakt.PID) {
+	reply, err := goakt.Ask(askCtx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(reply).To(beOfType[*egopb.CommandReply]())
+	ctx.Expect(reply.(*egopb.CommandReply).GetReply()).To(beOfType[*egopb.CommandReply_StateReply]())
+}
+
 // TestEventSourcedActorSpawnBindsExactTenantScope covers TENANT-003 T4's
 // core guarantee: once PreStart binds entity.scope via resolveScope, every
-// store call this actor makes — both the read during recovery and the
-// write from a live command — carries the exact tenant scope resolved for
-// this spawn, never persistence.Unscoped(). A *mocks.EventsStore is used
-// instead of the real testkit.EventStore precisely so that a call made
-// with the wrong scope is observable directly: mockery's generated mock
-// only matches an expectation whose argument values compare equal, so an
-// unexpected-scope call panics rather than silently succeeding against
-// some other (scope, persistenceID) bucket.
+// store call this actor makes, both the read during recovery and the write
+// from a live command, carries the exact tenant scope resolved for this
+// spawn, never persistence.Unscoped(). The store is a mock whose expectations
+// name the scope explicitly, so a call made with the wrong scope is reported
+// as unexpected instead of silently succeeding against some other
+// (scope, persistenceID) bucket.
 func TestEventSourcedActorSpawnBindsExactTenantScope(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+	specs.Describe(t, "a tenant-aware actor reads and writes the store with the exact scope resolved for its spawn", func(s *specs.Spec) {
+		s.It("binds the spawn-time tenant scope for recovery and for the live write", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+			scopeA, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-	store := new(mocks.EventsStore)
-	store.EXPECT().Ping(mock.Anything).Return(nil)
-	store.EXPECT().GetLatestEvent(mock.Anything, scopeA, persistenceID).Return(nil, nil)
-	store.EXPECT().WriteEvents(mock.Anything, scopeA, mock.Anything, mock.Anything).Return(nil).Once()
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			pingAnyTimes(ctrl)
+			ctrl.Method("GetLatestEvent").Expect(mock.Any(), scopeA, persistenceID).Times(1).Return(nil, nil)
+			ctrl.Method("WriteEvents").Expect(mock.Any(), scopeA, mock.Any(), mock.Any()).Times(1).Return(nil)
 
-	eventStream := eventstream.New()
+			eventStream := newClosingEventStream(ctx)
+			system := startEventsSystem(ctx, "TestActorSystem", 3,
+				extensions.NewEventsStore(store),
+				extensions.NewEventsStream(eventStream),
+				extensions.NewTenancyMarker())
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(store),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// PreStart must succeed and recover using the spawn-bound scope, not Unscoped().
+			pid, err := system.Spawn(context.Background(), behavior.ID(), New(),
+				goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
+				goakt.WithLongLived(), goakt.WithStashing())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err, "PreStart must succeed and recover using the spawn-bound scope, not Unscoped()")
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			tenantA, err := tenancy.NewTenantContext("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			ctxA, err := tenancy.Attach(context.Background(), tenantA)
+			ctx.Expect(err).To(specs.BeNil())
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"the command must succeed against the mock store bound to the exact tenant scope")
-
-	pause.For(time.Second)
-
-	// Every registered expectation above named scopeA explicitly (never
-	// mock.Anything for the scope argument): if either GetLatestEvent
-	// (recovery) or WriteEvents (the live command's persist) had instead
-	// been called with persistence.Unscoped(), that call would not have
-	// matched any expectation and the mock would have panicked well before
-	// this point. AssertExpectations proves the expected calls did happen.
-	store.AssertExpectations(t)
-
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// The command must succeed against the mock store bound to the exact
+			// tenant scope. A GetLatestEvent or WriteEvents call made with
+			// persistence.Unscoped() instead would match no expectation and the
+			// controller reports it as unexpected.
+			askCreateAccount(ctx, ctxA, pid)
+		})
+	})
 }
 
 // TestEventSourcedActorPreStartFailsClosedWithoutTenantScope covers
 // TENANT-003 T4's fail-closed guard: when tenancy is active (the actor
 // system carries extensions.TenancyExtensionID) but the per-spawn
 // extensions.EntityTenantScope dependency was not injected, PreStart must
-// refuse to start the actor — via resolveScope, before validateAndRecover
-// ever runs — rather than falling back to persistence.Unscoped(). No store
+// refuse to start the actor, via resolveScope and before validateAndRecover
+// ever runs, rather than falling back to persistence.Unscoped(). No store
 // method may be invoked at all: not Ping, not GetLatestEvent, not
-// WriteEvents. No expectation is registered on the mock below, so any call
-// to it at all would panic; the explicit AssertNotCalled checks make that
-// guarantee an assertion rather than an accident of test ordering.
+// WriteEvents. The mock below has no expectation, so any call is reported as
+// unexpected, and the case also asserts that it recorded no call.
 func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+	specs.Describe(t, "PreStart refuses to start a tenant-aware actor that was given no tenant scope", func(s *specs.Spec) {
+		s.It("fails closed with the typed missing-scope error and never touches the store", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	store := new(mocks.EventsStore)
-	eventStream := eventstream.New()
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			eventStream := newClosingEventStream(ctx)
+			system := startEventsSystem(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(store),
+				extensions.NewEventsStream(eventStream),
+				extensions.NewTenancyMarker())
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(store),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(1))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Deliberately no extensions.NewEntityTenantScope dependency: tenancy is
+			// active (extensions.NewTenancyMarker() above), but no scope was bound
+			// for this spawn.
+			pid, err := system.Spawn(context.Background(), behavior.ID(), New(),
+				goakt.WithDependencies(behavior),
+				goakt.WithLongLived(), goakt.WithStashing())
 
-	actor := New()
-	// Deliberately no extensions.NewEntityTenantScope dependency: tenancy is
-	// active (extensions.NewTenancyMarker() above), but no scope was bound
-	// for this spawn.
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.Error(t, err, "PreStart must fail closed when tenancy is active and no tenant scope was injected")
-	require.True(t, errors.Is(err, extensions.ErrEntityTenantScopeMissing),
-		"the rejection must be the typed extensions.ErrEntityTenantScopeMissing, not an invented error")
-	require.Nil(t, pid)
-	pause.For(time.Second)
-
-	store.AssertNotCalled(t, "Ping", mock.Anything)
-	store.AssertNotCalled(t, "GetLatestEvent", mock.Anything, mock.Anything, mock.Anything)
-	store.AssertNotCalled(t, "WriteEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// The rejection must be the typed error, not an invented one.
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrEntityTenantScopeMissing))
+			ctx.Expect(pid).To(specs.BeNil())
+			ctx.Expect(ctrl.Calls()).To(specs.BeEmpty())
+		})
+	})
 }
 
 // TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore is the regression
@@ -174,49 +143,33 @@ func TestEventSourcedActorPreStartFailsClosedWithoutTenantScope(t *testing.T) {
 // actor makes must still carry persistence.Unscoped() exactly as it did
 // before TENANT-003 T4 introduced entity.scope. The mock store below only
 // has expectations registered for persistence.Unscoped(): a call with any
-// other scope value would not match and would panic the mock.
+// other scope value is reported as unexpected.
 func TestEventSourcedActorLegacyModeAlwaysUsesUnscopedStore(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+	specs.Describe(t, "an actor on a system without tenancy keeps using the unscoped store", func(s *specs.Spec) {
+		s.It("recovers and writes with persistence.Unscoped()", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	store := new(mocks.EventsStore)
-	store.EXPECT().Ping(mock.Anything).Return(nil)
-	store.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-	store.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Once()
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			pingAnyTimes(ctrl)
+			ctrl.Method("GetLatestEvent").Expect(mock.Any(), persistence.Unscoped(), persistenceID).Times(1).Return(nil, nil)
+			ctrl.Method("WriteEvents").Expect(mock.Any(), persistence.Unscoped(), mock.Any(), mock.Any()).Times(1).Return(nil)
 
-	eventStream := eventstream.New()
+			eventStream := newClosingEventStream(ctx)
+			// No extensions.NewTenancyMarker() here: legacy mode, exactly like the
+			// pre-TENANT-003 actor system configuration.
+			system := startEventsSystem(ctx, "TestActorSystem", 3,
+				extensions.NewEventsStore(store),
+				extensions.NewEventsStream(eventStream))
 
-	// No extensions.NewTenancyMarker() here: legacy mode, exactly like the
-	// pre-TENANT-003 actor system configuration.
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(store),
-			extensions.NewEventsStream(eventStream),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			pid, err := system.Spawn(context.Background(), behavior.ID(), New(),
+				goakt.WithDependencies(behavior),
+				goakt.WithLongLived(), goakt.WithStashing())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-	pause.For(time.Second)
-	store.AssertExpectations(t)
-
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			askCreateAccount(ctx, context.Background(), pid)
+		})
+	})
 }
