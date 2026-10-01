@@ -51,7 +51,7 @@ After spec B, the integration tests live in `inttest/` and start their own Postg
 
 - [x] **C1 Restart flow.** `inttest/flows`: engine on `persistence/postgres`, commands, actor-system restart, and an assertion that the state is recovered. Check: `cd inttest && go test -count=1 ./flows/...`. Route: delegated writer.
 - [x] **C2 No-skip rule.** Add the rule to `unitgate` and cover it with a test. Check: `go test ./.github/scripts/unitgate` and `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
-- [ ] **C3 CI job.** Add the `inttest` job, the paths filter, the `ci-ok` needs entry, and the `modules` coverage for both new modules. Check: `actionlint`, plus a green CI run of the PR in which `inttest` really ran. Route: delegated writer, then a parent check of the CI run.
+- [x] **C3 CI job.** Add the `inttest` job, the paths filter, the `ci-ok` needs entry, and the `modules` coverage for both new modules. Check: `actionlint`, plus a green CI run of the PR in which `inttest` really ran. Route: delegated writer, then a parent check of the CI run.
 - [ ] **C4 Docs.** Update `docs/ci.md` and `docs/testing/go-specs.md`. Check: structural readback. Route: delegated writer.
 
 ## Progress and evidence
@@ -68,6 +68,14 @@ After spec B, the integration tests live in `inttest/` and start their own Postg
 - RED: `skips_test.go` first gave `undefined: RuleSkip` (build failed). GREEN: `go test ./.github/scripts/unitgate` ok. The fixtures cover each form, a non-test file, aliasing, call-result and field receivers, de-duplication, and negatives (same calls outside `inttest/`, `inttestx/`, `Skipper`, a local `Short`), plus the no-allowlist case.
 - Real-file proof: adding `t.Skip("x")` to `inttest/flows/restart_test.go` made `go run ./.github/scripts/unitgate -strict` exit 1 with `inttest/flows/restart_test.go: no-skip: calls Skip; a test under inttest/ must fail when its dependency is missing, never skip`. Reverted; the gate is green again (`ok (0 pending entries, 40 resource entries)`).
 
+### C3 (route: delegated writer)
+
+- `plan` gets a second `dorny/paths-filter@v4` step (`inttest-changes`, pull requests only) with the filter `inttest` over `inttest/**`, `persistence/**`, `example/cluster/**`, `publisher/**`, `compose/**`, `engine/**`, exposed as the output `inttest`.
+- Job `inttest`: `needs: plan`; runs on `workflow_dispatch`, or on a pull request whose base is `main` or whose paths filter matched; `ubuntu-latest`, `timeout-minutes: 20`; checkout, `go-setup`, then `go test -count=1 -timeout=15m ./...` in `inttest`. No `services:` and no DSN variable. It is listed in `ci-ok` `needs`, and the header comment lists it.
+- `modules`: `persistence/postgres` was already in the matrix (spec A). `inttest` is added through a matrix `include` entry with `vet-only: "yes"`. The job now has a "Build and vet" step for every entry and a "Test" step with `if: matrix.vet-only != 'yes'`. The flag is a string because an absent matrix key is null and `null != false` is false in the expression language. `go vet` compiles the test files, which is the point.
+- Root unit lanes never include `inttest`: `go list ./...` at the root lists 45 packages and none is under `inttest`, and `.github/scripts/test-matrix.sh` builds its list from `go list ./...`. `tidy` walks `git ls-files 'go.mod' '**/go.mod'`, so it covers `inttest/go.mod` and `persistence/postgres/go.mod`. `.github/dependabot.yml` gets `/inttest` next to `/persistence/postgres`.
+- Check: `actionlint .github/workflows/ci.yml` exits 0. Pending, to be checked by the parent: a green CI run of the PR in which the `inttest` job really ran.
+
 ## Next step
 
-C3.
+C4.
