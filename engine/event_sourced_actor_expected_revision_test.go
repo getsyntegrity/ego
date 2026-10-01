@@ -32,7 +32,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/egopb"
@@ -48,33 +47,6 @@ import (
 // not merely at the actor/message level; the rest are included for the same
 // reason since the machinery is already in place.
 // -----------------------------------------------------------------------
-
-// dispatchWithMetadata wraps payload in a command.Envelope carrying opts and
-// sends it through engine.Dispatch, returning the resulting command.Result.
-// It is a test-only convenience over the canonical entry point real callers
-// use to declare an ExpectedRevision (design.md D5); SendCommand (the legacy
-// path exercised separately by TestEventSourcedLegacyCommandIsUnconditional)
-// never carries one.
-//
-// Spec files should call dispatch instead. This variant takes a plain
-// *testing.T for the test files that are not on go-specs yet, and goes away
-// with them.
-func dispatchWithMetadata(t *testing.T, engine *Engine, entityID string, payload proto.Message, opts ...command.MetadataOption) command.Result {
-	t.Helper()
-	md, err := command.NewMetadata(command.OperationID(uuid.NewString()), opts...)
-	if err != nil {
-		t.Fatalf("building command metadata: %v", err)
-	}
-	env, err := command.NewEnvelope(payload, md)
-	if err != nil {
-		t.Fatalf("building command envelope: %v", err)
-	}
-	result, err := engine.Dispatch(context.Background(), entityID, env, time.Minute)
-	if err != nil {
-		t.Fatalf("dispatching command: %v", err)
-	}
-	return result
-}
 
 // ES-success: expected revision matches the aggregate's current revision.
 func TestEventSourcedExpectedRevisionSuccessMatchesCurrent(t *testing.T) {
