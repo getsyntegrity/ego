@@ -6,7 +6,7 @@
 #                  (.github/scripts/test-matrix.sh): regular packages go whole into TEST_SHARDS
 #                  shards; a package slower than SPLIT_THRESHOLD is split by test into several
 #                  shards, so one slow package cannot dominate the wall time
-#   test (N)    -> each shard on its own runner, in parallel
+#   test (N)    -> each shard on its own runner, in parallel; the TestCluster* tests are skipped (cluster job)
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
 #   modules     -> build, vet and test of every nested module (persistence/postgres, publishers, compat,
@@ -51,6 +51,10 @@ env:
   SPLIT_THRESHOLD: "90"   # seconds. A package slower than this (by real timings) is split by test.
   SPLIT_TARGET: "90"      # seconds. Aimed duration of each shard of a split package.
   TESTFLAGS: "-timeout=20m"
+  # Top-level tests that start a multi-node cluster (named TestCluster*, see docs/ci.md). The test shards and
+  # the race job skip them (-skip), the cluster job runs only them (-run), and test-matrix.sh leaves them
+  # out of the lists it distributes, so every test runs in exactly one lane.
+  CLUSTER_TESTS: "^TestCluster"
   GOTESTSUM_VERSION: "v1.13.0"
 
 jobs:
@@ -165,6 +169,9 @@ jobs:
           mkdir -p reports
           args=()
           [ -z "$RUN" ] || args+=(-run "$RUN")
+          # -run selects the share of a split package and -skip removes the cluster tests from it;
+          # both apply at once. The cluster tests run in the cluster job.
+          args+=(-skip "$CLUSTER_TESTS")
           # shellcheck disable=SC2086  # PACKAGES is a space-separated list
           gotestsum --format github-actions \
             --jsonfile "reports/test-$ID.json" --junitfile "reports/junit-$ID.xml" \
@@ -238,6 +245,8 @@ jobs:
   #   PR to develop: build and vet (fast; detects use of newer stdlib API).
   #   PR to main:    runs ALL the tests with the minimum before publishing.
   # Uses plain `go test`: gotestsum 1.13 needs Go >= 1.24 and the minimum may be lower.
+  # It does NOT skip the TestCluster tests, on purpose: it is the only job that runs them with the minimum
+  # Go, and the only full test run of a hotfix/* PR to main (the cluster job does not run there).
   test-min:
     name: test (min)
     needs: plan
