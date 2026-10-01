@@ -51,7 +51,7 @@ CI does not change in this spec. The cluster tests keep running in the normal sh
 - [x] **T2 Isolate in `engine`.** Make every multi-node test a `TestCluster*`. Cluster cases split out of mixed tests go to `*_cluster_test.go` in the same package, and the allowlist is updated. Check: `go test ./engine/` is green. Route: delegated writer.
 - [x] **T3 Isolate in the other packages.** The same treatment for `compose/goakt` and any other package the inventory finds. Check: their tests are green. Route: delegated writer.
 - [x] **T4 `unitgate` rule.** Add the rule with RED and GREEN tests in both directions, and make sure `unitgate -strict` is green on the repo. Route: delegated writer.
-- [ ] **T5 Count parity.** Record the after counts per package, plus the reconciliation for every moved case. Check: `go test -skip '^TestCluster' ./...` and `go test -run '^TestCluster' <packages>` are both green, and their sum equals the baseline. Route: delegated writer.
+- [x] **T5 Count parity.** Record the after counts per package, plus the reconciliation for every moved case. Check: `go test -skip '^TestCluster' ./...` and `go test -run '^TestCluster' <packages>` are both green, and their sum equals the baseline. Route: delegated writer.
 
 ## Inventory
 
@@ -108,6 +108,11 @@ Nine tests in two packages, 31 subtests in all (1+1+1+14+1+1+7+1+4), counted as 
   - RED: with the rule stubbed out, `go test ./.github/scripts/unitgate` failed 11 cases (10 report cases and the never-allowlisted case). GREEN after the implementation, with one fix on the way: `importNames` names the go-dynaport import `go-dynaport` (last path element), but the package is `dynaport`, so the first run still failed 5 cases until `withPackageNames` added the real name.
   - GREEN: `go test -count=1 ./.github/scripts/unitgate` ok; `go run ./.github/scripts/unitgate -strict`: ok (0 pending entries, 40 resource entries); `go vet` and `gofmt -l` on the package clean.
   - Proof on real files (not committed): renaming `TestClusterEngineRemoteSpawnTenantBinding`, `TestClusterEngineRemoteEntitySpawn` and `TestCluster_AppTwoNodePlacesAndStopsCleanly` back made the gate exit 1 with 3 `cluster-name` problems (the three files, one direct `dynaport.Get`, two through `newTestCluster` and `newClusterNodes`); after reverting the names the gate is ok again.
+- T5 done. Parity holds, measured with `/home/pablog/.claude/jobs/e070bb18/tmp/c206/run.sh` (a `go test -count=1 -json` per package, no `-race`) and `reconcile.py`.
+  - Before and after, every package has identical counts. After the renames the table is the same as the baseline: engine 205 top-level / 434 subtests (639), compose/goakt 25 / 43 (68), sum 404 / 998 (1402), nothing failed or skipped.
+  - Name-level reconciliation: applying the rename table above to the baseline names gives exactly the set of names after the change, with every status equal. Subtests per renamed parent are identical: 1, 1, 1, 14, 1, 1, 7, 1, 4 for the nine cluster tests, and 1 for `TestEngineClusterKindsExposesEgoActors`. No case moved between files, so there is no split to reconcile.
+  - Lane split on the same packages: `-skip '^TestCluster'` gives 395 top-level + 967 subtests = 1362 (engine 604, compose/goakt 63, every other package unchanged). `-run '^TestCluster'` gives 9 top-level + 31 subtests = 40 (engine 8 tests / 35 names, compose/goakt 1 test / 5 names). 1362 + 40 = 1402 = baseline total, and the two name sets are disjoint and together equal the full set. All three runs exit 0.
+  - Verification of record: `go build ./... && go vet ./...` ok; `go test -count=1 ./engine/... ./internal/... ./compose/... ./migration/...` green (no flake failed, no re-run needed); `go test ./.github/scripts/unitgate` ok; `go run ./.github/scripts/unitgate -strict` ok; `gofmt -l engine internal compose migration .github/scripts/unitgate` empty; `go mod tidy -diff` clean.
 
 ## Renames
 
@@ -128,4 +133,4 @@ The tests stay in the files where they are: each one is already a whole cluster 
 
 ## Next step
 
-T5.
+Spec 2 (`odd/tasks/test-lanes-206.md`): the CI lanes that use `-skip '^TestCluster'` and `-run '^TestCluster'`. Follow-up noted here: some Describe/It texts of the renamed tests break the naming rule (for example `Engine Multi Node Remote Entity Spawn` / `holds`) and can be reworded without changing the counts.
