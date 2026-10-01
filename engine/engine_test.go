@@ -1515,11 +1515,9 @@ func TestEngineRebuildProjectionSuccess(t *testing.T) {
 			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
 			require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
+			// The restarted actor is looked up by name and may not be registered yet,
+			// so poll instead of asserting on one immediate lookup.
 			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
-
-			running, err := engine.IsProjectionRunning(ctx, name)
-			require.NoError(t, err)
-			require.True(t, running, "projection should be running again after rebuild")
 		})
 	})
 }

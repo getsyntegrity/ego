@@ -47,6 +47,9 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
       RED: making `IsProjectionRunning` return false gave `Eventually: timed out after 10.000647566s (981
       attempts) ... last observed: false`. The two cluster tests got faster (12.07 s to 10.15 s) because the
       1 s waits are gone.
+      Flake note: CI saw `actor not found` in `TestEngineRebuildProjectionSuccess` from the immediate
+      `IsProjectionRunning` lookup right after `RebuildProjection`. The final lookup is now only the
+      `Eventually` poll, which treats a lookup error as "not running yet". `-count=30` passes.
 - [x] T2 `publisher_test.go` fixed waits to `ctx.Eventually` (5 tests). Route: inline. RED: dropping the
       `StatesTopic` publish in the durable-state actor gave `Eventually: timed out after 10.000345093s ...
       expected 0 to be greater than or equal to 1`.
