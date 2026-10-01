@@ -85,17 +85,6 @@ func marshalLegacyEvent(persistenceID string, seqNr uint64, event *anypb.Any, st
 	return result, nil
 }
 
-// buildLegacyEventBytes is the testing.TB form of marshalLegacyEvent. It stays
-// because tenant_adoption_test.go, which is not part of this rework, calls it.
-func buildLegacyEventBytes(t testing.TB, persistenceID string, seqNr uint64, event *anypb.Any, state *anypb.Any, timestamp int64, shard uint64) []byte {
-	t.Helper()
-	raw, err := marshalLegacyEvent(persistenceID, seqNr, event, state, timestamp, shard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
 // legacyEventBytes is marshalLegacyEvent checked through the spec.
 func legacyEventBytes(ctx *specs.Context, persistenceID string, seqNr uint64, event *anypb.Any, state *anypb.Any, timestamp int64, shard uint64) []byte {
 	ctx.T.Helper()
