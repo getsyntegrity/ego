@@ -960,11 +960,11 @@ func TestEngineProjectionsOwnHandlers(t *testing.T) {
 	})
 }
 
-// TestEngineClusterMode runs a single-node cluster end-to-end to exercise the
+// TestClusterEngineSingleNodeServesProjectionsAndEntities runs a single-node cluster end-to-end to exercise the
 // StartProjection-as-singleton branch (sys.InCluster()==true) and the
 // engine.ClusterKinds() registration. It builds the goakt actor system manually
 // to demonstrate the cluster-mode bootstrap.
-func TestEngineClusterMode(t *testing.T) {
+func TestClusterEngineSingleNodeServesProjectionsAndEntities(t *testing.T) {
 	specs.Describe(t, "a single-node cluster runs projections as singletons and serves entities", func(s *specs.Spec) {
 		s.It("starts both projections and an entity", func(sc *specs.Context) {
 			t := sc.T
@@ -1056,7 +1056,7 @@ func TestEngineClusterMode(t *testing.T) {
 	})
 }
 
-// TestEngineMultiNodeRemoteEntitySpawn is a regression test for remote entity
+// TestClusterEngineRemoteEntitySpawn is a regression test for remote entity
 // spawns failing with "dependency type is not registered".
 //
 // With the default RoundRobin placement, Engine.Entity routes spawns to peer
@@ -1066,9 +1066,9 @@ func TestEngineClusterMode(t *testing.T) {
 // calls Entity(), so every spawn landing on node2 exercises that
 // pre-registration path; before the fix those spawns failed because node2's
 // registry was only populated by its own (never-issued) Entity() calls.
-func TestEngineMultiNodeRemoteEntitySpawn(t *testing.T) {
-	specs.Describe(t, "Engine Multi Node Remote Entity Spawn", func(s *specs.Spec) {
-		s.It("holds", func(sc *specs.Context) {
+func TestClusterEngineRemoteEntitySpawn(t *testing.T) {
+	specs.Describe(t, "engine.Engine.Entity placement on a two-node cluster", func(s *specs.Spec) {
+		s.It("serves entities that round-robin placement put on the node that never called Entity", func(sc *specs.Context) {
 			t := sc.T
 			ctx := context.Background()
 
@@ -2633,11 +2633,11 @@ func TestEngineRebuildProjectionRestartError(t *testing.T) {
 	})
 }
 
-// TestEngineClusterModeStartProjectionAlreadyExists exercises the cluster
+// TestClusterEngineStartProjectionAlreadyExists exercises the cluster
 // singleton branch in StartProjection where a second start of the same
 // projection name is a clean no-op: SpawnSingleton is idempotent when the
 // name is already bound to the same singleton, so no error surfaces.
-func TestEngineClusterModeStartProjectionAlreadyExists(t *testing.T) {
+func TestClusterEngineStartProjectionAlreadyExists(t *testing.T) {
 	specs.Describe(t, "starting a projection twice in cluster mode is a no-op", func(s *specs.Spec) {
 		s.It("takes the ErrSingletonAlreadyExists branch", func(sc *specs.Context) {
 			t := sc.T

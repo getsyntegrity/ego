@@ -86,7 +86,7 @@ type domainOnlySpawnCaseG4 struct {
 	spawn  func(engine *Engine, id string) error
 }
 
-// TestEngineMultiNodeNeutralBehaviors spawns behaviors through the public
+// TestClusterEngineNeutralBehaviors spawns behaviors through the public
 // Spawn* methods on a two-node cluster, where GoAkt serializes every spawn's
 // dependencies and may place the actor on the peer (ego-arch-002-s3 design,
 // §8). Each case starts its own cluster, and only node 1 spawns.
@@ -95,7 +95,7 @@ type domainOnlySpawnCaseG4 struct {
 // while it holds the actor-system lock, and a recovered panic would leave the
 // cluster cleanup blocked on that lock. Run the test with a short timeout
 // (-timeout 90s) so either the panic or the timeout ends the binary.
-func TestEngineMultiNodeNeutralBehaviors(t *testing.T) {
+func TestClusterEngineNeutralBehaviors(t *testing.T) {
 	specs.Describe(t, "behaviors spawned through the Spawn methods on a two-node cluster", func(s *specs.Spec) {
 		// newCluster starts the cluster of the case: both nodes register
 		// AccountEventSourcedBehavior through WithEntityKinds.

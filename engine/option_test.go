@@ -563,12 +563,12 @@ func TestConfigGoaktOptionsProjectionDefaultsRecovery(t *testing.T) {
 	})
 }
 
-// TestClusterKindsExposesEgoActors pins the GoAkt kind names of the cluster
+// TestEngineClusterKindsExposesEgoActors pins the GoAkt kind names of the cluster
 // actors. GoAkt names a kind lower(reflect.Type.String()) and ships that name
 // in spawn, relocation and singleton records, so a node running another
 // version only understands these exact names: the types must stay declared in
 // package engine.
-func TestClusterKindsExposesEgoActors(t *testing.T) {
+func TestEngineClusterKindsExposesEgoActors(t *testing.T) {
 	specs.Describe(t, "ClusterKinds exposes the GoAkt kind names of the eGo actors", func(s *specs.Spec) {
 		s.It("lists exactly the four cluster actors under their lower-cased type names", func(ctx *specs.Context) {
 			want := []string{

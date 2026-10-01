@@ -38,7 +38,7 @@ import (
 	"github.com/getsyntegrity/ego/tenancy"
 )
 
-// TestEngineRemoteSpawnTenantBinding runs the spawn-binding contract
+// TestClusterEngineRemoteSpawnTenantBinding runs the spawn-binding contract
 // against a real two-node cluster. With RoundRobin placement over two
 // members, a run of spawns from node1 places some entities on node2, so
 // node1 receives REMOTE PIDs: the only way node1 can learn such an actor's
@@ -46,7 +46,7 @@ import (
 // landed locally or remotely, a same-tenant re-spawn must be an idempotent
 // success and a different-tenant re-spawn must fail with
 // ErrSpawnTenantMismatch — from either node.
-func TestEngineRemoteSpawnTenantBinding(t *testing.T) {
+func TestClusterEngineRemoteSpawnTenantBinding(t *testing.T) {
 	specs.Describe(t, "spawn tenant binding across a two-node cluster", func(s *specs.Spec) {
 		s.It("keeps same-tenant respawns idempotent and rejects other tenants, local or remote", func(ctx *specs.Context) {
 			bg := context.Background()
