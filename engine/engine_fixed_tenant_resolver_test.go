@@ -24,15 +24,13 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/tenancy"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
 // multiTenantFixedResolver is the multi-tenant resolver the
@@ -63,28 +61,30 @@ func (r *multiTenantFixedResolver) FixedTenant() (tenancy.TenantID, bool) {
 // ErrSpawnTenantUndetermined, exactly as before the call site moved behind
 // the accessor. It never calls Resolve at spawn.
 func TestEngineSpawnWithMultiTenantFixedTenantResolverNeedsWithTenant(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a multi-tenant resolver that implements FixedTenantResolver", func(s *specs.Spec) {
+		s.It("needs WithTenant to spawn and never resolves at spawn", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := newConnectedEventsStoreG3(ctx)
 
-	resolver := &multiTenantFixedResolver{stubTenantResolver: stubTenantResolver{id: "acme"}}
-	engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+			resolver := &multiTenantFixedResolver{stubTenantResolver: stubTenantResolver{id: "acme"}}
+			engine := newSpecsEngineG3(ctx, "Sample", store, WithTenantResolver(resolver))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	err := engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(entityID))
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrSpawnTenantUndetermined), "got %v, want ErrSpawnTenantUndetermined", err)
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, newTenancyProbeEventSourcedBehavior(entityID))).To(specs.MatchError(ErrSpawnTenantUndetermined))
 
-	exists, err := engine.EntityExists(ctx, entityID)
-	require.NoError(t, err)
-	require.False(t, exists, "no actor may be spawned when the tenant cannot be determined")
-	require.Positive(t, resolver.asked.Load(), "the engine must ask the resolver for its fixed tenant")
-	require.Zero(t, resolver.resolved.Load(), "the engine must never call Resolve at spawn")
+			// no actor may be spawned when the tenant cannot be determined
+			exists, err := engine.EntityExists(bg, entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists).To(specs.BeFalse())
+			// the engine must ask the resolver for its fixed tenant
+			ctx.Expect(resolver.asked.Load()).To(specs.BeGreaterThan(int32(0)))
+			// the engine must never call Resolve at spawn
+			ctx.Expect(resolver.resolved.Load()).To(specs.BeZero())
 
-	// With WithTenant the same resolver spawns: the fixed tenant is only
-	// the fallback.
-	require.NoError(t, engine.Entity(ctx, newTenancyProbeEventSourcedBehavior(uuid.NewString()), WithTenant("acme")))
+			// With WithTenant the same resolver spawns: the fixed tenant is only
+			// the fallback.
+			ctx.Expect(engine.Entity(bg, newTenancyProbeEventSourcedBehavior(uuid.NewString()), WithTenant("acme"))).To(specs.BeNil())
+		})
+	})
 }
