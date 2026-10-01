@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package infra_test
+package postgres_test
 
 import (
 	"context"
@@ -30,22 +30,22 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/getsyntegrity/ego/inttest/infra"
+	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
 )
 
-var shared *infra.Postgres
+var shared *pginfra.Postgres
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	pg, err := infra.StartPostgres(ctx)
+	pg, err := pginfra.StartPostgres(ctx)
 	if err != nil {
-		_, _ = os.Stderr.WriteString("inttest/infra: cannot start the Postgres container: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/infra/postgres: cannot start the Postgres container: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	shared = pg
 	code := m.Run()
 	if err := pg.Terminate(ctx); err != nil {
-		_, _ = os.Stderr.WriteString("inttest/infra: cannot terminate the Postgres container: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/infra/postgres: cannot terminate the Postgres container: " + err.Error() + "\n")
 		if code == 0 {
 			code = 1
 		}
@@ -55,8 +55,8 @@ func TestMain(m *testing.M) {
 
 func TestPostgresNewDatabase(t *testing.T) {
 	t.Parallel()
-	specs.Describe(t, "Postgres.NewDatabase", func(s *specs.Spec) {
-		s.It("returns a reachable, empty database", func(sc *specs.Context) {
+	specs.Describe(t, "postgres.Postgres.NewDatabase on the shared container", func(s *specs.Spec) {
+		s.It("returns a reachable database that has no tables", func(sc *specs.Context) {
 			ctx := context.Background()
 			dsn := shared.NewDatabase(t)
 
@@ -69,7 +69,7 @@ func TestPostgresNewDatabase(t *testing.T) {
 			sc.Expect(tables).To(specs.Equal(0))
 		})
 
-		s.It("gives each call its own database", func(sc *specs.Context) {
+		s.It("gives each call a database whose tables the other databases do not see", func(sc *specs.Context) {
 			ctx := context.Background()
 			first, second := shared.NewDatabase(t), shared.NewDatabase(t)
 			sc.Expect(first).To(specs.Not(specs.Equal(second)))

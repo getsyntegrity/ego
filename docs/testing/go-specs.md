@@ -240,7 +240,10 @@ module, nested ones included, and fails on:
    `exec.Command*`, `httptest.NewServer*`, a real goakt `actor.NewActorSystem`, `os.Create` in a file with no
    `TempDir`, or `os.Getenv("...DSN...")`. The check is static and per file. Files under `inttest/` are
    outside this rule, because that module exists to run against real infrastructure started with
-   Testcontainers; rules 1 to 3 still apply there;
+   Testcontainers; rules 1 to 3 still apply there. The module has two kinds of packages and no others:
+   `inttest/infra/<backend>` starts a container (today `infra/postgres`; `infra/kafka`, `infra/nats` and
+   `infra/pulsar` will sit beside it), and `inttest/flows/<area>` checks a behavior against it (today
+   `flows/eventstore`);
 5. under `inttest/` only, any call to `Skip`, `Skipf` or `SkipNow` on any receiver, or to `testing.Short`, in a
    test or a non-test file. A test there must fail when its dependency is missing, so it can never look green
    without running. No allowlist can excuse it. See [Integration tests](../ci.md#integration-tests).

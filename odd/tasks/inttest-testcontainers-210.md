@@ -118,6 +118,18 @@ Other checks: `go run ./.github/scripts/unitgate -strict` ok (0 pending entries,
 
 Follow-ups for spec C: the `inttest` job in `ci.yml` and the `modules`/`tidy` coverage of the new module, the `unitgate` rule against `t.Skip`/`testing.Short` under `inttest/`, and the end-to-end flow in `inttest/flows`.
 
+## Review follow-up (PR #280)
+
+Spec A (PR #279) received review fixes while this branch was open: the version table is now `ego_schema_migrations`, `Migrate` returns `ErrSchemaAhead` for a database newer than the binary, and every Describe/It name was rewritten. This section records how spec B absorbed them. The layout below supersedes the `inttest/infra` and `inttest/postgres` paths named earlier in this document.
+
+- **Merge** (`0522c10`). `origin/feat/persistence-postgres` merged with `--no-ff`. Git saw `example/cluster/stores_postgres_test.go` (modified in A) as the same file as `inttest/postgres/event_store_test.go` and reported a content conflict. The deleted file stays deleted. In its place, I kept this branch's version and applied A's new Describe/It strings to the 18 moved tests (the pairs were taken from A's diff, none missing), and changed the schema harness to `DROP TABLE ego_schema_migrations`. The unit-test gate list has no entry for the deleted file.
+- **Ported specs** (`bec946e`). `TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary` (version row 99, `errors.Is` `ErrSchemaAhead`, nothing changed) and `TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone` now live in `inttest/flows/eventstore/schema_test.go`. Each gets a fresh database from `NewDatabase`, so neither needs `resetPostgresSchema` or a deferred cleanup.
+- **Layout** (`0a613d7`, `git mv`). The module has two kinds of packages only. Infrastructure: `inttest/infra/postgres` (package `postgres`; importers alias it `pginfra` because `persistence/postgres` has the same name; `infra/kafka`, `infra/nats` and `infra/pulsar` will sit beside it). Flows: `inttest/flows/eventstore` (package `eventstore_test`: event store specs, schema specs, both conformance runs, `TestMain`). I kept the package name `postgres` instead of inventing `pgcontainer`, so the directory and the package agree. The README of `persistence/postgres`, `docs/testing/go-specs.md` and the `unitgate` test fixture path were updated; `unitgate` itself matches the `inttest/` prefix and needed no change.
+- **TestMain comment** (`70c3663`). It no longer claims the defer runs when a test panics. It now says `run` exists so Terminate is deferred before `os.Exit`, and that after a panic the process dies and Ryuk removes the container.
+- **Names** (`90f25eb`). Only the infra spec broke the rule: `Postgres.NewDatabase` became `postgres.Postgres.NewDatabase on the shared container`, with children `returns a reachable database that has no tables` and `gives each call a database whose tables the other databases do not see`. Every flow spec already carried A's unit plus behavior names.
+
+Checks: `cd inttest && go vet ./... && go test -count=1 -json ./...` gives 23 top-level tests passed, 0 failed, 0 skipped, in `inttest/flows/eventstore` and `inttest/infra/postgres`. `example/cluster` vet clean (no test files). `persistence/postgres`, root `./persistence/...` and `./engine/` pass. `go mod tidy -diff` is clean in root, `inttest`, `persistence/postgres` and `example/cluster`. `unitgate -strict` ok. `gofmt -l inttest` is empty.
+
 ## Next step
 
 Spec C.

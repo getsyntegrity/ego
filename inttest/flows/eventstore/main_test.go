@@ -20,33 +20,34 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package postgres_test
+package eventstore_test
 
 import (
 	"context"
 	"os"
 	"testing"
 
-	"github.com/getsyntegrity/ego/inttest/infra"
+	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
 )
 
 // shared is the one Postgres container of this package. TestMain starts it before the first test and terminates
 // it after the last one. Tests never read it before m.Run, and they only call NewDatabase on it.
-var shared *infra.Postgres
+var shared *pginfra.Postgres
 
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
-// run exists so the container is terminated by a defer even when m.Run panics, before os.Exit ends the process.
+// run exists so Terminate is deferred before os.Exit; if a test panics, the process dies without running it and
+// the Testcontainers reaper (Ryuk) removes the container.
 func run(m *testing.M) int {
 	ctx := context.Background()
-	pg, err := infra.StartPostgres(ctx)
+	pg, err := pginfra.StartPostgres(ctx)
 	if err != nil {
-		_, _ = os.Stderr.WriteString("inttest/postgres: cannot start the Postgres container, the tests cannot run without it: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("inttest/flows/eventstore: cannot start the Postgres container, the tests cannot run without it: " + err.Error() + "\n")
 		return 1
 	}
 	defer func() {
 		if err := pg.Terminate(ctx); err != nil {
-			_, _ = os.Stderr.WriteString("inttest/postgres: cannot terminate the Postgres container: " + err.Error() + "\n")
+			_, _ = os.Stderr.WriteString("inttest/flows/eventstore: cannot terminate the Postgres container: " + err.Error() + "\n")
 		}
 	}()
 	shared = pg
