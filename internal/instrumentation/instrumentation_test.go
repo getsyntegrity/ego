@@ -26,7 +26,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +146,22 @@ func newTracer(t testing.TB) (*tracetest.InMemoryExporter, *sdktrace.TracerProvi
 	return exporter, provider
 }
 
+// measurementValue and measurementAttributeCount project one recorded measurement for the matchers.
+func measurementValue(m measurement) float64 { return m.value }
+
+func measurementAttributeCount(m measurement) int { return m.attrs.Len() }
+
+// spansNamed returns the exported spans carrying name.
+func spansNamed(exporter *tracetest.InMemoryExporter, name string) tracetest.SpanStubs {
+	var out tracetest.SpanStubs
+	for _, span := range exporter.GetSpans() {
+		if span.Name == name {
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
 // recovered runs fn and returns the value it panicked with, or nil.
 func recovered(fn func()) (value any) {
 	defer func() { value = recover() }()
@@ -157,7 +172,7 @@ func recovered(fn func()) (value any) {
 func TestNewWithoutMeterDisablesMetrics(t *testing.T) {
 	specs.Describe(t, "New without a meter disables metrics", func(s *specs.Spec) {
 		s.It("returns nil instruments", func(ctx *specs.Context) {
-			ctx.Expect(New(nil) == nil).To(specs.BeTrue())
+			ctx.Expect(New(nil)).To(specs.BeNil())
 		})
 	})
 }
@@ -166,7 +181,7 @@ func TestNewCreatesTheCatalog(t *testing.T) {
 	specs.Describe(t, "New registers the full instrument catalog on the meter", func(s *specs.Spec) {
 		s.It("creates every instrument with its kind, description and unit", func(ctx *specs.Context) {
 			meter := newFakeMeter()
-			ctx.Expect(New(meter) != nil).To(specs.BeTrue())
+			ctx.Expect(New(meter)).To(specs.Not(specs.BeNil()))
 
 			ctx.Expect(meter.catalog).ToEqual(map[string]string{
 				"ego.commands.total":                    "Int64Counter|Total number of commands processed|",
@@ -221,37 +236,36 @@ func TestRecordingMethods(t *testing.T) {
 			instruments.ProjectionStopped(base)
 			instruments.ProjectionEventHandled(base)
 
-			var withAttributes []string
-			values := func(name string) []float64 {
-				var out []float64
-				for _, m := range meter.measurements[name] {
-					if m.attrs.Len() != 0 {
-						withAttributes = append(withAttributes, name)
-					}
-					out = append(out, m.value)
-				}
-				return out
+			commands := meter.measurements["ego.commands.total"]
+			duration := meter.measurements["ego.commands.duration"]
+			persisted := meter.measurements["ego.events.persisted.total"]
+			entities := meter.measurements["ego.entities.active"]
+			projections := meter.measurements["ego.projections.active"]
+			processed := meter.measurements["ego.projection.events.processed.total"]
+
+			// Every instrument carries no attributes: the failure names the offending measurement.
+			noAttributes := specs.EveryElement(specs.Project("attributes", measurementAttributeCount, specs.Equal(0)))
+			for _, recorded := range [][]measurement{commands, duration, persisted, entities, projections, processed} {
+				ctx.Expect(recorded).To(noAttributes)
 			}
 
-			commands := values("ego.commands.total")
-			duration := values("ego.commands.duration")
-			persisted := values("ego.events.persisted.total")
-			entities := values("ego.entities.active")
-			projections := values("ego.projections.active")
-			processed := values("ego.projection.events.processed.total")
-
-			// Every instrument carries no attributes: any offender is listed here.
-			ctx.Expect(withAttributes).To(specs.BeNil())
-			ctx.Expect(commands).ToEqual([]float64{1})
-			ctx.Expect(len(duration)).ToEqual(1)
-			// Duration is recorded in whole milliseconds.
-			ctx.Expect(duration[0] >= float64(1500)).To(specs.BeTrue())
+			valueOf := func(want ...float64) specs.Matcher {
+				ms := make([]specs.Matcher, len(want))
+				for i, w := range want {
+					ms[i] = specs.Project("value", measurementValue, specs.Equal(w))
+				}
+				return specs.HaveElementsInOrder(ms...)
+			}
+			ctx.Expect(commands).To(valueOf(1))
+			ctx.Expect(duration).To(specs.HaveLen(1))
+			// Duration is recorded in whole milliseconds, at least the elapsed 1500.
+			ctx.Expect(duration[0].value).To(specs.BeGreaterThanOrEqual(float64(1500)))
 			// Duration is truncated to whole milliseconds.
-			ctx.Expect(duration[0]).ToEqual(float64(int64(duration[0])))
-			ctx.Expect(persisted).ToEqual([]float64{3})
-			ctx.Expect(entities).ToEqual([]float64{1, -1})
-			ctx.Expect(projections).ToEqual([]float64{1, -1})
-			ctx.Expect(processed).ToEqual([]float64{1})
+			ctx.Expect(duration[0].value).ToEqual(float64(int64(duration[0].value)))
+			ctx.Expect(persisted).To(valueOf(3))
+			ctx.Expect(entities).To(valueOf(1, -1))
+			ctx.Expect(projections).To(valueOf(1, -1))
+			ctx.Expect(processed).To(valueOf(1))
 		})
 	})
 }
@@ -262,24 +276,23 @@ func TestShardRecordsTheGaugesWithProjectionAttributes(t *testing.T) {
 			attribute.String("projection_name", "orders"),
 			attribute.Int64("shard", 7),
 		)
-		for _, tc := range []struct {
+		type gauge struct {
 			name  string
 			value float64
-		}{
+		}
+		specs.Table(s, []gauge{
 			{"ego.projection.lag_ms", 11},
 			{"ego.projection.latest_offset", 22},
 			{"ego.projection.events_behind", 33},
-		} {
-			s.It(tc.name, func(ctx *specs.Context) {
-				meter := newFakeMeter()
-				New(meter).Shard("orders", 7).Record(context.Background(), 11, 22, 33)
+		}, func(g gauge) string { return g.name }, func(ctx *specs.Context, g gauge) {
+			meter := newFakeMeter()
+			New(meter).Shard("orders", 7).Record(context.Background(), 11, 22, 33)
 
-				recorded := meter.measurements[tc.name]
-				ctx.Expect(len(recorded)).ToEqual(1)
-				ctx.Expect(recorded[0].value).ToEqual(tc.value)
-				ctx.Expect(want.Equals(&recorded[0].attrs)).To(specs.BeTrue())
-			})
-		}
+			ctx.Expect(meter.measurements[g.name]).To(specs.HaveElementsInOrder(specs.All(
+				specs.Project("value", measurementValue, specs.Equal(g.value)),
+				specs.Project("attributes", func(m measurement) attribute.Set { return m.attrs }, specs.Equal(want)),
+			)))
+		})
 	})
 }
 
@@ -289,7 +302,7 @@ func TestStartCommandSpan(t *testing.T) {
 			base := context.Background()
 			got, span := StartCommandSpan(base, nil, "pid", nil)
 			ctx.Expect(got).ToEqual(base)
-			ctx.Expect(span == nil).To(specs.BeTrue())
+			ctx.Expect(span).To(specs.BeNil())
 		})
 
 		s.It("with a tracer the span is a child carrying the command attributes", func(ctx *specs.Context) {
@@ -298,12 +311,14 @@ func TestStartCommandSpan(t *testing.T) {
 			parentCtx, parent := tracer.Start(context.Background(), "parent")
 
 			spanCtx, span := StartCommandSpan(parentCtx, tracer, "pid-1", wrapperspb.String("x"))
-			ctx.Expect(span != nil).To(specs.BeTrue())
+			ctx.Expect(span).To(specs.Not(specs.BeNil()))
 			ctx.Expect(span.SpanContext()).ToEqual(trace.SpanContextFromContext(spanCtx))
 			span.End()
 			parent.End()
 
-			stub := findSpan(ctx.T, exporter, "ego.command")
+			commandSpans := spansNamed(exporter, "ego.command")
+			ctx.Expect(commandSpans).To(specs.HaveLen(1))
+			stub := commandSpans[0]
 			ctx.Expect(stub.Parent.SpanID()).ToEqual(parent.SpanContext().SpanID())
 			ctx.Expect(stub.Attributes).ToEqual([]attribute.KeyValue{
 				attribute.String("ego.persistence_id", "pid-1"),
@@ -325,13 +340,13 @@ func TestSendCommandSpan(t *testing.T) {
 			_, failed := StartSendCommandSpan(context.Background(), tracer, "entity-2", wrapperspb.String("x"))
 			EndSendCommandSpan(failed, errors.New("boom"))
 
+			// The syncer exports spans in the order they end: the clean one first, then the failed one.
 			spans := exporter.GetSpans()
-			ctx.Expect(len(spans)).ToEqual(2)
-			sort.Slice(spans, func(i, j int) bool { return spans[i].Status.Code < spans[j].Status.Code })
+			ctx.Expect(spans).To(specs.HaveLen(2))
 
 			ctx.Expect(spans[0].Name).ToEqual("ego.send_command")
 			ctx.Expect(spans[0].Status.Code).ToEqual(codes.Unset)
-			ctx.Expect(len(spans[0].Events)).ToEqual(0)
+			ctx.Expect(spans[0].Events).To(specs.BeEmpty())
 			ctx.Expect(spans[0].Attributes).ToEqual([]attribute.KeyValue{
 				attribute.String("ego.entity_id", "entity-1"),
 				attribute.String("ego.command_type", "google.protobuf.StringValue"),
@@ -339,7 +354,7 @@ func TestSendCommandSpan(t *testing.T) {
 
 			ctx.Expect(spans[1].Status.Code).ToEqual(codes.Error)
 			ctx.Expect(spans[1].Status.Description).ToEqual("boom")
-			ctx.Expect(len(spans[1].Events)).ToEqual(1)
+			ctx.Expect(spans[1].Events).To(specs.HaveLen(1))
 			ctx.Expect(spans[1].Events[0].Name).ToEqual("exception")
 		})
 	})
@@ -349,14 +364,13 @@ func TestInstallPropagator(t *testing.T) {
 	specs.Describe(t, "InstallPropagator installs the trace-context and baggage propagator", func(s *specs.Spec) {
 		s.It("exposes the traceparent, tracestate and baggage fields", func(ctx *specs.Context) {
 			previous := otel.GetTextMapPropagator()
-			ctx.T.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+			ctx.Cleanup(func() { otel.SetTextMapPropagator(previous) })
 			otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
 
 			InstallPropagator()
 
-			fields := otel.GetTextMapPropagator().Fields()
-			sort.Strings(fields)
-			ctx.Expect(fields).ToEqual([]string{"baggage", "traceparent", "tracestate"})
+			ctx.Expect(otel.GetTextMapPropagator().Fields()).
+				To(specs.ContainTheSameElementsAs([]string{"baggage", "traceparent", "tracestate"}))
 		})
 	})
 }
@@ -384,15 +398,4 @@ func TestInstrumentationStaysRuntimeNeutral(t *testing.T) {
 		assert.Falsef(t, strings.HasSuffix(dep, "/internal/extensions"),
 			"internal/instrumentation must not depend on the GoAkt adapter's internals; found %s", dep)
 	}
-}
-
-func findSpan(t testing.TB, exporter *tracetest.InMemoryExporter, name string) tracetest.SpanStub {
-	t.Helper()
-	for _, span := range exporter.GetSpans() {
-		if span.Name == name {
-			return span
-		}
-	}
-	t.Fatalf("span %q was not exported", name)
-	return tracetest.SpanStub{}
 }
