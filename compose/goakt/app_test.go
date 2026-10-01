@@ -31,27 +31,153 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	actor "github.com/tochemey/goakt/v4/actor"
 
 	"github.com/getsyntegrity/ego/compose"
+	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/engine"
 	"github.com/getsyntegrity/ego/eventstream"
 	"github.com/getsyntegrity/ego/port/adapter"
 	"github.com/getsyntegrity/ego/port/publishing"
 	"github.com/getsyntegrity/ego/projection"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/ego/testkit"
 )
 
 const projectionName = "balances"
 
-// errText is err's message, or "" for nil, so a text expectation on a missing
-// error fails on the expectation instead of panicking.
-func errText(err error) string {
-	if err == nil {
-		return ""
+// validationError matches an error that wraps a *compose.ValidationError of
+// the given rule and, when field is not empty, of the given field. A failure
+// names the part that differs ("Rule: expected V7 to equal V2").
+func validationError(rule, field string) specs.Matcher {
+	part := func(name string, get func(*compose.ValidationError) string, want string) specs.Matcher {
+		return specs.Project(name, func(err error) string {
+			var ve *compose.ValidationError
+			if !errors.As(err, &ve) {
+				return ""
+			}
+			return get(ve)
+		}, specs.Equal(want))
 	}
-	return err.Error()
+	ms := []specs.Matcher{
+		specs.MatchErrorAs(new(*compose.ValidationError)),
+		part("Rule", func(ve *compose.ValidationError) string { return ve.Rule }, rule),
+	}
+	if field != "" {
+		ms = append(ms, part("Field", func(ve *compose.ValidationError) string { return ve.Field }, field))
+	}
+	return specs.All(ms...)
+}
+
+// publisherMock is the publishing.EventPublisher and publishing.StatePublisher
+// port forwarded to a mock.Controller. Method names carry the publisher id, so
+// one controller serves several publishers.
+type publisherMock struct {
+	c  *mock.Controller
+	id string
+}
+
+func (m publisherMock) ID() string { return m.id }
+
+func (m publisherMock) Close(ctx context.Context) error {
+	return m.c.Method(m.id + ".Close").Call(ctx).Err(0)
+}
+
+// expectClose declares how many times the publisher must be closed.
+func (m publisherMock) expectClose(n int) {
+	m.c.Method(m.id + ".Close").Expect(mock.Any()).Times(n).Return(nil)
+}
+
+type eventPublisherMock struct{ publisherMock }
+
+func (m eventPublisherMock) Publish(ctx context.Context, event *egopb.Event) error {
+	return m.c.Method(m.id+".Publish").Call(ctx, event).Err(0)
+}
+
+type statePublisherMock struct{ publisherMock }
+
+func (m statePublisherMock) Publish(ctx context.Context, state *egopb.DurableState) error {
+	return m.c.Method(m.id+".Publish").Call(ctx, state).Err(0)
+}
+
+// pingMockEventsStore is a connected testkit events store whose Ping is
+// forwarded to a mock.Controller. Every other method is the real in-memory
+// store.
+type pingMockEventsStore struct {
+	*testkit.EventStore
+	c *mock.Controller
+}
+
+func (s pingMockEventsStore) Ping(ctx context.Context) error {
+	return s.c.Method("EventsStore.Ping").Call(ctx).Err(0)
+}
+
+// expectPings declares how many times the events store is probed and what
+// each probe returns.
+func (s pingMockEventsStore) expectPings(n int, err error) {
+	s.c.Method("EventsStore.Ping").Expect(mock.Any()).Times(n).Return(err)
+}
+
+// mockedFixture is a valid Spec like fixture's, whose two publishers and
+// events store Ping are mocks, so a case states the calls it expects with
+// Times(n) instead of reading counters. The other stores are connected
+// testkit stores. It is for cases that never start the actor system.
+type mockedFixture struct {
+	spec   compose.Spec
+	events pingMockEventsStore
+	evPub  eventPublisherMock
+	stPub  statePublisherMock
+}
+
+func newMockedFixture(ctx *specs.Context, name string) *mockedFixture {
+	ctrl := mock.NewController(ctx) // registered first, so it verifies after the stores disconnect
+	bg := context.Background()
+	events := pingMockEventsStore{EventStore: testkit.NewEventsStore(), c: ctrl}
+	states := testkit.NewDurableStore()
+	offsets := testkit.NewOffsetStore()
+	for _, connect := range []func(context.Context) error{events.Connect, states.Connect, offsets.Connect} {
+		ctx.Expect(connect(bg)).To(specs.BeNil())
+	}
+	ctx.Cleanup(func() {
+		_ = events.Disconnect(bg)
+		_ = states.Disconnect(bg)
+		_ = offsets.Disconnect(bg)
+	})
+	f := &mockedFixture{
+		events: events,
+		evPub:  eventPublisherMock{publisherMock{ctrl, "events-pub"}},
+		stPub:  statePublisherMock{publisherMock{ctrl, "states-pub"}},
+	}
+	f.spec = compose.Spec{
+		Name:        name,
+		Families:    compose.EventSourced | compose.DurableState,
+		EventsStore: events,
+		StateStore:  states,
+		OffsetStore: offsets,
+		Projections: map[string]*projection.Options{
+			projectionName: {Handler: &recordingHandler{}, BufferSize: 10, PullInterval: 10 * time.Millisecond},
+		},
+		EventPublishers: []publishing.EventPublisher{f.evPub},
+		StatePublishers: []publishing.StatePublisher{f.stPub},
+		ShutdownTimeout: 20 * time.Second,
+	}
+	return f
+}
+
+// expectPublisherCloses declares how many times each publisher is closed.
+func (f *mockedFixture) expectPublisherCloses(n int) {
+	f.evPub.expectClose(n)
+	f.stPub.expectClose(n)
+}
+
+// newApp builds the App under test. It registers no Stop: these cases never
+// start anything, and a Stop at the end would be a call the case did not ask for.
+func newApp(ctx *specs.Context, spec compose.Spec, opts ...Option) *App {
+	app, err := New(spec, append([]Option{WithLogger(engine.DiscardLogger)}, opts...)...)
+	ctx.Expect(err).To(specs.BeNil())
+	return app
 }
 
 // fixture is one fully wired Spec plus the fakes a test inspects.
@@ -167,18 +293,15 @@ func TestApp_ValidSpecRunsAnEngine(t *testing.T) {
 func TestNew_MissingRequiredDependencyFailsWithNothingStarted(t *testing.T) {
 	specs.Describe(t, "New fails on a Spec missing a required store, before any I/O, and leaves publishers to the consumer", func(s *specs.Spec) {
 		s.It("returns no App and a V2 ValidationError on EventsStore, and closes no publisher", func(ctx *specs.Context) {
-			pub := newEventPublisher("p")
+			pub := eventPublisherMock{publisherMock{mock.NewController(ctx), "p"}}
+			pub.expectClose(0)
 			app, err := New(compose.Spec{
 				Name:            "missing-store",
 				Families:        compose.EventSourced,
 				EventPublishers: []publishing.EventPublisher{pub},
 			})
 			ctx.Expect(app).To(specs.BeNil())
-			var ve *compose.ValidationError
-			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
-			ctx.Expect(ve.Rule).ToEqual("V2")
-			ctx.Expect(ve.Field).ToEqual("EventsStore")
-			ctx.Expect(pub.closed.Load()).ToEqual(int32(0))
+			ctx.Expect(err).To(validationError("V2", "EventsStore"))
 		})
 	})
 }
@@ -188,9 +311,10 @@ func TestNew_MissingRequiredDependencyFailsWithNothingStarted(t *testing.T) {
 func TestNew_StartsNothing(t *testing.T) {
 	specs.Describe(t, "New on a valid Spec does no I/O", func(s *specs.Spec) {
 		s.It("pings no store and builds no engine or actor system", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "new-starts-nothing")
-			app := mustNew(ctx.T, f.spec)
-			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
+			f := newMockedFixture(ctx, "new-starts-nothing")
+			f.events.expectPings(0, nil)
+			f.expectPublisherCloses(0)
+			app := newApp(ctx, f.spec)
 			ctx.Expect(app.Engine()).To(specs.BeNil())
 			ctx.Expect(app.sys).To(specs.BeNil())
 		})
@@ -205,9 +329,7 @@ func TestNew_NegativeShutdownTimeoutFailsAtNew(t *testing.T) {
 			f := newFixture(ctx.T, "negative-timeout")
 			f.spec.ShutdownTimeout = -time.Second
 			_, err := New(f.spec)
-			var ve *compose.ValidationError
-			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
-			ctx.Expect(ve.Rule).ToEqual("V7")
+			ctx.Expect(err).To(validationError("V7", ""))
 		})
 	})
 }
@@ -225,41 +347,48 @@ func TestNew_G1_ClusterRequiresEntityKinds(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(ErrClusterConfigRequired))
 			app, err := New(f.spec, WithCluster(actor.NewClusterConfig(), &wallet{}))
 			ctx.Expect(err).To(specs.BeNil())
-			_ = app.Stop(context.Background())
+			ctx.Cleanup(func() { _ = app.Stop(context.Background()) })
 		})
 	})
 }
 
+// g2Case is one actor system name. The row is named after the name; the empty
+// name has no usable subtest name, so it is called "empty name".
+type g2Case struct{ row, name string }
+
 // TestNew_G2_ActorSystemName agrees with GoAkt's own name check for every
 // case, so a drift in GoAkt's rule fails here.
 func TestNew_G2_ActorSystemName(t *testing.T) {
-	for _, name := range []string{"", "Sample", "ego-cluster", "a_b-9", "9lives", "-lead", "_lead", "has space", "dot.ted", "é"} {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, name)
-			_, goaktErr := actor.NewActorSystem(name)
+	specs.Describe(t, "New rejects an actor system name with G2 exactly when GoAkt's NewActorSystem rejects it", func(s *specs.Spec) {
+		specs.Table(s, []g2Case{
+			{"empty name", ""}, {"Sample", "Sample"}, {"ego-cluster", "ego-cluster"}, {"a_b-9", "a_b-9"},
+			{"9lives", "9lives"}, {"-lead", "-lead"}, {"_lead", "_lead"}, {"has space", "has space"},
+			{"dot.ted", "dot.ted"}, {"é", "é"},
+		}, func(c g2Case) string { return c.row }, func(ctx *specs.Context, c g2Case) {
+			f := newFixture(ctx.T, c.name)
+			_, goaktErr := actor.NewActorSystem(c.name)
+
 			app, err := New(f.spec)
+			if app != nil {
+				ctx.Cleanup(func() { _ = app.Stop(context.Background()) })
+			}
+
 			var ve *compose.ValidationError
 			gotG2 := errors.As(err, &ve) && ve.Rule == "G2" && ve.Field == "Name"
-			if gotG2 != (goaktErr != nil) {
-				t.Fatalf("New G2 = %v (err %v), GoAkt NewActorSystem err = %v: the two must agree", gotG2, err, goaktErr)
-			}
-			if app != nil {
-				_ = app.Stop(context.Background())
-			}
+			ctx.Expect(gotG2).ToEqual(goaktErr != nil)
 		})
-	}
+	})
 }
 
 // TestNew_ReportsEveryProblem joins Spec and GoAkt problems in one error.
 func TestNew_ReportsEveryProblem(t *testing.T) {
 	specs.Describe(t, "New joins Spec and GoAkt problems in one error", func(s *specs.Spec) {
 		_, err := New(compose.Spec{Name: "bad name", Families: compose.Saga}, WithCluster(actor.NewClusterConfig()))
-		for _, want := range []string{"(V2)", "(G2)", "(G1)"} {
-			s.It("reports "+want, func(ctx *specs.Context) {
+		specs.Table(s, []string{"(V2)", "(G2)", "(G1)"}, func(want string) string { return "reports " + want },
+			func(ctx *specs.Context, want string) {
 				ctx.Expect(err).To(specs.Not(specs.BeNil()))
 				ctx.Expect(err.Error()).To(specs.Contain(want))
 			})
-		}
 	})
 }
 
@@ -324,18 +453,18 @@ func TestStart_FailureAtEachStepReleasesEverything(t *testing.T) {
 func TestStart_ProbeFailureNamesTheStore(t *testing.T) {
 	specs.Describe(t, "Start reports a real store Ping failure as a probe StartError naming the store", func(s *specs.Spec) {
 		s.It("names EventsStore and closes every publisher", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "probe-fails")
-			f.events.pingErr = errors.New("connection refused")
-			app := mustNew(ctx.T, f.spec)
+			f := newMockedFixture(ctx, "probe-fails")
+			f.events.expectPings(1, errors.New("connection refused"))
+			f.expectPublisherCloses(1)
+			app := newApp(ctx, f.spec)
 
 			err := app.Start(context.Background())
 
 			var se *compose.StartError
 			ctx.Expect(err).To(specs.MatchErrorAs(&se))
 			ctx.Expect(se.Step).ToEqual(StepProbeStores)
-			ctx.Expect(errText(se.Err)).To(specs.Contain("EventsStore"))
-			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
-			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
+			ctx.Expect(se.Err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(se.Err.Error()).To(specs.Contain("EventsStore"))
 		})
 	})
 }
@@ -378,8 +507,10 @@ func TestStart_ActorSystemStepFailsForReal(t *testing.T) {
 func TestStart_CancelledContextStartsNothing(t *testing.T) {
 	specs.Describe(t, "Start on a done context fails the first step before it runs and still releases publishers", func(s *specs.Spec) {
 		s.It("fails the probe step with context.Canceled, runs nothing and closes every publisher", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "cancelled")
-			app := mustNew(ctx.T, f.spec)
+			f := newMockedFixture(ctx, "cancelled")
+			f.events.expectPings(0, nil)
+			f.expectPublisherCloses(1)
+			app := newApp(ctx, f.spec)
 			cctx, cancel := context.WithCancel(context.Background())
 			cancel()
 
@@ -389,10 +520,7 @@ func TestStart_CancelledContextStartsNothing(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchErrorAs(&se))
 			ctx.Expect(se.Step).ToEqual(StepProbeStores)
 			ctx.Expect(err).To(specs.MatchError(context.Canceled))
-			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
 			ctx.Expect(app.sys).To(specs.BeNil())
-			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
-			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
 		})
 	})
 }
@@ -402,12 +530,11 @@ func TestStart_CancelledContextStartsNothing(t *testing.T) {
 func TestStop_NeverStartedClosesPublishers(t *testing.T) {
 	specs.Describe(t, "Stop on a never-started App closes the publishers it took ownership of at New", func(s *specs.Spec) {
 		s.It("closes every publisher and touches no store", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "never-started")
-			app := mustNew(ctx.T, f.spec)
+			f := newMockedFixture(ctx, "never-started")
+			f.events.expectPings(0, nil)
+			f.expectPublisherCloses(1)
+			app := newApp(ctx, f.spec)
 			ctx.Expect(app.Stop(context.Background())).To(specs.BeNil())
-			ctx.Expect(f.evPub.closed.Load()).ToEqual(int32(1))
-			ctx.Expect(f.stPub.closed.Load()).ToEqual(int32(1))
-			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
 		})
 	})
 }
@@ -747,7 +874,7 @@ func TestStart_PublisherPingFailureNamesTheAdapter(t *testing.T) {
 }
 
 // lyingStatePublisher declares CapStart without implementing Start.
-type lyingStatePublisher struct{ *statePublisher }
+type lyingStatePublisher struct{ statePublisherMock }
 
 func (p *lyingStatePublisher) Describe() adapter.Descriptor {
 	return adapter.Descriptor{
@@ -763,17 +890,14 @@ func (p *lyingStatePublisher) Describe() adapter.Descriptor {
 func TestNew_V8RejectsALyingPublisherWithNothingStarted(t *testing.T) {
 	specs.Describe(t, "New runs rule V8 and rejects a publisher whose declaration and methods disagree", func(s *specs.Spec) {
 		s.It("returns no App and a V8 ValidationError on StatePublishers[0], pinging and closing nothing", func(ctx *specs.Context) {
-			f := newFixture(ctx.T, "lying-publisher")
-			liar := &lyingStatePublisher{statePublisher: newStatePublisher("states-1")}
+			f := newMockedFixture(ctx, "lying-publisher")
+			f.events.expectPings(0, nil)
+			liar := &lyingStatePublisher{statePublisherMock{publisherMock{f.stPub.c, "states-1"}}}
+			liar.expectClose(0)
 			f.spec.StatePublishers = []publishing.StatePublisher{liar}
 			app, err := New(f.spec)
 			ctx.Expect(app).To(specs.BeNil())
-			var ve *compose.ValidationError
-			ctx.Expect(err).To(specs.MatchErrorAs(&ve))
-			ctx.Expect(ve.Rule).ToEqual("V8")
-			ctx.Expect(ve.Field).ToEqual("StatePublishers[0]")
-			ctx.Expect(f.events.pings.Load()).ToEqual(int32(0))
-			ctx.Expect(liar.closed.Load()).ToEqual(int32(0))
+			ctx.Expect(err).To(validationError("V8", "StatePublishers[0]"))
 		})
 	})
 }
