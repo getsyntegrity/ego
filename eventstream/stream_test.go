@@ -37,27 +37,29 @@ const (
 	waitInterval = time.Millisecond
 )
 
-// waitUntil polls cond every interval until it holds and fails the test with
-// what when timeout passes first. It never waits without a bound.
-func waitUntil(t testing.TB, timeout, interval time.Duration, cond func() bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for %s", timeout, what)
-		}
-		time.Sleep(interval)
-	}
-}
-
 // awaitQueued waits until sub has n messages queued. Publish and Broadcast
 // signal each subscriber from its own goroutine, so delivery is observable
 // only through the subscriber's queue.
-func awaitQueued(t testing.TB, sub Subscriber, n int) {
-	t.Helper()
+func awaitQueued(ctx *specs.Context, sub Subscriber, n int) {
 	queued := sub.(*subscriber).messages
-	waitUntil(t, waitTimeout, waitInterval, func() bool { return queued.Length() >= uint64(n) },
-		"the published messages to reach the subscriber")
+	ctx.Eventually(func() any { return queued.Length() }, specs.BeGreaterThanOrEqual(uint64(n)),
+		specs.WithTimeout(waitTimeout), specs.WithInterval(waitInterval))
+}
+
+// fired reports, without blocking, whether ch has a value or is closed.
+func fired(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// awaitFired waits until ch has a value or is closed.
+func awaitFired(ctx *specs.Context, ch <-chan struct{}) {
+	ctx.Eventually(func() any { return fired(ch) }, specs.BeTrue(),
+		specs.WithTimeout(waitTimeout), specs.WithInterval(waitInterval))
 }
 
 // drain returns every message the subscriber's iterator yields.
@@ -83,74 +85,54 @@ func TestStream(t *testing.T) {
 			ctx.Expect(sub.Active()).To(specs.BeTrue())
 
 			// empty iterator should close immediately
-			ctx.Expect(len(drain(sub))).ToEqual(0)
+			ctx.Expect(drain(sub)).To(specs.BeEmpty())
 
 			sub.subscribe("a")
 			sub.subscribe("b")
-			ctx.Expect(len(sub.Topics())).ToEqual(2)
+			ctx.Expect(sub.Topics()).To(specs.HaveLen(2))
 
 			sub.signal(NewMessage("a", "one"))
 			sub.signal(NewMessage("b", "two"))
 
-			ctx.Expect(len(drain(sub))).ToEqual(2)
+			ctx.Expect(drain(sub)).To(specs.HaveLen(2))
 
 			sub.unsubscribe("a")
-			ctx.Expect(len(sub.Topics())).ToEqual(1)
+			ctx.Expect(sub.Topics()).To(specs.HaveLen(1))
 
 			sub.Shutdown()
 			ctx.Expect(sub.Active()).To(specs.BeFalse())
 
 			// signals after shutdown should be ignored
 			sub.signal(NewMessage("b", "three"))
-			ctx.Expect(len(drain(sub))).ToEqual(0)
+			ctx.Expect(drain(sub)).To(specs.BeEmpty())
 
 			// enqueue nil while active to cover nil dequeue branch before shutdown
 			activeSub := newSubscriber()
 			activeSub.messages.Enqueue(nil)
-			ctx.Expect(len(drain(activeSub))).ToEqual(0)
+			ctx.Expect(drain(activeSub)).To(specs.BeEmpty())
 
 			// cover nil dequeue path: manually drop a nil into the queue
 			sub.messages.Enqueue(nil)
-			for _, msg := range drain(sub) {
-				ctx.Expect(msg == nil).To(specs.BeTrue())
-			}
+			ctx.Expect(drain(sub)).To(specs.EveryElement(specs.BeNil()))
 		})
 
 		s.It("With Ready signaling", func(ctx *specs.Context) {
 			sub := newSubscriber()
 
 			// no message yet: Ready must not fire
-			firedEarly := false
-			select {
-			case <-sub.Ready():
-				firedEarly = true
-			default:
-			}
-			ctx.Expect(firedEarly).To(specs.BeFalse())
+			ctx.Expect(fired(sub.Ready())).To(specs.BeFalse())
 
 			// a signal wakes a consumer blocked on Ready
 			sub.signal(NewMessage("a", "one"))
-			woke := false
-			select {
-			case <-sub.Ready():
-				woke = true
-			case <-time.After(time.Second):
-			}
-			ctx.Expect(woke).To(specs.BeTrue())
+			awaitFired(ctx, sub.Ready())
 
 			// coalescing: many signals while no one is draining keep at most one
 			// pending wake-up, and a single drain still sees every message
 			sub.signal(NewMessage("a", "two"))
 			sub.signal(NewMessage("a", "three"))
 			<-sub.Ready()
-			ctx.Expect(len(drain(sub))).ToEqual(3)
-			extraWakeUp := false
-			select {
-			case <-sub.Ready():
-				extraWakeUp = true
-			default:
-			}
-			ctx.Expect(extraWakeUp).To(specs.BeFalse())
+			ctx.Expect(drain(sub)).To(specs.HaveLen(3))
+			ctx.Expect(fired(sub.Ready())).To(specs.BeFalse())
 
 			// Shutdown wakes a consumer blocked on Ready
 			done := make(chan struct{})
@@ -159,13 +141,7 @@ func TestStream(t *testing.T) {
 				close(done)
 			}()
 			sub.Shutdown()
-			shutdownWoke := false
-			select {
-			case <-done:
-				shutdownWoke = true
-			case <-time.After(time.Second):
-			}
-			ctx.Expect(shutdownWoke).To(specs.BeTrue())
+			awaitFired(ctx, done)
 			ctx.Expect(sub.Active()).To(specs.BeFalse())
 		})
 
@@ -174,7 +150,7 @@ func TestStream(t *testing.T) {
 
 			// add consumer
 			cons := broker.AddSubscriber()
-			ctx.Expect(cons == nil).To(specs.BeFalse())
+			ctx.Expect(cons).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(cons, "t1")
 			broker.Subscribe(cons, "t2")
 
@@ -197,12 +173,12 @@ func TestStream(t *testing.T) {
 
 			// add consumer
 			cons := broker.AddSubscriber()
-			ctx.Expect(cons == nil).To(specs.BeFalse())
+			ctx.Expect(cons).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(cons, "t1")
 			broker.Subscribe(cons, "t2")
 
 			sub2 := broker.AddSubscriber()
-			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			ctx.Expect(sub2).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(sub2, "t1")
 
 			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
@@ -242,10 +218,10 @@ func TestStream(t *testing.T) {
 			broker.Publish("t1", "hi")
 			// The inactive subscriber is filtered synchronously inside Publish, so
 			// once the active one has its message nothing else can still arrive.
-			awaitQueued(ctx.T, active, 1)
+			awaitQueued(ctx, active, 1)
 
-			ctx.Expect(len(drain(active))).ToEqual(1)
-			ctx.Expect(len(drain(inactive))).ToEqual(0)
+			ctx.Expect(drain(active)).To(specs.HaveLen(1))
+			ctx.Expect(drain(inactive)).To(specs.BeEmpty())
 
 			broker.Close()
 		})
@@ -268,12 +244,12 @@ func TestStream(t *testing.T) {
 
 			// add consumer
 			cons := broker.AddSubscriber()
-			ctx.Expect(cons == nil).To(specs.BeFalse())
+			ctx.Expect(cons).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(cons, "t1")
 			broker.Subscribe(cons, "t2")
 
 			sub2 := broker.AddSubscriber()
-			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			ctx.Expect(sub2).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(sub2, "t1")
 
 			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
@@ -284,17 +260,16 @@ func TestStream(t *testing.T) {
 			broker.Publish("t1", "hi")
 			broker.Publish("t2", "hello")
 
-			awaitQueued(ctx.T, cons, 2)
+			awaitQueued(ctx, cons, 2)
 
 			messages := drain(cons)
-			for _, message := range messages {
-				ctx.Expect(message == nil).To(specs.BeFalse())
-				ctx.Expect(message.Topic()).To(specs.Not(specs.Equal("")))
-				ctx.Expect(message.Payload() == nil).To(specs.BeFalse())
-			}
-
-			ctx.Expect(len(messages)).ToEqual(2)
-			ctx.Expect(len(cons.Topics())).ToEqual(2)
+			ctx.Expect(messages).To(specs.HaveLen(2))
+			ctx.Expect(messages).To(specs.EveryElement(specs.All(
+				specs.Not(specs.BeNil()),
+				specs.Project("Topic", (*Message).Topic, specs.Not(specs.Equal(""))),
+				specs.Project("Payload", (*Message).Payload, specs.Not(specs.BeNil())),
+			)))
+			ctx.Expect(cons.Topics()).To(specs.HaveLen(2))
 
 			broker.Close()
 		})
@@ -304,12 +279,12 @@ func TestStream(t *testing.T) {
 
 			// add consumer
 			cons := broker.AddSubscriber()
-			ctx.Expect(cons == nil).To(specs.BeFalse())
+			ctx.Expect(cons).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(cons, "t1")
 			broker.Subscribe(cons, "t2")
 
 			sub2 := broker.AddSubscriber()
-			ctx.Expect(sub2 == nil).To(specs.BeFalse())
+			ctx.Expect(sub2).To(specs.Not(specs.BeNil()))
 			broker.Subscribe(sub2, "t1")
 
 			ctx.Expect(broker.SubscribersCount("t1")).ToEqual(2)
@@ -319,10 +294,10 @@ func TestStream(t *testing.T) {
 
 			broker.Broadcast("hi", []string{"t1", "t2"})
 
-			awaitQueued(ctx.T, cons, 2)
+			awaitQueued(ctx, cons, 2)
 
-			ctx.Expect(len(drain(cons))).ToEqual(2)
-			ctx.Expect(len(cons.Topics())).ToEqual(2)
+			ctx.Expect(drain(cons)).To(specs.HaveLen(2))
+			ctx.Expect(cons.Topics()).To(specs.HaveLen(2))
 
 			broker.Close()
 		})
