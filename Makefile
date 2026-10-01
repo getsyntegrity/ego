@@ -31,6 +31,10 @@ proto:
 	cp -R gen/test/.   test/data/testpb/
 	cp -R gen/sample/. internal/samplepb/
 	rm -rf gen
+	buf generate --template buf.gen.example.yaml --path protos/sample
+	mkdir -p example/examplepb
+	cp -R gen-example/sample/. example/examplepb/
+	rm -rf gen-example
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
@@ -100,7 +104,13 @@ docker-protogen: docker-image
 		cp -R gen/ego/.    egopb/ && \
 		cp -R gen/test/.   test/data/testpb/ && \
 		cp -R gen/sample/. internal/samplepb/ && \
-		rm -rf gen'
+		rm -rf gen && \
+		buf generate \
+			--template buf.gen.example.yaml \
+			--path protos/sample && \
+		mkdir -p example/examplepb && \
+		cp -R gen-example/sample/. example/examplepb/ && \
+		rm -rf gen-example'
 
 # Composite target: lint + test, the same combination the Earthfile `test`
 # target used to BUILD.

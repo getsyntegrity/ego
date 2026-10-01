@@ -7,8 +7,12 @@ replace github.com/getsyntegrity/ego => ../../
 
 replace github.com/getsyntegrity/ego/persistence/postgres => ../../persistence/postgres
 
+// The cluster example imports the generated sample messages from the sibling example module.
+replace github.com/getsyntegrity/ego/example => ../
+
 require (
 	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/ego/example v0.0.0
 	github.com/getsyntegrity/ego/persistence/postgres v0.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85

@@ -75,7 +75,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
+	samplepb "github.com/getsyntegrity/ego/example/examplepb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/testkit"
 )
