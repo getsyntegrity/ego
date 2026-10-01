@@ -75,7 +75,8 @@ Only `*_test.go` files in those two packages change; production code does not.
 
 `saga-actor-component-lane`: move the goakt-based saga tests out of the unit lane or give `Actor` a seam
 for the actor system and clock, so the 33 `TestSagaActor` cases and the 5 s default-timeout case stop
-using real time.
+using real time. The go-specs migration of those cases is done in `saga-actor-go-specs.md`; the seam part
+remains as `saga-command-timeout-seam` there.
 
 ## Progress
 
