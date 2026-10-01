@@ -2287,151 +2287,255 @@ func TestEventSourcedActorBatchTenantHomogeneity_ZeroEventSameTenant(t *testing.
 }
 
 func TestEventSourcedActorErrorPaths(t *testing.T) {
-	t.Run("with missing behavior fails to start", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("with missing behavior fails to start", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
 
-		eventStream := eventstream.New()
-		persistenceID := uuid.NewString()
+			// The spawn is refused on the missing behavior, before any store is
+			// touched, so a call to the events store is unexpected.
+			ctrl := specmock.NewController(ctx)
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
 
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
+			// spawn with no behavior dependency
+			rig.expectRefused(ctx, nil, persistenceID, goakt.WithLongLived(), goakt.WithStashing())
+		})
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+		specs.Table(s, []mistypedExtensionCase{
+			{
+				name:        "returns an error instead of panicking when the snapshot store extension is registered with an unexpected type",
+				system:      "TestEventSourcedMistypedSnapshotSystem",
+				extensionID: extensions.SnapshotStoreExtensionID,
+			},
+			{
+				name:        "returns an error instead of panicking when the event adapters extension is registered with an unexpected type",
+				system:      "TestEventSourcedMistypedEventAdaptersSystem",
+				extensionID: extensions.EventAdaptersExtensionID,
+			},
+			{
+				name:        "returns an error instead of panicking when the encryptor extension is registered with an unexpected type",
+				system:      "TestEventSourcedMistypedEncryptorSystem",
+				extensionID: extensions.EncryptorExtensionID,
+			},
+			{
+				name:        "returns an error instead of panicking when the telemetry extension is registered with an unexpected type",
+				system:      "TestEventSourcedMistypedTelemetrySystem",
+				extensionID: extensions.TelemetryExtensionID,
+			},
+		}, func(c mistypedExtensionCase) string { return c.name }, func(ctx *specs.Context, c mistypedExtensionCase) {
+			persistenceID := uuid.NewString()
+
+			// PreStart fails on the mistyped extension before it reads the events
+			// store, so the store sees no call.
+			ctrl := specmock.NewController(ctx)
+			rig := startActorRigWith(ctx, c.system, 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)),
+				&enginetest.MistypedExtension{Name: c.extensionID})
+
+			rig.expectRefused(ctx, extensions.ErrMissingRequiredExtensions, persistenceID,
+				goakt.WithLongLived(), goakt.WithStashing())
+		})
+
+		s.It("with event encryption failure during command processing", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			eventStore := connectedEventsStore(ctx)
+
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Encrypt").
+				Expect(specmock.Any(), persistenceID, specmock.Any()).
+				Return(nil, "", assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
+				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)))
+			pid := rig.spawn(ctx, behavior)
 
-		require.NoError(t, actorSystem.Start(ctx))
+			pause.For(time.Second)
 
-		// spawn with no behavior dependency
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.StartWith("failed to encrypt event"))
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			// nothing reached the store
+			latest, err := eventStore.GetLatestEvent(context.Background(), persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.BeNil())
+		})
 
-	t.Run("returns an error instead of panicking when the snapshot store extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
+		s.It("with snapshot encryption failure during command processing", func(ctx *specs.Context) {
+			// Snapshot encryption failures are logged by the snapshot writer child
+			// actor but do not fail the command. Snapshots are an optimization for
+			// faster recovery, not a correctness requirement. The command succeeds
+			// with a state reply.
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		eventStream := eventstream.New()
-		persistenceID := uuid.NewString()
+			eventStore := connectedEventsStore(ctx)
+			snapshotStore := connectedSnapshotStore(ctx)
 
-		eventStore := new(mocks.EventsStore)
+			// event encryption (parent) succeeds; snapshot encryption (child) fails
+			ctrl := specmock.NewController(ctx)
+			encrypt := ctrl.Method("Encrypt")
+			encrypt.Expect(specmock.Any(), persistenceID, specmock.Any()).Return([]byte("ciphertext"), "key-1", nil)
+			encrypt.Expect(specmock.Any(), persistenceID, specmock.Any()).Return(nil, "", assert.AnError)
 
-		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedSnapshotSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
 				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.SnapshotStoreExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+				extensions.NewSnapshotStore(snapshotStore),
+				extensions.NewEncryptor(enginetest.NewEncryptorMock(ctrl)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{SnapshotInterval: 1})
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+			pause.For(time.Second)
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			state := stateReplyOf(ctx, reply)
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(1))
 
-	t.Run("returns an error instead of panicking when the event adapters extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
+			// allow time for the child snapshot writer to process
+			pause.For(time.Second)
 
-		eventStream := eventstream.New()
-		persistenceID := uuid.NewString()
+			// verify no snapshot was written since encryption failed
+			snap, err := snapshotStore.GetLatestSnapshot(context.Background(), persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(snap).To(specs.BeNil())
+		})
 
-		eventStore := new(mocks.EventsStore)
+		s.It("with DeleteEvents error in retention policy does not crash", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEventAdaptersSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.EventAdaptersExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			// The janitor retries a failed delete with backoff, and stopping the actor
+			// system cancels the retries, so DeleteEvents runs at least once.
+			eventsCtrl := specmock.NewController(ctx)
+			eventsCtrl.Method("Ping").Expect(specmock.Any()).Return(nil)
+			eventsCtrl.Method("GetLatestEvent").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, nil)
+			eventsCtrl.Method("WriteEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Return(nil).Times(2)
+			deleteEvents := eventsCtrl.Method("DeleteEvents")
+			deleteEvents.
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(2)).
+				Return(assert.AnError).AtLeast(1)
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+			snapshotCtrl := specmock.NewController(ctx)
+			snapshotCtrl.Method("Ping").Expect(specmock.Any()).Return(nil)
+			snapshotCtrl.Method("GetLatestSnapshot").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, nil)
+			snapshotCtrl.Method("WriteSnapshot").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any()).
+				Return(nil)
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(eventsCtrl)),
+				extensions.NewSnapshotStore(enginetest.NewSnapshotStoreMock(snapshotCtrl)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval:       2,
+				HasRetentionPolicy:     true,
+				DeleteEventsOnSnapshot: true,
+				EventsRetentionCount:   0,
+			})
 
-	t.Run("returns an error instead of panicking when the encryptor extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
+			pause.For(time.Second)
 
-		eventStream := eventstream.New()
-		persistenceID := uuid.NewString()
+			// first command
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			stateReplyOf(ctx, reply)
 
-		eventStore := new(mocks.EventsStore)
+			// second command triggers snapshot interval (2) and then DeleteEvents which errors
+			reply = ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100})
 
-		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedEncryptorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.EncryptorExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			// actor must still be alive: error is only logged
+			stateReplyOf(ctx, reply)
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+			// the janitor child deletes asynchronously: wait for the failing call
+			ctx.Eventually(callCount(deleteEvents), specs.BeGreaterThanOrEqual(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
+		s.It("with DeleteSnapshots error in retention policy does not crash", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	t.Run("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
+			eventsCtrl := specmock.NewController(ctx)
+			eventsCtrl.Method("Ping").Expect(specmock.Any()).Return(nil)
+			eventsCtrl.Method("GetLatestEvent").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, nil)
+			eventsCtrl.Method("WriteEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Return(nil).Times(4)
 
-		eventStream := eventstream.New()
-		persistenceID := uuid.NewString()
+			// As for DeleteEvents, the janitor retries the failed delete, so it runs
+			// at least once.
+			snapshotCtrl := specmock.NewController(ctx)
+			snapshotCtrl.Method("Ping").Expect(specmock.Any()).Return(nil)
+			snapshotCtrl.Method("GetLatestSnapshot").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, nil)
+			snapshotCtrl.Method("WriteSnapshot").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any()).
+				Return(nil).Times(2)
+			deleteSnapshots := snapshotCtrl.Method("DeleteSnapshots")
+			deleteSnapshots.
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID, uint64(2)).
+				Return(assert.AnError).AtLeast(1)
 
-		eventStore := new(mocks.EventsStore)
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(eventsCtrl)),
+				extensions.NewSnapshotStore(enginetest.NewSnapshotStoreMock(snapshotCtrl)))
+			pid := rig.spawn(ctx, behavior, &extensions.EntityConfig{
+				SnapshotInterval:          2,
+				HasRetentionPolicy:        true,
+				DeleteSnapshotsOnSnapshot: true,
+			})
 
-		actorSystem, err := goakt.NewActorSystem("TestEventSourcedMistypedTelemetrySystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			pause.For(time.Second)
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, persistenceID, actor, goakt.WithLongLived(), goakt.WithStashing())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
+			// commands 1 and 2: first snapshot at seq 2
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}))
 
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			// commands 3 and 4: second snapshot at seq 4 -> DeleteSnapshots is called and errors
+			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}))
+			reply := ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 25})
+
+			// actor still alive after logged error
+			state := stateReplyOf(ctx, reply)
+			ctx.Expect(state.GetSequenceNumber()).ToEqual(uint64(4))
+
+			// the janitor child deletes asynchronously: wait for the failing call
+			ctx.Eventually(callCount(deleteSnapshots), specs.BeGreaterThanOrEqual(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+			ctx.Expect(pid.IsRunning()).To(specs.BeTrue())
+		})
+
+		s.It("with persistEvents write failure shuts down actor", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			ctrl := specmock.NewController(ctx)
+			ctrl.Method("Ping").Expect(specmock.Any()).Return(nil)
+			ctrl.Method("GetLatestEvent").
+				Expect(specmock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, nil)
+			ctrl.Method("WriteEvents").
+				Expect(specmock.Any(), persistence.Unscoped(), specmock.Any(), specmock.Any()).
+				Return(assert.AnError)
+
+			rig := startActorRigWith(ctx, "TestActorSystem", 1,
+				extensions.NewEventsStore(enginetest.NewEventsStoreMock(ctrl)))
+			pid := rig.spawn(ctx, behavior)
+
+			pause.For(time.Second)
+
+			reply := ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500})
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(assert.AnError.Error()))
+		})
 	})
 
 	// The recovery failure cases below need no actor system: recover is the whole
@@ -2641,252 +2745,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		})
 	})
 
-	t.Run("with event encryption failure during command processing", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		encryptor := new(mockencryption.Encryptor)
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError)
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("with snapshot encryption failure during command processing", func(t *testing.T) {
-		// Snapshot encryption failures are logged by the snapshot writer child
-		// actor but do not fail the command. Snapshots are an optimization for
-		// faster recovery, not a correctness requirement. The command succeeds
-		// with a state reply.
-		ctx := context.TODO()
-
-		eventStore := testkit.NewEventsStore()
-		snapshotStore := testkit.NewSnapshotStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, snapshotStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		encryptor := new(mockencryption.Encryptor)
-		// event encryption (parent) succeeds; snapshot encryption (child) fails
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return([]byte("ciphertext"), "key-1", nil).Once()
-		encryptor.EXPECT().Encrypt(mock.Anything, persistenceID, mock.Anything).Return(nil, "", assert.AnError).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-				extensions.NewEncryptor(encryptor),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		entityCfg := &extensions.EntityConfig{SnapshotInterval: 1}
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// allow time for the child snapshot writer to process
-		pause.For(time.Second)
-
-		// verify no snapshot was written since encryption failed
-		snap, err := snapshotStore.GetLatestSnapshot(ctx, persistence.Unscoped(), persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, snap)
-
-		require.NoError(t, eventStore.Disconnect(ctx))
-		require.NoError(t, snapshotStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("with DeleteEvents error in retention policy does not crash", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil)
-		eventStore.EXPECT().DeleteEvents(mock.Anything, persistence.Unscoped(), persistenceID, uint64(2)).Return(assert.AnError)
-
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
-		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(nil)
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval:       2,
-			HasRetentionPolicy:     true,
-			DeleteEventsOnSnapshot: true,
-			EventsRetentionCount:   0,
-		}
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// first command
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		// second command triggers snapshot interval (2) and then DeleteEvents which errors
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// actor must still be alive: error is only logged
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("with DeleteSnapshots error in retention policy does not crash", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(nil).Times(4)
-
-		snapshotStore := new(mocks.SnapshotStore)
-		snapshotStore.EXPECT().Ping(mock.Anything).Return(nil)
-		snapshotStore.EXPECT().GetLatestSnapshot(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		snapshotStore.EXPECT().WriteSnapshot(mock.Anything, persistence.Unscoped(), mock.Anything).Return(nil).Times(2)
-		snapshotStore.EXPECT().DeleteSnapshots(mock.Anything, persistence.Unscoped(), persistenceID, uint64(2)).Return(assert.AnError)
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewSnapshotStore(snapshotStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		entityCfg := &extensions.EntityConfig{
-			SnapshotInterval:          2,
-			HasRetentionPolicy:        true,
-			DeleteSnapshotsOnSnapshot: true,
-		}
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior, entityCfg), goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		// commands 1 and 2: first snapshot at seq 2
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 100}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// commands 3 and 4: second snapshot at seq 4 → DeleteSnapshots is called and errors
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 50}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		reply, err = goakt.Ask(ctx, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 25}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		// actor still alive after logged error
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 4, state.StateReply.GetSequenceNumber())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
 	t.Run("with unhandled non-command message does not crash", func(t *testing.T) {
 		ctx := context.TODO()
 
@@ -2935,48 +2793,6 @@ func TestEventSourcedActorErrorPaths(t *testing.T) {
 		require.NoError(t, actorSystem.Stop(ctx))
 	})
 
-	t.Run("with persistEvents write failure shuts down actor", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
-		eventStream := eventstream.New()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil)
-		eventStore.EXPECT().GetLatestEvent(mock.Anything, persistence.Unscoped(), persistenceID).Return(nil, nil)
-		eventStore.EXPECT().WriteEvents(mock.Anything, persistence.Unscoped(), mock.Anything, mock.Anything).Return(assert.AnError)
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-
-		require.NoError(t, actorSystem.Start(ctx))
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior),
-			goakt.WithLongLived(), goakt.WithStashing())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		pause.For(time.Second)
-
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
 }
 
 // noopEventAdapter is a no-op event adapter that passes events through unchanged
