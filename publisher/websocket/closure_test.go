@@ -110,27 +110,32 @@ func TestUnitTestClosureExcludesRuntimeAndRoot(t *testing.T) {
 // whole path segment.
 func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
 	specs.Describe(t, "the closure guard rejects the runtime, the engine and the composition root by whole path segment", func(s *specs.Spec) {
-		rejected := []struct{ name, dep string }{
-			{"the composition root", "github.com/getsyntegrity/ego/compose"},
-			{"a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt"},
-			{"a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle"},
-			{"the engine package", "github.com/getsyntegrity/ego/engine"},
-			{"a GoAkt package", "github.com/tochemey/goakt/v4/actor"},
+		type closureCase struct {
+			name, dep string
+			// wantPrefix is the start of the violation message, or "" when dep is allowed.
+			wantPrefix string
 		}
-		for _, tc := range rejected {
-			s.It("rejects "+tc.name, func(ctx *specs.Context) {
-				ctx.Expect(closureViolation(tc.dep)).To(specs.Not(specs.Equal("")))
-			})
+		const (
+			runtimeRegressed = "unit-test closure regressed: "
+			rootDependency   = "adapter depends on the composition root: "
+		)
+		rows := []closureCase{
+			{"rejects the composition root", "github.com/getsyntegrity/ego/compose", rootDependency},
+			{"rejects a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt", rootDependency},
+			{"rejects a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle", rootDependency},
+			{"rejects the engine package", "github.com/getsyntegrity/ego/engine", runtimeRegressed},
+			{"rejects a GoAkt package", "github.com/tochemey/goakt/v4/actor", runtimeRegressed},
+			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer", ""},
+			{"allows the publishing port", "github.com/getsyntegrity/ego/port/publishing", ""},
+			{"allows the protobuf package", "github.com/getsyntegrity/ego/egopb", ""},
 		}
-		allowed := []struct{ name, dep string }{
-			{"a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer"},
-			{"the publishing port", "github.com/getsyntegrity/ego/port/publishing"},
-			{"the protobuf package", "github.com/getsyntegrity/ego/egopb"},
-		}
-		for _, tc := range allowed {
-			s.It("allows "+tc.name, func(ctx *specs.Context) {
-				ctx.Expect(closureViolation(tc.dep)).ToEqual("")
-			})
-		}
+		specs.Table(s, rows, func(c closureCase) string { return c.name }, func(ctx *specs.Context, c closureCase) {
+			got := closureViolation(c.dep)
+			if c.wantPrefix == "" {
+				ctx.Expect(got).To(specs.BeEmpty())
+				return
+			}
+			ctx.Expect(got).To(specs.StartWith(c.wantPrefix))
+		})
 	})
 }
