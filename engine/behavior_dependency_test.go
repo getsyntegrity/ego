@@ -33,8 +33,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/remote"
@@ -269,52 +267,60 @@ func TestSpawnDependency(t *testing.T) {
 	})
 }
 
+// nilBehaviorSpawn is one spawn of a nil or typed-nil behavior.
+type nilBehaviorSpawn struct {
+	name  string
+	spawn func(ctx context.Context, engine *Engine) error
+}
+
 // nilBehaviorSpawns returns one spawn per family for a nil behavior and for
 // typed-nil pointers, through the old public API and the unexported spawn
 // functions. Each must be rejected before it reaches GoAkt.
-func nilBehaviorSpawns(ctx context.Context, engine *Engine) []struct {
-	name  string
-	spawn func() error
-} {
-	return []struct {
-		name  string
-		spawn func() error
-	}{
-		{"Entity nil", func() error { return engine.Entity(ctx, nil) }},
-		{"Entity typed-nil", func() error { return engine.Entity(ctx, (*AccountEventSourcedBehavior)(nil)) }},
-		{"spawnEventSourced typed-nil domain-only", func() error {
+func nilBehaviorSpawns() []nilBehaviorSpawn {
+	return []nilBehaviorSpawn{
+		{"Entity nil", func(ctx context.Context, engine *Engine) error { return engine.Entity(ctx, nil) }},
+		{"Entity typed-nil", func(ctx context.Context, engine *Engine) error {
+			return engine.Entity(ctx, (*AccountEventSourcedBehavior)(nil))
+		}},
+		{"spawnEventSourced typed-nil domain-only", func(ctx context.Context, engine *Engine) error {
 			return engine.spawnEventSourced(ctx, (*domainOnlyEventSourced)(nil))
 		}},
-		{"DurableStateEntity nil", func() error { return engine.DurableStateEntity(ctx, nil) }},
-		{"DurableStateEntity typed-nil", func() error {
+		{"DurableStateEntity nil", func(ctx context.Context, engine *Engine) error { return engine.DurableStateEntity(ctx, nil) }},
+		{"DurableStateEntity typed-nil", func(ctx context.Context, engine *Engine) error {
 			return engine.DurableStateEntity(ctx, (*AccountDurableStateBehavior)(nil))
 		}},
-		{"spawnDurableState typed-nil domain-only", func() error {
+		{"spawnDurableState typed-nil domain-only", func(ctx context.Context, engine *Engine) error {
 			return engine.spawnDurableState(ctx, (*domainOnlyDurableState)(nil))
 		}},
-		{"Saga nil", func() error { return engine.Saga(ctx, nil, 0) }},
-		{"Saga typed-nil", func() error { return engine.Saga(ctx, (*testSagaBehavior)(nil), 0) }},
-		{"spawnSaga typed-nil domain-only", func() error { return engine.spawnSaga(ctx, (*domainOnlySaga)(nil), 0) }},
+		{"Saga nil", func(ctx context.Context, engine *Engine) error { return engine.Saga(ctx, nil, 0) }},
+		{"Saga typed-nil", func(ctx context.Context, engine *Engine) error {
+			return engine.Saga(ctx, (*testSagaBehavior)(nil), 0)
+		}},
+		{"spawnSaga typed-nil domain-only", func(ctx context.Context, engine *Engine) error {
+			return engine.spawnSaga(ctx, (*domainOnlySaga)(nil), 0)
+		}},
 	}
 }
 
-// requireNilBehaviorsRejected runs every nilBehaviorSpawns case against
-// engine: each returns a *BehaviorPlacementError wrapping
-// ErrBehaviorNotPointer, does not panic, and spawns nothing.
-func requireNilBehaviorsRejected(t *testing.T, engine *Engine) {
-	t.Helper()
-	ctx := context.Background()
-	sys := engine.ActorSystem()
-	for _, tc := range nilBehaviorSpawns(ctx, engine) {
-		t.Run(tc.name, func(t *testing.T) {
+// nilBehaviorRejectionSpecs registers one case per nilBehaviorSpawns entry on s.
+// Each case checks that the spawn returns a *BehaviorPlacementError wrapping
+// ErrBehaviorNotPointer, does not panic, and spawns nothing. engine is read when
+// a case runs, so the caller may build the engine in a BeforeEach hook.
+func nilBehaviorRejectionSpecs(s *specs.Spec, engine func() *Engine) {
+	for _, tc := range nilBehaviorSpawns() {
+		s.It(tc.name, func(sc *specs.Context) {
+			ctx := context.Background()
+			e := engine()
+			sys := e.ActorSystem()
 			before := sys.NumActors()
 			var err error
-			require.NotPanics(t, func() { err = tc.spawn() })
-			require.ErrorIs(t, err, ErrBehaviorNotPointer)
+			sc.Expect(panicValueG1(func() { err = tc.spawn(ctx, e) })).To(specs.BeNil())
+			sc.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
 			var placement *BehaviorPlacementError
-			require.ErrorAs(t, err, &placement)
-			assert.Empty(t, placement.EntityID)
-			assert.Equal(t, before, sys.NumActors(), "nothing may be spawned for a nil behavior")
+			sc.Expect(err).To(specs.MatchErrorAs(&placement))
+			sc.Expect(placement.EntityID).To(specs.BeEmpty())
+			// nothing may be spawned for a nil behavior
+			sc.Expect(sys.NumActors()).To(specs.Equal(before))
 		})
 	}
 }
@@ -323,18 +329,26 @@ func requireNilBehaviorsRejected(t *testing.T, engine *Engine) {
 // behaviors outside cluster mode, where a non-serializable behavior would
 // otherwise be carried by a LocalBehavior and its ID read at spawn.
 func TestEngineRejectsNilBehaviorsSingleNode(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
-	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+	specs.Describe(t, "Engine Rejects Nil Behaviors Single Node", func(s *specs.Spec) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		stateStore := testkit.NewDurableStore()
+		t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "NilBehaviors", store, WithLogger(DiscardLogger), WithStateStore(stateStore))
-	require.NoError(t, engine.Start(ctx))
+		engine := newTestEngine(t, "NilBehaviors", store, WithLogger(DiscardLogger), WithStateStore(stateStore))
+		// The engine is shared by the cases below, so the stores connect and the engine starts once.
+		var startOnce sync.Once
+		s.BeforeEach(func(sc *specs.Context) {
+			startOnce.Do(func() {
+				sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+				sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
+				sc.Expect(engine.Start(ctx)).To(specs.BeNil())
+			})
+		})
 
-	requireNilBehaviorsRejected(t, engine)
+		nilBehaviorRejectionSpecs(s, func() *Engine { return engine })
+	})
 }
 
 func TestBehaviorPlacementError(t *testing.T) {
@@ -386,57 +400,63 @@ func TestBehaviorFrom(t *testing.T) {
 // functions (the public Spawn* entry points arrive in S3-3). Each is carried
 // by a LocalBehavior and answers on a single node.
 func TestEngineSpawnsDomainOnlyBehaviorsSingleNode(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "Engine Spawns Domain Only Behaviors Single Node", func(s *specs.Spec) {
+		ctx := context.Background()
 
-	t.Run("event-sourced, envelope-capable", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-		engine := newTestEngine(t, "DomainOnlyES", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
+		s.It("event-sourced, envelope-capable", func(sc *specs.Context) {
+			t := sc.T
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			engine := newTestEngine(t, "DomainOnlyES", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-		b := &domainOnlyEventSourced{id: uuid.NewString()}
-		require.NoError(t, engine.spawnEventSourced(ctx, b))
+			b := &domainOnlyEventSourced{id: uuid.NewString()}
+			sc.Expect(engine.spawnEventSourced(ctx, b)).To(specs.BeNil())
 
-		state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 7}, time.Minute)
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, revision)
-		assert.EqualValues(t, 7, state.(*testpb.Account).GetAccountBalance())
-		assert.Equal(t, 1, b.envelopeHits(), "an envelope-capable behavior still receives HandleEnvelope")
-	})
+			state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 7}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			sc.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(7)))
+			sc.Expect(b.envelopeHits()).To(specs.Equal(1))
+		})
 
-	t.Run("durable state", func(t *testing.T) {
-		stateStore := testkit.NewDurableStore()
-		require.NoError(t, stateStore.Connect(ctx))
-		t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
-		engine := newTestEngine(t, "DomainOnlyDS", nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
-		require.NoError(t, engine.Start(ctx))
+		s.It("durable state", func(sc *specs.Context) {
+			t := sc.T
+			stateStore := testkit.NewDurableStore()
+			sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+			engine := newTestEngine(t, "DomainOnlyDS", nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-		b := &domainOnlyDurableState{id: uuid.NewString()}
-		require.NoError(t, engine.spawnDurableState(ctx, b))
+			b := &domainOnlyDurableState{id: uuid.NewString()}
+			sc.Expect(engine.spawnDurableState(ctx, b)).To(specs.BeNil())
 
-		state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 9}, time.Minute)
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, revision)
-		assert.EqualValues(t, 9, state.(*testpb.Account).GetAccountBalance())
-	})
+			state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 9}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			sc.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(9)))
+		})
 
-	t.Run("saga", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-		engine := newTestEngine(t, "DomainOnlySaga", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
+		s.It("saga", func(sc *specs.Context) {
+			t := sc.T
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			engine := newTestEngine(t, "DomainOnlySaga", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-		b := &domainOnlySaga{id: "saga-" + uuid.NewString()}
-		require.NoError(t, engine.spawnSaga(ctx, b, 0))
+			b := &domainOnlySaga{id: "saga-" + uuid.NewString()}
+			sc.Expect(engine.spawnSaga(ctx, b, 0)).To(specs.BeNil())
 
-		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			info, err := engine.SagaStatus(ctx, b.ID(), time.Second)
-			require.NoError(c, err)
-			require.NotNil(c, info)
-			assert.Equal(c, b.ID(), info.ID)
-		}, 10*time.Second, 50*time.Millisecond)
+			sc.Eventually(func() any {
+				info, err := engine.SagaStatus(ctx, b.ID(), time.Second)
+				if err != nil || info == nil {
+					return ""
+				}
+				return info.ID
+			}, specs.Equal(b.ID()), specs.WithTimeout(10*time.Second), specs.WithInterval(50*time.Millisecond))
+		})
 	})
 }
 
@@ -445,86 +465,102 @@ func TestEngineSpawnsDomainOnlyBehaviorsSingleNode(t *testing.T) {
 // that the engine rejects behaviors it cannot hand to GoAkt with a typed
 // error before any spawn, instead of panicking.
 func TestEngineRejectsUnplaceableBehaviorsInClusterMode(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
-	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+	specs.Describe(t, "Engine Rejects Unplaceable Behaviors In Cluster Mode", func(s *specs.Spec) {
+		ctx := context.Background()
+		store := testkit.NewEventsStore()
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		stateStore := testkit.NewDurableStore()
+		t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
-	ports := dynaport.Get(3)
-	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
-	host := "127.0.0.1"
-	provider := &mockClusterProvider{
-		id:    "placement",
-		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
-	}
-	clusterCfg := goakt.NewClusterConfig().
-		WithDiscovery(provider).
-		WithDiscoveryPort(gossipPort).
-		WithPeersPort(clusterPort).
-		WithMinimumPeersQuorum(1).
-		WithReplicaCount(1).
-		WithPartitionCount(4).
-		WithKinds(ClusterKinds()...)
+		// The single-node cluster is shared by the cases below, so it is built
+		// once, before the first case runs.
+		var (
+			startOnce sync.Once
+			engine    *Engine
+		)
+		s.BeforeEach(func(sc *specs.Context) {
+			startOnce.Do(func() {
+				sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+				sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
 
-	cfg := NewConfig(store, WithLogger(DiscardLogger), WithStateStore(stateStore))
-	sys, err := goakt.NewActorSystem("Placement", append(cfg.GoaktOptions(),
-		goakt.WithCluster(clusterCfg),
-		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
-	)...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	t.Cleanup(func() { _ = sys.Stop(ctx) })
-	require.Eventually(t, sys.InCluster, 10*time.Second, 50*time.Millisecond)
+				ports := dynaport.Get(3)
+				gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+				host := "127.0.0.1"
+				provider := &mockClusterProvider{
+					id:    "placement",
+					peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+				}
+				clusterCfg := goakt.NewClusterConfig().
+					WithDiscovery(provider).
+					WithDiscoveryPort(gossipPort).
+					WithPeersPort(clusterPort).
+					WithMinimumPeersQuorum(1).
+					WithReplicaCount(1).
+					WithPartitionCount(4).
+					WithKinds(ClusterKinds()...)
 
-	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+				cfg := NewConfig(store, WithLogger(DiscardLogger), WithStateStore(stateStore))
+				sys, err := goakt.NewActorSystem("Placement", append(cfg.GoaktOptions(),
+					goakt.WithCluster(clusterCfg),
+					goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+				)...)
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(sys.Start(ctx)).To(specs.BeNil())
+				t.Cleanup(func() { _ = sys.Stop(ctx) })
+				sc.Eventually(func() any { return sys.InCluster() }, specs.BeTrue(),
+					specs.WithTimeout(10*time.Second), specs.WithInterval(50*time.Millisecond))
 
-	cases := []struct {
-		name  string
-		spawn func(id string) error
-		cause error
-	}{
-		{"value type through the old Entity API", func(id string) error {
-			return engine.Entity(ctx, valueTypeEventSourcedBehavior{id: id})
-		}, ErrBehaviorNotPointer},
-		{"domain-only event-sourced", func(id string) error {
-			return engine.spawnEventSourced(ctx, &domainOnlyEventSourced{id: id})
-		}, ErrBehaviorNotSerializable},
-		{"domain-only durable state", func(id string) error {
-			return engine.spawnDurableState(ctx, &domainOnlyDurableState{id: id})
-		}, ErrBehaviorNotSerializable},
-		{"domain-only saga", func(id string) error {
-			return engine.spawnSaga(ctx, &domainOnlySaga{id: id}, 0)
-		}, ErrBehaviorNotSerializable},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			id := uuid.NewString()
-			err := tc.spawn(id)
-			require.ErrorIs(t, err, tc.cause)
-			var placement *BehaviorPlacementError
-			require.ErrorAs(t, err, &placement)
-			assert.Equal(t, id, placement.EntityID)
-
-			exists, err := engine.EntityExists(ctx, id)
-			require.NoError(t, err)
-			assert.False(t, exists, "nothing may be spawned for a rejected behavior")
+				engine, err = NewEngine(sys, cfg)
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(engine.Start(ctx)).To(specs.BeNil())
+				t.Cleanup(func() { _ = engine.Stop(ctx) })
+			})
 		})
-	}
 
-	t.Run("nil and typed-nil behaviors", func(t *testing.T) {
-		requireNilBehaviorsRejected(t, engine)
+		cases := []struct {
+			name  string
+			spawn func(id string) error
+			cause error
+		}{
+			{"value type through the old Entity API", func(id string) error {
+				return engine.Entity(ctx, valueTypeEventSourcedBehavior{id: id})
+			}, ErrBehaviorNotPointer},
+			{"domain-only event-sourced", func(id string) error {
+				return engine.spawnEventSourced(ctx, &domainOnlyEventSourced{id: id})
+			}, ErrBehaviorNotSerializable},
+			{"domain-only durable state", func(id string) error {
+				return engine.spawnDurableState(ctx, &domainOnlyDurableState{id: id})
+			}, ErrBehaviorNotSerializable},
+			{"domain-only saga", func(id string) error {
+				return engine.spawnSaga(ctx, &domainOnlySaga{id: id}, 0)
+			}, ErrBehaviorNotSerializable},
+		}
+		for _, tc := range cases {
+			s.It(tc.name, func(sc *specs.Context) {
+				id := uuid.NewString()
+				err := tc.spawn(id)
+				sc.Expect(err).To(specs.MatchError(tc.cause))
+				var placement *BehaviorPlacementError
+				sc.Expect(err).To(specs.MatchErrorAs(&placement))
+				sc.Expect(placement.EntityID).To(specs.Equal(id))
+
+				exists, err := engine.EntityExists(ctx, id)
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(exists).To(specs.BeFalse())
+			})
+		}
+
+		s.Describe("nil and typed-nil behaviors", func(s *specs.Spec) {
+			nilBehaviorRejectionSpecs(s, func() *Engine { return engine })
+		})
+
+		// A serializable pointer behavior still spawns and answers in cluster mode.
+		s.It("a serializable pointer behavior still spawns and answers", func(sc *specs.Context) {
+			id := uuid.NewString()
+			sc.Expect(engine.Entity(ctx, NewAccountEventSourcedBehavior(id))).To(specs.BeNil())
+			state, _, err := engine.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 3}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(3)))
+		})
 	})
-
-	// A serializable pointer behavior still spawns and answers in cluster mode.
-	id := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(id)))
-	state, _, err := engine.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 3}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 3, state.(*testpb.Account).GetAccountBalance())
 }

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // commandArchitectureAllowedModules names the only module-qualified import
@@ -46,51 +46,62 @@ var commandArchitectureAllowedModules = []string{
 // list -deps ./command/...` subprocess, not a source-text scan) so it
 // also catches transitive dependencies.
 func TestCommandArchitecture(t *testing.T) {
-	goBin, err := tenancyArchitectureGoBinary()
-	require.NoError(t, err, "go toolchain not found")
+	specs.Describe(t, "Command Architecture", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			goBin, err := tenancyArchitectureGoBinary()
+			sc.Expect(err).To(specs.BeNil())
 
-	root := architectureModuleRoot(t)
+			root := architectureModuleRoot(t)
 
-	// The command package itself is always present in its own `-deps`
-	// output; it is the subject under test, not a dependency it
-	// acquired, so it must be excluded from the allowlist check below
-	// rather than trivially failing it.
-	commandPackages := tenancyArchitectureGoList(t, goBin, root, "list", "./command/...")
-	require.NotEmpty(t, commandPackages, "go list ./command/... returned no packages, so it proves nothing")
+			// The command package itself is always present in its own `-deps`
+			// output; it is the subject under test, not a dependency it
+			// acquired, so it must be excluded from the allowlist check below
+			// rather than trivially failing it.
+			commandPackages := tenancyArchitectureGoList(t, goBin, root, "list", "./command/...")
+			sc.Expect(commandPackages).To(specs.Not(specs.BeEmpty()))
 
-	self := make(map[string]struct{}, len(commandPackages))
-	for _, pkg := range commandPackages {
-		self[pkg] = struct{}{}
-	}
-
-	deps := tenancyArchitectureGoList(t, goBin, root, "list", "-deps", "./command/...")
-	require.NotEmpty(t, deps, "go list -deps ./command/... returned no dependencies, so it proves nothing")
-
-	var checked int
-	for _, dep := range deps {
-		if _, isSelf := self[dep]; isSelf {
-			continue
-		}
-		checked++
-
-		first, _, _ := strings.Cut(dep, "/")
-		if !strings.Contains(first, ".") {
-			continue // standard library
-		}
-
-		var allowed bool
-		for _, module := range commandArchitectureAllowedModules {
-			if dep == module || strings.HasPrefix(dep, module+"/") {
-				allowed = true
-				break
+			self := make(map[string]struct{}, len(commandPackages))
+			for _, pkg := range commandPackages {
+				self[pkg] = struct{}{}
 			}
-		}
-		require.Truef(t, allowed,
-			"command/ must not depend on %q: only the standard library, google.golang.org/protobuf "+
-				"and ego/tenancy are allowed (design.md's import allowlist, EGO-WRITE-003) — command "+
-				"is a leaf package with no GoAkt, transport, auth, or other first-party runtime dependency", dep)
-	}
-	require.NotZero(t, checked, "no external dependency was checked against the allowlist, so this test proves nothing")
+
+			deps := tenancyArchitectureGoList(t, goBin, root, "list", "-deps", "./command/...")
+			sc.Expect(deps).To(specs.Not(specs.BeEmpty()))
+
+			var (
+				checked    int
+				disallowed []string
+			)
+			for _, dep := range deps {
+				if _, isSelf := self[dep]; isSelf {
+					continue
+				}
+				checked++
+
+				first, _, _ := strings.Cut(dep, "/")
+				if !strings.Contains(first, ".") {
+					continue // standard library
+				}
+
+				var allowed bool
+				for _, module := range commandArchitectureAllowedModules {
+					if dep == module || strings.HasPrefix(dep, module+"/") {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					disallowed = append(disallowed, dep)
+				}
+			}
+			// command/ is a leaf package: only the standard library, google.golang.org/protobuf
+			// and ego/tenancy are allowed (design.md's import allowlist, EGO-WRITE-003), with
+			// no GoAkt, transport, auth or other first-party runtime dependency.
+			sc.Expect(disallowed).To(specs.BeEmpty())
+			sc.Expect(checked).To(specs.Not(specs.BeZero()))
+		})
+	})
 }
 
 // tenancyArchitectureGoList and tenancyArchitectureGoBinary are defined in
