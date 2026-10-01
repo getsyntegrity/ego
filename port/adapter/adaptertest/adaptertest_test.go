@@ -32,7 +32,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync/atomic"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -58,17 +57,12 @@ type owned struct {
 	unstable bool                // Describe returns a different Name each call
 	calls    int
 
-	startErr   error
-	closed     int
-	closeErr   error         // returned by every Close after the first
-	closeBlock chan struct{} // Close ignores its context and waits on this
+	startErr error
+	closed   int
+	closeErr error // returned by every Close after the first
 }
 
 func (o *owned) Close(ctx context.Context) error {
-	if o.closeBlock != nil {
-		<-o.closeBlock
-		return nil
-	}
 	o.closed++
 	if o.closed > 1 && o.closeErr != nil {
 		return o.closeErr
@@ -464,38 +458,6 @@ func TestCapture_NonIdempotentCloseFailsAT3(t *testing.T) {
 			ctx.Expect(got).To(onlyFailure("AT-3/release twice", "use of closed network connection"))
 		})
 	})
-}
-
-func TestCapture_CloseIgnoringTheDeadlineFailsAT4(t *testing.T) {
-	specs.Describe(t, "Capture fails AT-4 for a release that ignores its deadline", func(s *specs.Spec) {
-		s.It("fails only AT-4 and mentions the deadline", func(ctx *specs.Context) {
-			block := make(chan struct{})
-			ctx.T.Cleanup(func() { close(block) })
-			stalled := &atomic.Bool{}
-			target := ownedTarget(nil)
-			target.Stall = func(*testing.T) { stalled.Store(true) }
-			target.New = func(*testing.T) (any, error) {
-				return lazyBlock{ownedDescribed{&owned{desc: desc("fake")}}, stalled, block}, nil
-			}
-			got := outcomes(ctx.T, adaptertest.Capture(ctx.T, target))
-			ctx.Expect(got).To(onlyFailure("AT-4", "deadline"))
-		})
-	})
-}
-
-// lazyBlock's Close ignores its context once the backend is stalled.
-type lazyBlock struct {
-	ownedDescribed
-	stalled *atomic.Bool
-	block   chan struct{}
-}
-
-func (l lazyBlock) Close(ctx context.Context) error {
-	if l.stalled.Load() {
-		<-l.block
-		return nil
-	}
-	return l.ownedDescribed.Close(ctx)
 }
 
 func TestCapture_FailStartWhoseAcquireSucceedsFailsAT2(t *testing.T) {

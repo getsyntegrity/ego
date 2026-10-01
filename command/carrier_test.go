@@ -27,153 +27,186 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/command"
 )
 
 func TestMarshalMetadataUsesCanonicalKeys(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "MarshalMetadata writes root metadata under the canonical ego.cmd keys", func(s *specs.Spec) {
+		s.It("writes the required keys and omits the optional ones", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	require.Equal(t, string(op), carrier["ego.cmd.operation_id"])
-	require.Equal(t, string(command.CorrelationID(op)), carrier["ego.cmd.correlation_id"])
-	require.NotEmpty(t, carrier["ego.cmd.timestamp"])
-	require.NotContains(t, carrier, "ego.cmd.causation_id")
-	require.NotContains(t, carrier, "ego.cmd.deadline")
-	require.NotContains(t, carrier, "ego.cmd.principal_id")
-	require.NotContains(t, carrier, "ego.cmd.principal_kind")
+			carrier := command.MarshalMetadata(md)
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.operation_id", string(op)))
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.correlation_id", string(command.CorrelationID(op))))
+			ctx.Expect(carrier).To(specs.HaveKey("ego.cmd.timestamp"))
+			ctx.Expect(carrier["ego.cmd.timestamp"]).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.causation_id")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.deadline")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.principal_id")))
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.principal_kind")))
+		})
+	})
 }
 
 func TestCarrierRoundTripPreservesIdentity(t *testing.T) {
-	root := mustOperationID(t, "op-root")
-	rootMD, err := command.NewMetadata(root)
-	require.NoError(t, err)
+	specs.Describe(t, "a carrier round trip preserves operation, correlation and causation identity", func(s *specs.Spec) {
+		s.It("restores the identity of a derived child", func(ctx *specs.Context) {
+			root := mustOperationID(ctx, "op-root")
+			rootMD, err := command.NewMetadata(root)
+			ctx.Expect(err).To(specs.BeNil())
 
-	child := mustOperationID(t, "op-child")
-	childMD, err := rootMD.Derive(child)
-	require.NoError(t, err)
+			child := mustOperationID(ctx, "op-child")
+			childMD, err := rootMD.Derive(child)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(childMD)
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			carrier := command.MarshalMetadata(childMD)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.Equal(t, childMD.OperationID(), got.OperationID())
-	require.Equal(t, childMD.CorrelationID(), got.CorrelationID())
+			ctx.Expect(got.OperationID()).ToEqual(childMD.OperationID())
+			ctx.Expect(got.CorrelationID()).ToEqual(childMD.CorrelationID())
 
-	wantCausation, ok := childMD.CausationID()
-	require.True(t, ok)
-	gotCausation, ok := got.CausationID()
-	require.True(t, ok)
-	require.Equal(t, wantCausation, gotCausation)
+			wantCausation, ok := childMD.CausationID()
+			ctx.Expect(ok).To(specs.BeTrue())
+			gotCausation, ok := got.CausationID()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotCausation).ToEqual(wantCausation)
+		})
+	})
 }
 
 func TestCarrierRoundTripOptionalFieldsAbsent(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "a carrier round trip keeps absent optional fields absent", func(s *specs.Spec) {
+		s.It("reports causation, tenant, principal, deadline and custom values as absent", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			carrier := command.MarshalMetadata(md)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, ok := got.CausationID()
-	require.False(t, ok)
-	_, ok = got.Tenant()
-	require.False(t, ok)
-	_, ok = got.Principal()
-	require.False(t, ok)
-	_, ok = got.Deadline()
-	require.False(t, ok)
-	require.Empty(t, got.Custom())
+			_, ok := got.CausationID()
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, ok = got.Tenant()
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, ok = got.Principal()
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, ok = got.Deadline()
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(got.Custom()).To(specs.BeEmpty())
+		})
+	})
 }
 
 func TestCarrierRoundTripOptionalFieldsPresent(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	tc := mustTenantContext(t, "tenant-1")
-	principal, err := command.NewPrincipal("user-1", command.WithPrincipalKind("service-account"))
-	require.NoError(t, err)
-	deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Nanosecond)
+	specs.Describe(t, "a carrier round trip preserves present optional fields", func(s *specs.Spec) {
+		s.It("restores tenant, principal, deadline and custom value", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "tenant-1")
+			principal, err := command.NewPrincipal("user-1", command.WithPrincipalKind("service-account"))
+			ctx.Expect(err).To(specs.BeNil())
+			deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Nanosecond)
 
-	md, err := command.NewMetadata(op,
-		command.WithTenant(tc),
-		command.WithPrincipal(principal),
-		command.WithDeadline(deadline),
-		command.WithCustom("region", "us-east-1"),
-	)
-	require.NoError(t, err)
+			md, err := command.NewMetadata(op,
+				command.WithTenant(tc),
+				command.WithPrincipal(principal),
+				command.WithDeadline(deadline),
+				command.WithCustom("region", "us-east-1"),
+			)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			carrier := command.MarshalMetadata(md)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	gotTenant, ok := got.Tenant()
-	require.True(t, ok)
-	gotTenantID, _ := gotTenant.Tenant()
-	wantTenantID, _ := tc.Tenant()
-	require.Equal(t, wantTenantID, gotTenantID)
+			gotTenant, ok := got.Tenant()
+			ctx.Expect(ok).To(specs.BeTrue())
+			gotTenantID, _ := gotTenant.Tenant()
+			wantTenantID, _ := tc.Tenant()
+			ctx.Expect(gotTenantID).ToEqual(wantTenantID)
 
-	gotPrincipal, ok := got.Principal()
-	require.True(t, ok)
-	require.Equal(t, principal, gotPrincipal)
+			gotPrincipal, ok := got.Principal()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotPrincipal).ToEqual(principal)
 
-	gotDeadline, ok := got.Deadline()
-	require.True(t, ok)
-	require.True(t, deadline.Equal(gotDeadline))
+			gotDeadline, ok := got.Deadline()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotDeadline).To(beTime(deadline))
 
-	gotCustom, ok := got.CustomValue("region")
-	require.True(t, ok)
-	require.Equal(t, "us-east-1", gotCustom)
+			gotCustom, ok := got.CustomValue("region")
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gotCustom).ToEqual("us-east-1")
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsMissingOperationID(t *testing.T) {
-	carrier := command.Carrier{
-		"ego.cmd.correlation_id": "flow-1",
-		"ego.cmd.timestamp":      time.Now().UTC().Format(time.RFC3339Nano),
-	}
+	specs.Describe(t, "UnmarshalMetadata rejects a carrier without an operation id", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidMetadata", func(ctx *specs.Context) {
+			carrier := command.Carrier{
+				"ego.cmd.correlation_id": "flow-1",
+				"ego.cmd.timestamp":      time.Now().UTC().Format(time.RFC3339Nano),
+			}
 
-	_, err := command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+			_, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsReservedBareKey(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects a bare canonical key used as custom metadata", func(s *specs.Spec) {
+		s.It("fails with ErrReservedKey", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["operation_id"] = "shadow-attempt"
+			carrier := command.MarshalMetadata(md)
+			carrier["operation_id"] = "shadow-attempt"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrReservedKey)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrReservedKey))
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsInvalidCustomValue(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects an invalid custom value", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidMetadata for a value with a NUL byte", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["region"] = "us-east-1\x00"
+			carrier := command.MarshalMetadata(md)
+			carrier["region"] = "us-east-1\x00"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+		})
+	})
 }
 
 func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata tolerates unknown ego.cmd keys from a newer writer", func(s *specs.Spec) {
+		s.It("drops the unknown key without adding custom metadata", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["ego.cmd.future_field"] = "from-a-newer-writer"
+			carrier := command.MarshalMetadata(md)
+			carrier["ego.cmd.future_field"] = "from-a-newer-writer"
 
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
-	require.Equal(t, md.OperationID(), got.OperationID())
-	require.Empty(t, got.Custom())
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got.OperationID()).ToEqual(md.OperationID())
+			ctx.Expect(got.Custom()).To(specs.BeEmpty())
+		})
+	})
 }
 
 // TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace proves a carrier
@@ -185,108 +218,140 @@ func TestUnmarshalMetadataIgnoresUnknownEgoCmdKey(t *testing.T) {
 // be more permissive than constructing directly via WithCustom, which
 // already rejects any "ego."-prefixed custom key.
 func TestUnmarshalMetadataRejectsUnrecognizedEgoNamespace(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects keys in an unrecognized ego namespace", func(s *specs.Spec) {
+		s.It("fails with ErrReservedKey for an ego.idem key", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["ego.idem.key"] = "future-namespace-value"
+			carrier := command.MarshalMetadata(md)
+			carrier["ego.idem.key"] = "future-namespace-value"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrReservedKey)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrReservedKey))
+		})
+	})
 }
 
 func TestCarrierRoundTripExpectedRevisionPresent(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op, command.WithExpectedRevision(7))
-	require.NoError(t, err)
+	specs.Describe(t, "a carrier round trip preserves a present expected revision", func(s *specs.Spec) {
+		s.It("writes the revision as a decimal string and restores it", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op, command.WithExpectedRevision(7))
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	require.Equal(t, "7", carrier["ego.cmd.expected_revision"])
+			carrier := command.MarshalMetadata(md)
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.expected_revision", "7"))
 
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	revision, ok := got.ExpectedRevision()
-	require.True(t, ok)
-	require.Equal(t, uint64(7), revision)
+			revision, ok := got.ExpectedRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(revision).ToEqual(uint64(7))
+		})
+	})
 }
 
 func TestCarrierRoundTripExpectedRevisionAbsentStaysAbsent(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "a carrier round trip keeps an absent expected revision absent", func(s *specs.Spec) {
+		s.It("writes no key and restores no revision", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	require.NotContains(t, carrier, "ego.cmd.expected_revision")
+			carrier := command.MarshalMetadata(md)
+			ctx.Expect(carrier).To(specs.Not(specs.HaveKey("ego.cmd.expected_revision")))
 
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, ok := got.ExpectedRevision()
-	require.False(t, ok)
+			_, ok := got.ExpectedRevision()
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsMalformedExpectedRevision(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects a malformed expected revision", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidMetadata for a non-numeric value", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["ego.cmd.expected_revision"] = "not-a-number"
+			carrier := command.MarshalMetadata(md)
+			carrier["ego.cmd.expected_revision"] = "not-a-number"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsNegativeExpectedRevision(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects a negative expected revision", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidMetadata for -1", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	carrier["ego.cmd.expected_revision"] = "-1"
+			carrier := command.MarshalMetadata(md)
+			carrier["ego.cmd.expected_revision"] = "-1"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+		})
+	})
 }
 
 func TestUnmarshalMetadataRejectsExpectedRevisionOverflow(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "UnmarshalMetadata rejects an expected revision beyond uint64", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidMetadata for math.MaxUint64 + 1", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	// math.MaxUint64 + 1, one past the largest value strconv.ParseUint(_, 10, 64) accepts.
-	carrier["ego.cmd.expected_revision"] = "18446744073709551616"
+			carrier := command.MarshalMetadata(md)
+			// math.MaxUint64 + 1, one past the largest value strconv.ParseUint(_, 10, 64) accepts.
+			carrier["ego.cmd.expected_revision"] = "18446744073709551616"
 
-	_, err = command.UnmarshalMetadata(carrier)
-	require.ErrorIs(t, err, command.ErrInvalidMetadata)
+			_, err = command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+		})
+	})
 }
 
 func TestCarrierRoundTripExpectedRevisionMaxUint64(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op, command.WithExpectedRevision(math.MaxUint64))
-	require.NoError(t, err)
+	specs.Describe(t, "a carrier round trip preserves the largest expected revision", func(s *specs.Spec) {
+		s.It("writes and restores math.MaxUint64", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op, command.WithExpectedRevision(math.MaxUint64))
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	require.Equal(t, "18446744073709551615", carrier["ego.cmd.expected_revision"])
+			carrier := command.MarshalMetadata(md)
+			ctx.Expect(carrier).To(specs.HavePair("ego.cmd.expected_revision", "18446744073709551615"))
 
-	got, err := command.UnmarshalMetadata(carrier)
-	require.NoError(t, err)
+			got, err := command.UnmarshalMetadata(carrier)
+			ctx.Expect(err).To(specs.BeNil())
 
-	revision, ok := got.ExpectedRevision()
-	require.True(t, ok)
-	require.Equal(t, uint64(math.MaxUint64), revision)
+			revision, ok := got.ExpectedRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(revision).ToEqual(uint64(math.MaxUint64))
+		})
+	})
 }
 
 func TestCarrierDelegatesTenantSerializationToTenancyPackage(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	tc := mustTenantContext(t, "tenant-1")
-	md, err := command.NewMetadata(op, command.WithTenant(tc))
-	require.NoError(t, err)
+	specs.Describe(t, "MarshalMetadata delegates tenant serialization to the tenancy package", func(s *specs.Spec) {
+		s.It("writes the tenancy scope and id keys", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			tc := mustTenantContext(ctx, "tenant-1")
+			md, err := command.NewMetadata(op, command.WithTenant(tc))
+			ctx.Expect(err).To(specs.BeNil())
 
-	carrier := command.MarshalMetadata(md)
-	require.Equal(t, "tenant", carrier["ego.tenant.scope"])
-	require.Equal(t, "tenant-1", carrier["ego.tenant.id"])
+			carrier := command.MarshalMetadata(md)
+			ctx.Expect(carrier).To(specs.HavePair("ego.tenant.scope", "tenant"))
+			ctx.Expect(carrier).To(specs.HavePair("ego.tenant.id", "tenant-1"))
+		})
+	})
 }

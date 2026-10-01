@@ -29,9 +29,10 @@ package testkit
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/offsetstore"
@@ -48,20 +49,32 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestEventStoreConformance(t *testing.T) {
-	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
-		return NewEventsStore()
+	specs.Describe(t, "the in-repo EventStore satisfies the EventsStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunEventsStoreConformance(ctx.T, func(t *testing.T) persistence.EventsStore {
+				return NewEventsStore()
+			})
+		})
 	})
 }
 
 func TestDurableStoreConformance(t *testing.T) {
-	conformance.RunStateStoreConformance(t, func(t *testing.T) persistence.StateStore {
-		return NewDurableStore()
+	specs.Describe(t, "the in-repo DurableStore satisfies the StateStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunStateStoreConformance(ctx.T, func(t *testing.T) persistence.StateStore {
+				return NewDurableStore()
+			})
+		})
 	})
 }
 
 func TestSnapshotStoreConformance(t *testing.T) {
-	conformance.RunSnapshotStoreConformance(t, func(t *testing.T) persistence.SnapshotStore {
-		return NewSnapshotStore()
+	specs.Describe(t, "the in-repo SnapshotStore satisfies the SnapshotStore conformance suite", func(s *specs.Spec) {
+		s.It("passes every check of the suite", func(ctx *specs.Context) {
+			conformance.RunSnapshotStoreConformance(ctx.T, func(t *testing.T) persistence.SnapshotStore {
+				return NewSnapshotStore()
+			})
+		})
 	})
 }
 
@@ -85,48 +98,73 @@ var wantStoreAdapterOutcomes = map[string]adaptertest.Outcome{
 	"AT-5":                              adaptertest.Passed,
 }
 
+// outcomeLine renders one harness result as "check: outcome", adding the
+// detail when the check failed, so a spec failure prints each offender with
+// the reason it gives.
+func outcomeLine(r adaptertest.Result) string {
+	line := fmt.Sprintf("%s: %v", r.Check, r.Outcome)
+	if r.Outcome == adaptertest.Failed {
+		line += ": " + r.Detail
+	}
+	return line
+}
+
 func TestStoresAdapterConformance(t *testing.T) {
-	cases := []struct {
+	type row struct {
 		name string
 		port adapter.Port
 		new  func() any
-	}{
+	}
+	rows := []row{
 		{"EventStore", persistence.PortEventsStore, func() any { return NewEventsStore() }},
 		{"DurableStore", persistence.PortStateStore, func() any { return NewDurableStore() }},
 		{"OffsetStore", offsetstore.PortOffsetStore, func() any { return NewOffsetStore() }},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			results := adaptertest.Run(t, adaptertest.Target{
-				Port:      tc.port,
-				Ownership: adaptertest.Borrowed,
-				New:       func(*testing.T) (any, error) { return tc.new(), nil },
-			})
-			require.Len(t, results, len(wantStoreAdapterOutcomes))
-			for _, r := range results {
-				require.Contains(t, wantStoreAdapterOutcomes, r.Check)
-				require.Equal(t, wantStoreAdapterOutcomes[r.Check], r.Outcome, "%s: %s", r.Check, r.Detail)
-			}
-		})
+
+	var wantLines []string
+	for check, outcome := range wantStoreAdapterOutcomes {
+		wantLines = append(wantLines, fmt.Sprintf("%s: %v", check, outcome))
 	}
+
+	specs.Describe(t, "the in-memory stores pass the adapter lifecycle checks as Borrowed adapters", func(s *specs.Spec) {
+		specs.Table(s, rows, func(r row) string { return r.name }, func(ctx *specs.Context, r row) {
+			results := adaptertest.Run(ctx.T, adaptertest.Target{
+				Port:      r.port,
+				Ownership: adaptertest.Borrowed,
+				New:       func(*testing.T) (any, error) { return r.new(), nil },
+			})
+
+			// Every expected check ran once, with the expected outcome, and no
+			// other check ran.
+			lines := make([]string, 0, len(results))
+			for _, res := range results {
+				lines = append(lines, outcomeLine(res))
+			}
+			ctx.Expect(lines).To(specs.ContainTheSameElementsAs(wantLines))
+		})
+	})
 }
 
 // The descriptors declare no capability: CapReady is implied by the store
 // ports, and the stores have no Start.
 func TestStoreDescriptors(t *testing.T) {
-	cases := map[string]struct {
+	type row struct {
+		name  string
 		value any
 		port  adapter.Port
-	}{
-		"EventStore":   {NewEventsStore(), persistence.PortEventsStore},
-		"DurableStore": {NewDurableStore(), persistence.PortStateStore},
-		"OffsetStore":  {NewOffsetStore(), offsetstore.PortOffsetStore},
 	}
-	for name, tc := range cases {
-		d, ok := adapter.Describe(tc.value)
-		require.True(t, ok, "%s is undeclared", name)
-		require.Equal(t, adapter.Descriptor{Ports: []adapter.Port{tc.port}, Name: "testkit-memory"}, d, name)
+	rows := []row{
+		{"EventStore", NewEventsStore(), persistence.PortEventsStore},
+		{"DurableStore", NewDurableStore(), persistence.PortStateStore},
+		{"OffsetStore", NewOffsetStore(), offsetstore.PortOffsetStore},
 	}
+	specs.Describe(t, "each store declares its port and the testkit-memory name in its descriptor", func(s *specs.Spec) {
+		specs.Table(s, rows, func(r row) string { return r.name }, func(ctx *specs.Context, r row) {
+			d, ok := adapter.Describe(r.value)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(d).ToEqual(adapter.Descriptor{Ports: []adapter.Port{r.port}, Name: "testkit-memory"})
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -149,38 +187,36 @@ func TestStoreDescriptors(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConformanceCatchesNonIsolatingStore(t *testing.T) {
-	t.Run("EventsStore", func(t *testing.T) {
-		results := conformance.CaptureEventsStoreChecks(newNonIsolatingEventsStore)
-		assertSuiteDetectedNonIsolation(t, results)
-	})
+	specs.Describe(t, "the conformance suite fails against a store that does not isolate by scope", func(s *specs.Spec) {
+		s.It("EventsStore", func(ctx *specs.Context) {
+			results := conformance.CaptureEventsStoreChecks(newNonIsolatingEventsStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 
-	t.Run("StateStore", func(t *testing.T) {
-		results := conformance.CaptureStateStoreChecks(newNonIsolatingDurableStore)
-		assertSuiteDetectedNonIsolation(t, results)
-	})
+		s.It("StateStore", func(ctx *specs.Context) {
+			results := conformance.CaptureStateStoreChecks(newNonIsolatingDurableStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 
-	t.Run("SnapshotStore", func(t *testing.T) {
-		results := conformance.CaptureSnapshotStoreChecks(newNonIsolatingSnapshotStore)
-		assertSuiteDetectedNonIsolation(t, results)
+		s.It("SnapshotStore", func(ctx *specs.Context) {
+			results := conformance.CaptureSnapshotStoreChecks(newNonIsolatingSnapshotStore)
+			assertSuiteDetectedNonIsolation(ctx, results)
+		})
 	})
 }
 
-// assertSuiteDetectedNonIsolation requires at least one captured check to
+// assertSuiteDetectedNonIsolation expects at least one captured check to
 // have failed, and logs every result (with -v) so a future silent recovery
 // to an always-passing suite is visible check-by-check, not just as a single
 // boolean.
-func assertSuiteDetectedNonIsolation(t *testing.T, results []conformance.CheckResult) {
-	t.Helper()
-	require.NotEmpty(t, results)
+func assertSuiteDetectedNonIsolation(ctx *specs.Context, results []conformance.CheckResult) {
+	ctx.T.Helper()
+	ctx.Expect(results).To(specs.Not(specs.BeEmpty()))
 
-	var failed []string
 	for _, r := range results {
-		t.Logf("check %-65s failed=%v errors=%v", r.Name, r.Failed, r.Errors)
-		if r.Failed {
-			failed = append(failed, r.Name)
-		}
+		ctx.T.Logf("check %-65s failed=%v errors=%v", r.Name, r.Failed, r.Errors)
 	}
-	require.NotEmpty(t, failed, "the conformance suite must detect at least one isolation violation against a non-isolating store")
+	ctx.Expect(results).To(specs.AnyElement(specs.Project("failed", func(r conformance.CheckResult) bool { return r.Failed }, specs.BeTrue())))
 }
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/proto"
 
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
@@ -155,7 +155,9 @@ func (r *recordingTB) FailNow() {
 
 // recordFailure runs the assertion against a recording testing.TB and reports
 // whether it failed. The assertion runs on its own goroutine because a failed
-// require aborts through runtime.Goexit.
+// require aborts through runtime.Goexit. That goroutine touches only the
+// recorder, never a spec context, and recordFailure joins it before returning,
+// so it stays a raw goroutine.
 func recordFailure(t testing.TB, assert func(t testing.TB)) bool {
 	recorder := &recordingTB{TB: t}
 	done := make(chan struct{})
@@ -174,200 +176,242 @@ func recordFailure(t testing.TB, assert func(t testing.TB)) bool {
 // ---------------------------------------------------------------------------
 
 func TestEventSourcedScenario_GivenStateWhenCommandThenEventsAndState(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-1"}
+	specs.Describe(t, "EventSourcedScenario checks events and state after a command on a given state", func(s *specs.Spec) {
+		s.It("given a state, a command produces the expected events and resulting state", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-1"}
 
-	ForEventSourcedBehavior(behavior).
-		Given(&testpb.Account{
-			AccountId:      "acc-1",
-			AccountBalance: 100.00,
-		}).
-		When(&testpb.CreditAccount{
-			AccountId: "acc-1",
-			Balance:   50.00,
-		}).
-		ThenEvents(t,
-			&testpb.AccountCredited{
-				AccountId:      "acc-1",
-				AccountBalance: 50.00,
-			},
-		).
-		ThenState(t, &testpb.Account{
-			AccountId:      "acc-1",
-			AccountBalance: 150.00,
+			ForEventSourcedBehavior(behavior).
+				Given(&testpb.Account{
+					AccountId:      "acc-1",
+					AccountBalance: 100.00,
+				}).
+				When(&testpb.CreditAccount{
+					AccountId: "acc-1",
+					Balance:   50.00,
+				}).
+				ThenEvents(ctx.T,
+					&testpb.AccountCredited{
+						AccountId:      "acc-1",
+						AccountBalance: 50.00,
+					},
+				).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "acc-1",
+					AccountBalance: 150.00,
+				})
 		})
+	})
 }
 
 func TestEventSourcedScenario_WhenCommandFromInitialState(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-2"}
+	specs.Describe(t, "EventSourcedScenario runs a command from the initial state", func(s *specs.Spec) {
+		s.It("a command from the initial state produces the expected events and state", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-2"}
 
-	ForEventSourcedBehavior(behavior).
-		When(&testpb.CreateAccount{
-			AccountBalance: 200.00,
-		}).
-		ThenEvents(t,
-			&testpb.AccountCreated{
-				AccountId:      "acc-2",
-				AccountBalance: 200.00,
-			},
-		).
-		ThenState(t, &testpb.Account{
-			AccountId:      "acc-2",
-			AccountBalance: 200.00,
+			ForEventSourcedBehavior(behavior).
+				When(&testpb.CreateAccount{
+					AccountBalance: 200.00,
+				}).
+				ThenEvents(ctx.T,
+					&testpb.AccountCreated{
+						AccountId:      "acc-2",
+						AccountBalance: 200.00,
+					},
+				).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "acc-2",
+					AccountBalance: 200.00,
+				})
 		})
+	})
 }
 
 func TestEventSourcedScenario_WhenCommandReturnsError(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-3"}
+	specs.Describe(t, "EventSourcedScenario reports a command handler error", func(s *specs.Spec) {
+		s.It("a command for the wrong entity fails with its error", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-3"}
 
-	ForEventSourcedBehavior(behavior).
-		When(&testpb.CreditAccount{
-			AccountId: "wrong-id",
-			Balance:   10.00,
-		}).
-		ThenError(t, "command sent to the wrong entity")
+			ForEventSourcedBehavior(behavior).
+				When(&testpb.CreditAccount{
+					AccountId: "wrong-id",
+					Balance:   10.00,
+				}).
+				ThenError(ctx.T, "command sent to the wrong entity")
+		})
+	})
 }
 
 func TestEventSourcedScenario_WhenCommandProducesNoEvents(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-4"}
+	specs.Describe(t, "EventSourcedScenario reports a command that emits nothing", func(s *specs.Spec) {
+		s.It("a command that emits nothing has no events", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-4"}
 
-	ForEventSourcedBehavior(behavior).
-		When(&testpb.TestNoEvent{}).
-		ThenNoEvents(t)
+			ForEventSourcedBehavior(behavior).
+				When(&testpb.TestNoEvent{}).
+				ThenNoEvents(ctx.T)
+		})
+	})
 }
 
 func TestEventSourcedScenario_HandleEventFailsOnProducedEvent(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-5"}
+	specs.Describe(t, "EventSourcedScenario surfaces an event the behavior cannot apply", func(s *specs.Spec) {
+		s.It("an unrecognized produced event fails while deriving the state", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-5"}
 
-	// TestPanic makes the command handler emit an event that HandleEvent
-	// does not recognize, which surfaces while deriving the resulting state.
-	ForEventSourcedBehavior(behavior).
-		When(&testpb.TestPanic{}).
-		ThenError(t, "unhandled event")
+			// TestPanic makes the command handler emit an event that HandleEvent
+			// does not recognize, which surfaces while deriving the resulting state.
+			ForEventSourcedBehavior(behavior).
+				When(&testpb.TestPanic{}).
+				ThenError(ctx.T, "unhandled event")
+		})
+	})
 }
 
 func TestEventSourcedScenario_GivenStateIsPassedToCommandHandler(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-6"}
+	specs.Describe(t, "EventSourcedScenario hands the given state to the command handler as-is", func(s *specs.Spec) {
+		s.It("the command result builds on the given state without replaying events", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-6"}
 
-	// The prior state is handed to the command handler as-is: no event replay
-	// happens during the Given phase, so HandleEvent is only exercised on the
-	// events the command produced.
-	ForEventSourcedBehavior(behavior).
-		Given(&testpb.Account{
-			AccountId:      "acc-6",
-			AccountBalance: 125.00,
-		}).
-		When(&testpb.CreditAccount{
-			AccountId: "acc-6",
-			Balance:   75.00,
-		}).
-		ThenEvents(t,
-			&testpb.AccountCredited{
-				AccountId:      "acc-6",
-				AccountBalance: 75.00,
-			},
-		).
-		ThenState(t, &testpb.Account{
-			AccountId:      "acc-6",
-			AccountBalance: 200.00,
+			// The prior state is handed to the command handler as-is: no event replay
+			// happens during the Given phase, so HandleEvent is only exercised on the
+			// events the command produced.
+			ForEventSourcedBehavior(behavior).
+				Given(&testpb.Account{
+					AccountId:      "acc-6",
+					AccountBalance: 125.00,
+				}).
+				When(&testpb.CreditAccount{
+					AccountId: "acc-6",
+					Balance:   75.00,
+				}).
+				ThenEvents(ctx.T,
+					&testpb.AccountCredited{
+						AccountId:      "acc-6",
+						AccountBalance: 75.00,
+					},
+				).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "acc-6",
+					AccountBalance: 200.00,
+				})
 		})
+	})
 }
 
 func TestEventSourcedScenario_GivenEventsBuildTheState(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-8"}
+	specs.Describe(t, "EventSourcedScenario builds the arranged state from given events", func(s *specs.Spec) {
+		s.It("given events are applied to build the state the command runs against", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-8"}
 
-	ForEventSourcedBehavior(behavior).
-		GivenEvents(
-			&testpb.AccountCreated{
-				AccountId:      "acc-8",
-				AccountBalance: 100.00,
-			},
-			&testpb.AccountCredited{
-				AccountId:      "acc-8",
-				AccountBalance: 25.00,
-			},
-		).
-		When(&testpb.CreditAccount{
-			AccountId: "acc-8",
-			Balance:   75.00,
-		}).
-		ThenEvents(t,
-			&testpb.AccountCredited{
-				AccountId:      "acc-8",
-				AccountBalance: 75.00,
-			},
-		).
-		ThenState(t, &testpb.Account{
-			AccountId:      "acc-8",
-			AccountBalance: 200.00,
+			ForEventSourcedBehavior(behavior).
+				GivenEvents(
+					&testpb.AccountCreated{
+						AccountId:      "acc-8",
+						AccountBalance: 100.00,
+					},
+					&testpb.AccountCredited{
+						AccountId:      "acc-8",
+						AccountBalance: 25.00,
+					},
+				).
+				When(&testpb.CreditAccount{
+					AccountId: "acc-8",
+					Balance:   75.00,
+				}).
+				ThenEvents(ctx.T,
+					&testpb.AccountCredited{
+						AccountId:      "acc-8",
+						AccountBalance: 75.00,
+					},
+				).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "acc-8",
+					AccountBalance: 200.00,
+				})
 		})
+	})
 }
 
 func TestEventSourcedScenario_GivenEventsApplyOnTopOfGivenState(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-9"}
+	specs.Describe(t, "EventSourcedScenario applies given events on top of a given state", func(s *specs.Spec) {
+		s.It("given events replay over the given state like a snapshot recovery", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-9"}
 
-	// mirrors an entity recovered from a snapshot and then replayed
-	ForEventSourcedBehavior(behavior).
-		Given(&testpb.Account{
-			AccountId:      "acc-9",
-			AccountBalance: 100.00,
-		}).
-		GivenEvents(
-			&testpb.AccountCredited{
-				AccountId:      "acc-9",
-				AccountBalance: 25.00,
-			},
-		).
-		When(&testpb.CreditAccount{
-			AccountId: "acc-9",
-			Balance:   75.00,
-		}).
-		ThenState(t, &testpb.Account{
-			AccountId:      "acc-9",
-			AccountBalance: 200.00,
+			// mirrors an entity recovered from a snapshot and then replayed
+			ForEventSourcedBehavior(behavior).
+				Given(&testpb.Account{
+					AccountId:      "acc-9",
+					AccountBalance: 100.00,
+				}).
+				GivenEvents(
+					&testpb.AccountCredited{
+						AccountId:      "acc-9",
+						AccountBalance: 25.00,
+					},
+				).
+				When(&testpb.CreditAccount{
+					AccountId: "acc-9",
+					Balance:   75.00,
+				}).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "acc-9",
+					AccountBalance: 200.00,
+				})
 		})
+	})
 }
 
 func TestEventSourcedScenario_GivenEventsFailureIsReportedAsArrangementFailure(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-10"}
+	specs.Describe(t, "EventSourcedScenario reports a failed arrangement instead of a command outcome", func(s *specs.Spec) {
+		behavior := &accountEventSourcedBehavior{id: "acc-10"}
 
-	// TestNoEvent is not recognized by HandleEvent, so the arrangement cannot be
-	// built. Every assertion must report that instead of a command outcome, even
-	// ThenError, which would otherwise let a broken setup pass as a failed command.
-	result := ForEventSourcedBehavior(behavior).
-		GivenEvents(&testpb.TestNoEvent{}).
-		When(&testpb.CreateAccount{
-			AccountBalance: 10.00,
+		// TestNoEvent is not recognized by HandleEvent, so the arrangement cannot be
+		// built. Every assertion must report that instead of a command outcome, even
+		// ThenError, which would otherwise let a broken setup pass as a failed command.
+		result := ForEventSourcedBehavior(behavior).
+			GivenEvents(&testpb.TestNoEvent{}).
+			When(&testpb.CreateAccount{
+				AccountBalance: 10.00,
+			})
+
+		s.It("records the arrangement error and no command error", func(ctx *specs.Context) {
+			ctx.Expect(result.arrangeErr).To(specs.Project("message", func(err error) string {
+				if err == nil {
+					return ""
+				}
+				return err.Error()
+			}, specs.Contain("given events could not be applied")))
+			ctx.Expect(result.err).To(specs.BeNil())
 		})
 
-	require.Error(t, result.arrangeErr)
-	require.ErrorContains(t, result.arrangeErr, "given events could not be applied")
-	require.NoError(t, result.err, "an arrangement failure must not surface as a command error")
+		type row struct {
+			name   string
+			assert func(t testing.TB)
+		}
+		rows := []row{
+			{"ThenEvents", func(t testing.TB) { result.ThenEvents(t, &testpb.AccountCreated{}) }},
+			{"ThenState", func(t testing.TB) { result.ThenState(t, &testpb.Account{}) }},
+			{"ThenNoEvents", func(t testing.TB) { result.ThenNoEvents(t) }},
+			{"ThenError", func(t testing.TB) { result.ThenError(t, "unhandled event") }},
+		}
 
-	assertions := []struct {
-		name   string
-		assert func(t testing.TB)
-	}{
-		{"ThenEvents", func(t testing.TB) { result.ThenEvents(t, &testpb.AccountCreated{}) }},
-		{"ThenState", func(t testing.TB) { result.ThenState(t, &testpb.Account{}) }},
-		{"ThenNoEvents", func(t testing.TB) { result.ThenNoEvents(t) }},
-		{"ThenError", func(t testing.TB) { result.ThenError(t, "unhandled event") }},
-	}
-
-	for _, assertion := range assertions {
-		t.Run(assertion.name, func(t *testing.T) {
-			require.True(t, recordFailure(t, assertion.assert),
-				"%s must fail when the arrangement failed", assertion.name)
+		specs.Table(s, rows, func(r row) string { return r.name + " fails when the arrangement failed" }, func(ctx *specs.Context, r row) {
+			ctx.Expect(recordFailure(ctx.T, r.assert)).To(specs.BeTrue())
 		})
-	}
+	})
 }
 
 func TestEventSourcedScenario_UnhandledCommandReturnsError(t *testing.T) {
-	behavior := &accountEventSourcedBehavior{id: "acc-7"}
+	specs.Describe(t, "EventSourcedScenario reports a command the behavior does not handle", func(s *specs.Spec) {
+		s.It("an unhandled command fails with the behavior's error", func(ctx *specs.Context) {
+			behavior := &accountEventSourcedBehavior{id: "acc-7"}
 
-	// TestSend is not handled by our test behavior
-	ForEventSourcedBehavior(behavior).
-		When(&testpb.TestSend{}).
-		ThenError(t, "unhandled command")
+			// TestSend is not handled by our test behavior
+			ForEventSourcedBehavior(behavior).
+				When(&testpb.TestSend{}).
+				ThenError(ctx.T, "unhandled command")
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -375,57 +419,73 @@ func TestEventSourcedScenario_UnhandledCommandReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDurableStateScenario_GivenStateWhenCommandThenStateAndVersion(t *testing.T) {
-	behavior := &accountDurableStateBehavior{id: "ds-1"}
+	specs.Describe(t, "DurableStateScenario checks state and version after a command on a given state", func(s *specs.Spec) {
+		s.It("given a state and version, a command produces the expected state and next version", func(ctx *specs.Context) {
+			behavior := &accountDurableStateBehavior{id: "ds-1"}
 
-	ForDurableStateBehavior(behavior).
-		Given(
-			&testpb.Account{
-				AccountId:      "ds-1",
-				AccountBalance: 100.00,
-			},
-			1, // prior version
-		).
-		When(&testpb.CreditAccount{
-			AccountId: "ds-1",
-			Balance:   50.00,
-		}).
-		ThenState(t, &testpb.Account{
-			AccountId:      "ds-1",
-			AccountBalance: 150.00,
-		}).
-		ThenVersion(t, 2)
+			ForDurableStateBehavior(behavior).
+				Given(
+					&testpb.Account{
+						AccountId:      "ds-1",
+						AccountBalance: 100.00,
+					},
+					1, // prior version
+				).
+				When(&testpb.CreditAccount{
+					AccountId: "ds-1",
+					Balance:   50.00,
+				}).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "ds-1",
+					AccountBalance: 150.00,
+				}).
+				ThenVersion(ctx.T, 2)
+		})
+	})
 }
 
 func TestDurableStateScenario_WhenCommandFromInitialState(t *testing.T) {
-	behavior := &accountDurableStateBehavior{id: "ds-2"}
+	specs.Describe(t, "DurableStateScenario runs a command from the initial state", func(s *specs.Spec) {
+		s.It("a command from the initial state produces the expected state and version", func(ctx *specs.Context) {
+			behavior := &accountDurableStateBehavior{id: "ds-2"}
 
-	ForDurableStateBehavior(behavior).
-		When(&testpb.CreateAccount{
-			AccountBalance: 300.00,
-		}).
-		ThenState(t, &testpb.Account{
-			AccountId:      "ds-2",
-			AccountBalance: 300.00,
-		}).
-		ThenVersion(t, 1)
+			ForDurableStateBehavior(behavior).
+				When(&testpb.CreateAccount{
+					AccountBalance: 300.00,
+				}).
+				ThenState(ctx.T, &testpb.Account{
+					AccountId:      "ds-2",
+					AccountBalance: 300.00,
+				}).
+				ThenVersion(ctx.T, 1)
+		})
+	})
 }
 
 func TestDurableStateScenario_WhenCommandReturnsError(t *testing.T) {
-	behavior := &accountDurableStateBehavior{id: "ds-3"}
+	specs.Describe(t, "DurableStateScenario reports a command handler error", func(s *specs.Spec) {
+		s.It("a command for the wrong entity fails with its error", func(ctx *specs.Context) {
+			behavior := &accountDurableStateBehavior{id: "ds-3"}
 
-	ForDurableStateBehavior(behavior).
-		When(&testpb.CreditAccount{
-			AccountId: "wrong-id",
-			Balance:   10.00,
-		}).
-		ThenError(t, "command sent to the wrong entity")
+			ForDurableStateBehavior(behavior).
+				When(&testpb.CreditAccount{
+					AccountId: "wrong-id",
+					Balance:   10.00,
+				}).
+				ThenError(ctx.T, "command sent to the wrong entity")
+		})
+	})
 }
 
 func TestDurableStateScenario_UnhandledCommandReturnsError(t *testing.T) {
-	behavior := &accountDurableStateBehavior{id: "ds-4"}
+	specs.Describe(t, "DurableStateScenario reports a command the behavior does not handle", func(s *specs.Spec) {
+		s.It("an unhandled command fails with the behavior's error", func(ctx *specs.Context) {
+			behavior := &accountDurableStateBehavior{id: "ds-4"}
 
-	// TestSend is not handled by our test behavior
-	ForDurableStateBehavior(behavior).
-		When(&testpb.TestSend{}).
-		ThenError(t, "unhandled command")
+			// TestSend is not handled by our test behavior
+			ForDurableStateBehavior(behavior).
+				When(&testpb.TestSend{}).
+				ThenError(ctx.T, "unhandled command")
+		})
+	})
 }

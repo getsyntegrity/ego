@@ -80,6 +80,17 @@ func WithResetOffset(resetOffset time.Time) Option {
 	})
 }
 
+// WithClock replaces the real clock the runner reads time from. The clock type
+// is package-private, so only this package's tests can build one: the option
+// exists to drive the pull loop, the retries, the store backoff and the offset
+// timestamps with a manual clock instead of sleeping. A nil clock is ignored
+// and the runner keeps the real one.
+func WithClock(c clock) Option {
+	return optionFunc(func(runner *Runner) {
+		runner.clock = c
+	})
+}
+
 // WithLogger sets the kit-logger Logger the runner writes its records to.
 func WithLogger(logger kitlog.Logger) Option {
 	return optionFunc(func(runner *Runner) {

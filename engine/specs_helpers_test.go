@@ -24,31 +24,8 @@ package engine
 
 import (
 	"context"
-	"reflect"
 	"time"
-
-	"github.com/getsyntegrity/go-specs/specs"
 )
-
-// beTheSamePointer matches a pointer that is the very same object as want,
-// the go-specs counterpart of testify's assert.Same. specs.Equal compares
-// deeply, so it cannot tell two equal but distinct values apart.
-func beTheSamePointer(want any) specs.Matcher {
-	return specs.Satisfy("the same pointer as the expected one", func(got any) bool {
-		w, g := reflect.ValueOf(want), reflect.ValueOf(got)
-		return w.Kind() == reflect.Pointer && g.Kind() == reflect.Pointer &&
-			w.Type() == g.Type() && w.Pointer() == g.Pointer()
-	})
-}
-
-// panicValue runs fn and returns what it panicked with, or nil when it did not
-// panic. Expect(panicValue(fn)).To(specs.BeNil()) is the go-specs counterpart
-// of testify's NotPanics.
-func panicValue(fn func()) (recovered any) {
-	defer func() { recovered = recover() }()
-	fn()
-	return nil
-}
 
 // waitTimeout bounds every ctx.Eventually poll on a real actor system. It is a
 // ceiling, not a delay: a poll returns as soon as its condition holds.
