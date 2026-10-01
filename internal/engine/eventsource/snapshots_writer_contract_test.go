@@ -49,17 +49,17 @@ var errSnapshotWrite = errors.New("snapshot write failed")
 // errEncrypt is what a failing encryptor returns.
 var errEncrypt = errors.New("encrypt failed")
 
-// writeGate holds a snapshot write until the case opens it, so a case can
+// snapshotWriteGate holds a snapshot write until the case opens it, so a case can
 // observe what happens while the write is still in flight without sleeping.
-type writeGate struct {
+type snapshotWriteGate struct {
 	once sync.Once
 	open chan struct{}
 }
 
-func newWriteGate() *writeGate { return &writeGate{open: make(chan struct{})} }
+func newSnapshotWriteGate() *snapshotWriteGate { return &snapshotWriteGate{open: make(chan struct{})} }
 
 // release lets every held and future write through. It is safe to call twice.
-func (g *writeGate) release() { g.once.Do(func() { close(g.open) }) }
+func (g *snapshotWriteGate) release() { g.once.Do(func() { close(g.open) }) }
 
 // snapshotWriterRig wires a snapshots writer and an events janitor on one
 // actor system whose stores record into one shared, ordered log.
@@ -74,7 +74,7 @@ type snapshotWriterRig struct {
 // gate, when non-nil, holds each snapshot write until it is released. The
 // actor system and the stores are stopped when the case ends, after the gate
 // is released.
-func newSnapshotWriterRig(ctx *specs.Context, snapshotErr error, encryptor *extensions.EncryptorExtension, gate *writeGate) *snapshotWriterRig {
+func newSnapshotWriterRig(ctx *specs.Context, snapshotErr error, encryptor *extensions.EncryptorExtension, gate *snapshotWriteGate) *snapshotWriterRig {
 	bg := context.Background()
 
 	calls := new(storeCalls)
@@ -168,7 +168,7 @@ func TestSnapshotsWriterContract(t *testing.T) {
 		})
 
 		s.It("retention runs after the snapshot write", func(ctx *specs.Context) {
-			gate := newWriteGate()
+			gate := newSnapshotWriteGate()
 			rig := newSnapshotWriterRig(ctx, nil, nil, gate)
 
 			rig.persist(ctx, persistence.Unscoped(), true)
