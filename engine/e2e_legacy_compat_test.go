@@ -28,14 +28,68 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/command"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
+
+// legacyCompatCaseG4 is one actor type the legacy-compatibility proof runs
+// against. spawn starts an engine and one entity of that type. first sends the
+// entity its opening command the legacy way and checks it succeeded with
+// revision 1.
+type legacyCompatCaseG4 struct {
+	actor string
+	spawn func(ctx *specs.Context, name string) (*Engine, string)
+	first func(ctx *specs.Context, engine *Engine, entityID string)
+}
+
+// legacyCompatCasesG4 lists both actor types: EventSourcedActor over a real
+// testkit.EventsStore and DurableStateActor over a real testkit.StateStore.
+func legacyCompatCasesG4() []legacyCompatCaseG4 {
+	bg := context.Background()
+	return []legacyCompatCaseG4{
+		{
+			actor: "EventSourcedActor",
+			spawn: func(ctx *specs.Context, name string) (*Engine, string) {
+				engine := newTestEngine(ctx.T, name, connectedEventsStoreG4(ctx), WithLogger(DiscardLogger))
+				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+				entityID := uuid.NewString()
+				ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
+				return engine, entityID
+			},
+			first: func(ctx *specs.Context, engine *Engine, entityID string) {
+				// The legacy entry point: SendCommand never carries ExpectedRevision,
+				// so every write it issues must resolve to Unconditional() (D4/D8).
+				state, revision, err := engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+				ctx.Expect(err).To(specs.BeNil())
+				acct, ok := state.(*testpb.Account)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(acct.GetAccountBalance()).ToEqual(float64(100))
+				ctx.Expect(revision).ToEqual(uint64(1))
+			},
+		},
+		{
+			actor: "DurableStateActor",
+			spawn: func(ctx *specs.Context, name string) (*Engine, string) {
+				engine := newTestEngine(ctx.T, name, nil, WithLogger(DiscardLogger), WithStateStore(connectedStateStoreG4(ctx)))
+				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+				entityID := uuid.NewString()
+				ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
+				return engine, entityID
+			},
+			first: func(ctx *specs.Context, engine *Engine, entityID string) {
+				// dispatchWithMetadataG4 with zero MetadataOptions declares no
+				// ExpectedRevision, matching the legacy caller contract for
+				// DurableStateActor as well.
+				created := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 100})
+				ctx.Expect(created.Outcome()).To(specs.Equal(command.OutcomeSuccess))
+				ctx.Expect(created.Revision()).ToEqual(uint64(1))
+			},
+		},
+	}
+}
 
 // This file is task 5.5's e2e proof for AC8 ("Legacy Caller Compatibility"):
 // a legacy command carrying no ExpectedRevision metadata behaves
@@ -50,147 +104,68 @@ import (
 // DurableState genesis tests in durable_state_actor_expected_revision_test.go,
 // each exercise only one actor type in isolation).
 func TestLegacyCompatEventSourcedAndDurableStateNeverConflict(t *testing.T) {
-	t.Run("EventSourcedActor: legacy commands never conflict under concurrent dispatch", func(t *testing.T) {
-		ctx := context.Background()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a command with no ExpectedRevision is unconditional and 0 maps to ExpectGenesis", func(s *specs.Spec) {
+		cases := legacyCompatCasesG4()
 
-		engine := newTestEngine(t, "e2e-legacy-es", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
+		specs.Table(s, cases, func(c legacyCompatCaseG4) string {
+			return c.actor + ": legacy commands never conflict under concurrent dispatch"
+		}, func(ctx *specs.Context, c legacyCompatCaseG4) {
+			engine, entityID := c.spawn(ctx, "e2e-legacy-"+c.actor)
+			c.first(ctx, engine, entityID)
 
-		entityID := uuid.NewString()
-		require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			// Multiple legacy commands dispatched concurrently against the same
+			// entity: Unconditional() never declares an expectation that can go
+			// stale, so none of these may ever surface concurrency_conflict,
+			// regardless of the concurrent dispatch racing through the mailbox.
+			// dispatchWithMetadataG4 with zero MetadataOptions declares no
+			// ExpectedRevision -- the same absence contract as the legacy path.
+			const n = 10
+			var wg sync.WaitGroup
+			results := make([]command.Result, n)
+			wg.Add(n)
+			for i := range n {
+				ctx.Go(func(task *specs.Context) {
+					defer wg.Done()
+					results[i] = dispatchWithMetadataG4(task, engine, entityID,
+						&testpb.CreditAccount{AccountId: entityID, Balance: 1})
+				})
+			}
+			wg.Wait()
 
-		// The legacy entry point: SendCommand never carries ExpectedRevision,
-		// so every write it issues must resolve to Unconditional() (D4/D8).
-		state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-		require.NoError(t, err)
-		acct, ok := state.(*testpb.Account)
-		require.True(t, ok)
-		assert.EqualValues(t, 100, acct.GetAccountBalance())
-		assert.EqualValues(t, 1, revision)
-
-		// Multiple legacy commands dispatched concurrently against the same
-		// entity: Unconditional() never declares an expectation that can go
-		// stale, so none of these may ever surface concurrency_conflict,
-		// regardless of the concurrent dispatch racing through the mailbox.
-		const n = 10
-		var wg sync.WaitGroup
-		results := make([]command.Result, n)
-		wg.Add(n)
-		for i := 0; i < n; i++ {
-			go func(i int) {
-				defer wg.Done()
-				// dispatchWithMetadata with zero MetadataOptions declares no
-				// ExpectedRevision -- the same absence contract as the legacy
-				// SendCommand path exercises above.
-				results[i] = dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 1})
-			}(i)
-		}
-		wg.Wait()
-
-		for i, result := range results {
-			require.Equalf(t, command.OutcomeSuccess, result.Outcome(), "legacy command %d must never be rejected", i)
-			if failure, hasFailure := result.Failure(); hasFailure {
-				if code, hasCode := failure.Code(); hasCode {
-					assert.NotEqual(t, command.CodeConcurrencyConflict, code)
+			outcomes := make([]command.Outcome, 0, n)
+			codes := make([]string, 0, n)
+			for _, result := range results {
+				outcomes = append(outcomes, result.Outcome())
+				if failure, hasFailure := result.Failure(); hasFailure {
+					if code, hasCode := failure.Code(); hasCode {
+						codes = append(codes, code)
+					}
 				}
 			}
-		}
-	})
+			// every legacy command succeeds: none is rejected, none conflicts
+			ctx.Expect(outcomes).To(specs.EveryElement(specs.Equal(command.OutcomeSuccess)))
+			ctx.Expect(codes).To(specs.NoElement(specs.Equal(command.CodeConcurrencyConflict)))
+		})
 
-	t.Run("DurableStateActor: legacy commands never conflict under concurrent dispatch", func(t *testing.T) {
-		ctx := context.Background()
-		store := testkit.NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		specs.Table(s, cases, func(c legacyCompatCaseG4) string {
+			return c.actor + ": ExpectedRevision=0 maps to ExpectGenesis()"
+		}, func(ctx *specs.Context, c legacyCompatCaseG4) {
+			engine, entityID := c.spawn(ctx, "e2e-legacy-genesis-"+c.actor)
 
-		engine := newTestEngine(t, "e2e-legacy-ds", nil, WithLogger(DiscardLogger), WithStateStore(store))
-		require.NoError(t, engine.Start(ctx))
+			result := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			ctx.Expect(result.Outcome()).To(specs.Equal(command.OutcomeSuccess))
+			ctx.Expect(result.Revision()).ToEqual(uint64(1))
 
-		entityID := uuid.NewString()
-		require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-		// dispatchWithMetadata with zero MetadataOptions declares no
-		// ExpectedRevision, matching the legacy caller contract for
-		// DurableStateActor as well.
-		created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 100})
-		require.Equal(t, command.OutcomeSuccess, created.Outcome())
-		require.EqualValues(t, 1, created.Revision())
-
-		const n = 10
-		var wg sync.WaitGroup
-		results := make([]command.Result, n)
-		wg.Add(n)
-		for i := 0; i < n; i++ {
-			go func(i int) {
-				defer wg.Done()
-				results[i] = dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 1})
-			}(i)
-		}
-		wg.Wait()
-
-		for i, result := range results {
-			require.Equalf(t, command.OutcomeSuccess, result.Outcome(), "legacy command %d must never be rejected", i)
-			if failure, hasFailure := result.Failure(); hasFailure {
-				if code, hasCode := failure.Code(); hasCode {
-					assert.NotEqual(t, command.CodeConcurrencyConflict, code)
-				}
-			}
-		}
-	})
-
-	t.Run("EventSourcedActor: ExpectedRevision=0 maps to ExpectGenesis()", func(t *testing.T) {
-		ctx := context.Background()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-
-		engine := newTestEngine(t, "e2e-legacy-es-genesis", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
-
-		entityID := uuid.NewString()
-		require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
-
-		result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-		require.Equal(t, command.OutcomeSuccess, result.Outcome())
-		assert.EqualValues(t, 1, result.Revision())
-
-		// A second genesis declaration against the now-existing aggregate must
-		// be rejected as a conflict, proving 0 was read as ExpectGenesis(),
-		// never as Unconditional() nor silently ignored.
-		conflict := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
-		require.Equal(t, command.OutcomeRejected, conflict.Outcome())
-		failure, ok := conflict.Failure()
-		require.True(t, ok)
-		code, hasCode := failure.Code()
-		require.True(t, hasCode)
-		assert.Equal(t, command.CodeConcurrencyConflict, code)
-	})
-
-	t.Run("DurableStateActor: ExpectedRevision=0 maps to ExpectGenesis()", func(t *testing.T) {
-		ctx := context.Background()
-		store := testkit.NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-
-		engine := newTestEngine(t, "e2e-legacy-ds-genesis", nil, WithLogger(DiscardLogger), WithStateStore(store))
-		require.NoError(t, engine.Start(ctx))
-
-		entityID := uuid.NewString()
-		require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-		result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-		require.Equal(t, command.OutcomeSuccess, result.Outcome())
-		assert.EqualValues(t, 1, result.Revision())
-
-		conflict := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
-		require.Equal(t, command.OutcomeRejected, conflict.Outcome())
-		failure, ok := conflict.Failure()
-		require.True(t, ok)
-		code, hasCode := failure.Code()
-		require.True(t, hasCode)
-		assert.Equal(t, command.CodeConcurrencyConflict, code)
+			// A second genesis declaration against the now-existing aggregate must
+			// be rejected as a conflict, proving 0 was read as ExpectGenesis(),
+			// never as Unconditional() nor silently ignored.
+			conflict := dispatchWithMetadataG4(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
+			ctx.Expect(conflict.Outcome()).To(specs.Equal(command.OutcomeRejected))
+			failure, ok := conflict.Failure()
+			ctx.Expect(ok).To(specs.BeTrue())
+			code, hasCode := failure.Code()
+			ctx.Expect(hasCode).To(specs.BeTrue())
+			ctx.Expect(code).To(specs.Equal(command.CodeConcurrencyConflict))
+		})
 	})
 }
