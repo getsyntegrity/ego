@@ -68,7 +68,7 @@ follow the go-specs conventions:
       `TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit`.
 - [x] T3 The batch precondition matrix. Route: inline. Evidence: `e8f5858`. RED mutation:
       `if !entity.batchHasPrecondition || true` in `eventsource`; all 8 conditional matrix rows
-      and the 4 other batch tests failed.
+      and 5 other batch tests failed.
 - [x] T4 Verify and deliver: vet, lint, gofmt, `-count=5`, full package with coverage, push, PR, CI.
       Evidence: see Progress.
 
