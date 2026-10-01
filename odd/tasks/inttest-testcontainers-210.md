@@ -51,7 +51,7 @@ The fix removes the cause instead: each integration test package starts its own 
 - [x] **B1 Module, infra and gate scope.** `inttest/go.mod`, `inttest/infra` (`StartPostgres`, per-test database), a smoke spec proving that a database is created and reachable, and `unitgate` excluding `inttest/` from the real-resource rule, with a `unitgate` test. Check: `cd inttest && go test ./infra/...`, `go test ./.github/scripts/unitgate`, `go run ./.github/scripts/unitgate -strict`. Route: delegated writer.
 - [x] **B2 Migrate the 19 tests.** Move them into `inttest/postgres`, with `TestMain` owning the container and each test getting its own database and calling `t.Parallel()`. Names and assertions are unchanged. Delete `example/cluster/stores_postgres_test.go` and its allowlist entry. Check: `cd inttest && go test -count=1 ./postgres/...` shows all 19 passed, and `example/cluster` `go test ./...` stays green. Route: delegated writer.
 - [x] **B3 Conformance suites.** In `inttest/postgres`, run `RunEventsStoreConformance` and `RunSchemaMigratorConformance` against `persistence/postgres`, including the legacy cases moved from spec A. Check: same command, with conformance subtests passing. Route: delegated writer.
-- [ ] **B4 Evidence.** Record these here:
+- [x] **B4 Evidence.** Record these here:
   - wall-clock time of `cd inttest && go test -count=1 ./...`;
   - the run with Docker stopped, which must FAIL, with its error output;
   - that the root `go test ./...` compiles nothing from `inttest`;
@@ -84,6 +84,40 @@ The fix removes the cause instead: each integration test package starts its own 
 - Design change: `infra.Postgres.NewDatabase` takes a small `infra.T` interface (`Helper`, `Errorf`, `FailNow`, `Cleanup`) instead of `testing.TB`, because the harness hooks receive a `conformance.SchemaT`, which is not a `testing.TB`. Each check therefore drops its database when the check ends.
 - RED: with `TestPostgresSchemaMigratorConformance` calling a missing `postgresSchemaHarness`, `go vet ./postgres/` gave `undefined: postgresSchemaHarness`. GREEN: `go test -count=1 -json ./...` in `inttest` has 21 top-level tests and 60 passes counting subtests, no skips and no failures, in about 4 s.
 
+### B4 (route: delegated writer)
+
+(a) Wall-clock and counts, `cd inttest && go test -count=1 ./...` (Docker running, image already pulled):
+
+```
+ok  	github.com/getsyntegrity/ego/inttest/infra	2.361s
+ok  	github.com/getsyntegrity/ego/inttest/postgres	3.424s
+real 0:03.95
+```
+
+From `go test -count=1 -json ./...`: 21 top-level tests passed, 0 skipped, 0 failed (60 passed, 0 skipped, 0 failed counting subtests).
+
+(b) Docker unavailable. I did not stop the system Docker daemon, because other sessions use it. Pointing `DOCKER_HOST` at a missing socket is not enough: Testcontainers checks each candidate host in turn and falls back to `/var/run/docker.sock`, so the run still passed. Instead I ran the tests in a private mount namespace (`unshare --user --map-root-user --mount`) where `/run/docker.sock` is replaced by `/dev/null`, together with `DOCKER_HOST=unix:///nonexistent.sock`. The host daemon and its containers were untouched (`docker ps` afterwards still lists them). The run FAILS, it does not skip or pass:
+
+```
+inttest/infra: cannot start the Postgres container: start the postgres:17.6-alpine container (is Docker running?): run postgres: generic container: get provider: check host "unix:///nonexistent.sock": docker info: failed to connect to the docker API at unix:///nonexistent.sock; ...
+check host "unix:///var/run/docker.sock": docker info: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+FAIL	github.com/getsyntegrity/ego/inttest/infra	0.050s
+inttest/postgres: cannot start the Postgres container, the tests cannot run without it: ...
+FAIL	github.com/getsyntegrity/ego/inttest/postgres	0.026s
+FAIL
+exit=1
+```
+
+(c) The root module does not see `inttest`: `go list ./... | rg inttest` prints nothing (the root `go list -m` is only `github.com/getsyntegrity/ego`, and there is no `go.work`), and `go list ./inttest/...` fails with `directory prefix inttest does not contain main module or its selected dependencies`. So the root `go test ./...` never compiles it. I did not run the full root suite.
+
+(d) `go mod tidy -diff` is clean in the root, `inttest`, `persistence/postgres` and `example/cluster`.
+
+(e) `git diff origin/develop -- go.mod go.sum` is empty, and `rg "pgx|testcontainers" go.mod` finds nothing.
+
+Other checks: `go run ./.github/scripts/unitgate -strict` ok (0 pending entries, 40 resource entries); `go test ./.github/scripts/unitgate` ok; `gofmt -l inttest .github/scripts/unitgate` empty; `go vet ./...` clean in `inttest` and `example/cluster`; `example/cluster` `go test ./...` prints `[no test files]`.
+
+Follow-ups for spec C: the `inttest` job in `ci.yml` and the `modules`/`tidy` coverage of the new module, the `unitgate` rule against `t.Skip`/`testing.Short` under `inttest/`, and the end-to-end flow in `inttest/flows`.
+
 ## Next step
 
-B4.
+Spec C.
