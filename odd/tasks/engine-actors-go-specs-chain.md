@@ -60,3 +60,16 @@ single spec would need far more than five tasks.
 - 2026-09-30: `develop` (go-specs v0.3.3) was merged into the #238 branch and pushed. `go mod tidy` is
   clean in every module. The two packages are green at 225.6 s and 22.2 s. S1 has started on
   `refactor/engine-test-seams`.
+- 2026-09-30: the chain is delivered as four stacked PRs:
+
+  | Spec | PR | Base |
+  |---|---|---|
+  | S1 | #244 | #238 |
+  | S2 | #245 | #244 |
+  | S3a | #246 | #244 |
+  | S3b | (this push) | #246 |
+
+  durablestate went from 22.2 s to 0.05 s, and eventsource went from 225.6 s to 81.1 s. Coverage is
+  unchanged: 85.8% for durablestate and 92.0% for eventsource. The rest of eventsource's time is in four
+  files outside #238, and S4 takes them on. No change to the lane inventory is needed; see the S3b doc for
+  why.

@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -44,7 +44,6 @@ import (
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
 	"github.com/getsyntegrity/ego/persistence"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	"github.com/getsyntegrity/ego/tenancy"
@@ -382,88 +381,6 @@ func TestDurableStateBehavior(t *testing.T) {
 		assert.NoError(t, durableStore.Disconnect(ctx))
 		eventStream.Close()
 	})
-	t.Run("with state recovery from state store failure", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(nil, assert.AnError)
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		persistentActor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-
-		eventStream.Close()
-		durableStore.AssertExpectations(t)
-	})
-	t.Run("with state recovery from state store with initial parsing failure", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		latestState := &egopb.DurableState{
-			ResultingState: &anypb.Any{
-				TypeUrl: "invalid-type-url",
-				Value:   []byte("invalid-value"),
-			},
-		}
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(latestState, nil)
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		persistentActor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-
-		eventStream.Close()
-		durableStore.AssertExpectations(t)
-	})
 	t.Run("with telemetry extension", func(t *testing.T) {
 		ctx := context.TODO()
 
@@ -616,6 +533,59 @@ func TestDurableStateBehavior(t *testing.T) {
 		require.NoError(t, err)
 
 		eventStream.Close()
+	})
+	// The two store-failure cases below need no actor system: recoverFromStore
+	// is the whole behavior under test, so they run on the actor struct with a
+	// StateStoreMock. The empty Describe name keeps the old subtest names.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
+
+		s.It("with state recovery from state store failure", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("GetLatestState").
+				Expect(mock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, assert.AnError)
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    enginetest.NewStateStoreMock(ctrl),
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.MatchError(assert.AnError))
+			ctx.Expect(entity.currentState).To(specs.BeNil())
+			ctx.Expect(entity.currentVersion).ToEqual(uint64(0))
+		})
+
+		s.It("with state recovery from state store with initial parsing failure", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			latestState := &egopb.DurableState{
+				ResultingState: &anypb.Any{
+					TypeUrl: "invalid-type-url",
+					Value:   []byte("invalid-value"),
+				},
+			}
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("GetLatestState").
+				Expect(mock.Any(), persistence.Unscoped(), persistenceID).
+				Return(latestState, nil)
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    enginetest.NewStateStoreMock(ctrl),
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.MatchRegex("failed to unmarshal the latest state"))
+			ctx.Expect(entity.currentState).To(specs.BeNil())
+			ctx.Expect(entity.currentVersion).ToEqual(uint64(0))
+		})
 	})
 }
 
