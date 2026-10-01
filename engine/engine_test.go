@@ -1487,39 +1487,36 @@ func TestEngineProjectionLagHappyPath(t *testing.T) {
 // RebuildProjection: it stops the running projection, resets its offset, and
 // restarts it.
 func TestEngineRebuildProjectionSuccess(t *testing.T) {
-	specs.Describe(t, "RebuildProjection stops, resets and restarts a running projection", func(s *specs.Spec) {
-		s.It("leaves the projection running again", func(sc *specs.Context) {
-			t := sc.T
-			ctx := context.Background()
-			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
-			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	ctx := context.Background()
+	store := testkit.NewEventsStore()
+	require.NoError(t, store.Connect(ctx))
+	t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-			offsetStore := testkit.NewOffsetStore()
-			require.NoError(t, offsetStore.Connect(ctx))
-			t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
+	offsetStore := testkit.NewOffsetStore()
+	require.NoError(t, offsetStore.Connect(ctx))
+	t.Cleanup(func() { _ = offsetStore.Disconnect(ctx) })
 
-			engine := newTestEngine(t, "Sample", store,
-				WithLogger(DiscardLogger),
-				WithOffsetStore(offsetStore),
-				WithProjection("rebuild-target", &projection.Options{
-					Handler:      projection.NewDiscardHandler(),
-					BufferSize:   100,
-					PullInterval: time.Second,
-				}),
-			)
-			require.NoError(t, engine.Start(ctx))
+	engine := newTestEngine(t, "Sample", store,
+		WithLogger(DiscardLogger),
+		WithOffsetStore(offsetStore),
+		WithProjection("rebuild-target", &projection.Options{
+			Handler:      projection.NewDiscardHandler(),
+			BufferSize:   100,
+			PullInterval: time.Second,
+		}),
+	)
+	require.NoError(t, engine.Start(ctx))
 
-			const name = "rebuild-target"
-			require.NoError(t, engine.StartProjection(ctx, name))
-			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
+	const name = "rebuild-target"
+	require.NoError(t, engine.StartProjection(ctx, name))
+	pause.For(300 * time.Millisecond)
 
-			require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
-			// The restarted actor is looked up by name and may not be registered yet,
-			// so poll instead of asserting on one immediate lookup.
-			sc.Eventually(projectionRunning(ctx, engine, name), specs.BeTrue(), specs.WithTimeout(waitTimeout))
-		})
-	})
+	require.NoError(t, engine.RebuildProjection(ctx, name, ZeroTime))
+	pause.For(300 * time.Millisecond)
+
+	running, err := engine.IsProjectionRunning(ctx, name)
+	require.NoError(t, err)
+	require.True(t, running, "projection should be running again after rebuild")
 }
 
 // TestEngineSagaHappyPath registers a saga via Engine.Saga and then queries

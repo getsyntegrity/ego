@@ -16,7 +16,7 @@ work while this branch was open, so that part was dropped in favor of develop's 
 
 Only `*_test.go` files in `engine/` change. No production code is touched.
 
-- `engine/engine_test.go` (8 tests) and `engine/publisher_test.go` (5 tests): `pause.For` after
+- `engine/engine_test.go` (7 tests) and `engine/publisher_test.go` (5 tests): `pause.For` after
   `StartProjection` is `ctx.Eventually` on `IsProjectionRunning`, the single-node cluster wait is
   `ctx.Eventually` on `sys.InCluster()`, the saga wait polls `SagaStatus`, and the publisher tests poll the
   recorded count. The `time.Sleep(50ms)` drain loop in `TestEngineSubscribeReceivesEventsAndStates` is two
@@ -27,6 +27,12 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 
 ## What does not change, and why
 
+- **`TestEngineRebuildProjectionSuccess`.** It flakes about once in 300 runs on develop itself (CI saw `actor
+  not found`; locally the projection is not running after the rebuild). Polling does not help: with
+  `ctx.Eventually` the projection stayed down for the whole 10 s, so the actor really is not restarted.
+  This looks like a race in `RebuildProjection` (Kill followed by an immediate Spawn of the same name),
+  which needs a production fix. Its original pauses are left as they are so this PR does not make the flake
+  worse. Follow-up: `engine-rebuild-projection-race`.
 - **`TestEnginePublisherIdleCPU`.** Its wall-clock window is the measurement.
 - **`waitFor`/`waitForCond` in `publisher_test.go`.** They are polling helpers (20 ms interval). `waitForCond(60s)`
   in the high-partition test polls and then skips, which `Eventually` cannot do; the ordering test was fixed
@@ -43,13 +49,10 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 
 ## Tasks
 
-- [x] T1 `engine_test.go` fixed waits to `ctx.Eventually` (8 tests). Route: inline script plus manual review.
+- [x] T1 `engine_test.go` fixed waits to `ctx.Eventually` (7 tests). Route: inline script plus manual review.
       RED: making `IsProjectionRunning` return false gave `Eventually: timed out after 10.000647566s (981
       attempts) ... last observed: false`. The two cluster tests got faster (12.07 s to 10.15 s) because the
       1 s waits are gone.
-      Flake note: CI saw `actor not found` in `TestEngineRebuildProjectionSuccess` from the immediate
-      `IsProjectionRunning` lookup right after `RebuildProjection`. The final lookup is now only the
-      `Eventually` poll, which treats a lookup error as "not running yet". `-count=30` passes.
 - [x] T2 `publisher_test.go` fixed waits to `ctx.Eventually` (5 tests). Route: inline. RED: dropping the
       `StatesTopic` publish in the durable-state actor gave `Eventually: timed out after 10.000345093s ...
       expected 0 to be greater than or equal to 1`.
@@ -61,6 +64,7 @@ Only `*_test.go` files in `engine/` change. No production code is touched.
 - `engine-go-specs-actor-lane`: the tests that start a real actor system (entity, saga, tenant, projection,
   durable-state) need a production seam or a component lane. Includes moving the existing `require.Eventually`
   calls to `ctx.Eventually`, and the architecture tests that shell out or walk the tree.
+- `engine-rebuild-projection-race`: fix the `RebuildProjection` restart race, then replace that test's pauses.
 - `enginetest-adapters-dedup`, as listed in `engine-rest-go-specs-v033.md`.
 
 ## Progress
