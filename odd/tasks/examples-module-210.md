@@ -105,3 +105,14 @@ Checks: root `go build`/`go vet` and `go test -count=1 ./engine/... ./internal/e
 ### Benchmark module after the merge (user, 2026-10-01)
 
 The user asked for `inttest` and `benchmark` to run only on `develop` or `main`, whichever suits the pipeline. Applied: `benchmark` follows the `inttest` rule. `modules` builds and vets it on every pull request with Go changes, as a vet-only include, so a change that breaks it fails before the merge. A new `benchmark` job in `ci.yml` runs its tests (without `-bench`; they start a real goakt actor system) on push to `develop`, the `develop` to `main` release pull request and `workflow_dispatch`. The job is listed in `ci-ok`. Check: `actionlint` is clean.
+
+### One example module (user, 2026-10-01)
+
+The user approved merging `example/cluster` into the `example` module, so there is now one `example/go.mod` for every example. Before, the cluster example was a module of its own that required `example` only to use `examplepb`. Now `example/go.mod` adds a `replace` for `persistence/postgres`, and `pgx` stays at v5.10.0, the same version as `persistence/postgres` and `inttest`. The `example/cluster` entries are gone from `modules` and Dependabot, and `docs/ci.md` and the cluster README are updated.
+
+Checks:
+- `actionlint` is clean.
+- The root module builds and vets.
+- `go mod tidy -diff` is clean in the root, `example`, `benchmark`, `inttest` and `persistence/postgres`.
+- In `example`, `go build`, `go vet` and `go test` pass, and the cluster example builds from its own directory, which is the path the Dockerfile uses.
+- `unitgate -strict` is ok.

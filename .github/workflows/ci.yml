@@ -10,7 +10,7 @@
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
 #   modules     -> build, vet and test of every nested module (persistence/postgres, publishers, compat,
-#                  example, example/cluster); inttest and benchmark are only built and vetted here, their
+#                  example, which also holds example/cluster); inttest and benchmark are only built and vetted here, their
 #                  tests run in their own jobs. The examples are compiled, never run
 #   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
 #                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
@@ -253,8 +253,8 @@ jobs:
       - if: github.base_ref == 'main'
         run: go test $TESTFLAGS ./...
 
-  # Nested modules (benchmark, persistence/postgres, publisher/*, test/compat, example, example/cluster,
-  # inttest) are separate Go modules: `./...` at the root does not reach them, so each one is built, vetted
+  # Nested modules (benchmark, persistence/postgres, publisher/*, test/compat, example (all the examples,
+  # example/cluster included), inttest) are separate Go modules: `./...` at the root does not reach them, so each one is built, vetted
   # and tested on its own. No race detector. The examples are compiled here on every pull request with Go
   # changes (they are never executed), so a change that breaks one fails before the merge. inttest and
   # benchmark are built and vetted only (go vet compiles their test files): their tests are heavy (Docker,
@@ -270,7 +270,6 @@ jobs:
       matrix:
         dir:
           - example
-          - example/cluster
           - persistence/postgres
           - publisher/kafka
           - publisher/nats
