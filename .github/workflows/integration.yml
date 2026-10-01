@@ -1,0 +1,78 @@
+# Integration lane (#210). Runs the tests that need a real resource (today: PostgresEventStore against PostgreSQL)
+# and proves they really ran. A skipped test reports "ok" in `go test`, so the lane ends with a gate.
+#
+#   manifest   .github/integration-suites.txt lists every top-level test the lane must execute
+#   run        go test -json -tags integration -run '^(...)$' for each module and package in the manifest
+#   gate       .github/scripts/integrationgate compares the manifest with the go test -json output and fails
+#              when a listed test never ran, was skipped, failed or no longer exists, or when an
+#              integration-tagged test is not listed
+#
+# Triggers: push to main, manual dispatch, and a call from ci.yml (pull requests to main, and pull requests to
+# develop that touch integration code). The check that blocks merges is still ci-ok in ci.yml.
+name: integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  # A newer pull request run replaces an older one; every push to main is validated.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EGO_EXAMPLE_POSTGRES_DSN: postgres://postgres:pg@localhost:5432/postgres?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: pg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Check the manifest
+        # Static: the manifest parses, every listed test still exists and no integration-tagged test is unlisted.
+        run: go run ./.github/scripts/integrationgate -check-manifest
+      - name: Run the suites
+        # A failing go test must not stop the job here: the gate below reads every result and gives the verdict.
+        run: |
+          REPORTS="$RUNNER_TEMP/integration"
+          mkdir -p "$REPORTS"
+          n=0
+          while IFS=$'\t' read -r module dir run; do
+            n=$((n + 1))
+            echo "::group::go test $module ($dir)"
+            (cd "$module" && go test -json -count=1 -tags integration -timeout=15m -run "$run" "./$dir") > "$REPORTS/test-$n.json" \
+              || echo "go test exited with status $? in $module ($dir); the gate reports what it found"
+            echo "::endgroup::"
+          done < <(go run ./.github/scripts/integrationgate -plan)
+      - name: Gate
+        run: |
+          REPORTS="$RUNNER_TEMP/integration"
+          status=0
+          go run ./.github/scripts/integrationgate -summary "$REPORTS/summary.md" "$REPORTS"/test-*.json || status=$?
+          [ ! -f "$REPORTS/summary.md" ] || cat "$REPORTS/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-report
+          path: ${{ runner.temp }}/integration/
+          retention-days: 14
+          if-no-files-found: ignore

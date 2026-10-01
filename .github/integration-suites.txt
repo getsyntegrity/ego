@@ -1,0 +1,35 @@
+# Suites the integration lane must execute (issue #210).
+#
+# Each line names one top-level test that .github/workflows/integration.yml has to run for real. The gate
+# (.github/scripts/integrationgate) reads this file and the `go test -json` output of the lane, and fails when a
+# listed test was never executed, was skipped (an unset resource looks like a skip, which looks like a pass),
+# failed, or no longer exists. It also fails when a top-level test in a file built with `//go:build integration`
+# is missing from this list, so a test cannot move behind the tag and silently run nowhere.
+#
+# Format: module-dir | package-dir | TestName
+#   module-dir   directory of the Go module that holds the test, relative to the repository root ("." is the root)
+#   package-dir  directory of the package inside that module ("." is the module root)
+#   TestName     a top-level test function, TestXxx (subtests travel with their parent)
+# Blank lines and lines starting with # are ignored. A suite may be listed once.
+#
+# example/cluster: PostgresEventStore against a real PostgreSQL. The tests skip when EGO_EXAMPLE_POSTGRES_DSN is
+# unset; the workflow starts a Postgres service and sets it.
+example/cluster | . | TestPostgresEventStore_Conformance
+example/cluster | . | TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner
+example/cluster | . | TestPostgresEventStore_ExpectGenesisConflictsOnExistingID
+example/cluster | . | TestPostgresEventStore_TenantScopeIsolatesRecords
+example/cluster | . | TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision
+example/cluster | . | TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock
+example/cluster | . | TestPostgresEventStore_PartialDeleteKeepsRevision
+example/cluster | . | TestPostgresEventStore_TotalDeleteKeepsRevision
+example/cluster | . | TestPostgresEventStore_DeleteKeepsRevisionPerTenant
+example/cluster | . | TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData
+example/cluster | . | TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict
+example/cluster | . | TestPostgresEventStore_UnconditionalRaceSameSequenceConflict
+example/cluster | . | TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite
+example/cluster | . | TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite
+example/cluster | . | TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite
+example/cluster | . | TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents
+example/cluster | . | TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone
+example/cluster | . | TestPostgresEventStore_SchemaMigratesLegacyDatabase
+example/cluster | . | TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata
