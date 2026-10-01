@@ -101,3 +101,7 @@ Proof that no binary links both generated packages (same proto file registered t
 - `rg -n 'ego/internal/' example --type go` returns nothing.
 
 Checks: root `go build`/`go vet` and `go test -count=1 ./engine/... ./internal/engine/saga/... ./internal/engine/enginetest/...` ok; `example` and `example/cluster` `go build`, `go vet`, `go test -count=1` ok; `benchmark` `go vet` ok; `go mod tidy -diff` clean in root, `example`, `example/cluster`, `benchmark`, `inttest`; `unitgate -strict` ok; `gofmt -l` empty.
+
+### Benchmark module after the merge (user, 2026-10-01)
+
+The user asked for `inttest` and `benchmark` to run only on `develop` or `main`, whichever suits the pipeline. Applied: `benchmark` follows the `inttest` rule. `modules` builds and vets it on every pull request with Go changes, as a vet-only include, so a change that breaks it fails before the merge. A new `benchmark` job in `ci.yml` runs its tests (without `-bench`; they start a real goakt actor system) on push to `develop`, the `develop` to `main` release pull request and `workflow_dispatch`. The job is listed in `ci-ok`. Check: `actionlint` is clean.
