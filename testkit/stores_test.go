@@ -97,6 +97,12 @@ func sequenceNumber[T interface{ GetSequenceNumber() uint64 }](want uint64) spec
 	return specs.Project("SequenceNumber", T.GetSequenceNumber, specs.Equal(want))
 }
 
+// versionNumber projects the version of a durable state so a failure names the
+// field.
+func versionNumber[T interface{ GetVersionNumber() uint64 }](want uint64) specs.Matcher {
+	return specs.Project("VersionNumber", T.GetVersionNumber, specs.Equal(want))
+}
+
 // lifecycleRow is one case of a Disconnect or Ping table.
 type lifecycleRow struct {
 	name      string

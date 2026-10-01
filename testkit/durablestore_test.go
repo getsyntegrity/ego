@@ -36,12 +36,9 @@ import (
 
 // newAccountState builds a *egopb.DurableState for persistenceID at
 // versionNumber, for use as the payload of a conditional WriteState call.
-func newAccountState(t testing.TB, persistenceID string, versionNumber uint64) *egopb.DurableState {
-	t.Helper()
+func newAccountState(ctx *specs.Context, persistenceID string, versionNumber uint64) *egopb.DurableState {
 	anyState, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-	if err != nil {
-		t.Fatalf("build state payload for %q: %v", persistenceID, err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return &egopb.DurableState{PersistenceId: persistenceID, ResultingState: anyState, VersionNumber: versionNumber}
 }
 
@@ -51,17 +48,16 @@ func newAccountState(t testing.TB, persistenceID string, versionNumber uint64) *
 
 func TestDurableStore_WriteState_InvalidPreconditionIsRejected(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with an invalid precondition", func(s *specs.Spec) {
-		s.It("is rejected and persists nothing", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
 
+		s.It("is rejected and persists nothing", func(ctx *specs.Context) {
 			var zero persistence.WritePrecondition
-			err := store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "invalid-precondition", 1), zero)
+			err := fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "invalid-precondition", 1), zero)
 
 			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidPrecondition))
 
-			got, getErr := store.GetLatestState(bg, persistence.Unscoped(), "invalid-precondition")
+			got, getErr := fx.store.GetLatestState(bg, persistence.Unscoped(), "invalid-precondition")
 			ctx.Expect(getErr).To(specs.BeNil())
 			// a rejected precondition must not persist anything
 			ctx.Expect(got).To(specs.BeNil())
@@ -71,51 +67,48 @@ func TestDurableStore_WriteState_InvalidPreconditionIsRejected(t *testing.T) {
 
 func TestDurableStore_WriteState_UnconditionalIsLegacyBehavior(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with an unconditional precondition", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
+
 		s.It("keeps the legacy behavior of the last write winning", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "legacy", 1), persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "legacy", 2), persistence.Unconditional())).To(specs.BeNil())
 
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "legacy", 1), persistence.Unconditional())).To(specs.BeNil())
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "legacy", 2), persistence.Unconditional())).To(specs.BeNil())
-
-			got, err := store.GetLatestState(bg, persistence.Unscoped(), "legacy")
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "legacy")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
-			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(2))
+			ctx.Expect(got).To(versionNumber[*egopb.DurableState](2))
 		})
 	})
 }
 
 func TestDurableStore_WriteState_ExactRevisionSucceedsWhenCurrent(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with an exact revision precondition", func(s *specs.Spec) {
-		s.It("succeeds when the revision is the current one", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
 
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "exact-ok", 1), persistence.ExpectGenesis())).To(specs.BeNil())
-			err := store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "exact-ok", 2), persistence.ExpectRevision(1))
+		s.It("succeeds when the revision is the current one", func(ctx *specs.Context) {
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "exact-ok", 1), persistence.ExpectGenesis())).To(specs.BeNil())
+			err := fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "exact-ok", 2), persistence.ExpectRevision(1))
 			ctx.Expect(err).To(specs.BeNil())
 
-			got, err := store.GetLatestState(bg, persistence.Unscoped(), "exact-ok")
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "exact-ok")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
-			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(2))
+			ctx.Expect(got).To(versionNumber[*egopb.DurableState](2))
 		})
 	})
 }
 
 func TestDurableStore_WriteState_StaleRevisionIsConflict(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with a stale revision precondition", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
+
 		s.It("reports a conflict and leaves the persisted state untouched", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "stale", 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "stale", 1), persistence.ExpectGenesis())).To(specs.BeNil())
-
-			err := store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "stale", 2), persistence.ExpectRevision(99))
+			err := fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "stale", 2), persistence.ExpectRevision(99))
 
 			var conflict *persistence.ConflictError
 			ctx.Expect(err).To(specs.MatchErrorAs(&conflict))
@@ -127,43 +120,41 @@ func TestDurableStore_WriteState_StaleRevisionIsConflict(t *testing.T) {
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(actual).ToEqual(uint64(1))
 
-			got, err := store.GetLatestState(bg, persistence.Unscoped(), "stale")
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "stale")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
 			// a rejected conditional write must not modify the persisted state
-			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(1))
+			ctx.Expect(got).To(versionNumber[*egopb.DurableState](1))
 		})
 	})
 }
 
 func TestDurableStore_WriteState_GenesisSucceedsOnEmpty(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with a genesis precondition", func(s *specs.Spec) {
-		s.It("succeeds when the entity has no state yet", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
 
-			err := store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "genesis-ok", 1), persistence.ExpectGenesis())
+		s.It("succeeds when the entity has no state yet", func(ctx *specs.Context) {
+			err := fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "genesis-ok", 1), persistence.ExpectGenesis())
 			ctx.Expect(err).To(specs.BeNil())
 
-			got, err := store.GetLatestState(bg, persistence.Unscoped(), "genesis-ok")
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "genesis-ok")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
-			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(1))
+			ctx.Expect(got).To(versionNumber[*egopb.DurableState](1))
 		})
 	})
 }
 
 func TestDurableStore_WriteState_GenesisConflictsOnExisting(t *testing.T) {
 	specs.Describe(t, "DurableStore.WriteState with a genesis precondition on an existing entity", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
+
 		s.It("reports a conflict and keeps the existing state", func(ctx *specs.Context) {
-			bg := context.TODO()
-			store := NewDurableStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "genesis-taken", 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "genesis-taken", 1), persistence.ExpectGenesis())).To(specs.BeNil())
-
-			err := store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx.T, "genesis-taken", 2), persistence.ExpectGenesis())
+			err := fx.store.WriteState(bg, persistence.Unscoped(), newAccountState(ctx, "genesis-taken", 2), persistence.ExpectGenesis())
 
 			var conflict *persistence.ConflictError
 			ctx.Expect(err).To(specs.MatchErrorAs(&conflict))
@@ -171,10 +162,10 @@ func TestDurableStore_WriteState_GenesisConflictsOnExisting(t *testing.T) {
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(actual).ToEqual(uint64(1))
 
-			got, err := store.GetLatestState(bg, persistence.Unscoped(), "genesis-taken")
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "genesis-taken")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).To(specs.Not(specs.BeNil()))
-			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(1))
+			ctx.Expect(got).To(versionNumber[*egopb.DurableState](1))
 		})
 	})
 }

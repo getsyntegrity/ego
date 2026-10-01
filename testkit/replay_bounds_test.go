@@ -43,21 +43,20 @@ import (
 // returned.
 func TestEventStoreReplayEventsAcceptsTheMigrationReplayBounds(t *testing.T) {
 	specs.Describe(t, "EventStore.ReplayEvents with the migration replay bounds", func(s *specs.Spec) {
-		s.It("returns every event, including one above the 32-bit int range", func(ctx *specs.Context) {
-			bg := context.Background()
-			store := NewEventsStore()
-			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+		bg := context.Background()
+		fx := withConnectedStore(s, NewEventsStore)
 
+		s.It("returns every event, including one above the 32-bit int range", func(ctx *specs.Context) {
 			high := uint64(math.MaxInt32) + 1
-			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{
 				{PersistenceId: "bounds", SequenceNumber: 1},
 				{PersistenceId: "bounds", SequenceNumber: high},
 			}, persistence.Unconditional())).To(specs.BeNil())
 
-			events, err := store.ReplayEvents(bg, persistence.Unscoped(), "bounds", 1, math.MaxUint64, uint64(math.MaxInt))
+			events, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "bounds", 1, math.MaxUint64, uint64(math.MaxInt))
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(len(events)).ToEqual(2)
-			ctx.Expect(events[1].GetSequenceNumber()).ToEqual(high)
+			ctx.Expect(events).To(specs.HaveLen(2))
+			ctx.Expect(events[1]).To(sequenceNumber[*egopb.Event](high))
 		})
 	})
 }
