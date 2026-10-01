@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -471,7 +470,7 @@ func TestTenantAdopterRealRunCopiesAndKeepsSource(t *testing.T) {
 			ctx.Expect(report.Failed).ToEqual(0)
 
 			target := tenantScope(ctx.T, "acme")
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, target, id, 1, 2, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, target, id, 1, 2, 10)).To(specs.HaveLen(2))
 
 			targetSnap := latestSnapshot(ctx.T, snapshotStore, target, id)
 			ctx.Expect(targetSnap).To(specs.Not(specs.BeNil()))
@@ -482,7 +481,7 @@ func TestTenantAdopterRealRunCopiesAndKeepsSource(t *testing.T) {
 			ctx.Expect(targetState.GetVersionNumber()).ToEqual(uint64(1))
 
 			// The source scope keeps its originals: no delete by default.
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, source, id, 1, 2, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, source, id, 1, 2, 10)).To(specs.HaveLen(2))
 			ctx.Expect(latestSnapshot(ctx.T, snapshotStore, source, id)).To(specs.Not(specs.BeNil()))
 			ctx.Expect(latestState(ctx.T, stateStore, source, id)).To(specs.Not(specs.BeNil()))
 		})
@@ -527,11 +526,12 @@ func TestTenantAdopterStampsTargetTenantMetadata(t *testing.T) {
 			// The copy carries exactly the actor-style tenant stamp plus one
 			// adoption receipt key, nothing else.
 			for key, value := range wantMetadata {
-				ctx.Expect(evt.GetTenantMetadata()[key]).ToEqual(value)
+				ctx.Expect(evt.GetTenantMetadata()).To(specs.HavePair(key, value))
 			}
-			ctx.Expect(len(evt.GetTenantMetadata())).ToEqual(len(wantMetadata) + 1)
+			ctx.Expect(evt.GetTenantMetadata()).To(specs.HaveLen(len(wantMetadata) + 1))
 			// Every adopted record carries an adoption receipt.
-			ctx.Expect(evt.GetTenantMetadata()[adoptionReceiptKey]).To(specs.Not(specs.Equal("")))
+			ctx.Expect(evt.GetTenantMetadata()).To(specs.HaveKey(adoptionReceiptKey))
+			ctx.Expect(evt.GetTenantMetadata()[adoptionReceiptKey]).To(specs.Not(specs.BeEmpty()))
 
 			snap := latestSnapshot(ctx.T, snapshotStore, target, id)
 			ctx.Expect(snap).To(specs.Not(specs.BeNil()))
@@ -713,7 +713,7 @@ func TestTenantAdopterReRunIsANoOp(t *testing.T) {
 
 			target := tenantScope(ctx.T, "acme")
 			// No duplicate event was written.
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, target, id, 1, 10, 10))).ToEqual(1)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, target, id, 1, 10, 10)).To(specs.HaveLen(1))
 		})
 	})
 }
@@ -750,7 +750,7 @@ func TestTenantAdopterAlreadyPresentInTargetIsNeverOverwritten(t *testing.T) {
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Copied).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 
 			// The pre-existing target record must be untouched (still timestamp 999,
@@ -842,7 +842,7 @@ func TestTenantAdopterPerAggregateFailureDoesNotAbortRun(t *testing.T) {
 			// The good aggregate is still migrated.
 			ctx.Expect(report.Copied).ToEqual(1)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0].PersistenceID).ToEqual(badID)
 			ctx.Expect(report.Failures[0].Err).To(specs.MatchError(assignErr))
 
@@ -927,7 +927,7 @@ func TestTenantAdopterEventsVerificationCatchesCorruptedWrite(t *testing.T) {
 			// A corrupted target write is reported as a failure, not silently
 			// verified.
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0].PersistenceID).ToEqual(id)
 			// The failure names the persistence id that differed.
 			ctx.Expect(errText(report.Failures[0].Err)).To(specs.Contain(id))
@@ -936,7 +936,7 @@ func TestTenantAdopterEventsVerificationCatchesCorruptedWrite(t *testing.T) {
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 
 			// The source copy remains fully intact after a failed verification.
-			ctx.Expect(len(replayEvents(ctx.T, base, source, id, 1, 2, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 2, 10)).To(specs.HaveLen(2))
 		})
 	})
 }
@@ -963,9 +963,7 @@ func TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite(t *testing.T) {
 				mangle: func(s *egopb.Snapshot) {
 					// Right sequence number, wrong state payload entirely.
 					payload, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: 999})
-					if err != nil {
-						ctx.T.Fatalf("corrupt payload: %v", err)
-					}
+					ctx.Expect(err).To(specs.BeNil())
 					s.State = payload
 				},
 			}
@@ -984,7 +982,7 @@ func TestTenantAdopterSnapshotVerificationCatchesCorruptedWrite(t *testing.T) {
 			// A snapshot whose payload differs from the source must fail
 			// verification even though its sequence number matches.
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0].PersistenceID).ToEqual(id)
 			ctx.Expect(errText(report.Failures[0].Err)).To(specs.Contain(id))
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
@@ -1020,9 +1018,7 @@ func TestTenantAdopterStateVerificationCatchesCorruptedWrite(t *testing.T) {
 				mangle: func(s *egopb.DurableState) {
 					// Right version number, wrong resulting-state payload entirely.
 					payload, err := anypb.New(&testpb.Account{AccountId: id, AccountBalance: 999})
-					if err != nil {
-						ctx.T.Fatalf("corrupt payload: %v", err)
-					}
+					ctx.Expect(err).To(specs.BeNil())
 					s.ResultingState = payload
 				},
 			}
@@ -1040,7 +1036,7 @@ func TestTenantAdopterStateVerificationCatchesCorruptedWrite(t *testing.T) {
 			// A durable state whose payload differs from the source must fail
 			// verification even though its version number matches.
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0].PersistenceID).ToEqual(id)
 			ctx.Expect(errText(report.Failures[0].Err)).To(specs.Contain(id))
 		})
@@ -1066,8 +1062,10 @@ func TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages(t *testing.T) {
 			const total = 3*pageSize + 1 // forces at least four PersistenceIDs pages
 			source := persistence.Unscoped()
 			assignments := make(map[string]tenancy.TenantID, total)
+			ids := make([]string, 0, total)
 			for i := 0; i < total; i++ {
 				id := fmt.Sprintf("adopt-page-%03d", i)
+				ids = append(ids, id)
 				seedEvents(ctx.T, eventsStore, source, newLegacyEvent(ctx.T, id, 1, int64(i)))
 				assignments[id] = "acme"
 			}
@@ -1090,15 +1088,14 @@ func TestTenantAdopterAdoptsEveryAggregateAcrossMultiplePages(t *testing.T) {
 
 			target := tenantScope(ctx.T, "acme")
 			var notAdopted []string
-			for id := range assignments {
+			for _, id := range ids {
 				if latestEvent(ctx.T, eventsStore, target, id) == nil {
 					notAdopted = append(notAdopted, id)
 				}
 			}
-			sort.Strings(notAdopted)
 			// Empty means every persistence id was adopted, none skipped at a page
-			// boundary; otherwise the failure prints the skipped ids.
-			ctx.Expect(notAdopted).To(specs.BeNil())
+			// boundary; otherwise the failure prints the skipped ids in order.
+			ctx.Expect(notAdopted).To(specs.BeEmpty())
 		})
 	})
 }
@@ -1153,7 +1150,7 @@ func TestTenantAdopterEventsVerificationRejectsDuplicateSequenceRows(t *testing.
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 
 			// The source remains intact after a failed verification.
-			ctx.Expect(len(replayEvents(ctx.T, base, source, id, 1, 2, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 2, 10)).To(specs.HaveLen(2))
 		})
 	})
 }
@@ -1200,17 +1197,17 @@ func TestTenantAdopterSourceDeletingReRunIsIdempotent(t *testing.T) {
 			// An equivalent target with a deleted source is already migrated.
 			ctx.Expect(second.AlreadyPresent).ToEqual(1)
 			ctx.Expect(second.Failed).ToEqual(0)
-			ctx.Expect(len(second.Failures)).ToEqual(0)
+			ctx.Expect(second.Failures).To(specs.BeEmpty())
 			ctx.Expect(second.Copied).ToEqual(0)
 			ctx.Expect(second.Verified).ToEqual(0)
 			ctx.Expect(second.SourceDeleted).ToEqual(0)
-			ctx.Expect(len(second.Aggregates)).ToEqual(1)
+			ctx.Expect(second.Aggregates).To(specs.HaveLen(1))
 			ctx.Expect(second.Aggregates[0].Events.Status).ToEqual(StatusAlreadyPresent)
 			ctx.Expect(second.Aggregates[0].Snapshot.Status).ToEqual(StatusAlreadyPresent)
 
 			// The second run wrote nothing.
 			target := tenantScope(ctx.T, "acme")
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, target, id, 1, 10, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, target, id, 1, 10, 10)).To(specs.HaveLen(2))
 		})
 	})
 }
@@ -1241,7 +1238,7 @@ func TestTenantAdopterSnapshotOnlyReRunAfterDeletionIsIdempotent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(second.AlreadyPresent).ToEqual(1)
 			ctx.Expect(second.Failed).ToEqual(0)
-			ctx.Expect(len(second.Failures)).ToEqual(0)
+			ctx.Expect(second.Failures).To(specs.BeEmpty())
 		})
 	})
 }
@@ -1278,7 +1275,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 			report := run(ctx.T, eventsStore, nil, id)
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
@@ -1290,7 +1287,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 			report := run(ctx.T, nil, snapshotStore, id)
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
@@ -1305,7 +1302,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 			// Same-tenant data with no adoption receipt never counts as adopted.
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
@@ -1319,7 +1316,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 			report := run(ctx.T, eventsStore, nil, id)
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
@@ -1330,7 +1327,7 @@ func TestTenantAdopterMissingSourceClassification(t *testing.T) {
 			report := run(ctx.T, eventsStore, snapshotStore, "nowhere")
 			ctx.Expect(report.Failed).ToEqual(1)
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errNoSourceRecords))
 		})
 	})
@@ -1397,7 +1394,7 @@ func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 
 			// The source is never deleted on a failed classification.
@@ -1418,7 +1415,7 @@ func TestTenantAdopterLaterSameTenantTargetIsNotEquivalent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 	})
@@ -1644,11 +1641,11 @@ func TestTenantAdopterSourceDeletionRefusesSuccessUnderConcurrentWrites(t *testi
 				// A source that changed during the run is not reported as deleted.
 				ctx.Expect(report.SourceDeleted).ToEqual(0)
 				ctx.Expect(report.Failed).ToEqual(1)
-				ctx.Expect(len(report.Failures)).ToEqual(1)
+				ctx.Expect(report.Failures).To(specs.HaveLen(1))
 				ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
 
 				// The event written during the run still exists in the source.
-				ctx.Expect(len(replayEvents(ctx.T, base, source, id, 1, 10, 10))).ToEqual(tc.wantSource)
+				ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 10, 10)).To(specs.HaveLen(tc.wantSource))
 			})
 		}
 	})
@@ -1689,7 +1686,7 @@ func TestTenantAdopterSnapshotDeletionRefusesSuccessUnderConcurrentWrites(t *tes
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
 
 			// The snapshot written during the run must survive.
@@ -1732,11 +1729,11 @@ func TestTenantAdopterDeletesSourceOfVerifiedExistingTarget(t *testing.T) {
 			ctx.Expect(second.Verified).ToEqual(0)
 			// The verified source is now deleted.
 			ctx.Expect(second.SourceDeleted).ToEqual(1)
-			ctx.Expect(len(second.Aggregates)).ToEqual(1)
+			ctx.Expect(second.Aggregates).To(specs.HaveLen(1))
 			ctx.Expect(second.Aggregates[0].Events.Status).ToEqual(StatusSourceDeleted)
 			ctx.Expect(second.Aggregates[0].Snapshot.Status).ToEqual(StatusSourceDeleted)
 
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, source, id, 1, 10, 10))).ToEqual(0)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, source, id, 1, 10, 10)).To(specs.BeEmpty())
 			ctx.Expect(latestSnapshot(ctx.T, snapshotStore, source, id)).To(specs.BeNil())
 		})
 	})
@@ -1783,7 +1780,7 @@ func TestTenantAdopterRefusesDeletionOfReplacedSameSequenceSnapshot(t *testing.T
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
 
 			// The replacement snapshot must survive.
@@ -1831,11 +1828,11 @@ func TestTenantAdopterRefusesDeletionOfRewrittenSourceEvent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
 
 			// A source that was rewritten must not be deleted.
-			ctx.Expect(len(replayEvents(ctx.T, base, source, id, 1, 10, 10))).ToEqual(2)
+			ctx.Expect(replayEvents(ctx.T, base, source, id, 1, 10, 10)).To(specs.HaveLen(2))
 		})
 	})
 }
@@ -2110,7 +2107,7 @@ func TestTenantAdopterFencedSourceWriterCannotInterleaveWithDeletion(t *testing.
 			ctx.Expect(report.Failed).ToEqual(0)
 			// The held-off write lands only after the deletion completed.
 			remaining := replayEvents(ctx.T, base, source, id, 1, 10, 10)
-			ctx.Expect(len(remaining)).ToEqual(1)
+			ctx.Expect(remaining).To(specs.HaveLen(1))
 			ctx.Expect(remaining[0].GetSequenceNumber()).ToEqual(uint64(3))
 		})
 	})
@@ -2181,7 +2178,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			store := seeded(ctx.T, "unavailable")
 			report := run(ctx.T, fence, store, "unavailable", bg)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTestFenceUnavailable))
 			expectBalanced(ctx, fence, 1)
 			// Nothing may be written without both fences.
@@ -2198,7 +2195,7 @@ func TestTenantAdopterReleasesItsFencesOnEveryPath(t *testing.T) {
 			defer cancel()
 			report := run(ctx.T, fence, store, "waiting", waitCtx)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(context.DeadlineExceeded))
 			acquired, released := fence.counts()
 			// Only the test's own hold may remain.
@@ -2235,7 +2232,7 @@ func TestTenantAdopterAcquiresFencesInDeterministicOrder(t *testing.T) {
 
 			northToSouth := orderFor(north, "south")
 			southToNorth := orderFor(south, "north")
-			ctx.Expect(len(northToSouth)).ToEqual(2)
+			ctx.Expect(northToSouth).To(specs.HaveLen(2))
 			// The lock order must not depend on the direction of the move.
 			ctx.Expect(southToNorth).ToEqual(northToSouth)
 		})
@@ -2254,7 +2251,7 @@ func TestTenantAdopterRejectsATargetEqualToTheSource(t *testing.T) {
 			report, err := adopter.Run(context.Background())
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetIsSource))
 			acquired, _ := fence.counts()
 			ctx.Expect(acquired).ToEqual(0)
@@ -2423,9 +2420,9 @@ func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T)
 			// A source that still holds a record is never reported as deleted.
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
-			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates).To(specs.HaveLen(1))
 			ctx.Expect(report.Aggregates[0].Events.Status).To(specs.NotEqual(StatusSourceDeleted))
 		})
 
@@ -2443,9 +2440,9 @@ func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T)
 			// A source that still holds a snapshot is never reported as deleted.
 			ctx.Expect(report.SourceDeleted).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errSourceChangedDuringAdoption))
-			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates).To(specs.HaveLen(1))
 			ctx.Expect(report.Aggregates[0].Snapshot.Status).To(specs.NotEqual(StatusSourceDeleted))
 		})
 	})
@@ -2482,7 +2479,7 @@ func TestMaxReplayLimitFitsInAnInt(t *testing.T) {
 	specs.Describe(t, "the read-everything replay limit never overflows when a store converts it to int", func(s *specs.Spec) {
 		s.It("equals math.MaxInt and converts to a non-negative int", func(ctx *specs.Context) {
 			ctx.Expect(maxReplayLimit).ToEqual(uint64(math.MaxInt))
-			ctx.Expect(int(maxReplayLimit) >= 0).To(specs.BeTrue())
+			ctx.Expect(int(maxReplayLimit)).To(specs.BeGreaterThanOrEqual(0))
 		})
 	})
 }
@@ -2511,7 +2508,7 @@ func TestTenantAdopterReplaysSequencesBeyondTheLimitValue(t *testing.T) {
 			target := tenantScope(ctx.T, "acme")
 			// The event above math.MaxInt must be adopted too.
 			adopted := replayEvents(ctx.T, store, target, id, 1, math.MaxUint64, 10)
-			ctx.Expect(len(adopted)).ToEqual(2)
+			ctx.Expect(adopted).To(specs.HaveLen(2))
 			ctx.Expect(adopted[1].GetSequenceNumber()).ToEqual(high)
 		})
 	})
@@ -2584,7 +2581,7 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 1}, "sparse-first")
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
@@ -2593,20 +2590,20 @@ func TestTenantAdopterChainedEventReceipts(t *testing.T) {
 			report := rerun(ctx.T, &hidingEventsStore{EventsStore: store, target: target, hide: 5}, "sparse-middle")
 			ctx.Expect(report.AlreadyPresent).ToEqual(0)
 			ctx.Expect(report.Failed).ToEqual(1)
-			ctx.Expect(len(report.Failures)).ToEqual(1)
+			ctx.Expect(report.Failures).To(specs.HaveLen(1))
 			ctx.Expect(report.Failures[0]).To(specs.MatchError(errTargetNotEquivalent))
 		})
 
 		s.It("a receipt whose recorded predecessor was altered fails", func(ctx *specs.Context) {
 			store := adoptSparse(ctx.T, "sparse-tampered")
 			adopted := replayEvents(ctx.T, store, target, "sparse-tampered", 1, math.MaxUint64, 10)
-			ctx.Expect(len(adopted)).ToEqual(3)
+			ctx.Expect(adopted).To(specs.HaveLen(3))
 			tampered, ok := proto.Clone(adopted[2]).(*egopb.Event)
 			ctx.Expect(ok).To(specs.BeTrue())
 			receipt := tampered.GetTenantMetadata()[adoptionReceiptKey]
 			parts := strings.SplitN(receipt, ":", 3)
 			// An event receipt records its predecessor: v1:<previous>:<digest>.
-			ctx.Expect(len(parts)).ToEqual(3)
+			ctx.Expect(parts).To(specs.HaveLen(3))
 			tampered.TenantMetadata[adoptionReceiptKey] = parts[0] + ":1:" + parts[2]
 			seedEvents(ctx.T, store, target, tampered)
 
@@ -2656,12 +2653,12 @@ func TestTenantAdopterCountsSideEffectsOfAFailedAggregate(t *testing.T) {
 			ctx.Expect(report.SourceDeleted).ToEqual(1)
 			// The aggregate as a whole did not verify.
 			ctx.Expect(report.Verified).ToEqual(0)
-			ctx.Expect(len(report.Aggregates)).ToEqual(1)
+			ctx.Expect(report.Aggregates).To(specs.HaveLen(1))
 			ctx.Expect(report.Aggregates[0].Events.Status).ToEqual(StatusSourceDeleted)
 			ctx.Expect(report.Aggregates[0].Snapshot.Status).ToEqual(StatusFailed)
 
 			// Precondition: the side effect the report must show really happened.
-			ctx.Expect(len(replayEvents(ctx.T, eventsStore, source, id, 1, math.MaxUint64, 10))).ToEqual(0)
+			ctx.Expect(replayEvents(ctx.T, eventsStore, source, id, 1, math.MaxUint64, 10)).To(specs.BeEmpty())
 		})
 	})
 }
@@ -2708,7 +2705,7 @@ func TestTenantAdopterPreDeleteCheckIgnoresReplayOrder(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			// Precondition: the pre-delete re-read saw the reordered replay.
-			ctx.Expect(store.sourceReplays >= 2).To(specs.BeTrue())
+			ctx.Expect(store.sourceReplays).To(specs.BeGreaterThanOrEqual(2))
 			// A reordered replay of the same events is not a source change.
 			ctx.Expect(report.Failed).ToEqual(0)
 			ctx.Expect(report.SourceDeleted).ToEqual(1)
