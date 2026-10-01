@@ -30,9 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 
 	"github.com/getsyntegrity/ego/command"
@@ -49,37 +48,42 @@ import (
 // OperationID and a Timestamp, exactly as command_context.go's Carrier
 // rematerialization is meant to produce.
 func TestEngineSendCommandDispatchesHandleEnvelope(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Send Command Dispatches Handle Envelope", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiring", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiring", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
-		AccountBalance: 100,
-	}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 100, acct.GetAccountBalance())
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+				AccountBalance: 100,
+			}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(100)))
 
-	handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit, "HandleCommand must not be called when the behavior implements HandleEnvelope and Metadata is available")
-	assert.Equal(t, 1, handleEnvelopeHit)
+			handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.Equal(1))
 
-	require.NotEmpty(t, env.Metadata().OperationID())
-	assert.False(t, env.Metadata().Timestamp().IsZero())
-	_, ok = command.PayloadAs[*testpb.CreateAccount](env)
-	require.True(t, ok)
+			sc.Expect(env.Metadata().OperationID()).To(specs.Not(specs.BeEmpty()))
+			sc.Expect(env.Metadata().Timestamp().IsZero()).To(specs.BeFalse())
+			_, ok = command.PayloadAs[*testpb.CreateAccount](env)
+			sc.Expect(ok).To(specs.BeTrue())
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineDispatchDispatchesHandleEnvelope is the same proof against the
@@ -87,35 +91,40 @@ func TestEngineSendCommandDispatchesHandleEnvelope(t *testing.T) {
 // adapter), confirming both entry points feed the same rematerialization
 // path (command_context.go's attachCarrier/metadataFromContext).
 func TestEngineDispatchDispatchesHandleEnvelope(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Dispatches Handle Envelope", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringDispatch", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringDispatch", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	op, err := command.NewOperationID("test-op-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 42}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("test-op-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op)
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 42}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
-	require.NoError(t, err)
-	assert.Equal(t, command.OutcomeSuccess, result.Outcome())
+			result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeSuccess))
 
-	handleCommandHit, handleEnvelopeHit, gotEnv := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit)
-	assert.Equal(t, 1, handleEnvelopeHit)
-	assert.Equal(t, op, gotEnv.Metadata().OperationID())
+			handleCommandHit, handleEnvelopeHit, gotEnv := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.Equal(1))
+			sc.Expect(gotEnv.Metadata().OperationID()).To(specs.Equal(op))
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler proves
@@ -127,35 +136,40 @@ func TestEngineDispatchDispatchesHandleEnvelope(t *testing.T) {
 // silently fall back to HandleCommand — running the payload as a legacy
 // command instead of surfacing the caller's error.
 func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Rejects Invalid Metadata Without Invoking Handler", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringInvalidMetadata", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringInvalidMetadata", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, command.Metadata{})
-	require.NoError(t, err)
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, command.Metadata{})
+			sc.Expect(err).To(specs.BeNil())
 
-	result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, command.ErrInvalidMetadata)
-	assert.Equal(t, command.Result{}, result)
+			result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
+			sc.Expect(err).To(specs.Not(specs.BeNil()))
+			sc.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+			sc.Expect(result).To(specs.Equal(command.Result{}))
 
-	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on invalid metadata")
-	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on invalid metadata")
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.Nil(t, event, "the store must never be invoked for a command rejected on invalid metadata")
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.BeNil())
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking proves Dispatch
@@ -167,37 +181,42 @@ func TestEngineDispatchRejectsInvalidMetadataWithoutInvokingHandler(t *testing.T
 // validation ran, panicking on the nil proto.Message interface whenever
 // telemetry was configured.
 func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Rejects Zero Value Envelope Without Panicking", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringZeroValueEnvelope", store, WithLogger(DiscardLogger),
-		WithTelemetry(&Telemetry{Tracer: otel.Tracer("test")}))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringZeroValueEnvelope", store, WithLogger(DiscardLogger),
+				WithTelemetry(&Telemetry{Tracer: otel.Tracer("test")}))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	var zeroEnv command.Envelope
+			var zeroEnv command.Envelope
 
-	require.NotPanics(t, func() {
-		result, err := engine.Dispatch(ctx, entityID, zeroEnv, time.Minute)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, command.ErrInvalidEnvelope)
-		assert.Equal(t, command.Result{}, result)
+			sc.Expect(panicValueG1(func() {
+				result, err := engine.Dispatch(ctx, entityID, zeroEnv, time.Minute)
+				sc.Expect(err).To(specs.Not(specs.BeNil()))
+				sc.Expect(err).To(specs.MatchError(command.ErrInvalidEnvelope))
+				sc.Expect(result).To(specs.Equal(command.Result{}))
+			})).To(specs.BeNil())
+
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
+
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.BeNil())
+
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
 	})
-
-	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a zero-value envelope")
-	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a zero-value envelope")
-
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.Nil(t, event, "the store must never be invoked for a zero-value envelope")
-
-	require.NoError(t, engine.Stop(ctx))
 }
 
 // TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler proves
@@ -206,39 +225,44 @@ func TestEngineDispatchRejectsZeroValueEnvelopeWithoutPanicking(t *testing.T) {
 // rather than letting the command run and possibly persist after its
 // declared deadline.
 func TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Rejects Expired Deadline Without Invoking Handler", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringExpiredDeadline", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringExpiredDeadline", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	op, err := command.NewOperationID("expired-deadline-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(-time.Minute)))
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("expired-deadline-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(-time.Minute)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
-	require.NoError(t, err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
-	assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
-	assert.ErrorIs(t, result.Err(), command.ErrTimedOut)
+			result, err := engine.Dispatch(ctx, entityID, env, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+			sc.Expect(result.Err()).To(specs.MatchError(command.ErrTimedOut))
 
-	handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit, "HandleCommand must not run for a command rejected on an already-expired deadline")
-	assert.Zero(t, handleEnvelopeHit, "HandleEnvelope must not run for a command rejected on an already-expired deadline")
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.Nil(t, event, "the store must never be invoked for a command rejected on an already-expired deadline")
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.BeNil())
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineDispatchClampsTimeoutToDeadline proves Dispatch bounds
@@ -247,76 +271,86 @@ func TestEngineDispatchRejectsExpiredDeadlineWithoutInvokingHandler(t *testing.T
 // enough to outlive the deadline but well within timeout must not be
 // allowed to complete and persist past the deadline.
 func TestEngineDispatchClampsTimeoutToDeadline(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Clamps Timeout To Deadline", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringDeadlineClamp", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringDeadlineClamp", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-	behavior.SetDelay(500 * time.Millisecond)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			behavior.SetDelay(500 * time.Millisecond)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	op, err := command.NewOperationID("deadline-clamp-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(100*time.Millisecond)))
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("deadline-clamp-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(100*time.Millisecond)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	start := time.Now()
-	result, err := engine.Dispatch(ctx, entityID, env, 10*time.Second)
-	elapsed := time.Since(start)
+			start := time.Now()
+			result, err := engine.Dispatch(ctx, entityID, env, 10*time.Second)
+			elapsed := time.Since(start)
 
-	require.NoError(t, err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
-	assert.Equal(t, command.OutcomeTimedOut, result.Outcome(), "SendSync must time out at the deadline rather than succeed at the handler's own 500ms")
-	assert.ErrorIs(t, result.Err(), command.ErrTimedOut)
-	assert.Less(t, elapsed, 400*time.Millisecond, "Dispatch must not wait anywhere near the 10s caller timeout when the deadline is 100ms out")
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+			sc.Expect(result.Err()).To(specs.MatchError(command.ErrTimedOut))
+			sc.Expect(elapsed).To(specs.BeLessThan(400 * time.Millisecond))
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.Nil(t, event, "the actor's post-handler gate must discard the handler's output once the deadline has passed, even though the handler ignored ctx and ran to completion")
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.BeNil())
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineSendCommandDispatchesDurableStateHandleEnvelope is the
 // DurableStateActor counterpart of
 // TestEngineSendCommandDispatchesHandleEnvelope.
 func TestEngineSendCommandDispatchesDurableStateHandleEnvelope(t *testing.T) {
-	ctx := context.Background()
-	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+	specs.Describe(t, "Engine Send Command Dispatches Durable State Handle Envelope", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			stateStore := testkit.NewDurableStore()
+			sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "EnvelopeWiringDurableState", nil,
-		WithLogger(DiscardLogger),
-		WithStateStore(stateStore),
-	)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "EnvelopeWiringDurableState", nil,
+				WithLogger(DiscardLogger),
+				WithStateStore(stateStore),
+			)
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newEnvelopeCapturingDurableStateBehavior(entityID)
-	require.NoError(t, engine.DurableStateEntity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingDurableStateBehavior(entityID)
+			sc.Expect(engine.DurableStateEntity(ctx, behavior)).To(specs.BeNil())
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
-		AccountBalance: 55,
-	}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 55, acct.GetAccountBalance())
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{
+				AccountBalance: 55,
+			}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(55)))
 
-	handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
-	assert.Zero(t, handleCommandHit)
-	assert.Equal(t, 1, handleEnvelopeHit)
-	require.NotEmpty(t, env.Metadata().OperationID())
+			handleCommandHit, handleEnvelopeHit, env := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.Equal(1))
+			sc.Expect(env.Metadata().OperationID()).To(specs.Not(specs.BeEmpty()))
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // dispatchOutcome carries an engine.Dispatch call's result back across a
@@ -493,130 +527,140 @@ func (x *blockingDurableStateBehavior) UnmarshalBinary(data []byte) error {
 // discarded handler's output never reached WriteEvents or mutated
 // entity.currentState/entity.eventsCounter.
 func TestEventSourcedActorDirectPathDiscardsHandlerOutputAfterDeadlineExpiry(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Event Sourced Actor Direct Path Discards Handler Output After Deadline Expiry", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "DeadlineDirectPath", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "DeadlineDirectPath", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newBlockingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newBlockingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior)).To(specs.BeNil())
 
-	op, err := command.NewOperationID("deadline-direct-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("deadline-direct-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	outcomeCh := make(chan dispatchOutcome, 1)
-	go func() {
-		result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
-		outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
-	}()
+			outcomeCh := make(chan dispatchOutcome, 1)
+			go func() {
+				result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
+				outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
+			}()
 
-	select {
-	case <-behavior.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("handler never started")
-	}
+			select {
+			case <-behavior.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler never started")
+			}
 
-	var outcome dispatchOutcome
-	select {
-	case outcome = <-outcomeCh:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
-	}
-	require.NoError(t, outcome.err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
-	assert.Equal(t, command.OutcomeTimedOut, outcome.result.Outcome())
-	assert.ErrorIs(t, outcome.result.Err(), command.ErrTimedOut)
+			var outcome dispatchOutcome
+			select {
+			case outcome = <-outcomeCh:
+			case <-time.After(3 * time.Second):
+				t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
+			}
+			sc.Expect(outcome.err).To(specs.BeNil())
+			sc.Expect(outcome.result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+			sc.Expect(outcome.result.Err()).To(specs.MatchError(command.ErrTimedOut))
 
-	// The handler is still blocked and nothing has been written either way.
-	// Release it now and prove the actor's own post-handler gate — not the
-	// caller giving up — is what keeps its output out of the store.
-	close(behavior.release)
+			// The handler is still blocked and nothing has been written either way.
+			// Release it now and prove the actor's own post-handler gate — not the
+			// caller giving up — is what keeps its output out of the store.
+			close(behavior.release)
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision, "the expired command must not have advanced entity.eventsCounter")
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 50, acct.GetAccountBalance(), "state must come only from the follow-up command, not the discarded one")
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(50)))
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the follow-up command's event may ever have been written")
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.Not(specs.BeNil()))
+			sc.Expect(event.GetSequenceNumber()).To(specs.Equal(uint64(1)))
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestDurableStateActorDiscardsHandlerOutputAfterDeadlineExpiry is the
 // DurableStateActor counterpart of
 // TestEventSourcedActorDirectPathDiscardsHandlerOutputAfterDeadlineExpiry.
 func TestDurableStateActorDiscardsHandlerOutputAfterDeadlineExpiry(t *testing.T) {
-	ctx := context.Background()
-	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
+	specs.Describe(t, "Durable State Actor Discards Handler Output After Deadline Expiry", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			stateStore := testkit.NewDurableStore()
+			sc.Expect(stateStore.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "DeadlineDurableState", nil,
-		WithLogger(DiscardLogger),
-		WithStateStore(stateStore),
-	)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "DeadlineDurableState", nil,
+				WithLogger(DiscardLogger),
+				WithStateStore(stateStore),
+			)
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newBlockingDurableStateBehavior(entityID)
-	require.NoError(t, engine.DurableStateEntity(ctx, behavior))
+			entityID := uuid.NewString()
+			behavior := newBlockingDurableStateBehavior(entityID)
+			sc.Expect(engine.DurableStateEntity(ctx, behavior)).To(specs.BeNil())
 
-	op, err := command.NewOperationID("deadline-durable-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("deadline-durable-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	outcomeCh := make(chan dispatchOutcome, 1)
-	go func() {
-		result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
-		outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
-	}()
+			outcomeCh := make(chan dispatchOutcome, 1)
+			go func() {
+				result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
+				outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
+			}()
 
-	select {
-	case <-behavior.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("handler never started")
-	}
+			select {
+			case <-behavior.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler never started")
+			}
 
-	var outcome dispatchOutcome
-	select {
-	case outcome = <-outcomeCh:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
-	}
-	require.NoError(t, outcome.err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
-	assert.Equal(t, command.OutcomeTimedOut, outcome.result.Outcome())
-	assert.ErrorIs(t, outcome.result.Err(), command.ErrTimedOut)
+			var outcome dispatchOutcome
+			select {
+			case outcome = <-outcomeCh:
+			case <-time.After(3 * time.Second):
+				t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
+			}
+			sc.Expect(outcome.err).To(specs.BeNil())
+			sc.Expect(outcome.result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+			sc.Expect(outcome.result.Err()).To(specs.MatchError(command.ErrTimedOut))
 
-	close(behavior.release)
+			close(behavior.release)
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision, "the expired command must not have advanced entity.currentVersion")
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 50, acct.GetAccountBalance())
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(50)))
 
-	stored, err := stateStore.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.EqualValues(t, 1, stored.GetVersionNumber(), "only the follow-up command's write may ever have reached the store")
+			stored, err := stateStore.GetLatestState(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(stored).To(specs.Not(specs.BeNil()))
+			sc.Expect(stored.GetVersionNumber()).To(specs.Equal(uint64(1)))
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEventSourcedActorBatchPathDoesNotContaminateBatchStateAfterDeadlineExpiry
@@ -627,61 +671,66 @@ func TestDurableStateActorDiscardsHandlerOutputAfterDeadlineExpiry(t *testing.T)
 // the store itself nor corrupt a later, valid command sharing the same
 // batch.
 func TestEventSourcedActorBatchPathDoesNotContaminateBatchStateAfterDeadlineExpiry(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Event Sourced Actor Batch Path Does Not Contaminate Batch State After Deadline Expiry", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "DeadlineBatchPath", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "DeadlineBatchPath", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newBlockingEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior, WithBatchThreshold(1)))
+			entityID := uuid.NewString()
+			behavior := newBlockingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(ctx, behavior, WithBatchThreshold(1))).To(specs.BeNil())
 
-	op, err := command.NewOperationID("deadline-batch-" + entityID)
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
-	require.NoError(t, err)
+			op, err := command.NewOperationID("deadline-batch-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(150*time.Millisecond)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 100}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	outcomeCh := make(chan dispatchOutcome, 1)
-	go func() {
-		result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
-		outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
-	}()
+			outcomeCh := make(chan dispatchOutcome, 1)
+			go func() {
+				result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 5*time.Second)
+				outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
+			}()
 
-	select {
-	case <-behavior.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("handler never started")
-	}
+			select {
+			case <-behavior.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler never started")
+			}
 
-	var outcome dispatchOutcome
-	select {
-	case outcome = <-outcomeCh:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
-	}
-	require.NoError(t, outcome.err, "an expired deadline is an outcome (OutcomeTimedOut), not a Go error")
-	assert.Equal(t, command.OutcomeTimedOut, outcome.result.Outcome())
+			var outcome dispatchOutcome
+			select {
+			case outcome = <-outcomeCh:
+			case <-time.After(3 * time.Second):
+				t.Fatal("Dispatch never returned once the deadline passed; the caller-side wait must not wait for the still-blocked handler")
+			}
+			sc.Expect(outcome.err).To(specs.BeNil())
+			sc.Expect(outcome.result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
 
-	close(behavior.release)
+			close(behavior.release)
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision, "the expired command must never have entered batchBuffer/batchState")
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 50, acct.GetAccountBalance())
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 50}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(50)))
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the follow-up command's event may ever have reached the batch writer")
+			event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.Not(specs.BeNil()))
+			sc.Expect(event.GetSequenceNumber()).To(specs.Equal(uint64(1)))
 
-	require.NoError(t, engine.Stop(ctx))
+			sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineDispatchEffectiveDeadlinePrecedence proves Dispatch computes the
@@ -691,129 +740,133 @@ func TestEventSourcedActorBatchPathDoesNotContaminateBatchStateAfterDeadlineExpi
 // are generous, and an explicit caller cancellation is reported distinctly
 // as OutcomeCanceled rather than OutcomeTimedOut.
 func TestEngineDispatchEffectiveDeadlinePrecedence(t *testing.T) {
-	newHarness := func(t *testing.T, name string) (*Engine, *testkit.EventStore) {
-		t.Helper()
-		ctx := context.Background()
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Dispatch Effective Deadline Precedence", func(s *specs.Spec) {
+		newHarness := func(sc *specs.Context, name string) (*Engine, *testkit.EventStore) {
+			t := sc.T
+			t.Helper()
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-		engine := newTestEngine(t, name, store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
-		t.Cleanup(func() { _ = engine.Stop(context.Background()) })
-		return engine, store
-	}
-
-	t.Run("metadata deadline wins over a generous timeout", func(t *testing.T) {
-		engine, _ := newHarness(t, "PrecedenceMetadataBeforeTimeout")
-		entityID := uuid.NewString()
-		behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(context.Background(), behavior))
-
-		op, err := command.NewOperationID("precedence-md-" + entityID)
-		require.NoError(t, err)
-		md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(-time.Minute)))
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
-		require.NoError(t, err)
-
-		result, err := engine.Dispatch(context.Background(), entityID, env, time.Hour)
-		require.NoError(t, err)
-		assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
-
-		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-		assert.Zero(t, handleCommandHit)
-		assert.Zero(t, handleEnvelopeHit, "a 1-hour timeout must not override an already-expired Metadata deadline")
-	})
-
-	t.Run("ctx deadline wins over a generous metadata deadline and timeout", func(t *testing.T) {
-		engine, _ := newHarness(t, "PrecedenceCtxBeforeMetadata")
-		entityID := uuid.NewString()
-		behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(context.Background(), behavior))
-
-		op, err := command.NewOperationID("precedence-ctx-" + entityID)
-		require.NoError(t, err)
-		md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(time.Hour)))
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
-		require.NoError(t, err)
-
-		expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
-		defer cancel()
-
-		result, err := engine.Dispatch(expiredCtx, entityID, env, time.Hour)
-		require.NoError(t, err)
-		assert.Equal(t, command.OutcomeTimedOut, result.Outcome())
-
-		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-		assert.Zero(t, handleCommandHit)
-		assert.Zero(t, handleEnvelopeHit, "an already-expired ctx deadline must be honored even though Metadata/timeout are generous")
-	})
-
-	t.Run("caller timeout wins when it is the tightest bound", func(t *testing.T) {
-		engine, store := newHarness(t, "PrecedenceTimeoutBeforeBoth")
-		entityID := uuid.NewString()
-		blocking := newBlockingEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(context.Background(), blocking))
-
-		op, err := command.NewOperationID("precedence-timeout-" + entityID)
-		require.NoError(t, err)
-		md, err := command.NewMetadata(op)
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
-		require.NoError(t, err)
-
-		outcomeCh := make(chan dispatchOutcome, 1)
-		go func() {
-			result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 100*time.Millisecond)
-			outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
-		}()
-
-		select {
-		case <-blocking.started:
-		case <-time.After(2 * time.Second):
-			t.Fatal("handler never started")
+			engine := newTestEngine(t, name, store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = engine.Stop(context.Background()) })
+			return engine, store
 		}
 
-		var outcome dispatchOutcome
-		select {
-		case outcome = <-outcomeCh:
-		case <-time.After(3 * time.Second):
-			t.Fatal("Dispatch never returned; a 100ms timeout with no Metadata/ctx deadline must still bound the wait")
-		}
-		require.NoError(t, outcome.err)
-		assert.Equal(t, command.OutcomeTimedOut, outcome.result.Outcome())
+		s.It("metadata deadline wins over a generous timeout", func(sc *specs.Context) {
+			engine, _ := newHarness(sc, "PrecedenceMetadataBeforeTimeout")
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(context.Background(), behavior)).To(specs.BeNil())
 
-		close(blocking.release)
-		event, err := store.GetLatestEvent(context.Background(), persistence.Unscoped(), entityID)
-		require.NoError(t, err)
-		assert.Nil(t, event, "the handler's output must be discarded once released, since the caller timeout already expired")
-	})
+			op, err := command.NewOperationID("precedence-md-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(-time.Minute)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-	t.Run("explicit caller cancellation is reported as OutcomeCanceled", func(t *testing.T) {
-		engine, _ := newHarness(t, "PrecedenceExplicitCancel")
-		entityID := uuid.NewString()
-		behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
-		require.NoError(t, engine.Entity(context.Background(), behavior))
+			result, err := engine.Dispatch(context.Background(), entityID, env, time.Hour)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
 
-		op, err := command.NewOperationID("precedence-cancel-" + entityID)
-		require.NoError(t, err)
-		md, err := command.NewMetadata(op)
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
-		require.NoError(t, err)
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
+		})
 
-		canceledCtx, cancel := context.WithCancel(context.Background())
-		cancel()
+		s.It("ctx deadline wins over a generous metadata deadline and timeout", func(sc *specs.Context) {
+			engine, _ := newHarness(sc, "PrecedenceCtxBeforeMetadata")
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(context.Background(), behavior)).To(specs.BeNil())
 
-		result, err := engine.Dispatch(canceledCtx, entityID, env, time.Minute)
-		require.NoError(t, err, "a caller cancellation is an outcome (OutcomeCanceled), not a Go error")
-		assert.Equal(t, command.OutcomeCanceled, result.Outcome())
-		assert.ErrorIs(t, result.Err(), command.ErrCanceled)
+			op, err := command.NewOperationID("precedence-ctx-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithDeadline(time.Now().Add(time.Hour)))
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
+			sc.Expect(err).To(specs.BeNil())
 
-		handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
-		assert.Zero(t, handleCommandHit)
-		assert.Zero(t, handleEnvelopeHit)
+			expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
+			defer cancel()
+
+			result, err := engine.Dispatch(expiredCtx, entityID, env, time.Hour)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
+		})
+
+		s.It("caller timeout wins when it is the tightest bound", func(sc *specs.Context) {
+			t := sc.T
+			engine, store := newHarness(sc, "PrecedenceTimeoutBeforeBoth")
+			entityID := uuid.NewString()
+			blocking := newBlockingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(context.Background(), blocking)).To(specs.BeNil())
+
+			op, err := command.NewOperationID("precedence-timeout-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op)
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
+			sc.Expect(err).To(specs.BeNil())
+
+			outcomeCh := make(chan dispatchOutcome, 1)
+			go func() {
+				result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 100*time.Millisecond)
+				outcomeCh <- dispatchOutcome{result: result, err: dispatchErr}
+			}()
+
+			select {
+			case <-blocking.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler never started")
+			}
+
+			var outcome dispatchOutcome
+			select {
+			case outcome = <-outcomeCh:
+			case <-time.After(3 * time.Second):
+				t.Fatal("Dispatch never returned; a 100ms timeout with no Metadata/ctx deadline must still bound the wait")
+			}
+			sc.Expect(outcome.err).To(specs.BeNil())
+			sc.Expect(outcome.result.Outcome()).To(specs.Equal(command.OutcomeTimedOut))
+
+			close(blocking.release)
+			event, err := store.GetLatestEvent(context.Background(), persistence.Unscoped(), entityID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(event).To(specs.BeNil())
+		})
+
+		s.It("explicit caller cancellation is reported as OutcomeCanceled", func(sc *specs.Context) {
+			engine, _ := newHarness(sc, "PrecedenceExplicitCancel")
+			entityID := uuid.NewString()
+			behavior := newEnvelopeCapturingEventSourcedBehavior(entityID)
+			sc.Expect(engine.Entity(context.Background(), behavior)).To(specs.BeNil())
+
+			op, err := command.NewOperationID("precedence-cancel-" + entityID)
+			sc.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op)
+			sc.Expect(err).To(specs.BeNil())
+			env, err := command.NewEnvelope(&testpb.CreateAccount{AccountBalance: 1}, md)
+			sc.Expect(err).To(specs.BeNil())
+
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			result, err := engine.Dispatch(canceledCtx, entityID, env, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(result.Outcome()).To(specs.Equal(command.OutcomeCanceled))
+			sc.Expect(result.Err()).To(specs.MatchError(command.ErrCanceled))
+
+			handleCommandHit, handleEnvelopeHit, _ := behavior.Snapshot()
+			sc.Expect(handleCommandHit).To(specs.BeZero())
+			sc.Expect(handleEnvelopeHit).To(specs.BeZero())
+		})
 	})
 }
