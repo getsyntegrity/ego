@@ -113,7 +113,7 @@ func newClusterNodes(ctx *specs.Context, kindsA, kindsB []engine.BehaviorKind) (
 	}
 
 	newNode := func(name string, kinds []engine.BehaviorKind, gossipPort, peersPort, remotingPort int) *clusterNode {
-		events, states, _ := connected(ctx.T)
+		events, states, _ := connected(ctx)
 		n := &clusterNode{
 			name:  name,
 			evPub: newEventPublisher(name + "-events"),
@@ -126,7 +126,7 @@ func newClusterNodes(ctx *specs.Context, kindsA, kindsB []engine.BehaviorKind) (
 			WithMinimumPeersQuorum(1).
 			WithReplicaCount(1).
 			WithPartitionCount(7)
-		n.app = mustNew(ctx.T, compose.Spec{
+		n.app = mustNew(ctx, compose.Spec{
 			// Both nodes belong to the same actor system.
 			Name:            "compose-cluster",
 			Families:        compose.EventSourced | compose.DurableState,

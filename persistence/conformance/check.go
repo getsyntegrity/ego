@@ -28,8 +28,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // Lifecycle is the subset of persistence.EventsStore, persistence.StateStore,
@@ -42,17 +40,17 @@ type Lifecycle interface {
 }
 
 // Check is one named isolation assertion against a store of type S. It is
-// written against require.TestingT rather than *testing.T so the exact same
+// written against TestingT rather than *testing.T so the exact same
 // check function can run either as a normal `go test` subtest (via
 // RunEventsStoreConformance/RunStateStoreConformance/
 // RunSnapshotStoreConformance) or captured, without a *testing.T, by
 // CaptureEventsStoreChecks/CaptureStateStoreChecks/CaptureSnapshotStoreChecks
 // (see the package doc comment's Self-checking section). *testing.T
-// satisfies require.TestingT, so no adaptation is needed for the normal
+// satisfies TestingT, so no adaptation is needed for the normal
 // path.
 type Check[S Lifecycle] struct {
 	Name string
-	Run  func(ctx context.Context, t require.TestingT, store S)
+	Run  func(ctx context.Context, t TestingT, store S)
 }
 
 // CheckResult reports one Check's outcome when run captured (see
@@ -87,7 +85,7 @@ func runConformance[S Lifecycle](t *testing.T, checks []Check[S], newStore func(
 	}
 }
 
-// captureTestingT implements require.TestingT by recording failures instead
+// captureTestingT implements TestingT by recording failures instead
 // of aborting the goroutine it runs in via a real *testing.T's semantics.
 // FailNow mimics *testing.T.FailNow by calling runtime.Goexit: callers MUST
 // invoke the checked function in a dedicated goroutine (see captureChecks)
@@ -98,12 +96,15 @@ type captureTestingT struct {
 	errors []string
 }
 
-func (c *captureTestingT) Errorf(format string, args ...interface{}) {
+func (c *captureTestingT) Errorf(format string, args ...any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.failed = true
 	c.errors = append(c.errors, fmt.Sprintf(format, args...))
 }
+
+// Helper is a no-op: the recorder keeps no call-site information.
+func (c *captureTestingT) Helper() {}
 
 func (c *captureTestingT) FailNow() {
 	c.mu.Lock()
