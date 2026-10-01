@@ -29,109 +29,121 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestRetryWithBackoff(t *testing.T) {
-	t.Run("succeeds on first attempt", func(t *testing.T) {
-		var calls int32
-		err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
-			atomic.AddInt32(&calls, 1)
-			return nil
+	specs.Describe(t, "retryWithBackoff retries an operation with exponential backoff until it succeeds, runs out of attempts or the context ends", func(s *specs.Spec) {
+		s.It("succeeds on first attempt", func(ctx *specs.Context) {
+			var calls int32
+			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+				atomic.AddInt32(&calls, 1)
+				return nil
+			})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(1))
 		})
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, atomic.LoadInt32(&calls))
-	})
-	t.Run("succeeds on second attempt", func(t *testing.T) {
-		var calls int32
-		err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
-			n := atomic.AddInt32(&calls, 1)
-			if n < 2 {
+		s.It("succeeds on second attempt", func(ctx *specs.Context) {
+			var calls int32
+			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+				n := atomic.AddInt32(&calls, 1)
+				if n < 2 {
+					return errors.New("transient")
+				}
+				return nil
+			})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(2))
+		})
+		s.It("succeeds on last attempt", func(ctx *specs.Context) {
+			maxRetries := 3
+			var calls int32
+			err := retryWithBackoff(context.Background(), maxRetries, func() error {
+				n := atomic.AddInt32(&calls, 1)
+				if int(n) <= maxRetries {
+					return errors.New("transient")
+				}
+				return nil
+			})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(maxRetries + 1))
+		})
+		s.It("returns last error after all attempts exhausted", func(ctx *specs.Context) {
+			sentinel := errors.New("persistent failure")
+			var calls int32
+			err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
+				atomic.AddInt32(&calls, 1)
+				return sentinel
+			})
+			ctx.Expect(err).To(specs.MatchError(sentinel))
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(defaultMaxRetries + 1))
+		})
+		s.It("zero max retries executes exactly once", func(ctx *specs.Context) {
+			var calls int32
+			sentinel := errors.New("fail")
+			err := retryWithBackoff(context.Background(), 0, func() error {
+				atomic.AddInt32(&calls, 1)
+				return sentinel
+			})
+			ctx.Expect(err).To(specs.MatchError(sentinel))
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(1))
+		})
+		s.It("context cancelled before retry", func(ctx *specs.Context) {
+			cctx, cancel := context.WithCancel(context.Background())
+			var calls int32
+			err := retryWithBackoff(cctx, defaultMaxRetries, func() error {
+				n := atomic.AddInt32(&calls, 1)
+				if n == 1 {
+					cancel()
+				}
 				return errors.New("transient")
-			}
-			return nil
+			})
+			ctx.Expect(err).To(specs.MatchError(context.Canceled))
+			ctx.Expect(atomic.LoadInt32(&calls)).ToEqual(int32(1))
 		})
-		require.NoError(t, err)
-		assert.EqualValues(t, 2, atomic.LoadInt32(&calls))
-	})
-	t.Run("succeeds on last attempt", func(t *testing.T) {
-		maxRetries := 3
-		var calls int32
-		err := retryWithBackoff(context.Background(), maxRetries, func() error {
-			n := atomic.AddInt32(&calls, 1)
-			if int(n) <= maxRetries {
+		s.It("context deadline exceeded before retry", func(ctx *specs.Context) {
+			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+
+			var calls int32
+			err := retryWithBackoff(cctx, 10, func() error {
+				atomic.AddInt32(&calls, 1)
 				return errors.New("transient")
+			})
+			ctx.Expect(err).To(specs.MatchError(context.DeadlineExceeded))
+			// A partial run is between one attempt and all ten; an empty
+			// offender list means the count was in range.
+			var outOfRange []int32
+			if got := atomic.LoadInt32(&calls); got < 1 || got >= 10 {
+				outOfRange = append(outOfRange, got)
 			}
-			return nil
+			ctx.Expect(outOfRange).To(specs.BeNil())
 		})
-		require.NoError(t, err)
-		assert.EqualValues(t, maxRetries+1, atomic.LoadInt32(&calls))
-	})
-	t.Run("returns last error after all attempts exhausted", func(t *testing.T) {
-		sentinel := errors.New("persistent failure")
-		var calls int32
-		err := retryWithBackoff(context.Background(), defaultMaxRetries, func() error {
-			atomic.AddInt32(&calls, 1)
-			return sentinel
-		})
-		require.ErrorIs(t, err, sentinel)
-		assert.EqualValues(t, defaultMaxRetries+1, atomic.LoadInt32(&calls))
-	})
-	t.Run("zero max retries executes exactly once", func(t *testing.T) {
-		var calls int32
-		sentinel := errors.New("fail")
-		err := retryWithBackoff(context.Background(), 0, func() error {
-			atomic.AddInt32(&calls, 1)
-			return sentinel
-		})
-		require.ErrorIs(t, err, sentinel)
-		assert.EqualValues(t, 1, atomic.LoadInt32(&calls))
-	})
-	t.Run("context cancelled before retry", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		var calls int32
-		err := retryWithBackoff(ctx, defaultMaxRetries, func() error {
-			n := atomic.AddInt32(&calls, 1)
-			if n == 1 {
-				cancel()
+		s.It("backoff delays increase between attempts", func(ctx *specs.Context) {
+			timestamps := make([]time.Time, 0, 4)
+			err := retryWithBackoff(context.Background(), 2, func() error {
+				timestamps = append(timestamps, time.Now())
+				return errors.New("fail")
+			})
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(len(timestamps)).ToEqual(3)
+
+			delay1 := timestamps[1].Sub(timestamps[0])
+			delay2 := timestamps[2].Sub(timestamps[1])
+
+			// Attempt 0: base=100ms, jitter ∈ [0.5,1.5) → [50ms, 150ms)
+			// Attempt 1: base=200ms, jitter ∈ [0.5,1.5) → [100ms, 300ms)
+			// Use generous bounds to accommodate scheduler jitter. An empty
+			// offender list means the delay was in range.
+			var firstOutOfRange, secondOutOfRange []time.Duration
+			if delay1 < 40*time.Millisecond || delay1 > 200*time.Millisecond {
+				firstOutOfRange = append(firstOutOfRange, delay1)
 			}
-			return errors.New("transient")
+			if delay2 < 80*time.Millisecond || delay2 > 400*time.Millisecond {
+				secondOutOfRange = append(secondOutOfRange, delay2)
+			}
+			ctx.Expect(firstOutOfRange).To(specs.BeNil())
+			ctx.Expect(secondOutOfRange).To(specs.BeNil())
 		})
-		require.ErrorIs(t, err, context.Canceled)
-		assert.EqualValues(t, 1, atomic.LoadInt32(&calls))
-	})
-	t.Run("context deadline exceeded before retry", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-		defer cancel()
-
-		var calls int32
-		err := retryWithBackoff(ctx, 10, func() error {
-			atomic.AddInt32(&calls, 1)
-			return errors.New("transient")
-		})
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		got := atomic.LoadInt32(&calls)
-		assert.True(t, got >= 1 && got < 10, "expected partial attempts, got %d", got)
-	})
-	t.Run("backoff delays increase between attempts", func(t *testing.T) {
-		timestamps := make([]time.Time, 0, 4)
-		err := retryWithBackoff(context.Background(), 2, func() error {
-			timestamps = append(timestamps, time.Now())
-			return errors.New("fail")
-		})
-		require.Error(t, err)
-		require.Len(t, timestamps, 3)
-
-		delay1 := timestamps[1].Sub(timestamps[0])
-		delay2 := timestamps[2].Sub(timestamps[1])
-
-		// Attempt 0: base=100ms, jitter ∈ [0.5,1.5) → [50ms, 150ms)
-		// Attempt 1: base=200ms, jitter ∈ [0.5,1.5) → [100ms, 300ms)
-		// Use generous bounds to accommodate scheduler jitter.
-		assert.True(t, delay1 >= 40*time.Millisecond && delay1 <= 200*time.Millisecond,
-			"first delay %v outside expected range [40ms, 200ms]", delay1)
-		assert.True(t, delay2 >= 80*time.Millisecond && delay2 <= 400*time.Millisecond,
-			"second delay %v outside expected range [80ms, 400ms]", delay2)
 	})
 }
