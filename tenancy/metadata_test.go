@@ -33,7 +33,7 @@ import (
 func TestMarshalMetadata_TenantScope_UsesEgoTenantKeys(t *testing.T) {
 	specs.Describe(t, "MarshalMetadata encodes a tenant-scoped context under the ego.tenant keys", func(s *specs.Spec) {
 		s.It("writes the tenant scope and id and no administrative keys", func(ctx *specs.Context) {
-			id := mustTenantID(ctx.T, "acme-corp")
+			id := mustTenantID(ctx, "acme-corp")
 			tc, err := tenancy.NewTenantContext(id)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -86,7 +86,7 @@ func TestMarshalMetadata_AdministrativeScope_OmitsCorrelationIDWhenAbsent(t *tes
 func TestMetadata_RoundTrip_TenantScope(t *testing.T) {
 	specs.Describe(t, "a tenant-scoped context survives a metadata round trip", func(s *specs.Spec) {
 		s.It("unmarshals to the context that was marshaled", func(ctx *specs.Context) {
-			id := mustTenantID(ctx.T, "globex-corp")
+			id := mustTenantID(ctx, "globex-corp")
 			want, err := tenancy.NewTenantContext(id)
 			ctx.Expect(err).To(specs.BeNil())
 

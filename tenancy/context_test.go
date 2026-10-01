@@ -36,7 +36,7 @@ import (
 func TestAttach_BindsTenantContextRetrievableViaFrom(t *testing.T) {
 	specs.Describe(t, "Attach binds a TenantContext that From returns", func(s *specs.Spec) {
 		s.It("returns the attached context", func(ctx *specs.Context) {
-			tc, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tc, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			bound, err := tenancy.Attach(context.Background(), tc)
@@ -52,7 +52,7 @@ func TestAttach_BindsTenantContextRetrievableViaFrom(t *testing.T) {
 func TestAttach_IsIdempotentForTheSameTenantContext(t *testing.T) {
 	specs.Describe(t, "Attach is idempotent for an equal TenantContext", func(s *specs.Spec) {
 		s.It("accepts re-attaching the same context and keeps it bound", func(ctx *specs.Context) {
-			tc, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tc, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			bound, err := tenancy.Attach(context.Background(), tc)
@@ -73,9 +73,9 @@ func TestAttach_IsIdempotentForTheSameTenantContext(t *testing.T) {
 func TestAttach_RejectsChangingAlreadyBoundTenantContext(t *testing.T) {
 	specs.Describe(t, "Attach rejects changing an already-bound TenantContext", func(s *specs.Spec) {
 		s.It("fails with ErrDenied and keeps the original binding", func(ctx *specs.Context) {
-			tcA, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tcA, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
-			tcB, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "globex-corp"))
+			tcB, err := tenancy.NewTenantContext(mustTenantID(ctx, "globex-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			bound, err := tenancy.Attach(context.Background(), tcA)
@@ -130,7 +130,7 @@ func TestAttach_RejectsZeroValueTenantContext(t *testing.T) {
 func TestAttach_ValidTenantScopedContextStillFlowsThroughUnchanged(t *testing.T) {
 	specs.Describe(t, "a valid tenant-scoped context flows through Attach and Require unchanged", func(s *specs.Spec) {
 		s.It("Require returns what Attach bound", func(ctx *specs.Context) {
-			tc, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tc, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			bound, err := tenancy.Attach(context.Background(), tc)
@@ -173,7 +173,7 @@ func TestRequire_ReturnsErrMissingWhenNothingAttached(t *testing.T) {
 func TestRequire_ReturnsBoundTenantContext(t *testing.T) {
 	specs.Describe(t, "Require returns the bound TenantContext", func(s *specs.Spec) {
 		s.It("returns the context that was attached", func(ctx *specs.Context) {
-			tc, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tc, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			bound, err := tenancy.Attach(context.Background(), tc)
@@ -189,7 +189,7 @@ func TestRequire_ReturnsBoundTenantContext(t *testing.T) {
 func TestVerifyUnchanged_ReturnsNilWhenEqual(t *testing.T) {
 	specs.Describe(t, "VerifyUnchanged accepts equal contexts", func(s *specs.Spec) {
 		s.It("returns nil for the same context twice", func(ctx *specs.Context) {
-			tc, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tc, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			ctx.Expect(tenancy.VerifyUnchanged(tc, tc)).To(specs.BeNil())
@@ -200,9 +200,9 @@ func TestVerifyUnchanged_ReturnsNilWhenEqual(t *testing.T) {
 func TestVerifyUnchanged_ReturnsErrDeniedWhenDifferent(t *testing.T) {
 	specs.Describe(t, "VerifyUnchanged rejects different contexts", func(s *specs.Spec) {
 		s.It("fails with ErrDenied", func(ctx *specs.Context) {
-			tcA, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "acme-corp"))
+			tcA, err := tenancy.NewTenantContext(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
-			tcB, err := tenancy.NewTenantContext(mustTenantID(ctx.T, "globex-corp"))
+			tcB, err := tenancy.NewTenantContext(mustTenantID(ctx, "globex-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			err = tenancy.VerifyUnchanged(tcA, tcB)
@@ -234,9 +234,7 @@ type simulateSagaCommand struct {
 // metadata and attaches it, exactly as design.md's Resolve-Once,
 // Propagate-After Discipline requires for a saga boundary. It returns the
 // resulting context (background reset, optionally reconstructed).
-func simulateSagaStep(t testing.TB, cmd simulateSagaCommand, reconstruct bool) context.Context {
-	t.Helper()
-
+func simulateSagaStep(ctx *specs.Context, cmd simulateSagaCommand, reconstruct bool) context.Context {
 	// This is the real saga_actor.go behavior being simulated: every
 	// pipeline step starts from a fresh context.Background(), not from
 	// whatever context the entrypoint used.
@@ -247,14 +245,10 @@ func simulateSagaStep(t testing.TB, cmd simulateSagaCommand, reconstruct bool) c
 	}
 
 	tc, err := tenancy.UnmarshalMetadata(cmd.metadata)
-	if err != nil {
-		t.Fatalf("UnmarshalMetadata: %v", err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 
 	sagaCtx, err = tenancy.Attach(sagaCtx, tc)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
-	}
+	ctx.Expect(err).To(specs.BeNil())
 	return sagaCtx
 }
 
@@ -262,7 +256,7 @@ func TestSagaBoundary_ReconstructsTenantIdentityFromCarriedMetadata(t *testing.T
 	specs.Describe(t, "a saga boundary reconstructs tenant identity from carried metadata", func(s *specs.Spec) {
 		s.It("survives the context.Background() reset only through metadata reconstruction", func(ctx *specs.Context) {
 			// Entrypoint: resolve once, attach (this is the trust boundary).
-			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx.T, "acme-corp"))
+			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			entrypointCtx := context.Background()
@@ -282,12 +276,12 @@ func TestSagaBoundary_ReconstructsTenantIdentityFromCarriedMetadata(t *testing.T
 			// this proves the harness models the reset faithfully, not just in
 			// name. A context.Background() reset must not carry any tenant
 			// identity implicitly.
-			resetOnly := simulateSagaStep(ctx.T, cmd, false)
+			resetOnly := simulateSagaStep(ctx, cmd, false)
 			_, ok := tenancy.From(resetOnly)
 			ctx.Expect(ok).To(specs.BeFalse())
 
 			// The saga step reconstructs identity explicitly from carried metadata.
-			sagaCtx := simulateSagaStep(ctx.T, cmd, true)
+			sagaCtx := simulateSagaStep(ctx, cmd, true)
 
 			sagaTC, err := tenancy.Require(sagaCtx)
 			ctx.Expect(err).To(specs.BeNil())
@@ -306,9 +300,9 @@ func TestSagaBoundary_ReconstructsTenantIdentityFromCarriedMetadata(t *testing.T
 func TestSagaBoundary_SkippingMetadataReconstructionFailsClosed(t *testing.T) {
 	specs.Describe(t, "a saga step that skips metadata reconstruction fails closed", func(s *specs.Spec) {
 		s.It("Require fails with ErrMissing after a bare context.Background() reset", func(ctx *specs.Context) {
-			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx.T, "acme-corp"))
+			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
-			entrypointCtx, err := tenancy.Attach(context.Background(), mustResolve(ctx.T, resolver, context.Background()))
+			entrypointCtx, err := tenancy.Attach(context.Background(), mustResolve(ctx, resolver, context.Background()))
 			ctx.Expect(err).To(specs.BeNil())
 			bound, err := tenancy.Require(entrypointCtx)
 			ctx.Expect(err).To(specs.BeNil())
@@ -317,7 +311,7 @@ func TestSagaBoundary_SkippingMetadataReconstructionFailsClosed(t *testing.T) {
 			// A saga step that resets to context.Background() and never
 			// reconstructs from the carried metadata (a real, reachable bug) must
 			// fail closed on the read side, not silently proceed unattributed.
-			sagaCtx := simulateSagaStep(ctx.T, cmd, false)
+			sagaCtx := simulateSagaStep(ctx, cmd, false)
 
 			_, err = tenancy.Require(sagaCtx)
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
@@ -325,12 +319,9 @@ func TestSagaBoundary_SkippingMetadataReconstructionFailsClosed(t *testing.T) {
 	})
 }
 
-func mustResolve(t testing.TB, r tenancy.TenantResolver, ctx context.Context) tenancy.TenantContext {
-	t.Helper()
-	tc, err := r.Resolve(ctx)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+func mustResolve(ctx *specs.Context, r tenancy.TenantResolver, in context.Context) tenancy.TenantContext {
+	tc, err := r.Resolve(in)
+	ctx.Expect(err).To(specs.BeNil())
 	return tc
 }
 
@@ -362,7 +353,7 @@ func simulateEntrypoint(ctx context.Context, resolver tenancy.TenantResolver) (c
 func TestInvocation_EntrypointResolvesAndAttaches_BehaviorOnlyRequires(t *testing.T) {
 	specs.Describe(t, "the entrypoint resolves and attaches; behavior only requires", func(s *specs.Spec) {
 		s.It("behavior reads the tenant the entrypoint attached", func(ctx *specs.Context) {
-			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx.T, "acme-corp"))
+			resolver, err := tenancy.WithSingleTenant(mustTenantID(ctx, "acme-corp"))
 			ctx.Expect(err).To(specs.BeNil())
 
 			// Entrypoint: invokes the resolver and attaches — this is the ONLY
