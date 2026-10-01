@@ -78,6 +78,10 @@ type Engine struct {
 	metrics       *instrumentation.Instruments
 	encryptor     encryption.Encryptor
 
+	// schemaMigration is carried over from Config: Start migrates the schema of
+	// every store that implements persistence.SchemaMigrator.
+	schemaMigration bool
+
 	// tenantResolver is the effective tenancy.TenantResolver carried over
 	// from Config; non-nil means tenant-aware mode is active. NewEngine has
 	// already validated there is at most one (ErrAmbiguousTenantResolver).
@@ -183,20 +187,21 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		name:           actorSys.Name(),
-		eventsStore:    config.eventsStore,
-		stateStore:     config.stateStore,
-		offsetStore:    config.offsetStore,
-		snapshotStore:  config.snapshotStore,
-		logger:         config.logger,
-		eventStream:    config.eventStream,
-		eventAdapters:  config.eventAdapters,
-		telemetry:      config.telemetry,
-		encryptor:      config.encryptor,
-		tenantResolver: config.tenantResolver,
-		entityFamilies: config.entityFamilies,
-		eventsStreams:  syncmap.New[string, *eventsStream](),
-		statesStreams:  syncmap.New[string, *statesStream](),
+		name:            actorSys.Name(),
+		eventsStore:     config.eventsStore,
+		stateStore:      config.stateStore,
+		offsetStore:     config.offsetStore,
+		snapshotStore:   config.snapshotStore,
+		logger:          config.logger,
+		eventStream:     config.eventStream,
+		eventAdapters:   config.eventAdapters,
+		telemetry:       config.telemetry,
+		encryptor:       config.encryptor,
+		schemaMigration: config.schemaMigration,
+		tenantResolver:  config.tenantResolver,
+		entityFamilies:  config.entityFamilies,
+		eventsStreams:   syncmap.New[string, *eventsStream](),
+		statesStreams:   syncmap.New[string, *statesStream](),
 	}
 	e.actorSystem.Store(&actorSystemRef{
 		sys:      actorSys,
@@ -246,18 +251,27 @@ func validateActorSystemExtensions(sys goakt.ActorSystem, cfg *Config) error {
 //
 // In the meta-framework design, Start does no actor-system construction —
 // the caller has already built and started goakt.NewActorSystem. Start only
-// wires the OpenTelemetry propagator (when WithTelemetry is configured) and
-// flips the engine into a "ready to receive entity work" state.
+// migrates the store schemas (when WithSchemaMigration is configured), wires
+// the OpenTelemetry propagator (when WithTelemetry is configured) and flips
+// the engine into a "ready to receive entity work" state.
 //
 // Parameters:
-//   - ctx: Execution context. Currently unused but retained for API symmetry
-//     with Stop and to leave room for future async initialization.
+//   - ctx: Execution context. It is passed to the stores' Migrate when
+//     WithSchemaMigration is set; otherwise it is unused.
 //
 // Returns:
 //   - An error if the engine is in an inconsistent state; otherwise, nil.
-func (engine *Engine) Start(_ context.Context) error {
+func (engine *Engine) Start(ctx context.Context) error {
 	if engine.actorSystem.Load() == nil {
 		return ErrActorSystemRequired
+	}
+
+	// Migrate first, before anything else changes: a failure must leave the
+	// engine as it was, not started and with no telemetry side effects.
+	if engine.schemaMigration {
+		if err := engine.migrateSchemas(ctx); err != nil {
+			return err
+		}
 	}
 
 	if engine.telemetry != nil {
@@ -267,6 +281,31 @@ func (engine *Engine) Start(_ context.Context) error {
 		instrumentation.InstallPropagator()
 	}
 	engine.started.Store(true)
+	return nil
+}
+
+// migrateSchemas runs Migrate on every configured store that implements
+// persistence.SchemaMigrator and stops at the first error. Stores that do not
+// implement it are skipped.
+func (engine *Engine) migrateSchemas(ctx context.Context) error {
+	stores := []struct {
+		kind  string
+		store any
+	}{
+		{"events store", engine.eventsStore},
+		{"state store", engine.stateStore},
+		{"offset store", engine.offsetStore},
+		{"snapshot store", engine.snapshotStore},
+	}
+	for _, s := range stores {
+		migrator, ok := s.store.(persistence.SchemaMigrator)
+		if !ok {
+			continue
+		}
+		if err := migrator.Migrate(ctx); err != nil {
+			return fmt.Errorf("engine: migrate the schema of the %s: %w", s.kind, err)
+		}
+	}
 	return nil
 }
 
