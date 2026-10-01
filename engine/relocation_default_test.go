@@ -25,7 +25,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
 )
@@ -41,25 +41,25 @@ import (
 // either default is ever flipped without updating WithRelocation's docs, this
 // test fails.
 func TestRelocationDisabledByDefault(t *testing.T) {
-	t.Run("newSpawnConfig with no options disables relocation", func(t *testing.T) {
-		config := newSpawnConfig()
-		require.False(t, config.toRelocate,
-			"relocation must stay disabled by default; WithRelocation(true) is required to opt in")
-	})
+	specs.Describe(t, "relocation is disabled by default and WithRelocation(true) is required to opt in", func(s *specs.Spec) {
+		s.It("newSpawnConfig with no options disables relocation", func(ctx *specs.Context) {
+			config := newSpawnConfig()
+			ctx.Expect(config.toRelocate).To(specs.BeFalse())
+		})
 
-	t.Run("newSpawnConfig with WithRelocation(true) enables relocation", func(t *testing.T) {
-		config := newSpawnConfig(WithRelocation(true))
-		require.True(t, config.toRelocate)
-	})
+		s.It("newSpawnConfig with WithRelocation(true) enables relocation", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithRelocation(true))
+			ctx.Expect(config.toRelocate).To(specs.BeTrue())
+		})
 
-	t.Run("runtimeport.ResolveSpawnOptions with no options disables relocation", func(t *testing.T) {
-		settings := runtimeport.ResolveSpawnOptions()
-		require.False(t, settings.Relocation(),
-			"relocation must stay disabled by default; WithRelocation(true) is required to opt in")
-	})
+		s.It("runtimeport.ResolveSpawnOptions with no options disables relocation", func(ctx *specs.Context) {
+			settings := runtimeport.ResolveSpawnOptions()
+			ctx.Expect(settings.Relocation()).To(specs.BeFalse())
+		})
 
-	t.Run("runtimeport.ResolveSpawnOptions with WithRelocation(true) enables relocation", func(t *testing.T) {
-		settings := runtimeport.ResolveSpawnOptions(WithRelocation(true))
-		require.True(t, settings.Relocation())
+		s.It("runtimeport.ResolveSpawnOptions with WithRelocation(true) enables relocation", func(ctx *specs.Context) {
+			settings := runtimeport.ResolveSpawnOptions(WithRelocation(true))
+			ctx.Expect(settings.Relocation()).To(specs.BeTrue())
+		})
 	})
 }

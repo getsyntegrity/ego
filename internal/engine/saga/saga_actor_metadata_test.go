@@ -26,8 +26,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
@@ -41,40 +40,51 @@ import (
 // fresh child from the saga's own rootMetadata (correlation inherited,
 // causation set to the saga's root operation).
 func TestActorAttachCommandMetadata(t *testing.T) {
-	rootOp, err := command.NewOperationID("saga-root-1")
-	require.NoError(t, err)
-	rootMetadata, err := command.NewMetadata(rootOp)
-	require.NoError(t, err)
+	specs.Describe(t, "attachCommandMetadata uses explicit metadata verbatim and derives the rest from the saga's root", func(s *specs.Spec) {
+		var (
+			rootMetadata command.Metadata
+			actor        *Actor
+		)
+		s.BeforeEach(func(ctx *specs.Context) {
+			rootOp, err := command.NewOperationID("saga-root-1")
+			ctx.Expect(err).To(specs.BeNil())
+			rootMetadata, err = command.NewMetadata(rootOp)
+			ctx.Expect(err).To(specs.BeNil())
 
-	s := &Actor{
-		sagaID:       "saga-root-1",
-		rootMetadata: rootMetadata,
-		logger:       enginetest.DiscardLogger,
-	}
+			actor = &Actor{
+				sagaID:       "saga-root-1",
+				rootMetadata: rootMetadata,
+				logger:       enginetest.DiscardLogger,
+			}
+		})
 
-	t.Run("zero-value metadata is auto-derived from the saga's root", func(t *testing.T) {
-		ctx := s.attachCommandMetadata(context.Background(), command.Metadata{})
+		s.It("zero-value metadata is auto-derived from the saga's root", func(ctx *specs.Context) {
+			attached := actor.attachCommandMetadata(context.Background(), command.Metadata{})
 
-		md, ok := protocol.MetadataFromContext(ctx)
-		require.True(t, ok)
-		assert.NotEqual(t, rootMetadata.OperationID(), md.OperationID(), "derived metadata must carry a fresh operation id, not the root's")
-		assert.Equal(t, rootMetadata.CorrelationID(), md.CorrelationID(), "correlation id must be inherited from the root (D7)")
-		causation, ok := md.CausationID()
-		require.True(t, ok)
-		assert.Equal(t, command.CausationID(rootMetadata.OperationID()), causation, "causation must be the saga's root operation")
-	})
+			md, ok := protocol.MetadataFromContext(attached)
+			ctx.Expect(ok).To(specs.BeTrue())
+			// derived metadata must carry a fresh operation id, not the root's
+			ctx.Expect(md.OperationID()).To(specs.NotEqual(rootMetadata.OperationID()))
+			// correlation id must be inherited from the root (D7)
+			ctx.Expect(md.CorrelationID()).ToEqual(rootMetadata.CorrelationID())
+			causation, ok := md.CausationID()
+			ctx.Expect(ok).To(specs.BeTrue())
+			// causation must be the saga's root operation
+			ctx.Expect(causation).ToEqual(command.CausationID(rootMetadata.OperationID()))
+		})
 
-	t.Run("explicit metadata is used verbatim", func(t *testing.T) {
-		explicitOp, err := command.NewOperationID("explicit-op-1")
-		require.NoError(t, err)
-		explicit, err := command.NewMetadata(explicitOp, command.WithCorrelationID("explicit-correlation"))
-		require.NoError(t, err)
+		s.It("explicit metadata is used verbatim", func(ctx *specs.Context) {
+			explicitOp, err := command.NewOperationID("explicit-op-1")
+			ctx.Expect(err).To(specs.BeNil())
+			explicit, err := command.NewMetadata(explicitOp, command.WithCorrelationID("explicit-correlation"))
+			ctx.Expect(err).To(specs.BeNil())
 
-		ctx := s.attachCommandMetadata(context.Background(), explicit)
+			attached := actor.attachCommandMetadata(context.Background(), explicit)
 
-		md, ok := protocol.MetadataFromContext(ctx)
-		require.True(t, ok)
-		assert.Equal(t, explicit.OperationID(), md.OperationID())
-		assert.Equal(t, explicit.CorrelationID(), md.CorrelationID())
+			md, ok := protocol.MetadataFromContext(attached)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(md.OperationID()).ToEqual(explicit.OperationID())
+			ctx.Expect(md.CorrelationID()).ToEqual(explicit.CorrelationID())
+		})
 	})
 }

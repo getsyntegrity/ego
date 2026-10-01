@@ -24,10 +24,12 @@ package publishingtest
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 const (
@@ -46,23 +48,36 @@ const (
 // the package can move with port/publishing into the ego-arch-006
 // contracts module (ego-arch-004 design §D8).
 func TestPublishingtestDependsOnlyOnStdlibPublishingAndEgopb(t *testing.T) {
-	deps := goListDeps(t, ".")
-	for _, want := range []string{publishingtestPath, publishingPath, egopbPath, "testing"} {
-		if !slices.Contains(deps, want) {
-			t.Fatalf("go list -deps . = %v, want it to list %s; the test would prove nothing", deps, want)
-		}
-	}
-	for _, dep := range deps {
-		switch {
-		case dep == adapterPath || strings.HasPrefix(dep, adapterPath+"/"):
-			t.Errorf("port/publishing/publishingtest must not depend on %q: it would create a module cycle once port/publishing moves (openspec/changes/ego-arch-004/design.md §D8)", dep)
-		case dep == publishingtestPath || dep == publishingPath || dep == egopbPath,
-			dep == protobufRuntime || strings.HasPrefix(dep, protobufRuntime+"/"),
-			isStdlib(dep):
-		default:
-			t.Errorf("port/publishing/publishingtest must not depend on %q: it may import only the standard library, port/publishing and egopb (openspec/changes/ego-arch-004/design.md §D8)", dep)
-		}
-	}
+	specs.Describe(t, "the import graph of port/publishing/publishingtest", func(s *specs.Spec) {
+		var deps []string
+		s.BeforeEach(func(ctx *specs.Context) {
+			deps = goListDeps(ctx, ".")
+			// The guard first: an empty or truncated graph would prove nothing.
+			ctx.Expect(deps).To(specs.ContainAllOf(publishingtestPath, publishingPath, egopbPath, "testing"))
+		})
+
+		s.It("never reaches port/adapter", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"port/adapter or one of its packages: it would create a module cycle once port/publishing moves "+
+					"(openspec/changes/ego-arch-004/design.md §D8)",
+				func(dep any) bool {
+					path := dep.(string)
+					return path == adapterPath || strings.HasPrefix(path, adapterPath+"/")
+				})))
+		})
+
+		s.It("holds only the standard library, port/publishing, egopb and the protobuf runtime", func(ctx *specs.Context) {
+			ctx.Expect(deps).To(specs.EveryElement(specs.Satisfy(
+				"publishingtest itself, port/publishing, egopb, the protobuf runtime or a standard library package: "+
+					"it may import only the standard library, port/publishing and egopb (openspec/changes/ego-arch-004/design.md §D8)",
+				func(dep any) bool {
+					path := dep.(string)
+					return path == publishingtestPath || path == publishingPath || path == egopbPath ||
+						path == protobufRuntime || strings.HasPrefix(path, protobufRuntime+"/") ||
+						isStdlib(path)
+				})))
+		})
+	})
 }
 
 // isStdlib reports whether an import path belongs to the standard library:
@@ -72,18 +87,21 @@ func isStdlib(path string) bool {
 	return !strings.Contains(first, ".")
 }
 
-func goListDeps(t *testing.T, pkg string) []string {
-	t.Helper()
+func goListDeps(ctx *specs.Context, pkg string) []string {
 	goBin, err := exec.LookPath("go")
+	var lookErr error
 	if err != nil {
-		t.Fatalf("go toolchain not found on PATH: %v", err)
+		lookErr = fmt.Errorf("go toolchain not found on PATH: %w", err)
 	}
+	ctx.Expect(lookErr).To(specs.BeNil())
 	cmd := exec.Command(goBin, "list", "-deps", pkg)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	var runErr error
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("go list -deps %s failed: %v\n%s", pkg, err, stderr.String())
+		runErr = fmt.Errorf("go list -deps %s failed: %w\n%s", pkg, err, stderr.String())
 	}
+	ctx.Expect(runErr).To(specs.BeNil())
 	return strings.Fields(stdout.String())
 }

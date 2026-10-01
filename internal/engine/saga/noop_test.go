@@ -25,29 +25,29 @@ package saga
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // TestSagaActionIsNoop covers the helper that replaced the unexported method
 // (*sagaAction).isNoop, which cannot stay a method once sagaAction is declared
 // in port/behavior (design.md §5.2).
 func TestSagaActionIsNoop(t *testing.T) {
-	testCases := []struct {
-		name   string
-		action *sagaAction
-		noop   bool
-	}{
-		{name: "nil action", action: nil, noop: true},
-		{name: "empty action", action: &sagaAction{}, noop: true},
-		{name: "empty slices", action: &sagaAction{Commands: []sagaCommand{}, Events: []Event{}}, noop: true},
-		{name: "command", action: &sagaAction{Commands: []sagaCommand{{EntityID: "a"}}}, noop: false},
-		{name: "event", action: &sagaAction{Events: []Event{nil}}, noop: false},
-		{name: "complete", action: &sagaAction{Complete: true}, noop: false},
-		{name: "compensate", action: &sagaAction{Compensate: true}, noop: false},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.noop, actionIsNoop(tc.action))
+	specs.Describe(t, "actionIsNoop reports whether a saga action asks for nothing", func(s *specs.Spec) {
+		type noopCase struct {
+			name   string
+			action *sagaAction
+			noop   bool
+		}
+		specs.Table(s, []noopCase{
+			{name: "nil action", action: nil, noop: true},
+			{name: "empty action", action: &sagaAction{}, noop: true},
+			{name: "empty slices", action: &sagaAction{Commands: []sagaCommand{}, Events: []Event{}}, noop: true},
+			{name: "command", action: &sagaAction{Commands: []sagaCommand{{EntityID: "a"}}}, noop: false},
+			{name: "event", action: &sagaAction{Events: []Event{nil}}, noop: false},
+			{name: "complete", action: &sagaAction{Complete: true}, noop: false},
+			{name: "compensate", action: &sagaAction{Compensate: true}, noop: false},
+		}, func(c noopCase) string { return c.name }, func(ctx *specs.Context, c noopCase) {
+			ctx.Expect(actionIsNoop(c.action)).ToEqual(c.noop)
 		})
-	}
+	})
 }

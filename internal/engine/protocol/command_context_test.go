@@ -26,56 +26,76 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/command"
 )
 
 func TestCarrierFromContext_NoneAttached(t *testing.T) {
-	_, ok := CarrierFromContext(context.Background())
-	require.False(t, ok)
+	specs.Describe(t, "CarrierFromContext reports no carrier for a context that never had one attached", func(s *specs.Spec) {
+		s.It("returns ok=false on a bare context", func(ctx *specs.Context) {
+			_, ok := CarrierFromContext(context.Background())
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestAttachCarrier_RoundTrip(t *testing.T) {
-	op, err := command.NewOperationID("op-1")
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "AttachCarrier stores a carrier that CarrierFromContext returns unchanged", func(s *specs.Spec) {
+		s.It("returns the attached carrier", func(ctx *specs.Context) {
+			op, err := command.NewOperationID("op-1")
+			ctx.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	ctx := AttachCarrier(context.Background(), command.MarshalMetadata(md))
+			attached := AttachCarrier(context.Background(), command.MarshalMetadata(md))
 
-	c, ok := CarrierFromContext(ctx)
-	require.True(t, ok)
-	require.Equal(t, command.MarshalMetadata(md), c)
+			c, ok := CarrierFromContext(attached)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(c).ToEqual(command.MarshalMetadata(md))
+		})
+	})
 }
 
 func TestMetadataFromContext_NoneAttached(t *testing.T) {
-	_, ok := MetadataFromContext(context.Background())
-	require.False(t, ok)
+	specs.Describe(t, "MetadataFromContext reports no metadata for a context that never had a carrier attached", func(s *specs.Spec) {
+		s.It("returns ok=false on a bare context", func(ctx *specs.Context) {
+			_, ok := MetadataFromContext(context.Background())
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }
 
 func TestMetadataFromContext_RematerializesMetadata(t *testing.T) {
-	op, err := command.NewOperationID("op-1")
-	require.NoError(t, err)
-	corr, err := command.NewOperationID("corr-1")
-	require.NoError(t, err)
-	md, err := command.NewMetadata(op, command.WithCorrelationID(command.CorrelationID(corr)))
-	require.NoError(t, err)
+	specs.Describe(t, "MetadataFromContext rebuilds the metadata from the attached carrier", func(s *specs.Spec) {
+		s.It("keeps the operation id, correlation id and timestamp", func(ctx *specs.Context) {
+			op, err := command.NewOperationID("op-1")
+			ctx.Expect(err).To(specs.BeNil())
+			corr, err := command.NewOperationID("corr-1")
+			ctx.Expect(err).To(specs.BeNil())
+			md, err := command.NewMetadata(op, command.WithCorrelationID(command.CorrelationID(corr)))
+			ctx.Expect(err).To(specs.BeNil())
 
-	ctx := AttachCarrier(context.Background(), command.MarshalMetadata(md))
+			attached := AttachCarrier(context.Background(), command.MarshalMetadata(md))
 
-	got, ok := MetadataFromContext(ctx)
-	require.True(t, ok)
-	require.Equal(t, md.OperationID(), got.OperationID())
-	require.Equal(t, md.CorrelationID(), got.CorrelationID())
-	require.Equal(t, md.Timestamp(), got.Timestamp())
+			got, ok := MetadataFromContext(attached)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(got.OperationID()).ToEqual(md.OperationID())
+			ctx.Expect(got.CorrelationID()).ToEqual(md.CorrelationID())
+			ctx.Expect(got.Timestamp()).ToEqual(md.Timestamp())
+		})
+	})
 }
 
 func TestMetadataFromContext_InvalidCarrierFailsClosed(t *testing.T) {
-	// A Carrier missing the required operation_id key fails to unmarshal;
-	// MetadataFromContext reports this as "no metadata available" rather
-	// than propagating the error, so callers fall back to legacy dispatch.
-	ctx := AttachCarrier(context.Background(), command.Carrier{})
-	_, ok := MetadataFromContext(ctx)
-	require.False(t, ok)
+	specs.Describe(t, "MetadataFromContext treats an invalid carrier as no metadata", func(s *specs.Spec) {
+		s.It("returns ok=false for a carrier missing the operation id", func(ctx *specs.Context) {
+			// A Carrier missing the required operation_id key fails to unmarshal;
+			// MetadataFromContext reports this as "no metadata available" rather
+			// than propagating the error, so callers fall back to legacy dispatch.
+			attached := AttachCarrier(context.Background(), command.Carrier{})
+			_, ok := MetadataFromContext(attached)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }

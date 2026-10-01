@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/tochemey/goakt/v4/extension"
 
 	"github.com/getsyntegrity/ego/command"
@@ -152,15 +152,19 @@ var (
 )
 
 func TestSagaActionAndSagaCommandAreAliases(t *testing.T) {
-	require.Equal(t, reflect.TypeFor[behaviorport.SagaAction](), reflect.TypeFor[SagaAction]())
-	require.Equal(t, reflect.TypeFor[behaviorport.SagaCommand](), reflect.TypeFor[SagaCommand]())
+	specs.Describe(t, "SagaAction and SagaCommand are aliases of the behavior port types, not copies", func(s *specs.Spec) {
+		s.It("are identical types and a literal of the old names is a value of the new type", func(ctx *specs.Context) {
+			ctx.Expect(reflect.TypeFor[SagaAction]()).ToEqual(reflect.TypeFor[behaviorport.SagaAction]())
+			ctx.Expect(reflect.TypeFor[SagaCommand]()).ToEqual(reflect.TypeFor[behaviorport.SagaCommand]())
 
-	// A literal written against the old names is a value of the new type.
-	var action any = &SagaAction{
-		Commands: []SagaCommand{{EntityID: "account-1", Timeout: time.Second}},
-		Complete: true,
-	}
-	moved, ok := action.(*behaviorport.SagaAction)
-	require.True(t, ok)
-	require.Equal(t, "account-1", moved.Commands[0].EntityID)
+			// A literal written against the old names is a value of the new type.
+			var action any = &SagaAction{
+				Commands: []SagaCommand{{EntityID: "account-1", Timeout: time.Second}},
+				Complete: true,
+			}
+			moved, ok := action.(*behaviorport.SagaAction)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(moved.Commands[0].EntityID).ToEqual("account-1")
+		})
+	})
 }

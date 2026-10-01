@@ -26,6 +26,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
+
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/port/adapter"
 	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
@@ -156,21 +158,21 @@ func TestDurableStatePublisherPublishingConformance(t *testing.T) {
 // (spec 3): one port each, the name "websocket", no declared capability
 // (no Start and no Ping, per O5).
 func TestDescriptors(t *testing.T) {
-	cases := map[string]struct {
-		value any
-		port  adapter.Port
-	}{
-		"events": {&EventsPublisher{}, publishing.PortEventPublisher},
-		"state":  {&DurableStatePublisher{}, publishing.PortStatePublisher},
-	}
-	for name, tc := range cases {
-		d, ok := adapter.Describe(tc.value)
-		if !ok {
-			t.Errorf("%s: adapter.Describe reports the publisher as undeclared", name)
-			continue
+	specs.Describe(t, "each publisher declares one port, the name websocket and no capability", func(s *specs.Spec) {
+		type descriptorCase struct {
+			name  string
+			value any
+			port  adapter.Port
 		}
-		if len(d.Ports) != 1 || d.Ports[0] != tc.port || d.Name != "websocket" || len(d.Capabilities) != 0 {
-			t.Errorf("%s: descriptor %+v, want {Ports: [%s], Name: websocket, no capabilities}", name, d, tc.port)
-		}
-	}
+		specs.Table(s, []descriptorCase{
+			{"events", &EventsPublisher{}, publishing.PortEventPublisher},
+			{"state", &DurableStatePublisher{}, publishing.PortStatePublisher},
+		}, func(c descriptorCase) string { return c.name }, func(ctx *specs.Context, c descriptorCase) {
+			d, ok := adapter.Describe(c.value)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(d.Ports).ToEqual([]adapter.Port{c.port})
+			ctx.Expect(d.Name).ToEqual("websocket")
+			ctx.Expect(d.Capabilities).To(specs.BeEmpty())
+		})
+	})
 }
