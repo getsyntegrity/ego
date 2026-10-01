@@ -62,7 +62,10 @@ type EventStore struct {
 	dsn  string
 }
 
-var _ persistence.EventsStore = (*EventStore)(nil)
+var (
+	_ persistence.EventsStore    = (*EventStore)(nil)
+	_ persistence.SchemaMigrator = (*EventStore)(nil)
+)
 
 // NewEventStore creates a new PostgreSQL-backed event store.
 func NewEventStore(dsn string) *EventStore {
@@ -81,6 +84,19 @@ func (s *EventStore) Connect(ctx context.Context) error {
 	}
 	s.pool = pool
 	return nil
+}
+
+// Migrate brings the database schema, every table of this module, to the
+// latest version. It implements persistence.SchemaMigrator and needs a
+// connected store; see SchemaMigrator for what it does.
+func (s *EventStore) Migrate(ctx context.Context) error {
+	return NewSchemaMigrator(s.pool).Migrate(ctx)
+}
+
+// SchemaVersion returns the schema version the database is at. It implements
+// persistence.SchemaMigrator.
+func (s *EventStore) SchemaVersion(ctx context.Context) (uint, error) {
+	return NewSchemaMigrator(s.pool).SchemaVersion(ctx)
 }
 
 func (s *EventStore) Disconnect(_ context.Context) error {

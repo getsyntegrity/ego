@@ -30,6 +30,7 @@ import (
 
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/ego/persistence"
 )
 
 // OffsetStore implements offsetstore.OffsetStore using PostgreSQL.
@@ -38,7 +39,10 @@ type OffsetStore struct {
 	dsn  string
 }
 
-var _ offsetstore.OffsetStore = (*OffsetStore)(nil)
+var (
+	_ offsetstore.OffsetStore    = (*OffsetStore)(nil)
+	_ persistence.SchemaMigrator = (*OffsetStore)(nil)
+)
 
 // NewOffsetStore creates a new PostgreSQL-backed offset store.
 func NewOffsetStore(dsn string) *OffsetStore {
@@ -57,6 +61,20 @@ func (s *OffsetStore) Connect(ctx context.Context) error {
 	}
 	s.pool = pool
 	return nil
+}
+
+// Migrate brings the database schema, every table of this module, to the
+// latest version. It implements persistence.SchemaMigrator and needs a
+// connected store. It runs the same migrator as EventStore.Migrate, so a
+// database shared by both stores is migrated once whichever runs first.
+func (s *OffsetStore) Migrate(ctx context.Context) error {
+	return NewSchemaMigrator(s.pool).Migrate(ctx)
+}
+
+// SchemaVersion returns the schema version the database is at. It implements
+// persistence.SchemaMigrator.
+func (s *OffsetStore) SchemaVersion(ctx context.Context) (uint, error) {
+	return NewSchemaMigrator(s.pool).SchemaVersion(ctx)
 }
 
 func (s *OffsetStore) Disconnect(_ context.Context) error {

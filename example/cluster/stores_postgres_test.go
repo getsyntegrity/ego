@@ -54,85 +54,6 @@ import (
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
-// eventsStoreSchemaDDL is the CREATE TABLE statement for events_store, kept
-// in sync by hand with the ConfigMap init.sql in k8s/postgres.yaml (the
-// deployment source of truth). It is used by the Postgres-backed tests
-// (stores_postgres_test.go) to provision a fresh schema without depending on
-// a running cluster's init container.
-//
-// tenant_id defaults to ” (the empty string), which scopeKey encodes as
-// persistence.Unscoped(): a valid tenancy.TenantID is never empty
-// (tenancy.NewTenantID rejects ""), so ” unambiguously means "no tenant".
-// Existing rows from before this column existed read back as ”, so an
-// existing non-tenant deployment needs no data rewrite — see README.md's
-// migration note for the ALTER TABLE recipe on an existing database.
-//
-// events_store_revisions holds one row per (tenant_id, persistence_id): the
-// StorageRevision, i.e. the highest sequence number ever committed for that
-// record. It is separate from events_store because DeleteEvents removes
-// replayable events for retention but must never lower the revision, or
-// ExpectGenesis() would succeed again and a stale ExpectRevision would win.
-// The row is also the per-record lock: every write takes it before touching
-// events_store (see WriteEvents), and so does DeleteEvents before its DELETE
-// (see DeleteEvents), so a delete can never interleave with a concurrent
-// write of the same record.
-//
-// The script is idempotent and doubles as the migration for a database
-// created before events_store_revisions existed: the final INSERT backfills
-// each record's revision from its highest retained sequence number, and never
-// lowers a revision that is already stored.
-//
-// tenant_metadata is a nullable JSONB column carrying egopb.Event's
-// TenantMetadata (proto field 10), the map a tenant-aware EventSourcedActor
-// serializes via tenancy.MarshalMetadata before persisting and reconstructs
-// via tenancy.UnmarshalMetadata on recovery (event_sourced_actor.go). It must
-// be nullable rather than NOT NULL DEFAULT '{}': proto3 cannot distinguish a
-// nil map from an empty one on the wire, so insertEvent (below) writes NULL
-// for both, and scanEvents reads NULL back as a nil map — the same shape
-// GetTenantMetadata() returns for an event that never carried tenant
-// metadata at all. A JSON object, not a second key/value table, mirrors the
-// map's own shape and keeps a single-record write to one row (#115 Codex
-// P2). ADD COLUMN IF NOT EXISTS migrates a database created before this
-// column existed with NO backfill: an existing row's tenant_metadata is
-// NULL, which is already the correct "no tenant metadata" reading for a row
-// nothing ever attached an identity to — inventing one here would be wrong.
-const eventsStoreSchemaDDL = `
-CREATE TABLE IF NOT EXISTS events_store
-(
-    tenant_id         VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id    VARCHAR(255)          NOT NULL,
-    sequence_number   BIGINT                NOT NULL,
-    is_deleted        BOOLEAN DEFAULT FALSE NOT NULL,
-    event_payload     BYTEA                 NOT NULL,
-    event_manifest    VARCHAR(255)          NOT NULL,
-    timestamp         BIGINT                NOT NULL,
-    shard_number      BIGINT                NOT NULL,
-    encryption_key_id VARCHAR(255) DEFAULT '' NOT NULL,
-    is_encrypted      BOOLEAN DEFAULT FALSE NOT NULL,
-    tenant_metadata   JSONB,
-    PRIMARY KEY (tenant_id, persistence_id, sequence_number)
-);
-ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
-CREATE INDEX IF NOT EXISTS idx_events_store_persistence_id ON events_store(tenant_id, persistence_id);
-CREATE INDEX IF NOT EXISTS idx_events_store_seqnumber ON events_store(sequence_number);
-CREATE INDEX IF NOT EXISTS idx_events_store_timestamp ON events_store(timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_store_shard ON events_store(shard_number);
-
-CREATE TABLE IF NOT EXISTS events_store_revisions
-(
-    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id VARCHAR(255)            NOT NULL,
-    revision       BIGINT                  NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id)
-);
-INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
-SELECT tenant_id, persistence_id, MAX(sequence_number)
-FROM events_store
-GROUP BY tenant_id, persistence_id
-ON CONFLICT (tenant_id, persistence_id)
-DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
-`
-
 // postgresTestDSN returns the DSN configured for these tests, skipping the
 // calling test when it is unset.
 func postgresTestDSN(t *testing.T) string {
@@ -144,9 +65,9 @@ func postgresTestDSN(t *testing.T) string {
 	return dsn
 }
 
-// newPostgresTestStore provisions the events_store schema (creating it if
-// missing) and truncates it, so every call returns a store backed by a
-// fresh, empty table — the contract persistence/conformance.RunEventsStoreConformance
+// newPostgresTestStore migrates the schema to the latest version and truncates
+// the event tables, so every call returns a store backed by fresh, empty
+// tables — the contract persistence/conformance.RunEventsStoreConformance
 // requires of newStore. The returned store is not yet Connect()-ed; the
 // conformance runner and the tests below do that themselves.
 func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
@@ -158,23 +79,41 @@ func newPostgresTestStore(sc *specs.Context, dsn string) *postgres.EventStore {
 
 // provisionPostgresTestStore does the work of newPostgresTestStore and returns the
 // error instead of asserting, for the conformance runner, whose callback has a
-// *testing.T and no spec context.
+// *testing.T and no spec context. The schema comes from the store's own
+// Migrate, the same path an engine started with WithSchemaMigration takes.
 func provisionPostgresTestStore(dsn string) (*postgres.EventStore, error) {
 	ctx := context.Background()
+
+	migrating := postgres.NewEventStore(dsn)
+	if err := migrating.Connect(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { _ = migrating.Disconnect(ctx) }()
+	if err := migrating.Migrate(ctx); err != nil {
+		return nil, err
+	}
 
 	setupPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
 	defer setupPool.Close()
-
-	if _, err = setupPool.Exec(ctx, eventsStoreSchemaDDL); err != nil {
-		return nil, err
-	}
 	if _, err = setupPool.Exec(ctx, "TRUNCATE TABLE events_store, events_store_revisions"); err != nil {
 		return nil, err
 	}
 	return postgres.NewEventStore(dsn), nil
+}
+
+// resetPostgresSchema drops every table the persistence/postgres module owns,
+// together with its version record, leaving a database no one has migrated.
+func resetPostgresSchema(ctx context.Context, dsn string) error {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
+	return err
 }
 
 func TestPostgresEventStore_Conformance(t *testing.T) {
@@ -186,6 +125,86 @@ func TestPostgresEventStore_Conformance(t *testing.T) {
 		}
 		return store
 	})
+}
+
+// postgresLatestSchemaVersion is the version of the newest file in
+// persistence/postgres/schema. Adding a file means raising it here.
+const postgresLatestSchemaVersion = 5
+
+// openSchemaMigrator is the opener of the schema suite: each call returns a
+// new, connected EventStore, which is the SchemaMigrator under test, with its
+// own pool as a separate cluster node would have.
+type openSchemaMigrator = func(t conformance.SchemaT) persistence.SchemaMigrator
+
+// postgresSchemaHarness wires the schema migrator suite to a real database. A
+// backend is the database itself, reset before each check.
+func postgresSchemaHarness(dsn string) conformance.SchemaMigratorHarness {
+	ctx := context.Background()
+	fatal := func(t conformance.SchemaT, what string, err error) {
+		t.Helper()
+		t.Errorf("%s: %v", what, err)
+		t.FailNow()
+	}
+	open := func(t conformance.SchemaT) persistence.SchemaMigrator {
+		store := postgres.NewEventStore(dsn)
+		if err := store.Connect(ctx); err != nil {
+			fatal(t, "connect a store", err)
+		}
+		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+		return store
+	}
+	// backendWith resets the database, lets setup leave a legacy shape, and
+	// returns the opener. setup returns SQL to run afterwards, or "".
+	backendWith := func(setup func(t conformance.SchemaT) string) func(conformance.SchemaT) openSchemaMigrator {
+		return func(t conformance.SchemaT) openSchemaMigrator {
+			if err := resetPostgresSchema(ctx, dsn); err != nil {
+				fatal(t, "reset the database", err)
+			}
+			if setup == nil {
+				return open
+			}
+			ddl := setup(t)
+			if ddl == "" {
+				return open
+			}
+			pool, err := pgxpool.New(ctx, dsn)
+			if err != nil {
+				fatal(t, "open a setup pool", err)
+			}
+			defer pool.Close()
+			if _, err = pool.Exec(ctx, ddl); err != nil {
+				fatal(t, "apply the legacy shape", err)
+			}
+			return open
+		}
+	}
+	legacy := func(ddl string) func(conformance.SchemaT) openSchemaMigrator {
+		return backendWith(func(conformance.SchemaT) string { return ddl })
+	}
+	return conformance.SchemaMigratorHarness{
+		NewBackend:    backendWith(nil),
+		LatestVersion: postgresLatestSchemaVersion,
+		Legacy: []conformance.LegacySchema{
+			{Name: "EventsStoreWithoutRevisions", Prepare: legacy(legacyEventsStoreDDL)},
+			{Name: "EventsStoreWithoutTenantMetadata", Prepare: legacy(legacyEventsStoreDDLBeforeTenantMetadata)},
+			{
+				// A database that is already at the latest shape, created by hand
+				// (the k8s init.sql) and so without a version record.
+				Name: "CurrentShapeWithoutVersionRecord",
+				Prepare: backendWith(func(t conformance.SchemaT) string {
+					if err := open(t).Migrate(ctx); err != nil {
+						fatal(t, "build the current shape", err)
+					}
+					return "DROP TABLE schema_migrations"
+				}),
+			},
+		},
+	}
+}
+
+func TestPostgresSchemaMigratorConformance(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	conformance.RunSchemaMigratorConformance(t, postgresSchemaHarness(dsn))
 }
 
 // countEventRows returns how many events_store rows an unscoped record has at
@@ -1154,7 +1173,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 			sc.Expect(err).To(specs.BeNil())
 			defer pool.Close()
 
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
 			sc.Expect(err).To(specs.BeNil())
 			_, err = pool.Exec(ctx, legacyEventsStoreDDL)
 			sc.Expect(err).To(specs.BeNil())
@@ -1168,14 +1187,14 @@ func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 				sc.Expect(err).To(specs.BeNil())
 			}
 
-			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-			sc.Expect(err).To(specs.BeNil())
-			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-			sc.Expect(err).To(specs.BeNil()) // the schema script must be idempotent
-
 			store := postgres.NewEventStore(dsn)
 			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
 			defer store.Disconnect(ctx)
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil()) // Migrate must be idempotent
+			version, err := store.SchemaVersion(ctx)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
 
 			tenantA, err := persistence.NewTenantScope("tenant-a")
 			sc.Expect(err).To(specs.BeNil())
@@ -1234,7 +1253,7 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 			sc.Expect(err).To(specs.BeNil())
 			defer pool.Close()
 
-			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions, events_store, offsets_store, schema_migrations`)
 			sc.Expect(err).To(specs.BeNil())
 			_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
 			sc.Expect(err).To(specs.BeNil())
@@ -1245,10 +1264,14 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 				VALUES ('', $1, 1, ''::bytea, '', 1000, 1)`, persistenceID)
 			sc.Expect(err).To(specs.BeNil())
 
-			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+			store := postgres.NewEventStore(dsn)
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil()) // Migrate must be idempotent
+			version, err := store.SchemaVersion(ctx)
 			sc.Expect(err).To(specs.BeNil())
-			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-			sc.Expect(err).To(specs.BeNil()) // the schema script must be idempotent
+			sc.Expect(version).To(specs.Equal(uint(postgresLatestSchemaVersion)))
 
 			var tenantMetadataIsNull bool
 			sc.Expect(pool.QueryRow(ctx,
@@ -1256,10 +1279,6 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 				persistenceID,
 			).Scan(&tenantMetadataIsNull)).To(specs.BeNil())
 			sc.Expect(tenantMetadataIsNull).To(specs.BeTrue()) // the migration must not backfill or invent tenant metadata for a pre-existing row
-
-			store := postgres.NewEventStore(dsn)
-			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
-			defer store.Disconnect(ctx)
 
 			latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
 			sc.Expect(err).To(specs.BeNil())
