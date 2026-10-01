@@ -55,14 +55,17 @@ func TestNewRecovery_WithAllOptions(t *testing.T) {
 	})
 }
 
+// recoveryOptionCase is one option together with the Recovery it must produce when applied to a zero value.
+type recoveryOptionCase struct {
+	name     string
+	option   RecoveryOption
+	expected Recovery
+}
+
 func TestRecoveryOption(t *testing.T) {
 	specs.Describe(t, "A RecoveryOption sets only its own field on a Recovery", func(s *specs.Spec) {
 		ts := time.Second
-		testCases := []struct {
-			name     string
-			option   RecoveryOption
-			expected Recovery
-		}{
+		specs.Table(s, []recoveryOptionCase{
 			{
 				name:     "WithRetries",
 				option:   WithRetries(5),
@@ -78,13 +81,10 @@ func TestRecoveryOption(t *testing.T) {
 				option:   WithRecoveryPolicy(Fail),
 				expected: Recovery{policy: Fail},
 			},
-		}
-		for _, tc := range testCases {
-			s.It(tc.name, func(ctx *specs.Context) {
-				var e Recovery
-				tc.option.Apply(&e)
-				ctx.Expect(e).ToEqual(tc.expected)
-			})
-		}
+		}, func(c recoveryOptionCase) string { return c.name }, func(ctx *specs.Context, c recoveryOptionCase) {
+			var e Recovery
+			c.option.Apply(&e)
+			ctx.Expect(e).ToEqual(c.expected)
+		})
 	})
 }
