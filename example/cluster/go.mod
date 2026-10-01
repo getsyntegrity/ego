@@ -7,9 +7,9 @@ replace github.com/getsyntegrity/ego => ../../
 
 require (
 	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
-	github.com/stretchr/testify v1.12.1
 	github.com/tochemey/goakt/v4 v4.5.4
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 	go.opentelemetry.io/otel v1.46.0

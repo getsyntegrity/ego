@@ -25,6 +25,7 @@ package instrumentation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -32,8 +33,6 @@ import (
 	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -380,22 +379,32 @@ func TestInstallPropagator(t *testing.T) {
 // internals or GoAkt itself. the former architecture checker only sees direct imports, so this
 // asserts the transitive closure via go list -deps.
 func TestInstrumentationStaysRuntimeNeutral(t *testing.T) {
-	goBin, err := exec.LookPath("go")
-	if err != nil {
-		t.Skip("the go tool is not on PATH")
-	}
+	specs.Describe(t, "the import graph of internal/instrumentation", func(s *specs.Spec) {
+		s.It("reaches neither GoAkt, the engine nor the GoAkt adapter internals", func(ctx *specs.Context) {
+			goBin, err := exec.LookPath("go")
+			if err != nil {
+				ctx.T.Skip("the go tool is not on PATH")
+			}
 
-	out, err := exec.Command(goBin, "list", "-deps", ".").CombinedOutput()
-	require.NoError(t, err, "go list -deps failed: %s", out)
+			out, err := exec.Command(goBin, "list", "-deps", ".").CombinedOutput()
+			var listErr error
+			if err != nil {
+				listErr = fmt.Errorf("go list -deps failed: %w\n%s", err, out)
+			}
+			ctx.Expect(listErr).To(specs.BeNil())
 
-	deps := strings.Fields(string(out))
-	require.NotEmpty(t, deps)
-	for _, dep := range deps {
-		assert.Falsef(t, strings.HasPrefix(dep, "github.com/tochemey/goakt"),
-			"internal/instrumentation must not depend on GoAkt; found %s", dep)
-		assert.Falsef(t, strings.HasSuffix(dep, "/ego/engine"),
-			"internal/instrumentation must not depend on the engine package; found %s", dep)
-		assert.Falsef(t, strings.HasSuffix(dep, "/internal/extensions"),
-			"internal/instrumentation must not depend on the GoAkt adapter's internals; found %s", dep)
-	}
+			deps := strings.Fields(string(out))
+			// The guard first: an empty or truncated graph would prove nothing.
+			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/ego/internal/instrumentation"))
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"a GoAkt package: internal/instrumentation must not depend on GoAkt",
+				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"the engine package: internal/instrumentation must not depend on it",
+				func(dep any) bool { return strings.HasSuffix(dep.(string), "/ego/engine") })))
+			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
+				"the GoAkt adapter internals (internal/extensions): internal/instrumentation must not depend on them",
+				func(dep any) bool { return strings.HasSuffix(dep.(string), "/internal/extensions") })))
+		})
+	})
 }

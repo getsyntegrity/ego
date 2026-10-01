@@ -28,9 +28,9 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -214,21 +214,19 @@ func (h *recordingHandler) Handle(_ context.Context, persistenceID string, _ *an
 
 // connected returns connected testkit stores, disconnected at cleanup: the
 // consumer owns stores (design §D5), so the tests do too.
-func connected(t *testing.T) (*pingCountingEventsStore, *writeCountingStateStore, *testkit.OffsetStore) {
-	t.Helper()
-	ctx := context.Background()
+func connected(ctx *specs.Context) (*pingCountingEventsStore, *writeCountingStateStore, *testkit.OffsetStore) {
+	ctx.Helper()
+	bg := context.Background()
 	events := &pingCountingEventsStore{EventStore: testkit.NewEventsStore()}
 	states := &writeCountingStateStore{DurableStore: testkit.NewDurableStore()}
 	offsets := testkit.NewOffsetStore()
 	for _, connect := range []func(context.Context) error{events.Connect, states.Connect, offsets.Connect} {
-		if err := connect(ctx); err != nil {
-			t.Fatalf("connect store: %v", err)
-		}
+		ctx.Expect(connect(bg)).To(specs.BeNil())
 	}
-	t.Cleanup(func() {
-		_ = events.Disconnect(ctx)
-		_ = states.Disconnect(ctx)
-		_ = offsets.Disconnect(ctx)
+	ctx.T.Cleanup(func() { // see mustNew: the Describe's T owns the stores
+		_ = events.Disconnect(bg)
+		_ = states.Disconnect(bg)
+		_ = offsets.Disconnect(bg)
 	})
 	return events, states, offsets
 }

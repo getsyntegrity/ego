@@ -41,10 +41,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -70,26 +69,42 @@ func postgresTestDSN(t *testing.T) string {
 // fresh, empty table — the contract persistence/conformance.RunEventsStoreConformance
 // requires of newStore. The returned store is not yet Connect()-ed; the
 // conformance runner and the tests below do that themselves.
-func newPostgresTestStore(t *testing.T, dsn string) *PostgresEventStore {
-	t.Helper()
+func newPostgresTestStore(sc *specs.Context, dsn string) *PostgresEventStore {
+	sc.Helper()
+	store, err := provisionPostgresTestStore(dsn)
+	sc.Expect(err).To(specs.BeNil())
+	return store
+}
+
+// provisionPostgresTestStore does the work of newPostgresTestStore and returns the
+// error instead of asserting, for the conformance runner, whose callback has a
+// *testing.T and no spec context.
+func provisionPostgresTestStore(dsn string) (*PostgresEventStore, error) {
 	ctx := context.Background()
 
 	setupPool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	defer setupPool.Close()
 
-	_, err = setupPool.Exec(ctx, eventsStoreSchemaDDL)
-	require.NoError(t, err)
-	_, err = setupPool.Exec(ctx, "TRUNCATE TABLE events_store, events_store_revisions")
-	require.NoError(t, err)
-
-	return NewPostgresEventStore(dsn)
+	if _, err = setupPool.Exec(ctx, eventsStoreSchemaDDL); err != nil {
+		return nil, err
+	}
+	if _, err = setupPool.Exec(ctx, "TRUNCATE TABLE events_store, events_store_revisions"); err != nil {
+		return nil, err
+	}
+	return NewPostgresEventStore(dsn), nil
 }
 
 func TestPostgresEventStore_Conformance(t *testing.T) {
 	dsn := postgresTestDSN(t)
 	conformance.RunEventsStoreConformance(t, func(t *testing.T) persistence.EventsStore {
-		return newPostgresTestStore(t, dsn)
+		store, err := provisionPostgresTestStore(dsn)
+		if err != nil { // the runner's callback takes a *testing.T by API
+			t.Fatalf("provision the Postgres test store: %v", err)
+		}
+		return store
 	})
 }
 
@@ -97,20 +112,23 @@ func TestPostgresEventStore_Conformance(t *testing.T) {
 // so the winner of a race between two writers can be identified afterward
 // from the persisted event alone. Modeled on testkit/concurrency_test.go's
 // markedEvent.
-func pgMarkedEvent(t *testing.T, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
-	t.Helper()
+func pgMarkedEvent(persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
 	payload, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	if err != nil {
+		// Packing a known message cannot fail. Panic rather than report: raceTwoWriters and the
+		// writer goroutines call this off the spec goroutine, where an assertion must not run.
+		panic(err)
+	}
 	return []*egopb.Event{
 		{PersistenceId: persistenceID, SequenceNumber: sequenceNumber, Event: payload, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
 }
 
 // pgEventMarker recovers the marker written by pgMarkedEvent.
-func pgEventMarker(t *testing.T, event *egopb.Event) float64 {
-	t.Helper()
+func pgEventMarker(sc *specs.Context, event *egopb.Event) float64 {
+	sc.Helper()
 	var msg testpb.AccountCreated
-	require.NoError(t, event.GetEvent().UnmarshalTo(&msg))
+	sc.Expect(event.GetEvent().UnmarshalTo(&msg)).To(specs.BeNil())
 	return msg.GetAccountBalance()
 }
 
@@ -119,9 +137,8 @@ func pgEventMarker(t *testing.T, event *egopb.Event) float64 {
 // EventSourcedActor populates via tenancy.MarshalMetadata before persisting
 // (event_sourced_actor.go's marshalEvent), and which insertEvent/scanEvents
 // must round-trip exactly (#115 Codex P2).
-func pgMarkedEventWithMetadata(t *testing.T, persistenceID string, sequenceNumber uint64, marker float64, tenantMetadata map[string]string) []*egopb.Event {
-	t.Helper()
-	events := pgMarkedEvent(t, persistenceID, sequenceNumber, marker)
+func pgMarkedEventWithMetadata(persistenceID string, sequenceNumber uint64, marker float64, tenantMetadata map[string]string) []*egopb.Event {
+	events := pgMarkedEvent(persistenceID, sequenceNumber, marker)
 	events[0].TenantMetadata = tenantMetadata
 	return events
 }
@@ -132,12 +149,12 @@ func pgMarkedEventWithMetadata(t *testing.T, persistenceID string, sequenceNumbe
 // one arbitrary extra key that is no part of that contract — proving the
 // store round-trips the map byte for byte rather than special-casing known
 // keys.
-func pgRealisticTenantMetadata(t *testing.T, tenantID string) (tenancy.TenantContext, map[string]string) {
-	t.Helper()
+func pgRealisticTenantMetadata(sc *specs.Context, tenantID string) (tenancy.TenantContext, map[string]string) {
+	sc.Helper()
 	id, err := tenancy.NewTenantID(tenantID)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	tc, err := tenancy.NewTenantContext(id)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	metadata := map[string]string(tenancy.MarshalMetadata(tc))
 	metadata["x-extra-carried-key"] = "pg-md-extra-value"
 	return tc, metadata
@@ -170,8 +187,8 @@ func raceTwoWriters(a, b func() error) (errA, errB error) {
 
 // countOutcomes classifies two conditional-write results into (successes,
 // conflicts), failing the test if either error is a non-conflict failure.
-func countOutcomes(t *testing.T, errA, errB error) (successes, conflicts int) {
-	t.Helper()
+func countOutcomes(sc *specs.Context, errA, errB error) (successes, conflicts int) {
+	sc.Helper()
 	for _, err := range []error{errA, errB} {
 		switch {
 		case err == nil:
@@ -179,7 +196,7 @@ func countOutcomes(t *testing.T, errA, errB error) (successes, conflicts int) {
 		case errors.Is(err, persistence.ErrConcurrencyConflict):
 			conflicts++
 		default:
-			t.Fatalf("unexpected non-conflict error: %v", err)
+			sc.Expect(err).To(specs.MatchError(persistence.ErrConcurrencyConflict)) // a non-conflict error
 		}
 	}
 	return successes, conflicts
@@ -191,48 +208,52 @@ func countOutcomes(t *testing.T, errA, errB error) (successes, conflicts int) {
 // directly (no actor, no mailbox), and exactly one of them must commit.
 func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("concurrent expect revision has exactly one winner", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-t8-event-race"
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-t8-event-race"
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
-		},
-		func() error {
-			return store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
-		},
-	)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 111), persistence.ExpectRevision(1))
+				},
+				func() error {
+					return store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 222), persistence.ExpectRevision(1))
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "exactly one of the two racing writers must commit")
-	assert.Equal(t, 1, conflicts, "the losing writer must observe a typed concurrency conflict")
+			successes, conflicts := countOutcomes(sc, errA, errB)
+			sc.Expect(successes).To(specs.Equal(1)) // exactly one of the two racing writers must commit
+			sc.Expect(conflicts).To(specs.Equal(1)) // the losing writer must observe a typed concurrency conflict
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 2, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(latest.GetSequenceNumber()).To(specs.Equal(uint64(2)))
 
-	winnerMarker := pgEventMarker(t, latest)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker, "final revision must reflect writer A, the one that actually succeeded")
-	} else {
-		assert.EqualValues(t, 222, winnerMarker, "final revision must reflect writer B, the one that actually succeeded")
-	}
+			winnerMarker := pgEventMarker(sc, latest)
+			if errA == nil {
+				sc.Expect(winnerMarker).To(specs.Equal(float64(111))) // final revision must reflect writer A, the one that actually succeeded
+			} else {
+				sc.Expect(winnerMarker).To(specs.Equal(float64(222))) // final revision must reflect writer B, the one that actually succeeded
+			}
 
-	// Only the winner's row is persisted: a losing conditional writer must
-	// never have inserted its own row before observing the conflict.
-	var count int
-	require.NoError(t, store.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
-		"", persistenceID, 2,
-	).Scan(&count))
-	assert.Equal(t, 1, count, "exactly one row must exist at the contested sequence number")
+			// Only the winner's row is persisted: a losing conditional writer must
+			// never have inserted its own row before observing the conflict.
+			var count int
+			sc.Expect(store.pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
+				"", persistenceID, 2,
+			).Scan(&count)).To(specs.BeNil())
+			sc.Expect(count).To(specs.Equal(1)) // exactly one row must exist at the contested sequence number
+		})
+	})
 }
 
 // TestPostgresEventStore_ExpectGenesisConflictsOnExistingID proves
@@ -241,29 +262,33 @@ func TestPostgresEventStore_ConcurrentExpectRevisionHasExactlyOneWinner(t *testi
 // without touching the existing row.
 func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("expect genesis conflicts on existing id", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-genesis-conflict"
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 111), persistence.ExpectGenesis()))
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-genesis-conflict"
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 111), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	err := store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 999), persistence.ExpectGenesis())
-	require.Error(t, err)
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
+			err := store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 999), persistence.ExpectGenesis())
+			sc.Expect(err).To(specs.Not(specs.BeNil()))
+			sc.Expect(err).To(specs.MatchError(persistence.ErrConcurrencyConflict))
 
-	var conflictErr *persistence.ConflictError
-	require.True(t, errors.As(err, &conflictErr))
-	actual, ok := conflictErr.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
+			var conflictErr *persistence.ConflictError
+			sc.Expect(errors.As(err, &conflictErr)).To(specs.BeTrue())
+			actual, ok := conflictErr.ActualRevision()
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(actual).To(specs.Equal(uint64(1)))
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 111, pgEventMarker(t, latest), "the existing record must be untouched by the failed genesis write")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(pgEventMarker(sc, latest)).To(specs.Equal(float64(111))) // the existing record must be untouched by the failed genesis write
+		})
+	})
 }
 
 // TestPostgresEventStore_TenantScopeIsolatesRecords proves two different
@@ -273,31 +298,35 @@ func TestPostgresEventStore_ExpectGenesisConflictsOnExistingID(t *testing.T) {
 // depth; this test pins it once more at the SQL layer specifically).
 func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("tenant scope isolates records", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tenantA, err := persistence.NewTenantScope("tenant-a")
-	require.NoError(t, err)
-	tenantB, err := persistence.NewTenantScope("tenant-b")
-	require.NoError(t, err)
-	const persistenceID = "pg-tenant-isolation"
+			tenantA, err := persistence.NewTenantScope("tenant-a")
+			sc.Expect(err).To(specs.BeNil())
+			tenantB, err := persistence.NewTenantScope("tenant-b")
+			sc.Expect(err).To(specs.BeNil())
+			const persistenceID = "pg-tenant-isolation"
 
-	require.NoError(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, persistenceID, 1, 111), persistence.ExpectGenesis()))
-	// Tenant B must be able to genesis the exact same persistence_id: its CAS
-	// state is entirely independent of tenant A's.
-	require.NoError(t, store.WriteEvents(ctx, tenantB, pgMarkedEvent(t, persistenceID, 1, 222), persistence.ExpectGenesis()))
+			sc.Expect(store.WriteEvents(ctx, tenantA, pgMarkedEvent(persistenceID, 1, 111), persistence.ExpectGenesis())).To(specs.BeNil())
+			// Tenant B must be able to genesis the exact same persistence_id: its CAS
+			// state is entirely independent of tenant A's.
+			sc.Expect(store.WriteEvents(ctx, tenantB, pgMarkedEvent(persistenceID, 1, 222), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	gotA, err := store.GetLatestEvent(ctx, tenantA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, gotA)
-	assert.EqualValues(t, 111, pgEventMarker(t, gotA))
+			gotA, err := store.GetLatestEvent(ctx, tenantA, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(gotA).To(specs.Not(specs.BeNil()))
+			sc.Expect(pgEventMarker(sc, gotA)).To(specs.Equal(float64(111)))
 
-	gotB, err := store.GetLatestEvent(ctx, tenantB, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	assert.EqualValues(t, 222, pgEventMarker(t, gotB))
+			gotB, err := store.GetLatestEvent(ctx, tenantB, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(gotB).To(specs.Not(specs.BeNil()))
+			sc.Expect(pgEventMarker(sc, gotB)).To(specs.Equal(float64(222)))
+		})
+	})
 }
 
 // TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision races an
@@ -316,49 +345,51 @@ func TestPostgresEventStore_TenantScopeIsolatesRecords(t *testing.T) {
 // window observable.
 func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("unconditional write cannot break expect revision", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const (
-		iterations        = 200
-		conditionalMark   = 111
-		unconditionalMark = 222
-	)
-	for i := range iterations {
-		persistenceID := fmt.Sprintf("pg-mixed-race-%d", i)
-		require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			scope := persistence.Unscoped()
+			const (
+				iterations        = 200
+				conditionalMark   = 111
+				unconditionalMark = 222
+			)
+			for i := range iterations {
+				persistenceID := fmt.Sprintf("pg-mixed-race-%d", i)
+				sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-		errConditional, errUnconditional := raceTwoWriters(
-			func() error {
-				return store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, conditionalMark), persistence.ExpectRevision(1))
-			},
-			func() error {
-				return store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, unconditionalMark), persistence.Unconditional())
-			},
-		)
-		require.NoError(t, errUnconditional, "iteration %d: the unconditional write must always succeed", i)
+				errConditional, errUnconditional := raceTwoWriters(
+					func() error {
+						return store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, conditionalMark), persistence.ExpectRevision(1))
+					},
+					func() error {
+						return store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, unconditionalMark), persistence.Unconditional())
+					},
+				)
+				sc.Expect(errUnconditional).To(specs.BeNil())
 
-		latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		require.EqualValues(t, 2, latest.GetSequenceNumber())
+				latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(latest).To(specs.Not(specs.BeNil()))
+				sc.Expect(latest.GetSequenceNumber()).To(specs.Equal(uint64(2)))
 
-		if errConditional == nil {
-			require.EqualValues(t, conditionalMark, pgEventMarker(t, latest),
-				"iteration %d: a successful ExpectRevision(1) write must own sequence 2", i)
-			continue
-		}
-		var conflictErr *persistence.ConflictError
-		require.True(t, errors.As(errConditional, &conflictErr),
-			"iteration %d: the conditional write must fail only with a typed conflict, got %v", i, errConditional)
-		actual, ok := conflictErr.ActualRevision()
-		require.True(t, ok)
-		require.EqualValues(t, 2, actual)
-		require.EqualValues(t, unconditionalMark, pgEventMarker(t, latest))
-	}
+				if errConditional == nil {
+					sc.Expect(pgEventMarker(sc, latest)).To(specs.Equal(float64(conditionalMark)))
+					continue
+				}
+				var conflictErr *persistence.ConflictError
+				sc.Expect(errors.As(errConditional, &conflictErr)).To(specs.BeTrue())
+				actual, ok := conflictErr.ActualRevision()
+				sc.Expect(ok).To(specs.BeTrue())
+				sc.Expect(actual).To(specs.Equal(uint64(2)))
+				sc.Expect(pgEventMarker(sc, latest)).To(specs.Equal(float64(unconditionalMark)))
+			}
+		})
+	})
 }
 
 // TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock runs two
@@ -368,49 +399,53 @@ func TestPostgresEventStore_UnconditionalWriteCannotBreakExpectRevision(t *testi
 // otherwise abort one of them with a deadlock error.
 func TestPostgresEventStore_UnconditionalMixedBatchesDoNotDeadlock(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("unconditional mixed batches do not deadlock", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	for i := range 100 {
-		seq := uint64(i + 1)
-		forward := append(pgMarkedEvent(t, "pg-batch-a", seq, 1), pgMarkedEvent(t, "pg-batch-b", seq, 1)...)
-		backward := append(pgMarkedEvent(t, "pg-batch-b", seq, 2), pgMarkedEvent(t, "pg-batch-a", seq, 2)...)
-		errA, errB := raceTwoWriters(
-			func() error { return store.WriteEvents(ctx, scope, forward, persistence.Unconditional()) },
-			func() error { return store.WriteEvents(ctx, scope, backward, persistence.Unconditional()) },
-		)
-		require.NoError(t, errA, "iteration %d", i)
-		require.NoError(t, errB, "iteration %d", i)
-	}
+			scope := persistence.Unscoped()
+			for i := range 100 {
+				seq := uint64(i + 1)
+				forward := append(pgMarkedEvent("pg-batch-a", seq, 1), pgMarkedEvent("pg-batch-b", seq, 1)...)
+				backward := append(pgMarkedEvent("pg-batch-b", seq, 2), pgMarkedEvent("pg-batch-a", seq, 2)...)
+				errA, errB := raceTwoWriters(
+					func() error { return store.WriteEvents(ctx, scope, forward, persistence.Unconditional()) },
+					func() error { return store.WriteEvents(ctx, scope, backward, persistence.Unconditional()) },
+				)
+				sc.Expect(errA).To(specs.BeNil())
+				sc.Expect(errB).To(specs.BeNil())
+			}
 
-	for _, persistenceID := range []string{"pg-batch-a", "pg-batch-b"} {
-		err := store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 101, 0), persistence.ExpectRevision(100))
-		require.NoError(t, err, "unconditional batches must advance %s's revision to 100", persistenceID)
-	}
+			for _, persistenceID := range []string{"pg-batch-a", "pg-batch-b"} {
+				err := store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 101, 0), persistence.ExpectRevision(100))
+				sc.Expect(err).To(specs.BeNil())
+			}
+		})
+	})
 }
 
 // writeRevisions commits events 1..n for persistenceID, one ExpectRevision
 // step at a time, so the test also exercises the revision each write leaves.
-func writeRevisions(t *testing.T, store *PostgresEventStore, scope persistence.Scope, persistenceID string, n uint64) {
-	t.Helper()
+func writeRevisions(sc *specs.Context, store *PostgresEventStore, scope persistence.Scope, persistenceID string, n uint64) {
+	sc.Helper()
 	ctx := context.Background()
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+	sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
 	for seq := uint64(2); seq <= n; seq++ {
-		require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, seq, float64(seq)), persistence.ExpectRevision(seq-1)))
+		sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, seq, float64(seq)), persistence.ExpectRevision(seq-1))).To(specs.BeNil())
 	}
 }
 
 // requireConflictAt asserts err is a typed conflict that observed revision.
-func requireConflictAt(t *testing.T, err error, revision uint64) {
-	t.Helper()
+func requireConflictAt(sc *specs.Context, err error, revision uint64) {
+	sc.Helper()
 	var conflictErr *persistence.ConflictError
-	require.True(t, errors.As(err, &conflictErr), "expected a *persistence.ConflictError, got %v", err)
+	sc.Expect(errors.As(err, &conflictErr)).To(specs.BeTrue())
 	actual, ok := conflictErr.ActualRevision()
-	require.True(t, ok)
-	require.Equal(t, revision, actual)
+	sc.Expect(ok).To(specs.BeTrue())
+	sc.Expect(actual).To(specs.Equal(revision))
 }
 
 // appendApplicationName returns dsn with an application_name query parameter
@@ -432,9 +467,9 @@ func appendApplicationName(dsn, name string) string {
 // test, or another database — so it can wait for a precise number of lock
 // waiters instead of a fixed sleep. Setup (schema creation and truncation)
 // still runs over the plain, untagged dsn.
-func newPostgresTestStoreNamed(t *testing.T, dsn, applicationName string) *PostgresEventStore {
-	t.Helper()
-	store := newPostgresTestStore(t, dsn)
+func newPostgresTestStoreNamed(sc *specs.Context, dsn, applicationName string) *PostgresEventStore {
+	sc.Helper()
+	store := newPostgresTestStore(sc, dsn)
 	store.dsn = appendApplicationName(dsn, applicationName)
 	return store
 }
@@ -445,11 +480,11 @@ func newPostgresTestStoreNamed(t *testing.T, dsn, applicationName string) *Postg
 // until at least want ungranted lock requests are observed. It fails the
 // test with a clear message on timeout instead of letting a race test hang
 // or, worse, proceed on unverified timing.
-func waitForLockWaiters(t *testing.T, dsn, applicationName string, want int, timeout time.Duration) {
-	t.Helper()
+func waitForLockWaiters(sc *specs.Context, dsn, applicationName string, want int, timeout time.Duration) {
+	sc.Helper()
 	ctx := context.Background()
 	adminPool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	defer adminPool.Close()
 
 	deadline := time.Now().Add(timeout)
@@ -462,12 +497,12 @@ func waitForLockWaiters(t *testing.T, dsn, applicationName string, want int, tim
 			WHERE a.application_name = $1 AND a.datname = current_database() AND NOT l.granted`,
 			applicationName,
 		).Scan(&lastCount)
-		require.NoError(t, err)
+		sc.Expect(err).To(specs.BeNil())
 		if lastCount >= want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out after %s waiting for %d lock waiter(s) tagged %q, last saw %d", timeout, want, applicationName, lastCount)
+			sc.Expect(lastCount).To(specs.BeGreaterThanOrEqual(want)) // timed out waiting for the lock waiters tagged applicationName
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -479,14 +514,14 @@ func waitForLockWaiters(t *testing.T, dsn, applicationName string, want int, tim
 // closes the connection, both of which drop the lock. Used to pause a store
 // write or delete deterministically at a precise point instead of relying on
 // goroutine scheduling luck.
-func rawLockTable(t *testing.T, ctx context.Context, dsn, table, mode string) (release func()) {
-	t.Helper()
+func rawLockTable(sc *specs.Context, ctx context.Context, dsn, table, mode string) (release func()) {
+	sc.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	tx, err := conn.Begin(ctx)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	_, err = tx.Exec(ctx, fmt.Sprintf("LOCK TABLE %s IN %s MODE", table, mode))
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	return func() {
 		_ = tx.Rollback(ctx)
 		_ = conn.Close(ctx)
@@ -496,21 +531,21 @@ func rawLockTable(t *testing.T, ctx context.Context, dsn, table, mode string) (r
 // rawLockRow behaves like rawLockTable, but row-locks (with FOR UPDATE) the
 // rows matched by query instead of locking a whole table. It fails the test
 // if query matches no row, since that would silently lock nothing.
-func rawLockRow(t *testing.T, ctx context.Context, dsn, query string, args ...any) (release func()) {
-	t.Helper()
+func rawLockRow(sc *specs.Context, ctx context.Context, dsn, query string, args ...any) (release func()) {
+	sc.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	tx, err := conn.Begin(ctx)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	rows, err := tx.Query(ctx, query, args...)
-	require.NoError(t, err)
+	sc.Expect(err).To(specs.BeNil())
 	matched := 0
 	for rows.Next() {
 		matched++
 	}
-	require.NoError(t, rows.Err())
+	sc.Expect(rows.Err()).To(specs.BeNil())
 	rows.Close()
-	require.Positive(t, matched, "lock query matched no rows: %s", query)
+	sc.Expect(matched).To(specs.BeGreaterThan(0))
 	return func() {
 		_ = tx.Rollback(ctx)
 		_ = conn.Close(ctx)
@@ -522,24 +557,28 @@ func rawLockRow(t *testing.T, ctx context.Context, dsn, query string, args ...an
 // highest committed sequence number.
 func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("partial delete keeps revision", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-partial-delete"
-	writeRevisions(t, store, scope, persistenceID, 5)
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-partial-delete"
+			writeRevisions(sc, store, scope, persistenceID, 5)
 
-	require.NoError(t, store.DeleteEvents(ctx, scope, persistenceID, 3))
+			sc.Expect(store.DeleteEvents(ctx, scope, persistenceID, 3)).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 5, 10)
-	require.NoError(t, err)
-	require.Len(t, replayed, 2, "events 1..3 must no longer be replayable")
+			replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 5, 10)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(replayed).To(specs.HaveLen(2)) // events 1..3 must no longer be replayable
 
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(3)), 5)
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 5)
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 6, 6), persistence.ExpectRevision(5)))
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 4, 0), persistence.ExpectRevision(3)), 5)
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis()), 5)
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 6, 6), persistence.ExpectRevision(5))).To(specs.BeNil())
+		})
+	})
 }
 
 // TestPostgresEventStore_TotalDeleteKeepsRevision deletes every event of a
@@ -548,29 +587,33 @@ func TestPostgresEventStore_PartialDeleteKeepsRevision(t *testing.T) {
 // number ever committed.
 func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("total delete keeps revision", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-total-delete"
-	writeRevisions(t, store, scope, persistenceID, 5)
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-total-delete"
+			writeRevisions(sc, store, scope, persistenceID, 5)
 
-	require.NoError(t, store.DeleteEvents(ctx, scope, persistenceID, 5))
+			sc.Expect(store.DeleteEvents(ctx, scope, persistenceID, 5)).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.Nil(t, latest, "every event must be deleted")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.BeNil()) // every event must be deleted
 
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 5)
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 3, 0), persistence.ExpectRevision(2)), 5)
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 6, 6), persistence.ExpectRevision(5)))
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis()), 5)
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 3, 0), persistence.ExpectRevision(2)), 5)
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 6, 6), persistence.ExpectRevision(5))).To(specs.BeNil())
 
-	// An unconditional write of an older sequence number must not move the
-	// revision backwards either.
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 2), persistence.Unconditional()))
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 3, 0), persistence.ExpectRevision(2)), 6)
+			// An unconditional write of an older sequence number must not move the
+			// revision backwards either.
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 2), persistence.Unconditional())).To(specs.BeNil())
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 3, 0), persistence.ExpectRevision(2)), 6)
+		})
+	})
 }
 
 // TestPostgresEventStore_DeleteKeepsRevisionPerTenant proves the revision
@@ -578,24 +621,28 @@ func TestPostgresEventStore_TotalDeleteKeepsRevision(t *testing.T) {
 // and leaves another tenant's same persistence id untouched.
 func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("delete keeps revision per tenant", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tenantA, err := persistence.NewTenantScope("tenant-a")
-	require.NoError(t, err)
-	tenantB, err := persistence.NewTenantScope("tenant-b")
-	require.NoError(t, err)
-	const persistenceID = "pg-tenant-delete"
-	writeRevisions(t, store, tenantA, persistenceID, 3)
-	writeRevisions(t, store, tenantB, persistenceID, 2)
+			tenantA, err := persistence.NewTenantScope("tenant-a")
+			sc.Expect(err).To(specs.BeNil())
+			tenantB, err := persistence.NewTenantScope("tenant-b")
+			sc.Expect(err).To(specs.BeNil())
+			const persistenceID = "pg-tenant-delete"
+			writeRevisions(sc, store, tenantA, persistenceID, 3)
+			writeRevisions(sc, store, tenantB, persistenceID, 2)
 
-	require.NoError(t, store.DeleteEvents(ctx, tenantA, persistenceID, 3))
+			sc.Expect(store.DeleteEvents(ctx, tenantA, persistenceID, 3)).To(specs.BeNil())
 
-	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
-	require.NoError(t, store.WriteEvents(ctx, tenantB, pgMarkedEvent(t, persistenceID, 3, 3), persistence.ExpectRevision(2)))
-	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
+			requireConflictAt(sc, store.WriteEvents(ctx, tenantA, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
+			sc.Expect(store.WriteEvents(ctx, tenantB, pgMarkedEvent(persistenceID, 3, 3), persistence.ExpectRevision(2))).To(specs.BeNil())
+			requireConflictAt(sc, store.WriteEvents(ctx, tenantA, pgMarkedEvent(persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
+		})
+	})
 }
 
 // TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData is the
@@ -606,20 +653,24 @@ func TestPostgresEventStore_DeleteKeepsRevisionPerTenant(t *testing.T) {
 // when there is real data it could otherwise have paged over.
 func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("persistence ids zero page size with data", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	for _, id := range []string{"pg-page-a", "pg-page-b", "pg-page-c"} {
-		require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, id, 1, 1), persistence.ExpectGenesis()))
-	}
+			scope := persistence.Unscoped()
+			for _, id := range []string{"pg-page-a", "pg-page-b", "pg-page-c"} {
+				sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(id, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
+			}
 
-	ids, next, err := store.PersistenceIDs(ctx, scope, 0, "")
-	require.NoError(t, err)
-	assert.Empty(t, ids)
-	assert.Empty(t, next)
+			ids, next, err := store.PersistenceIDs(ctx, scope, 0, "")
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(ids).To(specs.BeEmpty())
+			sc.Expect(next).To(specs.BeEmpty())
+		})
+	})
 }
 
 // TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict pins the
@@ -638,62 +689,66 @@ func TestPostgresEventStore_PersistenceIDs_ZeroPageSize_WithData(t *testing.T) {
 // revision 7 already won.
 func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	const appName = "pg-race-distinct"
-	store := newPostgresTestStoreNamed(t, dsn, appName)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	// t.Cleanup, not a plain defer: it must run even if this goroutine is
-	// currently unwinding via t.Fatalf (e.g. from waitForLockWaiters timing
-	// out), and it must run AFTER the raw lock's own t.Cleanup(release)
-	// below (t.Cleanup runs last-registered-first), or a still-blocked
-	// writer goroutine would make store.Disconnect's pool.Close() hang
-	// forever waiting for its connection to be returned.
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("unconditional race distinct sequence conflict", func(sc *specs.Context) {
+			const appName = "pg-race-distinct"
+			store := newPostgresTestStoreNamed(sc, dsn, appName)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			// t.Cleanup, not a plain defer: it must run even if this goroutine is
+			// currently unwinding via a failed assertion (e.g. from waitForLockWaiters timing
+			// out), and it must run AFTER the raw lock's own sc.T.Cleanup(release)
+			// below (t.Cleanup runs last-registered-first), or a still-blocked
+			// writer goroutine would make store.Disconnect's pool.Close() hang
+			// forever waiting for its connection to be returned.
+			sc.T.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-race-distinct-seq"
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-race-distinct-seq"
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	release := rawLockTable(t, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
-	// Safety net: if a later assertion (or waitForLockWaiters itself) fails
-	// before the explicit release() below runs, this still drops the raw
-	// lock during cleanup, so a blocked goroutine cannot deadlock
-	// store.Disconnect's pool.Close(). release is idempotent (a second
-	// Rollback/Close is a harmless no-op error).
-	t.Cleanup(release)
+			release := rawLockTable(sc, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
+			// Safety net: if a later assertion (or waitForLockWaiters itself) fails
+			// before the explicit release() below runs, this still drops the raw
+			// lock during cleanup, so a blocked goroutine cannot deadlock
+			// store.Disconnect's pool.Close(). release is idempotent (a second
+			// Rollback/Close is a harmless no-op error).
+			sc.T.Cleanup(release)
 
-	unconditionalDone := make(chan error, 1)
-	go func() {
-		unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 7, 777), persistence.Unconditional())
-	}()
-	// The unconditional write advances the revision row (uncontended, since
-	// nothing else holds it yet) and then blocks on its own INSERT, which
-	// conflicts with the held table lock: exactly one waiter so far.
-	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+			unconditionalDone := make(chan error, 1)
+			go func() {
+				unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 7, 777), persistence.Unconditional())
+			}()
+			// The unconditional write advances the revision row (uncontended, since
+			// nothing else holds it yet) and then blocks on its own INSERT, which
+			// conflicts with the held table lock: exactly one waiter so far.
+			waitForLockWaiters(sc, dsn, appName, 1, 5*time.Second)
 
-	conditionalDone := make(chan error, 1)
-	go func() {
-		conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
-	}()
-	// The conditional write's lockRevision now queues behind the
-	// unconditional write's held-but-uncommitted revision row lock: a second
-	// waiter, blocked on a different lock than the first.
-	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+			conditionalDone := make(chan error, 1)
+			go func() {
+				conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 222), persistence.ExpectRevision(1))
+			}()
+			// The conditional write's lockRevision now queues behind the
+			// unconditional write's held-but-uncommitted revision row lock: a second
+			// waiter, blocked on a different lock than the first.
+			waitForLockWaiters(sc, dsn, appName, 2, 5*time.Second)
 
-	release()
+			release()
 
-	errUnconditional := <-unconditionalDone
-	errConditional := <-conditionalDone
+			errUnconditional := <-unconditionalDone
+			errConditional := <-conditionalDone
 
-	require.NoError(t, errUnconditional, "the unconditional write must always succeed")
-	requireConflictAt(t, errConditional, 7)
+			sc.Expect(errUnconditional).To(specs.BeNil()) // the unconditional write must always succeed
+			requireConflictAt(sc, errConditional, 7)
 
-	var count int
-	require.NoError(t, store.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
-		"", persistenceID, 2,
-	).Scan(&count))
-	assert.Equal(t, 0, count, "the losing conditional write must never have inserted sequence 2")
+			var count int
+			sc.Expect(store.pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3`,
+				"", persistenceID, 2,
+			).Scan(&count)).To(specs.BeNil())
+			sc.Expect(count).To(specs.Equal(0)) // the losing conditional write must never have inserted sequence 2
+		})
+	})
 }
 
 // TestPostgresEventStore_UnconditionalRaceSameSequenceConflict is the same
@@ -706,55 +761,59 @@ func TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict(t *testing
 // guards against under timing luck; this test pins it deterministically.
 func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	const appName = "pg-race-same"
-	store := newPostgresTestStoreNamed(t, dsn, appName)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	// See the identical t.Cleanup ordering comment in
-	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("unconditional race same sequence conflict", func(sc *specs.Context) {
+			const appName = "pg-race-same"
+			store := newPostgresTestStoreNamed(sc, dsn, appName)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			// See the identical t.Cleanup ordering comment in
+			// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+			sc.T.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-race-same-seq"
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-race-same-seq"
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	release := rawLockTable(t, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
-	// Safety net: if a later assertion (or waitForLockWaiters itself) fails
-	// before the explicit release() below runs, this still drops the raw
-	// lock during cleanup, so a blocked goroutine cannot deadlock
-	// store.Disconnect's pool.Close(). release is idempotent (a second
-	// Rollback/Close is a harmless no-op error).
-	t.Cleanup(release)
+			release := rawLockTable(sc, ctx, dsn, "events_store", "SHARE ROW EXCLUSIVE")
+			// Safety net: if a later assertion (or waitForLockWaiters itself) fails
+			// before the explicit release() below runs, this still drops the raw
+			// lock during cleanup, so a blocked goroutine cannot deadlock
+			// store.Disconnect's pool.Close(). release is idempotent (a second
+			// Rollback/Close is a harmless no-op error).
+			sc.T.Cleanup(release)
 
-	unconditionalDone := make(chan error, 1)
-	go func() {
-		unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 222), persistence.Unconditional())
-	}()
-	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+			unconditionalDone := make(chan error, 1)
+			go func() {
+				unconditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 222), persistence.Unconditional())
+			}()
+			waitForLockWaiters(sc, dsn, appName, 1, 5*time.Second)
 
-	conditionalDone := make(chan error, 1)
-	go func() {
-		conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 2, 999), persistence.ExpectRevision(1))
-	}()
-	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+			conditionalDone := make(chan error, 1)
+			go func() {
+				conditionalDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 2, 999), persistence.ExpectRevision(1))
+			}()
+			waitForLockWaiters(sc, dsn, appName, 2, 5*time.Second)
 
-	release()
+			release()
 
-	errUnconditional := <-unconditionalDone
-	errConditional := <-conditionalDone
+			errUnconditional := <-unconditionalDone
+			errConditional := <-conditionalDone
 
-	require.NoError(t, errUnconditional, "the unconditional write must always succeed")
+			sc.Expect(errUnconditional).To(specs.BeNil()) // the unconditional write must always succeed
 
-	var conflictErr *persistence.ConflictError
-	require.True(t, errors.As(errConditional, &conflictErr), "expected a *persistence.ConflictError, got %v", errConditional)
-	actual, ok := conflictErr.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 2, actual)
+			var conflictErr *persistence.ConflictError
+			sc.Expect(errors.As(errConditional, &conflictErr)).To(specs.BeTrue())
+			actual, ok := conflictErr.ActualRevision()
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(actual).To(specs.Equal(uint64(2)))
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 222, pgEventMarker(t, latest), "only the unconditional writer's row may occupy sequence 2")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(pgEventMarker(sc, latest)).To(specs.Equal(float64(222))) // only the unconditional writer's row may occupy sequence 2
+		})
+	})
 }
 
 // TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite
@@ -771,54 +830,58 @@ func TestPostgresEventStore_UnconditionalRaceSameSequenceConflict(t *testing.T) 
 // the record's new frontier.
 func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	const appName = "pg-race-delete"
-	store := newPostgresTestStoreNamed(t, dsn, appName)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	// See the identical t.Cleanup ordering comment in
-	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("delete events locks revision against concurrent write", func(sc *specs.Context) {
+			const appName = "pg-race-delete"
+			store := newPostgresTestStoreNamed(sc, dsn, appName)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			// See the identical t.Cleanup ordering comment in
+			// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+			sc.T.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-race-delete-target"
-	writeRevisions(t, store, scope, persistenceID, 2)
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-race-delete-target"
+			writeRevisions(sc, store, scope, persistenceID, 2)
 
-	release := rawLockRow(t, ctx, dsn,
-		`SELECT sequence_number FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3 FOR UPDATE`,
-		"", persistenceID, uint64(1))
-	// Safety net: see the identical t.Cleanup(release) comment in
-	// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
-	t.Cleanup(release)
+			release := rawLockRow(sc, ctx, dsn,
+				`SELECT sequence_number FROM events_store WHERE tenant_id=$1 AND persistence_id=$2 AND sequence_number=$3 FOR UPDATE`,
+				"", persistenceID, uint64(1))
+			// Safety net: see the identical sc.T.Cleanup(release) comment in
+			// TestPostgresEventStore_UnconditionalRaceDistinctSequenceConflict.
+			sc.T.Cleanup(release)
 
-	deleteDone := make(chan error, 1)
-	go func() {
-		deleteDone <- store.DeleteEvents(ctx, scope, persistenceID, 2)
-	}()
-	// DeleteEvents has locked the revision row and is now blocked on its own
-	// DELETE, which needs sequence 1's row lock: one waiter.
-	waitForLockWaiters(t, dsn, appName, 1, 5*time.Second)
+			deleteDone := make(chan error, 1)
+			go func() {
+				deleteDone <- store.DeleteEvents(ctx, scope, persistenceID, 2)
+			}()
+			// DeleteEvents has locked the revision row and is now blocked on its own
+			// DELETE, which needs sequence 1's row lock: one waiter.
+			waitForLockWaiters(sc, dsn, appName, 1, 5*time.Second)
 
-	writeDone := make(chan error, 1)
-	go func() {
-		writeDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 3, 3), persistence.ExpectRevision(2))
-	}()
-	// The conditional write's lockRevision now queues behind DeleteEvents's
-	// held revision-row lock: a second waiter, blocked on a different lock
-	// than the first.
-	waitForLockWaiters(t, dsn, appName, 2, 5*time.Second)
+			writeDone := make(chan error, 1)
+			go func() {
+				writeDone <- store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 3, 3), persistence.ExpectRevision(2))
+			}()
+			// The conditional write's lockRevision now queues behind DeleteEvents's
+			// held revision-row lock: a second waiter, blocked on a different lock
+			// than the first.
+			waitForLockWaiters(sc, dsn, appName, 2, 5*time.Second)
 
-	release()
+			release()
 
-	require.NoError(t, <-deleteDone)
-	require.NoError(t, <-writeDone, "the conditional write must observe the unchanged revision and succeed")
+			sc.Expect(<-deleteDone).To(specs.BeNil())
+			sc.Expect(<-writeDone).To(specs.BeNil()) // the conditional write must observe the unchanged revision and succeed
 
-	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 10, 10)
-	require.NoError(t, err)
-	require.Len(t, replayed, 1, "only sequence 3 must remain once the delete and the write both commit")
-	assert.EqualValues(t, 3, replayed[0].GetSequenceNumber())
+			replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 10, 10)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(replayed).To(specs.HaveLen(1)) // only sequence 3 must remain once the delete and the write both commit
+			sc.Expect(replayed[0].GetSequenceNumber()).To(specs.Equal(uint64(3)))
 
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
-	requireConflictAt(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 0), persistence.ExpectGenesis()), 3)
+			requireConflictAt(sc, store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 4, 0), persistence.ExpectRevision(2)), 3)
+		})
+	})
 }
 
 // TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite proves an
@@ -830,33 +893,37 @@ func TestPostgresEventStore_DeleteEventsLocksRevisionAgainstConcurrentWrite(t *t
 // tenancy.UnmarshalMetadata).
 func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("tenant metadata round trips unconditional write", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-unconditional-tenant")
-	scope, err := persistence.NewTenantScope("pg-md-unconditional-tenant")
-	require.NoError(t, err)
-	const persistenceID = "pg-md-unconditional-event"
+			tc, metadata := pgRealisticTenantMetadata(sc, "pg-md-unconditional-tenant")
+			scope, err := persistence.NewTenantScope("pg-md-unconditional-tenant")
+			sc.Expect(err).To(specs.BeNil())
+			const persistenceID = "pg-md-unconditional-event"
 
-	require.NoError(t, store.WriteEvents(ctx, scope,
-		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
-		persistence.Unconditional()))
+			sc.Expect(store.WriteEvents(ctx, scope,
+				pgMarkedEventWithMetadata(persistenceID, 1, 1, metadata),
+				persistence.Unconditional())).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	require.Equal(t, metadata, latest.GetTenantMetadata(), "GetLatestEvent must recover the exact tenant metadata map")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(latest.GetTenantMetadata()).To(specs.Equal(metadata)) // GetLatestEvent must recover the exact tenant metadata map
 
-	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
-	require.NoError(t, err)
-	require.Len(t, replayed, 1)
-	require.Equal(t, metadata, replayed[0].GetTenantMetadata(), "ReplayEvents must recover the exact tenant metadata map")
+			replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(replayed).To(specs.HaveLen(1))
+			sc.Expect(replayed[0].GetTenantMetadata()).To(specs.Equal(metadata)) // ReplayEvents must recover the exact tenant metadata map
 
-	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
-	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
-	require.Equal(t, tc, gotTC)
+			gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
+			sc.Expect(err).To(specs.BeNil()) // the recovered metadata must still unmarshal into a valid TenantContext
+			sc.Expect(gotTC).To(specs.Equal(tc))
+		})
+	})
 }
 
 // TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite is the same
@@ -865,33 +932,37 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_UnconditionalWrite(t *testi
 // writeUnconditional's insertEventIgnoreDuplicateSQL (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("tenant metadata round trips conditional write", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-conditional-tenant")
-	scope, err := persistence.NewTenantScope("pg-md-conditional-tenant")
-	require.NoError(t, err)
-	const persistenceID = "pg-md-conditional-event"
+			tc, metadata := pgRealisticTenantMetadata(sc, "pg-md-conditional-tenant")
+			scope, err := persistence.NewTenantScope("pg-md-conditional-tenant")
+			sc.Expect(err).To(specs.BeNil())
+			const persistenceID = "pg-md-conditional-event"
 
-	require.NoError(t, store.WriteEvents(ctx, scope,
-		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
-		persistence.ExpectGenesis()))
+			sc.Expect(store.WriteEvents(ctx, scope,
+				pgMarkedEventWithMetadata(persistenceID, 1, 1, metadata),
+				persistence.ExpectGenesis())).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	require.Equal(t, metadata, latest.GetTenantMetadata(), "GetLatestEvent must recover the exact tenant metadata map")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(latest.GetTenantMetadata()).To(specs.Equal(metadata)) // GetLatestEvent must recover the exact tenant metadata map
 
-	replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
-	require.NoError(t, err)
-	require.Len(t, replayed, 1)
-	require.Equal(t, metadata, replayed[0].GetTenantMetadata(), "ReplayEvents must recover the exact tenant metadata map")
+			replayed, err := store.ReplayEvents(ctx, scope, persistenceID, 1, 1, 10)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(replayed).To(specs.HaveLen(1))
+			sc.Expect(replayed[0].GetTenantMetadata()).To(specs.Equal(metadata)) // ReplayEvents must recover the exact tenant metadata map
 
-	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
-	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
-	require.Equal(t, tc, gotTC)
+			gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(latest.GetTenantMetadata()))
+			sc.Expect(err).To(specs.BeNil()) // the recovered metadata must still unmarshal into a valid TenantContext
+			sc.Expect(gotTC).To(specs.Equal(tc))
+		})
+	})
 }
 
 // TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents proves
@@ -899,35 +970,39 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_ConditionalWrite(t *testing
 // egopb.Event.TenantMetadata exactly (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("tenant metadata round trips get shard events", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tc, metadata := pgRealisticTenantMetadata(t, "pg-md-shard-tenant")
-	scope, err := persistence.NewTenantScope("pg-md-shard-tenant")
-	require.NoError(t, err)
-	const persistenceID = "pg-md-shard-event"
+			tc, metadata := pgRealisticTenantMetadata(sc, "pg-md-shard-tenant")
+			scope, err := persistence.NewTenantScope("pg-md-shard-tenant")
+			sc.Expect(err).To(specs.BeNil())
+			const persistenceID = "pg-md-shard-event"
 
-	require.NoError(t, store.WriteEvents(ctx, scope,
-		pgMarkedEventWithMetadata(t, persistenceID, 1, 1, metadata),
-		persistence.ExpectGenesis()))
+			sc.Expect(store.WriteEvents(ctx, scope,
+				pgMarkedEventWithMetadata(persistenceID, 1, 1, metadata),
+				persistence.ExpectGenesis())).To(specs.BeNil())
 
-	events, _, err := store.GetShardEvents(ctx, 1, 0, 10)
-	require.NoError(t, err)
+			events, _, err := store.GetShardEvents(ctx, 1, 0, 10)
+			sc.Expect(err).To(specs.BeNil())
 
-	var found *egopb.Event
-	for _, event := range events {
-		if event.GetPersistenceId() == persistenceID {
-			found = event
-		}
-	}
-	require.NotNil(t, found, "GetShardEvents must return the event written above")
-	require.Equal(t, metadata, found.GetTenantMetadata(), "GetShardEvents must recover the exact tenant metadata map")
+			var found *egopb.Event
+			for _, event := range events {
+				if event.GetPersistenceId() == persistenceID {
+					found = event
+				}
+			}
+			sc.Expect(found).To(specs.Not(specs.BeNil()))                  // GetShardEvents must return the event written above
+			sc.Expect(found.GetTenantMetadata()).To(specs.Equal(metadata)) // GetShardEvents must recover the exact tenant metadata map
 
-	gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(found.GetTenantMetadata()))
-	require.NoError(t, err, "the recovered metadata must still unmarshal into a valid TenantContext")
-	require.Equal(t, tc, gotTC)
+			gotTC, err := tenancy.UnmarshalMetadata(tenancy.Metadata(found.GetTenantMetadata()))
+			sc.Expect(err).To(specs.BeNil()) // the recovered metadata must still unmarshal into a valid TenantContext
+			sc.Expect(gotTC).To(specs.Equal(tc))
+		})
+	})
 }
 
 // TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone proves an event
@@ -937,20 +1012,24 @@ func TestPostgresEventStore_TenantMetadataRoundTrips_GetShardEvents(t *testing.T
 // produces (#115 Codex P2).
 func TestPostgresEventStore_TenantMetadataAbsent_ReadsAsNone(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	store := newPostgresTestStore(t, dsn)
-	ctx := context.Background()
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("tenant metadata absent reads as none", func(sc *specs.Context) {
+			store := newPostgresTestStore(sc, dsn)
+			ctx := context.Background()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	scope := persistence.Unscoped()
-	const persistenceID = "pg-md-absent-event"
+			scope := persistence.Unscoped()
+			const persistenceID = "pg-md-absent-event"
 
-	require.NoError(t, store.WriteEvents(ctx, scope, pgMarkedEvent(t, persistenceID, 1, 1), persistence.ExpectGenesis()))
+			sc.Expect(store.WriteEvents(ctx, scope, pgMarkedEvent(persistenceID, 1, 1), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.Empty(t, latest.GetTenantMetadata(), "an event written with no tenant metadata must read back with none")
+			latest, err := store.GetLatestEvent(ctx, scope, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty()) // an event written with no tenant metadata must read back with none
+		})
+	})
 }
 
 // legacyEventsStoreDDL is events_store as it existed before
@@ -979,42 +1058,46 @@ CREATE TABLE events_store
 // highest retained sequence number. Applying the script twice is a no-op.
 func TestPostgresEventStore_SchemaMigratesLegacyDatabase(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	ctx := context.Background()
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("schema migrates legacy database", func(sc *specs.Context) {
+			ctx := context.Background()
 
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	defer pool.Close()
+			pool, err := pgxpool.New(ctx, dsn)
+			sc.Expect(err).To(specs.BeNil())
+			defer pool.Close()
 
-	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, legacyEventsStoreDDL)
-	require.NoError(t, err)
-	for _, row := range []struct {
-		tenantID string
-		seq      int
-	}{{"", 1}, {"", 2}, {"", 3}, {"tenant-a", 1}} {
-		_, err = pool.Exec(ctx, `
-			INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
-			VALUES ($1, 'pg-legacy', $2, ''::bytea, '', 0, 1)`, row.tenantID, row.seq)
-		require.NoError(t, err)
-	}
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
+			sc.Expect(err).To(specs.BeNil())
+			_, err = pool.Exec(ctx, legacyEventsStoreDDL)
+			sc.Expect(err).To(specs.BeNil())
+			for _, row := range []struct {
+				tenantID string
+				seq      int
+			}{{"", 1}, {"", 2}, {"", 3}, {"tenant-a", 1}} {
+				_, err = pool.Exec(ctx, `
+					INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
+					VALUES ($1, 'pg-legacy', $2, ''::bytea, '', 0, 1)`, row.tenantID, row.seq)
+				sc.Expect(err).To(specs.BeNil())
+			}
 
-	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-	require.NoError(t, err, "the schema script must be idempotent")
+			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+			sc.Expect(err).To(specs.BeNil())
+			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+			sc.Expect(err).To(specs.BeNil()) // the schema script must be idempotent
 
-	store := NewPostgresEventStore(dsn)
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+			store := NewPostgresEventStore(dsn)
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	tenantA, err := persistence.NewTenantScope("tenant-a")
-	require.NoError(t, err)
+			tenantA, err := persistence.NewTenantScope("tenant-a")
+			sc.Expect(err).To(specs.BeNil())
 
-	requireConflictAt(t, store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent(t, "pg-legacy", 1, 0), persistence.ExpectGenesis()), 3)
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent(t, "pg-legacy", 4, 4), persistence.ExpectRevision(3)))
-	requireConflictAt(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, "pg-legacy", 1, 0), persistence.ExpectGenesis()), 1)
-	require.NoError(t, store.WriteEvents(ctx, tenantA, pgMarkedEvent(t, "pg-legacy", 2, 2), persistence.ExpectRevision(1)))
+			requireConflictAt(sc, store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent("pg-legacy", 1, 0), persistence.ExpectGenesis()), 3)
+			sc.Expect(store.WriteEvents(ctx, persistence.Unscoped(), pgMarkedEvent("pg-legacy", 4, 4), persistence.ExpectRevision(3))).To(specs.BeNil())
+			requireConflictAt(sc, store.WriteEvents(ctx, tenantA, pgMarkedEvent("pg-legacy", 1, 0), persistence.ExpectGenesis()), 1)
+			sc.Expect(store.WriteEvents(ctx, tenantA, pgMarkedEvent("pg-legacy", 2, 2), persistence.ExpectRevision(1))).To(specs.BeNil())
+		})
+	})
 }
 
 // legacyEventsStoreDDLBeforeTenantMetadata is events_store and
@@ -1055,42 +1138,46 @@ CREATE TABLE events_store_revisions
 // Applying the script twice is a no-op (#115 Codex P2).
 func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 	dsn := postgresTestDSN(t)
-	ctx := context.Background()
+	specs.Describe(t, "PostgresEventStore against a real database", func(s *specs.Spec) {
+		s.It("schema migrates legacy tenant metadata", func(sc *specs.Context) {
+			ctx := context.Background()
 
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	defer pool.Close()
+			pool, err := pgxpool.New(ctx, dsn)
+			sc.Expect(err).To(specs.BeNil())
+			defer pool.Close()
 
-	_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
-	require.NoError(t, err)
+			_, err = pool.Exec(ctx, `DROP TABLE IF EXISTS events_store_revisions; DROP TABLE IF EXISTS events_store;`)
+			sc.Expect(err).To(specs.BeNil())
+			_, err = pool.Exec(ctx, legacyEventsStoreDDLBeforeTenantMetadata)
+			sc.Expect(err).To(specs.BeNil())
 
-	const persistenceID = "pg-legacy-tenant-metadata"
-	_, err = pool.Exec(ctx, `
-		INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
-		VALUES ('', $1, 1, ''::bytea, '', 1000, 1)`, persistenceID)
-	require.NoError(t, err)
+			const persistenceID = "pg-legacy-tenant-metadata"
+			_, err = pool.Exec(ctx, `
+				INSERT INTO events_store (tenant_id, persistence_id, sequence_number, event_payload, event_manifest, timestamp, shard_number)
+				VALUES ('', $1, 1, ''::bytea, '', 1000, 1)`, persistenceID)
+			sc.Expect(err).To(specs.BeNil())
 
-	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
-	require.NoError(t, err, "the schema script must be idempotent")
+			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+			sc.Expect(err).To(specs.BeNil())
+			_, err = pool.Exec(ctx, eventsStoreSchemaDDL)
+			sc.Expect(err).To(specs.BeNil()) // the schema script must be idempotent
 
-	var tenantMetadataIsNull bool
-	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT tenant_metadata IS NULL FROM events_store WHERE tenant_id='' AND persistence_id=$1 AND sequence_number=1`,
-		persistenceID,
-	).Scan(&tenantMetadataIsNull))
-	assert.True(t, tenantMetadataIsNull, "the migration must not backfill or invent tenant metadata for a pre-existing row")
+			var tenantMetadataIsNull bool
+			sc.Expect(pool.QueryRow(ctx,
+				`SELECT tenant_metadata IS NULL FROM events_store WHERE tenant_id='' AND persistence_id=$1 AND sequence_number=1`,
+				persistenceID,
+			).Scan(&tenantMetadataIsNull)).To(specs.BeNil())
+			sc.Expect(tenantMetadataIsNull).To(specs.BeTrue()) // the migration must not backfill or invent tenant metadata for a pre-existing row
 
-	store := NewPostgresEventStore(dsn)
-	require.NoError(t, store.Connect(ctx))
-	defer store.Disconnect(ctx)
+			store := NewPostgresEventStore(dsn)
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer store.Disconnect(ctx)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.Empty(t, latest.GetTenantMetadata(), "a pre-existing row must read back with no tenant metadata, never an invented identity")
-	assert.EqualValues(t, 1000, latest.GetTimestamp(), "the legacy row's other columns must be unaffected by the migration")
+			latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(latest).To(specs.Not(specs.BeNil()))
+			sc.Expect(latest.GetTenantMetadata()).To(specs.BeEmpty())     // a pre-existing row must read back with no tenant metadata, never an invented identity
+			sc.Expect(latest.GetTimestamp()).To(specs.Equal(int64(1000))) // the legacy row's other columns must be unaffected by the migration
+		})
+	})
 }

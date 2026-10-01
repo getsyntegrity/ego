@@ -60,19 +60,19 @@ var wantAdapterOutcomes = map[string]adaptertest.Outcome{
 }
 
 func requireAdapterOutcomes(t *testing.T, results []adaptertest.Result) {
-	t.Helper()
-	if len(results) != len(wantAdapterOutcomes) {
-		t.Errorf("adaptertest returned %d results, want %d", len(results), len(wantAdapterOutcomes))
-	}
-	for _, r := range results {
-		want, ok := wantAdapterOutcomes[r.Check]
-		switch {
-		case !ok:
-			t.Errorf("unexpected check %s", r.Check)
-		case r.Outcome != want:
-			t.Errorf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
-		}
-	}
+	specs.Describe(t, "the adaptertest results", func(s *specs.Spec) {
+		s.It("match the exact outcomes the websocket publishers must get", func(ctx *specs.Context) {
+			ctx.Expect(results).To(specs.HaveLen(len(wantAdapterOutcomes)))
+			for _, r := range results {
+				want, ok := wantAdapterOutcomes[r.Check]
+				ctx.Expect(ok).To(specs.BeTrue())
+				if r.Outcome != want {
+					ctx.T.Logf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
+				}
+				ctx.Expect(r.Outcome).To(specs.Equal(want))
+			}
+		})
+	})
 }
 
 func TestEventsPublisherAdapterConformance(t *testing.T) {
@@ -113,19 +113,19 @@ var wantPublishingOutcomes = map[string]publishingtest.Outcome{
 }
 
 func requirePublishingOutcomes(t *testing.T, results []publishingtest.Result) {
-	t.Helper()
-	if len(results) != len(wantPublishingOutcomes) {
-		t.Errorf("publishingtest returned %d results, want %d", len(results), len(wantPublishingOutcomes))
-	}
-	for _, r := range results {
-		want, ok := wantPublishingOutcomes[r.Check]
-		switch {
-		case !ok:
-			t.Errorf("unexpected check %s", r.Check)
-		case r.Outcome != want:
-			t.Errorf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
-		}
-	}
+	specs.Describe(t, "the publishingtest results", func(s *specs.Spec) {
+		s.It("match the exact outcomes the websocket publishers must get", func(ctx *specs.Context) {
+			ctx.Expect(results).To(specs.HaveLen(len(wantPublishingOutcomes)))
+			for _, r := range results {
+				want, ok := wantPublishingOutcomes[r.Check]
+				ctx.Expect(ok).To(specs.BeTrue())
+				if r.Outcome != want {
+					ctx.T.Logf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
+				}
+				ctx.Expect(r.Outcome).To(specs.Equal(want))
+			}
+		})
+	})
 }
 
 func TestEventsPublisherPublishingConformance(t *testing.T) {

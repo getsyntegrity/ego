@@ -27,7 +27,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/ego/persistence"
@@ -66,134 +65,134 @@ var StateStoreChecks = []Check[persistence.StateStore]{
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: stateUnscopedNeverCollidesWithForgedTenant},
 }
 
-func stateOtherTenantGetsNothing(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateOtherTenantGetsNothing(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "read-isolation"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
 
 	got, err := store.GetLatestState(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.Nil(t, got, "tenant B must not see tenant A's record")
+	requireNoError(t, err)
+	requireNil(t, got, "tenant B must not see tenant A's record")
 }
 
-func stateUnscopedAndTenantDoNotCrossRead(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateUnscopedAndTenantDoNotCrossRead(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 
 	const idWrittenByTenant = "unscoped-cross-read-tenant-wrote"
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, idWrittenByTenant, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, idWrittenByTenant, 1, 111), persistence.Unconditional()))
 	gotUnscoped, err := store.GetLatestState(ctx, persistence.Unscoped(), idWrittenByTenant)
-	require.NoError(t, err)
-	require.Nil(t, gotUnscoped, "Unscoped() must not see a record written only under a tenant scope")
+	requireNoError(t, err)
+	requireNil(t, gotUnscoped, "Unscoped() must not see a record written only under a tenant scope")
 
 	const idWrittenByUnscoped = "unscoped-cross-read-unscoped-wrote"
-	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), stateRecord(t, idWrittenByUnscoped, 1, 222), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, persistence.Unscoped(), stateRecord(t, idWrittenByUnscoped, 1, 222), persistence.Unconditional()))
 	gotTenant, err := store.GetLatestState(ctx, tenantA, idWrittenByUnscoped)
-	require.NoError(t, err)
-	require.Nil(t, gotTenant, "a tenant scope must not see a record written only under Unscoped()")
+	requireNoError(t, err)
+	requireNil(t, gotTenant, "a tenant scope must not see a record written only under Unscoped()")
 }
 
-func stateBothTenantsReadOwnRecord(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateBothTenantsReadOwnRecord(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "both-write-own-read"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
-	require.NoError(t, store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 222), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 222), persistence.Unconditional()))
 
 	gotA, err := store.GetLatestState(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotA)
-	require.Equal(t, float64(111), stateMarker(t, gotA), "tenant A must read back its own record, never tenant B's")
+	requireNoError(t, err)
+	requireNotNil(t, gotA)
+	requireEqual(t, float64(111), stateMarker(t, gotA), "tenant A must read back its own record, never tenant B's")
 
 	gotB, err := store.GetLatestState(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	require.Equal(t, float64(222), stateMarker(t, gotB), "tenant B must read back its own record, never tenant A's")
+	requireNoError(t, err)
+	requireNotNil(t, gotB)
+	requireEqual(t, float64(222), stateMarker(t, gotB), "tenant B must read back its own record, never tenant A's")
 }
 
-func stateOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "write-isolation"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.Unconditional()))
 	before, err := store.GetLatestState(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, before)
+	requireNoError(t, err)
+	requireNotNil(t, before)
 
-	require.NoError(t, store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 999), persistence.Unconditional()))
+	requireNoError(t, store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 999), persistence.Unconditional()))
 
 	after, err := store.GetLatestState(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.True(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's record for the same persistence_id")
+	requireNoError(t, err)
+	requireNotNil(t, after)
+	requireTrue(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's record for the same persistence_id")
 }
 
 // stateExpectGenesisSucceedsForNewTenant mirrors
 // eventsExpectGenesisSucceedsForNewTenant: it is the sharpest check for
 // StateStore too, for the identical reason — see that function's comment.
-func stateExpectGenesisSucceedsForNewTenant(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateExpectGenesisSucceedsForNewTenant(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "genesis-cross-tenant"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
 
 	err := store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, "ExpectGenesis() must succeed for tenant B: tenant A having already established this id must never leak into tenant B's own CAS state")
+	requireNoError(t, err, "ExpectGenesis() must succeed for tenant B: tenant A having already established this id must never leak into tenant B's own CAS state")
 
 	gotB, err := store.GetLatestState(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	require.Equal(t, float64(222), stateMarker(t, gotB))
+	requireNoError(t, err)
+	requireNotNil(t, gotB)
+	requireEqual(t, float64(222), stateMarker(t, gotB))
 }
 
-func stateExpectRevisionConflictCarriesScope(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateExpectRevisionConflictCarriesScope(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	const id = "conflict-carries-scope"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
 
 	err := store.WriteState(ctx, tenantA, stateRecord(t, id, 2, 222), persistence.ExpectRevision(999))
-	require.Error(t, err)
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
+	requireError(t, err)
+	requireErrorIs(t, err, persistence.ErrConcurrencyConflict)
 
 	var conflictErr *persistence.ConflictError
-	require.True(t, errors.As(err, &conflictErr), "the returned error must be a *persistence.ConflictError")
-	require.True(t, conflictErr.Scope().Equal(tenantA), "the conflict must carry the scope the failed write actually targeted")
+	requireTrue(t, errors.As(err, &conflictErr), "the returned error must be a *persistence.ConflictError")
+	requireTrue(t, conflictErr.Scope().Equal(tenantA), "the conflict must carry the scope the failed write actually targeted")
 }
 
-func stateConflictNotObservableInAnotherScope(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateConflictNotObservableInAnotherScope(ctx context.Context, t TestingT, store persistence.StateStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "conflict-not-cross-scope"
 
-	require.NoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
 	err := store.WriteState(ctx, tenantA, stateRecord(t, id, 1, 999), persistence.ExpectGenesis())
-	require.Error(t, err)
-	require.ErrorIs(t, err, persistence.ErrConcurrencyConflict)
+	requireError(t, err)
+	requireErrorIs(t, err, persistence.ErrConcurrencyConflict)
 
 	err = store.WriteState(ctx, tenantB, stateRecord(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, "a conflict raised in tenant A's scope must not be observable in tenant B's scope")
+	requireNoError(t, err, "a conflict raised in tenant A's scope must not be observable in tenant B's scope")
 }
 
-func stateUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.StateStore) {
+func stateUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t TestingT, store persistence.StateStore) {
 	forgedTenant := mustTenantScope(t, "unscoped")
 	const id = "forging-guard"
 
-	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
+	requireNoError(t, store.WriteState(ctx, persistence.Unscoped(), stateRecord(t, id, 1, 111), persistence.ExpectGenesis()))
 	err := store.WriteState(ctx, forgedTenant, stateRecord(t, id, 1, 222), persistence.ExpectGenesis())
-	require.NoError(t, err, `a tenant literally named "unscoped" must never forge Unscoped()'s own CAS state`)
+	requireNoError(t, err, `a tenant literally named "unscoped" must never forge Unscoped()'s own CAS state`)
 
 	gotUnscoped, err := store.GetLatestState(ctx, persistence.Unscoped(), id)
-	require.NoError(t, err)
-	require.NotNil(t, gotUnscoped)
-	require.Equal(t, float64(111), stateMarker(t, gotUnscoped))
+	requireNoError(t, err)
+	requireNotNil(t, gotUnscoped)
+	requireEqual(t, float64(111), stateMarker(t, gotUnscoped))
 
 	gotForged, err := store.GetLatestState(ctx, forgedTenant, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotForged)
-	require.Equal(t, float64(222), stateMarker(t, gotForged))
+	requireNoError(t, err)
+	requireNotNil(t, gotForged)
+	requireEqual(t, float64(222), stateMarker(t, gotForged))
 }
