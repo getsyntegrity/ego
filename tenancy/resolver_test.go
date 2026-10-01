@@ -57,7 +57,6 @@ func TestWithSingleTenant_RejectsInvalidTenantID(t *testing.T) {
 	specs.Describe(t, "WithSingleTenant rejects an invalid tenant id", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid for an empty id", func(ctx *specs.Context) {
 			_, err := tenancy.WithSingleTenant(tenancy.TenantID(""))
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})

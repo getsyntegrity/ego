@@ -98,22 +98,20 @@ func TestError_TenantAccessorWithAttribution(t *testing.T) {
 
 func TestError_IsMatchesSentinelByReason(t *testing.T) {
 	specs.Describe(t, "errors.Is matches an Error to the sentinel of its reason", func(s *specs.Spec) {
-		tests := []struct {
+		type sentinelCase struct {
 			name     string
 			reason   Reason
 			sentinel error
-		}{
+		}
+
+		specs.Table(s, []sentinelCase{
 			{"missing", ReasonMissing, ErrMissing},
 			{"invalid", ReasonInvalid, ErrInvalid},
 			{"denied", ReasonDenied, ErrDenied},
-		}
-
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				err := newError(tt.reason, "boom", nil)
-				ctx.Expect(err).To(specs.MatchError(tt.sentinel))
-			})
-		}
+		}, func(c sentinelCase) string { return c.name }, func(ctx *specs.Context, c sentinelCase) {
+			err := newError(c.reason, "boom", nil)
+			ctx.Expect(err).To(specs.MatchError(c.sentinel))
+		})
 	})
 }
 

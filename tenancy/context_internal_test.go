@@ -47,7 +47,6 @@ func TestRequire_RejectsInvalidTenantContextEvenIfSomehowBound(t *testing.T) {
 			bound := context.WithValue(context.Background(), tenantContextKey, zero)
 
 			_, err := Require(bound)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(ErrInvalid))
 		})
 	})

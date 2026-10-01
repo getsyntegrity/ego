@@ -35,7 +35,6 @@ func TestNewTenantContext_RejectsEmptyTenantID(t *testing.T) {
 	specs.Describe(t, "NewTenantContext rejects an empty tenant id", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantContext("")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -46,7 +45,6 @@ func TestNewTenantContext_RejectsZeroValueTenantID(t *testing.T) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			var zero tenancy.TenantID
 			_, err := tenancy.NewTenantContext(zero)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -58,24 +56,21 @@ func TestNewTenantContext_RevalidatesTenantIDBypassingConstructor(t *testing.T) 
 		// NewTenantID with a bare conversion. NewTenantContext must not trust
 		// an already-typed TenantID — it must re-run R1 validation.
 		invalidUTF8 := string([]byte{0xff, 0xfe, 0xfd})
-		tests := []struct {
+		type idCase struct {
 			name string
 			id   tenancy.TenantID
-		}{
+		}
+
+		specs.Table(s, []idCase{
 			{"leading whitespace", tenancy.TenantID(" acme")},
 			{"trailing whitespace", tenancy.TenantID("acme ")},
 			{"control rune", tenancy.TenantID("acme\x00corp")},
 			{"too long", tenancy.TenantID(strings.Repeat("a", 129))},
 			{"invalid UTF-8", tenancy.TenantID(invalidUTF8)},
-		}
-
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				_, err := tenancy.NewTenantContext(tt.id)
-				ctx.Expect(err).To(specs.Not(specs.BeNil()))
-				ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
-			})
-		}
+		}, func(c idCase) string { return c.name }, func(ctx *specs.Context, c idCase) {
+			_, err := tenancy.NewTenantContext(c.id)
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 	})
 }
 
@@ -122,25 +117,22 @@ func TestNewTenantContext_DifferentTenantsProduceDifferentContexts(t *testing.T)
 
 func TestNewAdministrative_RequiresActorAndReason(t *testing.T) {
 	specs.Describe(t, "NewAdministrative requires an actor and a reason", func(s *specs.Spec) {
-		tests := []struct {
+		type attributionCase struct {
 			name   string
 			actor  string
 			reason string
-		}{
+		}
+
+		specs.Table(s, []attributionCase{
 			{"empty actor", "", "incident response"},
 			{"empty reason", "ops-oncall", ""},
 			{"both empty", "", ""},
 			{"whitespace only actor", "   ", "incident response"},
 			{"whitespace only reason", "ops-oncall", "   "},
-		}
-
-		for _, tt := range tests {
-			s.It(tt.name, func(ctx *specs.Context) {
-				_, err := tenancy.NewAdministrative(tt.actor, tt.reason)
-				ctx.Expect(err).To(specs.Not(specs.BeNil()))
-				ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
-			})
-		}
+		}, func(c attributionCase) string { return c.name }, func(ctx *specs.Context, c attributionCase) {
+			_, err := tenancy.NewAdministrative(c.actor, c.reason)
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 	})
 }
 
@@ -184,7 +176,6 @@ func TestNewAdministrativeContext_RejectsZeroValueAdministrative(t *testing.T) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			var zero tenancy.Administrative
 			_, err := tenancy.NewAdministrativeContext(zero)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})

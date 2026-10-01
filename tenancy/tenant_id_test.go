@@ -35,7 +35,6 @@ func TestNewTenantID_RejectsEmpty(t *testing.T) {
 	specs.Describe(t, "NewTenantID rejects an empty identifier", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantID("")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -45,7 +44,6 @@ func TestNewTenantID_RejectsWhitespaceOnly(t *testing.T) {
 	specs.Describe(t, "NewTenantID rejects a whitespace-only identifier", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantID("   ")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -55,7 +53,6 @@ func TestNewTenantID_RejectsLeadingOrTrailingWhitespace(t *testing.T) {
 	specs.Describe(t, "NewTenantID rejects surrounding whitespace", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantID("  acme-corp  ")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -77,7 +74,6 @@ func TestNewTenantID_RejectsControlRune(t *testing.T) {
 	specs.Describe(t, "NewTenantID rejects a control rune", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantID("acme\x00corp")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -87,7 +83,6 @@ func TestNewTenantID_RejectsTabAndNewline(t *testing.T) {
 	specs.Describe(t, "NewTenantID rejects tabs and newlines", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.NewTenantID("acme\tcorp\n")
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -98,7 +93,6 @@ func TestNewTenantID_RejectsInvalidUTF8(t *testing.T) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			invalid := string([]byte{0xff, 0xfe, 0xfd})
 			_, err := tenancy.NewTenantID(invalid)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -109,7 +103,6 @@ func TestNewTenantID_RejectsTooLong(t *testing.T) {
 		s.It("fails with ErrInvalid at 129 bytes", func(ctx *specs.Context) {
 			tooLong := strings.Repeat("a", 129)
 			_, err := tenancy.NewTenantID(tooLong)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -128,21 +121,17 @@ func TestNewTenantID_AcceptsMaxLength(t *testing.T) {
 
 func TestNewTenantID_AcceptsArbitraryNonUUIDIdentifiers(t *testing.T) {
 	specs.Describe(t, "NewTenantID accepts arbitrary non-UUID identifiers", func(s *specs.Spec) {
-		tests := []string{
+		specs.Table(s, []string{
 			"acme-corp",
 			"customer_42",
 			"12345",
 			"Tenant.With.Dots",
 			"a",
-		}
-
-		for _, in := range tests {
-			s.It(in, func(ctx *specs.Context) {
-				id, err := tenancy.NewTenantID(in)
-				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(id).ToEqual(tenancy.TenantID(in))
-			})
-		}
+		}, func(in string) string { return in }, func(ctx *specs.Context, in string) {
+			id, err := tenancy.NewTenantID(in)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(id).ToEqual(tenancy.TenantID(in))
+		})
 	})
 }
 

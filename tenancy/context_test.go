@@ -82,7 +82,6 @@ func TestAttach_RejectsChangingAlreadyBoundTenantContext(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			_, err = tenancy.Attach(bound, tcB)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
 
 			// The original binding must survive the rejected attempt unchanged.
@@ -117,7 +116,6 @@ func TestAttach_RejectsZeroValueTenantContext(t *testing.T) {
 			var zero tenancy.TenantContext
 
 			bound, err := tenancy.Attach(context.Background(), zero)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 
 			// ctx must be left unchanged: no TenantContext attached at all, not
@@ -167,7 +165,6 @@ func TestRequire_ReturnsErrMissingWhenNothingAttached(t *testing.T) {
 	specs.Describe(t, "Require on a context with nothing attached", func(s *specs.Spec) {
 		s.It("fails with ErrMissing", func(ctx *specs.Context) {
 			_, err := tenancy.Require(context.Background())
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
 		})
 	})
@@ -209,7 +206,6 @@ func TestVerifyUnchanged_ReturnsErrDeniedWhenDifferent(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 
 			err = tenancy.VerifyUnchanged(tcA, tcB)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
 		})
 	})
@@ -324,7 +320,6 @@ func TestSagaBoundary_SkippingMetadataReconstructionFailsClosed(t *testing.T) {
 			sagaCtx := simulateSagaStep(ctx.T, cmd, false)
 
 			_, err = tenancy.Require(sagaCtx)
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
 		})
 	})
@@ -395,7 +390,6 @@ func TestInvocation_SkippingEntrypointAttachMeansBehaviorFails(t *testing.T) {
 			// responsibility until TENANT-006 automates it), domain code must fail
 			// closed, not silently execute as some default tenant.
 			_, err := simulateBehavior(context.Background())
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
 		})
 	})

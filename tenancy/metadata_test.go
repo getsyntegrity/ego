@@ -39,11 +39,10 @@ func TestMarshalMetadata_TenantScope_UsesEgoTenantKeys(t *testing.T) {
 
 			md := tenancy.MarshalMetadata(tc)
 
-			ctx.Expect(md["ego.tenant.scope"]).ToEqual("tenant")
-			ctx.Expect(md["ego.tenant.id"]).ToEqual("acme-corp")
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.scope", "tenant"))
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.id", "acme-corp"))
 			// a tenant-scoped context must not carry administrative keys
-			_, hasActor := md["ego.tenant.admin_actor"]
-			ctx.Expect(hasActor).To(specs.BeFalse())
+			ctx.Expect(md).To(specs.Not(specs.HaveKey("ego.tenant.admin_actor")))
 		})
 	})
 }
@@ -59,13 +58,12 @@ func TestMarshalMetadata_AdministrativeScope_UsesEgoTenantKeys(t *testing.T) {
 
 			md := tenancy.MarshalMetadata(tc)
 
-			ctx.Expect(md["ego.tenant.scope"]).ToEqual("administrative")
-			ctx.Expect(md["ego.tenant.admin_actor"]).ToEqual("ops-oncall")
-			ctx.Expect(md["ego.tenant.admin_reason"]).ToEqual("crypto-shred deleted tenant data")
-			ctx.Expect(md["ego.tenant.admin_correlation_id"]).ToEqual("corr-123")
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.scope", "administrative"))
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.admin_actor", "ops-oncall"))
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.admin_reason", "crypto-shred deleted tenant data"))
+			ctx.Expect(md).To(specs.HavePair("ego.tenant.admin_correlation_id", "corr-123"))
 			// an administrative context must not carry a tenant id key
-			_, hasID := md["ego.tenant.id"]
-			ctx.Expect(hasID).To(specs.BeFalse())
+			ctx.Expect(md).To(specs.Not(specs.HaveKey("ego.tenant.id")))
 		})
 	})
 }
@@ -80,8 +78,7 @@ func TestMarshalMetadata_AdministrativeScope_OmitsCorrelationIDWhenAbsent(t *tes
 
 			md := tenancy.MarshalMetadata(tc)
 
-			_, ok := md["ego.tenant.admin_correlation_id"]
-			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(md).To(specs.Not(specs.HaveKey("ego.tenant.admin_correlation_id")))
 		})
 	})
 }
@@ -134,7 +131,6 @@ func TestUnmarshalMetadata_RejectsMissingScope(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects metadata without a scope", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.UnmarshalMetadata(tenancy.Metadata{})
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -144,7 +140,6 @@ func TestUnmarshalMetadata_RejectsUnrecognizedScope(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects an unrecognized scope", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.UnmarshalMetadata(tenancy.Metadata{"ego.tenant.scope": "bogus"})
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -154,7 +149,6 @@ func TestUnmarshalMetadata_RejectsTenantScopeWithInvalidID(t *testing.T) {
 	specs.Describe(t, "UnmarshalMetadata rejects a tenant scope with an invalid id", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid for an empty id", func(ctx *specs.Context) {
 			_, err := tenancy.UnmarshalMetadata(tenancy.Metadata{"ego.tenant.scope": "tenant", "ego.tenant.id": ""})
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
@@ -164,7 +158,6 @@ func TestUnmarshalMetadata_RejectsAdministrativeScopeMissingAttribution(t *testi
 	specs.Describe(t, "UnmarshalMetadata rejects an administrative scope without attribution", func(s *specs.Spec) {
 		s.It("fails with ErrInvalid", func(ctx *specs.Context) {
 			_, err := tenancy.UnmarshalMetadata(tenancy.Metadata{"ego.tenant.scope": "administrative"})
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
 		})
 	})
