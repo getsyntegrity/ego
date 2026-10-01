@@ -22,7 +22,7 @@
 
 // Package runtimeconsumer is evidence for #147, not API: consumer code
 // written only against the runtime-neutral contracts — port/runtime,
-// port/behavior and the test/data/testpb messages — never against package
+// port/behavior and the internal/testpb messages — never against package
 // ego or GoAkt (openspec/changes/ego-runtime-001/design.md §D8). Its
 // closure test keeps it that way; compose/goakt's end-to-end test drives a
 // real application through it with App.Runtime().
@@ -33,9 +33,9 @@ import (
 	"fmt"
 	"time"
 
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 const (

@@ -46,9 +46,9 @@ import (
 	"github.com/getsyntegrity/ego/internal/extensions"
 	"github.com/getsyntegrity/ego/internal/goaktlog"
 	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

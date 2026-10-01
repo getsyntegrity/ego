@@ -29,7 +29,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 )
 
 // TestActorFallsBackToHandleCommandWithoutMetadata mirrors

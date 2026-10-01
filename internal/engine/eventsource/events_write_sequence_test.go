@@ -37,8 +37,8 @@ import (
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/engine/protocol"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // writeSequence records, in order, the observable steps of an event write:

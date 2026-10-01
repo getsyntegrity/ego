@@ -31,8 +31,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/command"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // This file is task 3.17's integration proof (spec: "End-to-End Propagation

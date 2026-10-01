@@ -32,7 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/command"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 )
 
 // legacyCompatCaseG4 is one actor type the legacy-compatibility proof runs

@@ -457,6 +457,12 @@ The dependencies column was computed before the migration, from static signals f
 | `TestReset` | migrated | none |
 | `TestValues` | migrated | none |
 
+#### `internal/testpb`
+
+| Test | Status | Dependencies to substitute |
+|---|---|---|
+| `TestDescriptor_IsSoundAndCarriesTheModulePath` | migrated | none |
+
 #### `internal/ticker`
 
 | Test | Status | Dependencies to substitute |
@@ -721,12 +727,6 @@ The dependencies column was computed before the migration, from static signals f
 | `TestWithSingleTenant_IndistinguishableFromAnyResolver` | migrated | none |
 | `TestWithSingleTenant_ProducesTenantScopedContext` | migrated | none |
 | `TestWithSingleTenant_RejectsInvalidTenantID` | migrated | none |
-
-#### `test/data/testpb`
-
-| Test | Status | Dependencies to substitute |
-|---|---|---|
-| `TestDescriptor_IsSoundAndCarriesTheModulePath` | migrated | none |
 
 #### `testkit`
 

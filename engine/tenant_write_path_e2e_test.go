@@ -34,8 +34,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // tenancyProbeCreditEventSourcedBehavior is entity B's behavior in

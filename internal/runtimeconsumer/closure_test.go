@@ -66,7 +66,7 @@ var allowedFirstParty = []any{
 	modulePrefix + "/eventstream",
 	modulePrefix + "/internal/queue",
 	modulePrefix + "/internal/syncmap",
-	modulePrefix + "/test/data/testpb",
+	modulePrefix + "/internal/testpb",
 }
 
 // isGoAkt reports whether dep is the GoAkt runtime module or one of its packages.

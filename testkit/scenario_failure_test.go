@@ -29,7 +29,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 )
 
 // messageTB records what a scenario assertion reports: every Errorf message and

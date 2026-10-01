@@ -35,9 +35,9 @@ import (
 	"github.com/getsyntegrity/ego/egopb"
 	"github.com/getsyntegrity/ego/internal/engine/enginetest"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // askCreateAccount sends a CreateAccount command and expects it to succeed with a state reply.

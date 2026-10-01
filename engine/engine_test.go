@@ -53,11 +53,11 @@ import (
 	"github.com/getsyntegrity/ego/internal/pause"
 	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
 	"github.com/getsyntegrity/ego/internal/syncmap"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/offsetstore"
 	"github.com/getsyntegrity/ego/persistence"
 	"github.com/getsyntegrity/ego/projection"
 	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

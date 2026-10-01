@@ -28,7 +28,7 @@ proto:
 	@echo "Generating protobuf code..."
 	buf generate
 	cp -R gen/ego/.    egopb/
-	cp -R gen/test/.   test/data/testpb/
+	cp -R gen/test/.   internal/testpb/
 	cp -R gen/sample/. internal/samplepb/
 	rm -rf gen
 	buf generate --template buf.gen.example.yaml --path protos/sample
@@ -102,7 +102,7 @@ docker-protogen: docker-image
 			--path protos/test \
 			--path protos/sample && \
 		cp -R gen/ego/.    egopb/ && \
-		cp -R gen/test/.   test/data/testpb/ && \
+		cp -R gen/test/.   internal/testpb/ && \
 		cp -R gen/sample/. internal/samplepb/ && \
 		rm -rf gen && \
 		buf generate \

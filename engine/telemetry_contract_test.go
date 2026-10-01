@@ -43,8 +43,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/getsyntegrity/ego/internal/testpb"
 	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // telemetryDumpEnv names an optional file the contract test writes its

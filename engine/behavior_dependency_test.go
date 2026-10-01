@@ -40,8 +40,8 @@ import (
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/internal/extensions"
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 	"github.com/getsyntegrity/ego/testkit"
 )
 

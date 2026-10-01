@@ -31,8 +31,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	testpb "github.com/getsyntegrity/ego/internal/testpb"
 	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
 )
 
 // AccountEventSourcedBehavior is a small bank-account event sourced behavior
