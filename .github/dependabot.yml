@@ -5,6 +5,7 @@ updates:
       - "/"
       - "/benchmark"
       - "/example/cluster"
+      - "/inttest"
       - "/persistence/postgres"
       - "/publisher/kafka"
       - "/publisher/nats"

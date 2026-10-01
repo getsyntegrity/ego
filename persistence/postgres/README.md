@@ -114,3 +114,5 @@ no environment variable:
 ```sh
 (cd ../../inttest && go test -count=1 ./...)
 ```
+
+See [Integration tests](../../docs/ci.md#integration-tests) for how they work.

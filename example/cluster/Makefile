@@ -1,12 +1,12 @@
 # eGo Cluster Example — Kind-based Kubernetes deployment
 #
 # Usage:
-#   make all       — Create Kind cluster, build, deploy, wait, and run tests
+#   make all       — Create Kind cluster, build, deploy, and wait until it is ready
 #   make teardown  — Delete the Kind cluster
 #
 # Prerequisites: docker, kind, kubectl, curl
 
-.PHONY: all kind-create docker-build deploy wait test load-test \
+.PHONY: all kind-create docker-build deploy wait load-test \
         db reset status logs teardown clean \
         dashboard grafana jaeger prometheus
 
@@ -23,7 +23,7 @@ INGRESS_MANIFEST := https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-ngi
 # Composite targets
 # ---------------------------------------------------------------------------
 
-all: kind-create docker-build deploy wait test
+all: kind-create docker-build deploy wait
 	@echo ""
 	@echo "=== All steps completed successfully ==="
 	@echo ""
@@ -121,88 +121,6 @@ wait:
 		echo "    Waiting... ($$i/30)"; \
 		sleep 2; \
 	done
-
-# ---------------------------------------------------------------------------
-# Integration test (via NGINX Ingress — load-balanced across pods)
-# ---------------------------------------------------------------------------
-
-test:
-	@echo ""
-	@echo "==> Running integration tests via ingress ($(BASE_URL))..."
-	@echo "    Requests are load-balanced across all 3 pods by NGINX."
-	@echo ""
-	@echo "--- Step 1: Health check ---"
-	@curl -sf $(BASE_URL)/healthz && echo "" || { echo "FAIL: healthz"; exit 1; }
-	@echo ""
-	@echo "--- Step 2: Create account with balance 1000 ---"
-	@SUCCESS=0; for i in $$(seq 1 10); do \
-		RESP=$$(curl -s -w "\n%{http_code}" -X POST $(BASE_URL)/accounts/acct-1 \
-			-H 'Content-Type: application/json' -d '{"balance":1000}'); \
-		HTTP=$$(echo "$$RESP" | tail -1); \
-		BODY=$$(echo "$$RESP" | sed '$$d'); \
-		if [ "$$HTTP" -lt 400 ]; then \
-			echo "    $$BODY (HTTP $$HTTP)"; \
-			SUCCESS=1; break; \
-		fi; \
-		echo "    Retry $$i/10: $$BODY (HTTP $$HTTP) — cluster may still be stabilizing..."; \
-		sleep 2; \
-	done; \
-	if [ "$$SUCCESS" != "1" ]; then echo "FAIL: create account failed after 10 retries"; exit 1; fi
-	@echo ""
-	@echo "--- Step 3: Send 30 credits of 10 each (load-balanced across pods) ---"
-	@FAIL=0; for i in $$(seq 1 30); do \
-		HTTP=$$(curl -s -o /dev/null -w "%{http_code}" -X POST $(BASE_URL)/accounts/acct-1/credit \
-			-H 'Content-Type: application/json' -d '{"amount":10}'); \
-		if [ "$$HTTP" -ge 400 ]; then echo "    WARN: credit $$i returned HTTP $$HTTP"; FAIL=1; fi; \
-	done; \
-	if [ "$$FAIL" = "1" ]; then echo "    Some credit requests failed (see above)."; \
-	else echo "    30 credit requests sent successfully."; fi
-	@echo ""
-	@echo "--- Step 4: Send 10 debits of 5 each (load-balanced across pods) ---"
-	@FAIL=0; for i in $$(seq 1 10); do \
-		HTTP=$$(curl -s -o /dev/null -w "%{http_code}" -X POST $(BASE_URL)/accounts/acct-1/debit \
-			-H 'Content-Type: application/json' -d '{"amount":5}'); \
-		if [ "$$HTTP" -ge 400 ]; then echo "    WARN: debit $$i returned HTTP $$HTTP"; FAIL=1; fi; \
-	done; \
-	if [ "$$FAIL" = "1" ]; then echo "    Some debit requests failed (see above)."; \
-	else echo "    10 debit requests sent successfully."; fi
-	@echo ""
-	@echo "--- Step 5: Wait for projection to catch up ---"
-	@sleep 5
-	@echo ""
-	@echo "--- Step 6: Query projection (read side) ---"
-	@RESULT=$$(curl -sf $(BASE_URL)/accounts/acct-1); \
-	echo "    $$RESULT"; \
-	echo ""; \
-	BALANCE=$$(echo "$$RESULT" | grep -o '"balance":[0-9.]*' | cut -d: -f2); \
-	if [ "$$BALANCE" = "1250" ]; then \
-		echo "=== PASS: balance is 1250 (1000 + 30*10 - 10*5) as expected ==="; \
-	else \
-		echo "=== FAIL: expected balance 1250 but got $$BALANCE ==="; \
-	fi
-	@echo ""
-	@echo "--- Step 7: Verify load distribution across pods ---"
-	@echo "    Sending 30 read-side queries and collecting X-Served-By headers..."
-	@# /healthz cannot be used here: Kind's NGINX Ingress Controller exposes
-	@# its own /healthz on the data port (80) and answers it before the
-	@# request reaches the app, so no X-Served-By header makes it back. Hit a
-	@# real backend route instead.
-	@PODS=$$(for i in $$(seq 1 30); do \
-		curl -sf -D - -o /dev/null $(BASE_URL)/accounts/acct-1 2>/dev/null | grep -i x-served-by | awk '{print $$2}' | tr -d '\r'; \
-	done); \
-	UNIQUE=$$(echo "$$PODS" | sort -u | grep -c .); \
-	echo "    Pods that served requests:"; \
-	echo "$$PODS" | sort | uniq -c | sort -rn | while read count name; do \
-		echo "      $$name — $$count requests"; \
-	done; \
-	echo ""; \
-	if [ "$$UNIQUE" -ge 2 ]; then \
-		echo "=== PASS: requests were distributed across $$UNIQUE pods ==="; \
-	else \
-		echo "=== FAIL: all requests went to a single pod ($$UNIQUE unique) ==="; \
-	fi
-	@echo ""
-	@echo "==> Tests completed."
 
 # ---------------------------------------------------------------------------
 # Load test — create 1000 accounts, 50 concurrent
@@ -328,7 +246,7 @@ reset:
 	@kubectl exec --context kind-$(CLUSTER) -n $(NAMESPACE) statefulset/postgres -- \
 		psql -U ego -d ego -c \
 		"TRUNCATE events_store, offsets_store, account_balances;"
-	@echo "    Done. Tables are empty — ready for make test / make load-test."
+	@echo "    Done. Tables are empty — ready for make load-test."
 
 status:
 	kubectl get all --context kind-$(CLUSTER) -n $(NAMESPACE)

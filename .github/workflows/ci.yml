@@ -9,8 +9,13 @@
 #   test (N)    -> each shard on its own runner, in parallel
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
-#   modules     -> build, vet and test of every nested module (benchmark, example, publishers, compat)
+#   modules     -> build, vet and test of every nested module (benchmark, example, persistence/postgres,
+#                  publishers, compat); inttest is only built and vetted here, its tests run in the inttest job
+#   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
+#                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
+#                  never on feature or hotfix PRs
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
+#                  plus the no-skip rule for inttest/
 name: ci
 
 on:
@@ -246,9 +251,10 @@ jobs:
       - if: github.base_ref == 'main'
         run: go test $TESTFLAGS ./...
 
-  # Nested modules (benchmark, example/cluster, publisher/*, test/compat) are separate
-  # Go modules: `./...` at the root does not reach them, so each one is built, vetted
-  # and tested on its own. No race detector.
+  # Nested modules (benchmark, example/cluster, persistence/postgres, publisher/*, test/compat, inttest) are
+  # separate Go modules: `./...` at the root does not reach them, so each one is built, vetted and tested on
+  # its own. No race detector. inttest is built and vetted only (go vet compiles its test files): its tests
+  # need Docker and run in the inttest job, so the unit lanes never start a container.
   modules:
     name: modules (${{ matrix.dir }})
     needs: plan
@@ -267,15 +273,44 @@ jobs:
           - publisher/pulsar
           - publisher/websocket
           - test/compat
+        include:
+          # Build and vet only. A string flag, because an absent matrix key is null and null == false.
+          - dir: inttest
+            vet-only: "yes"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/go-setup
-      - name: Build, vet and test
+      - name: Build and vet
         working-directory: ${{ matrix.dir }}
         run: |
           go build ./...
           go vet ./...
-          go test $TESTFLAGS ./...
+      - name: Test
+        if: matrix.vet-only != 'yes'
+        working-directory: ${{ matrix.dir }}
+        run: go test $TESTFLAGS ./...
+
+  # Integration tests: the inttest module starts its own containers with Testcontainers (Docker is already
+  # on ubuntu-latest), so there are no services: and no DSN variables. A missing Docker fails the job, a test
+  # under inttest/ never skips (the no-skip rule of unit-gate). It runs on every push to develop (the result
+  # of each merge), on the develop -> main release PR (the gate that keeps main from receiving a red
+  # integration run, through ci-ok) and on manual runs. Feature and hotfix PRs never run it; a hotfix is
+  # covered once its main -> develop sync PR is merged and develop is pushed. ci-ok accepts "skipped".
+  inttest:
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.base_ref == 'main' && github.head_ref == 'develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Integration tests
+        working-directory: inttest
+        run: go test -count=1 -timeout=15m ./...
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
@@ -358,7 +393,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, unit-gate, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, unit-gate, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:
