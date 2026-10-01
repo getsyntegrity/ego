@@ -24,17 +24,14 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/getsyntegrity/ego/command"
 	"github.com/getsyntegrity/ego/persistence"
 	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
 )
 
 // TestDurableStateExpectedRevisionEndToEndPropagation is task 4.18's
@@ -51,64 +48,49 @@ import (
 // proves ExpectedRevision actually changes the real commit outcome, not
 // merely that it is accepted and ignored.
 func TestDurableStateExpectedRevisionEndToEndPropagation(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a durable state actor wired to a real engine and store", func(s *specs.Spec) {
+		s.It("commits the matching ExpectedRevision and rejects the other one, leaving the store untouched", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedDurableStoreG2(ctx)
+			engine := startEngineG2(ctx, "DS-integration-propagation", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
-	engine := newTestEngine(t, "DS-integration-propagation", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			created := dispatchG2(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccessG2(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			durable, err := store.GetLatestState(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, durable.GetVersionNumber()).ToEqual(1)
 
-	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	require.EqualValues(t, 1, durable.GetVersionNumber())
+			// The non-matching command: same payload/entity, ExpectedRevision does
+			// not match the real persisted revision (1).
+			nonMatching := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
+			expectConcurrencyConflictG2(ctx, nonMatching)
+			conflict := conflictErrorG2(ctx, nonMatching)
+			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectRevision(7))
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, actual).ToEqual(1)
 
-	// The non-matching command: same payload/entity, ExpectedRevision does
-	// not match the real persisted revision (1).
-	nonMatching := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
-	require.Equal(t, command.OutcomeRejected, nonMatching.Outcome())
-	failure, ok := nonMatching.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
+			// The store must be unchanged by the rejected write.
+			durable, err = store.GetLatestState(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, durable.GetVersionNumber()).ToEqual(1)
 
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(nonMatching.Err(), &conflict))
-	assert.Equal(t, persistence.ExpectRevision(7), conflict.Expected())
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
+			// The matching command: identical payload, ExpectedRevision now matches
+			// the real persisted revision (1). It commits and advances the real
+			// StorageRevision to 2.
+			matching := dispatchG2(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccessG2(ctx, matching)
+			specs.ExpectT(ctx, matching.Revision()).ToEqual(2)
+			specs.ExpectT(ctx, accountOfG2(ctx, matching).GetAccountBalance()).ToEqual(750)
 
-	// The store must be unchanged by the rejected write.
-	durable, err = store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	assert.EqualValues(t, 1, durable.GetVersionNumber())
-
-	// The matching command: identical payload, ExpectedRevision now matches
-	// the real persisted revision (1). It commits and advances the real
-	// StorageRevision to 2.
-	matching := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, matching.Outcome())
-	assert.EqualValues(t, 2, matching.Revision())
-
-	state, ok := matching.State()
-	require.True(t, ok)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance())
-
-	durable, err = store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	assert.EqualValues(t, 2, durable.GetVersionNumber())
+			durable, err = store.GetLatestState(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, durable.GetVersionNumber()).ToEqual(2)
+		})
+	})
 }
