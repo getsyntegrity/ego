@@ -36,6 +36,14 @@ import (
 	"github.com/getsyntegrity/ego/testkit"
 )
 
+// optionCase pairs one runner option with the Runner field it must set.
+type optionCase struct {
+	name  string
+	opt   Option
+	field func(*Runner) any
+	want  any
+}
+
 func TestOption(t *testing.T) {
 	specs.Describe(t, "each runner option applies its value to the Runner", func(s *specs.Spec) {
 		ts := time.Second
@@ -43,35 +51,17 @@ func TestOption(t *testing.T) {
 		to := time.Now().Add(ts)
 		recovery := projection.NewRecovery()
 
-		s.It("WithRefreshInterval", func(ctx *specs.Context) {
+		specs.Table(s, []optionCase{
+			{"WithRefreshInterval", WithPullInterval(ts), func(r *Runner) any { return r.pullInterval }, ts},
+			{"WithMaxBufferSize", WithMaxBufferSize(5), func(r *Runner) any { return r.maxBufferSize }, 5},
+			{"WithStartOffset", WithStartOffset(from), func(r *Runner) any { return r.startingOffset }, from},
+			{"WithResetOffset", WithResetOffset(to), func(r *Runner) any { return r.resetOffsetTo }, to},
+			{"WithLogger", WithLogger(discardLogger), func(r *Runner) any { return r.logger }, discardLogger},
+			{"WithRecoveryStrategy", WithRecoveryStrategy(recovery), func(r *Runner) any { return r.recovery }, recovery},
+		}, func(c optionCase) string { return c.name }, func(ctx *specs.Context, c optionCase) {
 			var r Runner
-			WithPullInterval(ts).Apply(&r)
-			ctx.Expect(r.pullInterval).ToEqual(ts)
-		})
-		s.It("WithMaxBufferSize", func(ctx *specs.Context) {
-			var r Runner
-			WithMaxBufferSize(5).Apply(&r)
-			ctx.Expect(r.maxBufferSize).ToEqual(5)
-		})
-		s.It("WithStartOffset", func(ctx *specs.Context) {
-			var r Runner
-			WithStartOffset(from).Apply(&r)
-			ctx.Expect(r.startingOffset).ToEqual(from)
-		})
-		s.It("WithResetOffset", func(ctx *specs.Context) {
-			var r Runner
-			WithResetOffset(to).Apply(&r)
-			ctx.Expect(r.resetOffsetTo).ToEqual(to)
-		})
-		s.It("WithLogger", func(ctx *specs.Context) {
-			var r Runner
-			WithLogger(discardLogger).Apply(&r)
-			ctx.Expect(r.logger == discardLogger).To(specs.BeTrue())
-		})
-		s.It("WithRecoveryStrategy", func(ctx *specs.Context) {
-			var r Runner
-			WithRecoveryStrategy(recovery).Apply(&r)
-			ctx.Expect(r.recovery).ToEqual(recovery)
+			c.opt.Apply(&r)
+			ctx.Expect(c.field(&r)).ToEqual(c.want)
 		})
 	})
 }
@@ -82,7 +72,7 @@ func TestWithDeadLetterHandler(t *testing.T) {
 			dlh := projection.NewDiscardDeadLetterHandler()
 			var r Runner
 			WithDeadLetterHandler(dlh).Apply(&r)
-			ctx.Expect(r.deadLetterHandler != nil).To(specs.BeTrue())
+			ctx.Expect(r.deadLetterHandler).To(specs.Not(specs.BeNil()))
 			ctx.Expect(r.deadLetterHandler).ToEqual(dlh)
 		})
 	})
@@ -93,7 +83,7 @@ func TestWithDeadLetterHandlerNil(t *testing.T) {
 		s.It("keeps the dead-letter handler nil", func(ctx *specs.Context) {
 			var r Runner
 			WithDeadLetterHandler(nil).Apply(&r)
-			ctx.Expect(r.deadLetterHandler == nil).To(specs.BeTrue())
+			ctx.Expect(r.deadLetterHandler).To(specs.BeNil())
 		})
 	})
 }
@@ -105,7 +95,7 @@ func TestWithEventAdapters(t *testing.T) {
 			adapters := []eventadapter.EventAdapter{adapter}
 			var r Runner
 			WithEventAdapters(adapters).Apply(&r)
-			ctx.Expect(len(r.eventAdapters)).ToEqual(1)
+			ctx.Expect(r.eventAdapters).To(specs.HaveLen(1))
 			ctx.Expect(r.eventAdapters[0]).ToEqual(eventadapter.EventAdapter(adapter))
 		})
 	})
@@ -116,7 +106,7 @@ func TestWithEventAdaptersEmpty(t *testing.T) {
 		s.It("keeps the event adapters nil", func(ctx *specs.Context) {
 			var r Runner
 			WithEventAdapters(nil).Apply(&r)
-			ctx.Expect(r.eventAdapters == nil).To(specs.BeTrue())
+			ctx.Expect(r.eventAdapters).To(specs.BeNil())
 		})
 	})
 }
@@ -138,7 +128,7 @@ func TestWithEncryptor(t *testing.T) {
 			enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
 			var r Runner
 			WithEncryptor(enc).Apply(&r)
-			ctx.Expect(r.encryptor != nil).To(specs.BeTrue())
+			ctx.Expect(r.encryptor).To(specs.Not(specs.BeNil()))
 			ctx.Expect(r.encryptor).ToEqual(enc)
 		})
 	})
