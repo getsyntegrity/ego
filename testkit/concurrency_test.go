@@ -39,8 +39,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/getsyntegrity/ego/egopb"
@@ -50,39 +49,40 @@ import (
 
 // markedEvent builds a single-event batch carrying marker in AccountBalance,
 // so the winner of a race between two writers can be identified afterward
-// from the persisted event alone.
-func markedEvent(t *testing.T, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
-	t.Helper()
+// from the persisted event alone. A payload that cannot be built fails the
+// spec through ctx.
+func markedEvent(ctx *specs.Context, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
+	ctx.T.Helper()
 	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	return []*egopb.Event{
 		{PersistenceId: persistenceID, SequenceNumber: sequenceNumber, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
 	}
 }
 
 // eventMarker recovers the marker written by markedEvent.
-func eventMarker(t *testing.T, event *egopb.Event) float64 {
-	t.Helper()
+func eventMarker(ctx *specs.Context, event *egopb.Event) float64 {
+	ctx.T.Helper()
 	var msg testpb.AccountCreated
-	require.NoError(t, event.GetEvent().UnmarshalTo(&msg))
+	ctx.Expect(event.GetEvent().UnmarshalTo(&msg)).To(specs.BeNil())
 	return msg.GetAccountBalance()
 }
 
 // markedState builds a *egopb.DurableState carrying marker in AccountBalance,
 // so the winner of a race between two writers can be identified afterward
 // from the persisted state alone.
-func markedState(t *testing.T, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
-	t.Helper()
+func markedState(ctx *specs.Context, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
+	ctx.T.Helper()
 	anyState, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	return &egopb.DurableState{PersistenceId: persistenceID, ResultingState: anyState, VersionNumber: versionNumber}
 }
 
 // stateMarker recovers the marker written by markedState.
-func stateMarker(t *testing.T, state *egopb.DurableState) float64 {
-	t.Helper()
+func stateMarker(ctx *specs.Context, state *egopb.DurableState) float64 {
+	ctx.T.Helper()
 	var msg testpb.Account
-	require.NoError(t, state.GetResultingState().UnmarshalTo(&msg))
+	ctx.Expect(state.GetResultingState().UnmarshalTo(&msg)).To(specs.BeNil())
 	return msg.GetAccountBalance()
 }
 
@@ -91,6 +91,11 @@ func stateMarker(t *testing.T, state *egopb.DurableState) float64 {
 // itself — so the two calls genuinely contend against the store rather than
 // against each other's ordering in the test goroutine. It returns their two
 // errors in a-then-b order regardless of which one actually finished first.
+//
+// The goroutines only drive the two calls and never touch a spec context or a
+// testing.T, so they stay raw goroutines; raceTwoWriters joins both before it
+// returns, and the caller asserts on the collected errors. Callers must build
+// every payload before calling it, since a and b run off the case goroutine.
 func raceTwoWriters(a, b func() error) (errA, errB error) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -112,21 +117,34 @@ func raceTwoWriters(a, b func() error) (errA, errB error) {
 	return errA, errB
 }
 
-// countOutcomes classifies two conditional-write results into (successes,
-// conflicts), failing the test if either error is a non-conflict failure.
-func countOutcomes(t *testing.T, errA, errB error) (successes, conflicts int) {
-	t.Helper()
-	for _, err := range []error{errA, errB} {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, persistence.ErrConcurrencyConflict):
-			conflicts++
-		default:
-			t.Fatalf("unexpected non-conflict error: %v", err)
-		}
+// outcomeOf names the result of one conditional write: a commit, a concurrency
+// conflict, or any other failure (kept with its message so a spec failure shows
+// what went wrong).
+func outcomeOf(err error) string {
+	switch {
+	case err == nil:
+		return "committed"
+	case errors.Is(err, persistence.ErrConcurrencyConflict):
+		return "conflict"
+	default:
+		return "unexpected error: " + err.Error()
 	}
-	return successes, conflicts
+}
+
+// expectOneWinnerOneConflict asserts that, of two racing conditional writes,
+// exactly one committed and the other got a concurrency conflict, in either order.
+func expectOneWinnerOneConflict(ctx *specs.Context, errA, errB error) {
+	ctx.T.Helper()
+	ctx.Expect([]string{outcomeOf(errA), outcomeOf(errB)}).To(specs.ContainTheSameElementsAs([]string{"committed", "conflict"}))
+}
+
+// winningMarker is the marker the persisted record must carry: a's when a
+// committed, b's otherwise.
+func winningMarker(errA error, markerA, markerB float64) float64 {
+	if errA == nil {
+		return markerA
+	}
+	return markerB
 }
 
 // ---------------------------------------------------------------------------
@@ -134,37 +152,36 @@ func countOutcomes(t *testing.T, errA, errB error) (successes, conflicts int) {
 // ---------------------------------------------------------------------------
 
 func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore lets exactly one of two writers racing the same ExpectRevision commit", func(s *specs.Spec) {
+		s.It("one writer commits, the loser gets a concurrency conflict and the winner's event is stored", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const persistenceID = "t8-event-race"
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			const persistenceID = "t8-event-race"
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
-		},
-		func() error {
-			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
-		},
-	)
+			eventA := markedEvent(ctx, persistenceID, 2, 111)
+			eventB := markedEvent(ctx, persistenceID, 2, 222)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectRevision(1))
+				},
+				func() error {
+					return store.WriteEvents(bg, persistence.Unscoped(), eventB, persistence.ExpectRevision(1))
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "exactly one of the two racing writers must commit")
-	assert.Equal(t, 1, conflicts, "the losing writer must observe a typed concurrency conflict")
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 2, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(2))
 
-	winnerMarker := eventMarker(t, latest)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker, "final revision must reflect writer A, the one that actually succeeded")
-	} else {
-		assert.EqualValues(t, 222, winnerMarker, "final revision must reflect writer B, the one that actually succeeded")
-	}
+			ctx.Expect(eventMarker(ctx, latest)).ToEqual(winningMarker(errA, 111, 222))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -172,37 +189,36 @@ func TestEventStore_T8_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T)
 // ---------------------------------------------------------------------------
 
 func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "DurableStore lets exactly one of two writers racing the same ExpectRevision commit", func(s *specs.Spec) {
+		s.It("one writer commits, the loser gets a concurrency conflict and the winner's state is stored", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewDurableStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const persistenceID = "t9-state-race"
-	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			const persistenceID = "t9-state-race"
+			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 2, 111), persistence.ExpectRevision(1))
-		},
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 2, 222), persistence.ExpectRevision(1))
-		},
-	)
+			stateA := markedState(ctx, persistenceID, 2, 111)
+			stateB := markedState(ctx, persistenceID, 2, 222)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectRevision(1))
+				},
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateB, persistence.ExpectRevision(1))
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "exactly one of the two racing writers must commit")
-	assert.Equal(t, 1, conflicts, "the losing writer must observe a typed concurrency conflict, and must not overwrite the winner")
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
-	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.EqualValues(t, 2, got.GetVersionNumber())
+			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(2))
 
-	winnerMarker := stateMarker(t, got)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker, "final state must reflect writer A, the one that actually succeeded")
-	} else {
-		assert.EqualValues(t, 222, winnerMarker, "final state must reflect writer B, the one that actually succeeded")
-	}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -210,100 +226,102 @@ func TestDurableStore_T9_ConcurrentExpectRevisionHasExactlyOneWinner(t *testing.
 // ---------------------------------------------------------------------------
 
 func TestEventStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore lets exactly one of two concurrent genesis writers commit", func(s *specs.Spec) {
+		s.It("one genesis commits, the loser gets a concurrency conflict and the winner's event is stored", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const persistenceID = "t10-event-genesis-race"
+			const persistenceID = "t10-event-genesis-race"
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 111), persistence.ExpectGenesis())
-		},
-		func() error {
-			return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 222), persistence.ExpectGenesis())
-		},
-	)
+			eventA := markedEvent(ctx, persistenceID, 1, 111)
+			eventB := markedEvent(ctx, persistenceID, 1, 222)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectGenesis())
+				},
+				func() error {
+					return store.WriteEvents(bg, persistence.Unscoped(), eventB, persistence.ExpectGenesis())
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "exactly one genesis commit must succeed")
-	assert.Equal(t, 1, conflicts, "the losing genesis attempt must observe a typed concurrency conflict")
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest.GetSequenceNumber()).ToEqual(uint64(1))
 
-	winnerMarker := eventMarker(t, latest)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker)
-	} else {
-		assert.EqualValues(t, 222, winnerMarker)
-	}
+			ctx.Expect(eventMarker(ctx, latest)).ToEqual(winningMarker(errA, 111, 222))
+		})
+	})
 }
 
 func TestDurableStore_T10_ConcurrentGenesisHasExactlyOneWinner(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "DurableStore lets exactly one of two concurrent genesis writers commit", func(s *specs.Spec) {
+		s.It("one genesis commits, the loser gets a concurrency conflict and the winner's state is stored", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewDurableStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const persistenceID = "t10-state-genesis-race"
+			const persistenceID = "t10-state-genesis-race"
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 111), persistence.ExpectGenesis())
-		},
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 222), persistence.ExpectGenesis())
-		},
-	)
+			stateA := markedState(ctx, persistenceID, 1, 111)
+			stateB := markedState(ctx, persistenceID, 1, 222)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectGenesis())
+				},
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateB, persistence.ExpectGenesis())
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "exactly one genesis commit must succeed")
-	assert.Equal(t, 1, conflicts, "the losing genesis attempt must observe a typed concurrency conflict")
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
-	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.EqualValues(t, 1, got.GetVersionNumber())
+			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(1))
 
-	winnerMarker := stateMarker(t, got)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker)
-	} else {
-		assert.EqualValues(t, 222, winnerMarker)
-	}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
-// T8/T9/T10 repeated under -race and across many persistence ids, so the
-// guarantee is demonstrated under contention rather than as a single lucky
-// interleaving. Still no actor of any kind is involved (T11).
+// T8/T9/T10 repeated across many persistence ids, so the guarantee is
+// demonstrated under contention rather than as a single lucky interleaving.
+// Still no actor of any kind is involved (T11).
 // ---------------------------------------------------------------------------
 
 func TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore keeps a single ExpectRevision winner across many aggregates", func(s *specs.Spec) {
+		s.It("every one of 50 raced aggregates has exactly one winner and one conflict", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const rounds = 50
-	for i := 0; i < rounds; i++ {
-		persistenceID := fmt.Sprintf("t8-bulk-%d", i)
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			const rounds = 50
+			for i := 0; i < rounds; i++ {
+				persistenceID := fmt.Sprintf("t8-bulk-%d", i)
+				ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), markedEvent(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-		errA, errB := raceTwoWriters(
-			func() error {
-				return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 1), persistence.ExpectRevision(1))
-			},
-			func() error {
-				return store.WriteEvents(ctx, persistence.Unscoped(), markedEvent(t, persistenceID, 2, 2), persistence.ExpectRevision(1))
-			},
-		)
+				eventA := markedEvent(ctx, persistenceID, 2, 1)
+				eventB := markedEvent(ctx, persistenceID, 2, 2)
+				errA, errB := raceTwoWriters(
+					func() error {
+						return store.WriteEvents(bg, persistence.Unscoped(), eventA, persistence.ExpectRevision(1))
+					},
+					func() error {
+						return store.WriteEvents(bg, persistence.Unscoped(), eventB, persistence.ExpectRevision(1))
+					},
+				)
 
-		successes, conflicts := countOutcomes(t, errA, errB)
-		require.Equal(t, 1, successes)
-		require.Equal(t, 1, conflicts)
-	}
+				expectOneWinnerOneConflict(ctx, errA, errB)
+			}
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -324,45 +342,44 @@ func TestEventStore_T8_ConcurrentExpectRevisionHoldsAcrossManyAggregates(t *test
 // ---------------------------------------------------------------------------
 
 func TestDurableStore_CheckPreconditionsAloneDoesNotPreventStateStoreConflict(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "DurableStore's conditional write, not checkPreconditions, decides between two stale-version writers", func(s *specs.Spec) {
+		s.It("both writers pass the plus-or-minus one rule yet only one commits", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewDurableStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	const persistenceID = "checkpreconditions-narrow-responsibility"
-	require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, 1, 0), persistence.ExpectGenesis()))
+			const persistenceID = "checkpreconditions-narrow-responsibility"
+			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), markedState(ctx, persistenceID, 1, 0), persistence.ExpectGenesis())).To(specs.BeNil())
 
-	const observedVersion = 1
-	const newVersion = observedVersion + 1
+			const observedVersion = 1
+			const newVersion = observedVersion + 1
 
-	// Both writers independently satisfy a checkPreconditions-style ±1 delta
-	// check against the same observed version, since neither has yet seen the
-	// other's write. Only the StateStore's ExpectRevision CAS can tell them
-	// apart.
-	delta := int(math.Abs(float64(newVersion - observedVersion)))
-	require.Equal(t, 1, delta, "both writers must satisfy checkPreconditions' own ±1 rule to make this race meaningful")
+			// Both writers independently satisfy a checkPreconditions-style ±1 delta
+			// check against the same observed version, since neither has yet seen the
+			// other's write. Only the StateStore's ExpectRevision CAS can tell them
+			// apart.
+			delta := int(math.Abs(float64(newVersion - observedVersion)))
+			ctx.Expect(delta).ToEqual(1)
 
-	errA, errB := raceTwoWriters(
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, newVersion, 111), persistence.ExpectRevision(observedVersion))
-		},
-		func() error {
-			return store.WriteState(ctx, persistence.Unscoped(), markedState(t, persistenceID, newVersion, 222), persistence.ExpectRevision(observedVersion))
-		},
-	)
+			stateA := markedState(ctx, persistenceID, newVersion, 111)
+			stateB := markedState(ctx, persistenceID, newVersion, 222)
+			errA, errB := raceTwoWriters(
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateA, persistence.ExpectRevision(observedVersion))
+				},
+				func() error {
+					return store.WriteState(bg, persistence.Unscoped(), stateB, persistence.ExpectRevision(observedVersion))
+				},
+			)
 
-	successes, conflicts := countOutcomes(t, errA, errB)
-	assert.Equal(t, 1, successes, "checkPreconditions-shaped agreement on both sides must not let both writers commit")
-	assert.Equal(t, 1, conflicts, "the loser must observe a typed concurrency conflict raised by the StateStore, not by checkPreconditions")
+			expectOneWinnerOneConflict(ctx, errA, errB)
 
-	got, err := store.GetLatestState(ctx, persistence.Unscoped(), persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.EqualValues(t, newVersion, got.GetVersionNumber())
+			got, err := store.GetLatestState(bg, persistence.Unscoped(), persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got.GetVersionNumber()).ToEqual(uint64(newVersion))
 
-	winnerMarker := stateMarker(t, got)
-	if errA == nil {
-		assert.EqualValues(t, 111, winnerMarker, "the persisted state must reflect whichever writer the StateStore actually admitted")
-	} else {
-		assert.EqualValues(t, 222, winnerMarker, "the persisted state must reflect whichever writer the StateStore actually admitted")
-	}
+			ctx.Expect(stateMarker(ctx, got)).ToEqual(winningMarker(errA, 111, 222))
+		})
+	})
 }
