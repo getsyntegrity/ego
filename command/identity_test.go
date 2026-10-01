@@ -47,7 +47,7 @@ func TestNewOperationID(t *testing.T) {
 			{name: "empty rejected", inputs: []string{""}},
 			{name: "not valid UTF-8 rejected", inputs: []string{string([]byte{0xff, 0xfe})}},
 			{name: "leading or trailing whitespace rejected", inputs: []string{" order-123", "order-123 "}},
-			{name: "control rune rejected", inputs: []string{"order-123\n"}},
+			{name: "control rune rejected", inputs: []string{"order-123\n", "order\x00123"}},
 			{name: "exceeds max length rejected", inputs: []string{strings.Repeat("a", 129)}},
 		}, func(r rejection) string { return r.name }, func(ctx *specs.Context, r rejection) {
 			for _, in := range r.inputs {
