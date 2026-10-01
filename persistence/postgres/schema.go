@@ -38,6 +38,12 @@ import (
 // first, by hand, with the ALTER recipe of example/cluster/README.md.
 var ErrUnsupportedSchema = errors.New("postgres: unsupported legacy schema")
 
+// ErrSchemaAhead is returned by Migrate when the database records a version
+// newer than the last schema file this binary embeds: a newer build already
+// migrated it. Running on regardless could write against tables this build does
+// not understand, so Migrate fails and Engine.Start with it.
+var ErrSchemaAhead = errors.New("postgres: schema is newer than this binary")
+
 // ErrNotConnected is returned by Migrate and SchemaVersion on a store whose
 // Connect has not succeeded yet.
 var ErrNotConnected = errors.New("postgres: store is not connected")
@@ -118,6 +124,16 @@ func pendingSchemaFiles(files []schemaFile, current uint) []schemaFile {
 		if f.version > current {
 			return files[i:]
 		}
+	}
+	return nil
+}
+
+// checkSchemaNotAhead returns ErrSchemaAhead, wrapped with both versions, when
+// the database's current version is above latest, the version of the newest
+// embedded file.
+func checkSchemaNotAhead(current, latest uint) error {
+	if current > latest {
+		return fmt.Errorf("postgres: schema: database is at version %d, this binary knows up to %d: %w", current, latest, ErrSchemaAhead)
 	}
 	return nil
 }

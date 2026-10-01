@@ -55,6 +55,15 @@ The schema is a list of numbered SQL files embedded in the module, in [`schema/`
 
 `SchemaVersion` returns the highest recorded version, or `0` for a database that was never migrated.
 
+### A schema newer than the binary
+
+If the recorded version is higher than the last file this binary embeds, a newer build already migrated the
+database. `Migrate` returns `postgres.ErrSchemaAhead`, wrapped with both versions (`database is at version 7,
+this binary knows up to 5`), so `Engine.Start` fails loudly instead of running against tables the binary does
+not understand. An older binary refuses a newer schema: either roll the schema back, or roll the binary
+forward. The rejected alternative was a silent no-op that trusts every future file to be additive only; it
+would let an old binary corrupt data the day one is not.
+
 ### Versions
 
 | Version | File | Adds |

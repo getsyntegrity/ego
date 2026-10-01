@@ -1289,6 +1289,40 @@ func TestPostgresEventStore_SchemaMigratesLegacyTenantMetadata(t *testing.T) {
 	})
 }
 
+// TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary records a
+// version no embedded file has, as a newer build would have, and expects an
+// older binary to refuse instead of running on a schema it does not know.
+func TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary(t *testing.T) {
+	dsn := postgresTestDSN(t)
+	specs.Describe(t, "postgres.EventStore.Migrate on a database migrated by a newer binary", func(s *specs.Spec) {
+		s.It("fails with ErrSchemaAhead and changes nothing", func(sc *specs.Context) {
+			ctx := context.Background()
+			sc.Expect(resetPostgresSchema(ctx, dsn)).To(specs.BeNil())
+			// Leave no version 99 behind for the tests that run next.
+			defer func() { _ = resetPostgresSchema(ctx, dsn) }()
+
+			store := postgres.NewEventStore(dsn)
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			defer func() { _ = store.Disconnect(ctx) }()
+			sc.Expect(store.Migrate(ctx)).To(specs.BeNil())
+
+			pool, err := pgxpool.New(ctx, dsn)
+			sc.Expect(err).To(specs.BeNil())
+			defer pool.Close()
+			_, err = pool.Exec(ctx, `INSERT INTO ego_schema_migrations (version) VALUES (99)`)
+			sc.Expect(err).To(specs.BeNil())
+
+			err = store.Migrate(ctx)
+			sc.Expect(err).To(specs.MatchError(postgres.ErrSchemaAhead))
+			sc.Expect(err.Error()).To(specs.MatchRegex("database is at version 99, this binary knows up to 5"))
+
+			version, err := store.SchemaVersion(ctx)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(version).To(specs.Equal(uint(99)))
+		})
+	})
+}
+
 // TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone starts
 // from a database that another tool already manages: it holds a
 // schema_migrations table in golang-migrate's shape. ego must neither read that

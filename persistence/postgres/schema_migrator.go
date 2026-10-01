@@ -137,6 +137,10 @@ func (m *SchemaMigrator) Migrate(ctx context.Context) (err error) {
 		}
 	}
 
+	if err = checkSchemaNotAhead(current, files[len(files)-1].version); err != nil {
+		return err
+	}
+
 	for _, file := range pendingSchemaFiles(files, current) {
 		if err = applySchemaFile(ctx, conn, file); err != nil {
 			return err

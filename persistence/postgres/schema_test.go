@@ -215,6 +215,36 @@ func TestInferSchemaVersion(t *testing.T) {
 	})
 }
 
+type aheadCase struct {
+	name    string
+	current uint
+	latest  uint
+	wantErr bool
+	wantMsg string
+}
+
+func TestCheckSchemaNotAhead(t *testing.T) {
+	specs.Describe(t, "checkSchemaNotAhead compares the recorded version with the newest embedded file", func(s *specs.Spec) {
+		specs.Table(s, []aheadCase{
+			{name: "accepts a database that was never migrated", current: 0, latest: 5},
+			{name: "accepts a database one file behind", current: 4, latest: 5},
+			{name: "accepts a database at exactly the newest version", current: 5, latest: 5},
+			{name: "refuses a database one version ahead, naming both versions", current: 6, latest: 5, wantErr: true,
+				wantMsg: "database is at version 6, this binary knows up to 5"},
+			{name: "refuses a database far ahead", current: 99, latest: 5, wantErr: true,
+				wantMsg: "database is at version 99, this binary knows up to 5"},
+		}, func(c aheadCase) string { return c.name }, func(ctx *specs.Context, c aheadCase) {
+			err := checkSchemaNotAhead(c.current, c.latest)
+			if !c.wantErr {
+				ctx.Expect(err).To(specs.BeNil())
+				return
+			}
+			ctx.Expect(err).To(specs.MatchError(ErrSchemaAhead))
+			ctx.Expect(err.Error()).To(specs.MatchRegex(c.wantMsg))
+		})
+	})
+}
+
 func TestStoresNeedAConnectionToMigrate(t *testing.T) {
 	specs.Describe(t, "Migrate and SchemaVersion on a store that is not connected", func(s *specs.Spec) {
 		s.It("EventStore returns ErrNotConnected", func(ctx *specs.Context) {
