@@ -83,6 +83,16 @@ After spec B, the integration tests live in `inttest/` and start their own Postg
 - Stale `EGO_EXAMPLE_POSTGRES_DSN` mentions removed from `persistence/postgres/README.md` (now points at `inttest` and Docker) and `docs/testing/unit-migration.md` (two historical lines now say the tests moved to `inttest/postgres`). The remaining `POSTGRES_DSN` hits are `example/cluster/main.go` and `example/cluster/k8s/app.yaml`, which configure the example app itself, so they stay.
 - Check: structural readback of the three documents (anchors `#integration-tests` resolve to the new heading).
 
+### CI evidence (C3, parent check)
+
+PR #281, run https://github.com/getsyntegrity/ego/actions/runs/36910801709 was green. These jobs passed: `inttest`, `modules (inttest)` (build and vet only) and `ci-ok`. The `inttest` log shows that the three packages really ran against Testcontainers on the runner:
+
+```
+ok  github.com/getsyntegrity/ego/inttest/flows     8.976s
+ok  github.com/getsyntegrity/ego/inttest/infra     9.404s
+ok  github.com/getsyntegrity/ego/inttest/postgres  11.450s
+```
+
 ## Next step
 
-Open the PR to `develop` and confirm that the `inttest` job really ran in CI (the open part of C3).
+Review and merge, in order: #279 (A), #280 (B), #281 (C). After that, the housekeeping waits for the user's confirmation: close #278 without merging, delete `ci/integration-workflow`, and comment on #210.
