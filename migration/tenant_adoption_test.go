@@ -2454,20 +2454,94 @@ func TestTenantAdopterNeverReportsDeletionOfASourceThatStillExists(t *testing.T)
 	})
 }
 
-// untouchableEventsStore, untouchableSnapshotStore, and untouchableStateStore
-// embed a nil interface, so any method call on them panics: a test using
-// them proves the code under test never touches a store.
-type untouchableEventsStore struct{ persistence.EventsStore }
-type untouchableSnapshotStore struct{ persistence.SnapshotStore }
-type untouchableStateStore struct{ persistence.StateStore }
+// eventsStoreMock, snapshotStoreMock and stateStoreMock forward every call to a
+// mock.Controller. A case that declares no expectation proves the code under
+// test never touches the store: an unexpected call fails the case at once and
+// names the method and its arguments.
+type eventsStoreMock struct{ c *mock.Controller }
+
+func (m eventsStoreMock) Connect(ctx context.Context) error {
+	return m.c.Method("Connect").Call(ctx).Err(0)
+}
+func (m eventsStoreMock) Disconnect(ctx context.Context) error {
+	return m.c.Method("Disconnect").Call(ctx).Err(0)
+}
+func (m eventsStoreMock) Ping(ctx context.Context) error { return m.c.Method("Ping").Call(ctx).Err(0) }
+func (m eventsStoreMock) WriteEvents(ctx context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
+	return m.c.Method("WriteEvents").Call(ctx, scope, events, precondition).Err(0)
+}
+func (m eventsStoreMock) DeleteEvents(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	return m.c.Method("DeleteEvents").Call(ctx, scope, persistenceID, toSequenceNumber).Err(0)
+}
+func (m eventsStoreMock) ReplayEvents(ctx context.Context, scope persistence.Scope, persistenceID string, from, to, limit uint64) ([]*egopb.Event, error) {
+	r := m.c.Method("ReplayEvents").Call(ctx, scope, persistenceID, from, to, limit)
+	return mock.Value[[]*egopb.Event](r, 0), r.Err(1)
+}
+func (m eventsStoreMock) GetLatestEvent(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Event, error) {
+	r := m.c.Method("GetLatestEvent").Call(ctx, scope, persistenceID)
+	return mock.Value[*egopb.Event](r, 0), r.Err(1)
+}
+func (m eventsStoreMock) PersistenceIDs(ctx context.Context, scope persistence.Scope, pageSize uint64, pageToken string) ([]string, string, error) {
+	r := m.c.Method("PersistenceIDs").Call(ctx, scope, pageSize, pageToken)
+	return mock.Value[[]string](r, 0), mock.Value[string](r, 1), r.Err(2)
+}
+func (m eventsStoreMock) GetShardEvents(ctx context.Context, shardNumber uint64, offset int64, limit uint64) ([]*egopb.Event, int64, error) {
+	r := m.c.Method("GetShardEvents").Call(ctx, shardNumber, offset, limit)
+	return mock.Value[[]*egopb.Event](r, 0), mock.Value[int64](r, 1), r.Err(2)
+}
+func (m eventsStoreMock) ShardOffsets(ctx context.Context) (map[uint64]int64, error) {
+	r := m.c.Method("ShardOffsets").Call(ctx)
+	return mock.Value[map[uint64]int64](r, 0), r.Err(1)
+}
+
+type snapshotStoreMock struct{ c *mock.Controller }
+
+func (m snapshotStoreMock) Connect(ctx context.Context) error {
+	return m.c.Method("Connect").Call(ctx).Err(0)
+}
+func (m snapshotStoreMock) Disconnect(ctx context.Context) error {
+	return m.c.Method("Disconnect").Call(ctx).Err(0)
+}
+func (m snapshotStoreMock) Ping(ctx context.Context) error {
+	return m.c.Method("Ping").Call(ctx).Err(0)
+}
+func (m snapshotStoreMock) WriteSnapshot(ctx context.Context, scope persistence.Scope, snapshot *egopb.Snapshot) error {
+	return m.c.Method("WriteSnapshot").Call(ctx, scope, snapshot).Err(0)
+}
+func (m snapshotStoreMock) GetLatestSnapshot(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.Snapshot, error) {
+	r := m.c.Method("GetLatestSnapshot").Call(ctx, scope, persistenceID)
+	return mock.Value[*egopb.Snapshot](r, 0), r.Err(1)
+}
+func (m snapshotStoreMock) DeleteSnapshots(ctx context.Context, scope persistence.Scope, persistenceID string, toSequenceNumber uint64) error {
+	return m.c.Method("DeleteSnapshots").Call(ctx, scope, persistenceID, toSequenceNumber).Err(0)
+}
+
+type stateStoreMock struct{ c *mock.Controller }
+
+func (m stateStoreMock) Connect(ctx context.Context) error {
+	return m.c.Method("Connect").Call(ctx).Err(0)
+}
+func (m stateStoreMock) Disconnect(ctx context.Context) error {
+	return m.c.Method("Disconnect").Call(ctx).Err(0)
+}
+func (m stateStoreMock) Ping(ctx context.Context) error { return m.c.Method("Ping").Call(ctx).Err(0) }
+func (m stateStoreMock) WriteState(ctx context.Context, scope persistence.Scope, state *egopb.DurableState, precondition persistence.WritePrecondition) error {
+	return m.c.Method("WriteState").Call(ctx, scope, state, precondition).Err(0)
+}
+func (m stateStoreMock) GetLatestState(ctx context.Context, scope persistence.Scope, persistenceID string) (*egopb.DurableState, error) {
+	r := m.c.Method("GetLatestState").Call(ctx, scope, persistenceID)
+	return mock.Value[*egopb.DurableState](r, 0), r.Err(1)
+}
 
 func TestNewTenantAdopterRejectsAnInvalidSourceScope(t *testing.T) {
 	specs.Describe(t, "NewTenantAdopter rejects the zero-value source scope when the adopter is built", func(s *specs.Spec) {
 		s.It("returns ErrInvalidScope and no adopter, without touching any store", func(ctx *specs.Context) {
+			// No expectation is declared, so any call on a store fails the case.
+			ctrl := mock.NewController(ctx)
 			adopter, err := NewTenantAdopter(fixedAssignment(nil),
-				WithEventsStore(untouchableEventsStore{}),
-				WithSnapshotStore(untouchableSnapshotStore{}),
-				WithStateStore(untouchableStateStore{}),
+				WithEventsStore(eventsStoreMock{ctrl}),
+				WithSnapshotStore(snapshotStoreMock{ctrl}),
+				WithStateStore(stateStoreMock{ctrl}),
 				WithPersistenceIDs("order-1"),
 				WithSourceScope(persistence.Scope{}),
 				WithWriteEnabled(), WithAdoptionFence(newTestFence()))
