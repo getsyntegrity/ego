@@ -12,6 +12,8 @@ After spec 1, the multi-node tests can be selected by name, but CI still runs th
 
 ## What changes
 
+> **Superseded in part by review round 2.** Items 2–4 below describe the first version. After review, `cluster` runs `-run '^TestCluster' ./...` over the whole root module, `race` runs `./...` with `-skip '^TestCluster'`, and both run on every pull request with Go changes (like the unit shards), not with the `inttest` triggers. See "Review follow-up (PR #287, round 2)" below.
+
 1. **The normal shards skip the cluster tests.** Each shard's `go test`/`gotestsum` command gets `-skip '^TestCluster'`. `.github/scripts/test-matrix.sh` builds `-run '^(TestA|TestB)$'` patterns for packages it splits, so the skip must compose with them: a split shard still skips the cluster tests, and every non-cluster test stays in exactly one shard.
 2. **A `cluster` job** runs `go test -count=1 -run '^TestCluster'` on the packages that contain cluster tests (`engine`, `compose/goakt`). `go test` reports `no tests to run` as a pass, so the job counts the `TestCluster*` pass events in the `-json` output and fails if there are none.
 3. **A `race` job** runs `go test -race -count=1 -skip '^TestCluster'` on `engine/...`, `internal/engine/...`, `internal/projectionrunner`, `compose/goakt/...`, `internal/extensions` and `migration`. The cluster tests are not run under the race detector for now.
@@ -161,7 +163,7 @@ What changed:
     | `TestCluster_AppTwoNodePlacesAndStopsCleanly` (`compose/goakt`) | 0.83 s |
 
     The five tests near 10 s are dominated by waiting for the node to join its single-member cluster. No test failed, and none was intermittent in this run.
-  - **Timeouts set from the measurement.** Both `go test` invocations took about 2 minutes, so `cluster` and `race` now use `timeout-minutes: 10` (previously 20 and 30) with `go test -timeout=8m` (previously 15m and 25m). That leaves about 4 times the measured time before either job is cut.
+  - **Timeouts set from the measurement.** Both `go test` invocations took about 2 minutes, so `cluster` and `race` now use `timeout-minutes: 10` (previously 20 and 30) with `go test -timeout=8m` (previously 15m and 25m). `go test -timeout` limits each test binary (one package) on its own, not the whole run; the real limit of each job is `timeout-minutes: 10`. The measured run most likely had a warm build cache. After a dependency bump (`go.sum` changes), `-race` recompiles goakt, otel, grpc and the rest from scratch, so the job will take noticeably longer than 107 s and the real margin is smaller than 4x. Watch the first run after a dependency bump, and raise `timeout-minutes` to 15 if it gets close.
 - Nit from review: the continuation line of the `test (min)` comment in `ci.yml` was at column 0. It is indented now.
 
 ## Next step
