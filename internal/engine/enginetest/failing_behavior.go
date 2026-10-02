@@ -28,8 +28,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
 )
 
 // ErrHandleEvent is the error FailingHandleEventBehavior.HandleEvent returns.

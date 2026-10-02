@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Canonical ego.cmd.* keys Carrier uses to carry Metadata's fields (D9).

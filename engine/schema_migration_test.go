@@ -32,7 +32,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 var errSchemaDown = errors.New("schema backend down")

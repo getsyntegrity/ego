@@ -29,8 +29,8 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // The publishers implement the contracts from port/publishing directly, with

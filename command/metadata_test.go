@@ -29,8 +29,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // mustOperationID, mustTenantContext and mustMetadata build fixtures through the spec: a failed

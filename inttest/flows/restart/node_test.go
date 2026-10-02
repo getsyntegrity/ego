@@ -30,8 +30,8 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/persistence/postgres"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/persistence/postgres"
 )
 
 // node is one running eGo process: an actor system, the engine plugged into it and the Postgres events store

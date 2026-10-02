@@ -27,8 +27,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/mock"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/offsetstore"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/offsetstore"
 )
 
 // OffsetStoreMock is an offsetstore.OffsetStore backed by a go-specs

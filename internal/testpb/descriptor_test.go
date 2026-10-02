@@ -30,7 +30,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
-	"github.com/getsyntegrity/ego/internal/testpb"
+	"github.com/getsyntegrity/urd/internal/testpb"
 )
 
 // See egopb/descriptor_test.go: go_package sits inside the serialized
@@ -47,7 +47,7 @@ func TestDescriptor_IsSoundAndCarriesTheModulePath(t *testing.T) {
 		s.It("carries the module go_package", func(ctx *specs.Context) {
 			opts, ok := fd.Options().(*descriptorpb.FileOptions)
 			ctx.Expect(ok).To(specs.BeTrue())
-			const want = "github.com/getsyntegrity/ego/internal/testpb;testpb"
+			const want = "github.com/getsyntegrity/urd/internal/testpb;testpb"
 			ctx.Expect(opts.GetGoPackage()).ToEqual(want)
 		})
 		s.It("declares messages", func(ctx *specs.Context) {

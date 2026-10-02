@@ -29,7 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/urd/encryption"
 )
 
 // KeyStore is an in-memory implementation of encryption.KeyStore for testing.

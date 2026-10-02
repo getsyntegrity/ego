@@ -23,8 +23,8 @@
 package engine
 
 import (
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/testkit"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // The testkit declares the behavior subsets it needs rather than importing ego,

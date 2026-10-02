@@ -31,7 +31,7 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // undeclared implements none of the optional interfaces.

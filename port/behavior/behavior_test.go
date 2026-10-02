@@ -30,8 +30,8 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/port/behavior"
 )
 
 // The types below implement only ID() and the domain methods: no

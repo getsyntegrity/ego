@@ -29,8 +29,8 @@ import (
 
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/extensions"
 )
 
 // StartProjection starts the named projection previously registered on the

@@ -27,7 +27,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // TestRelocationDisabledByDefault pins the default that #154 found

@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	rootModule  = "github.com/getsyntegrity/ego"
+	rootModule  = "github.com/getsyntegrity/urd"
 	adapterPath = rootModule + "/port/adapter"
 )
 

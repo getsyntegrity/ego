@@ -30,7 +30,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 
-	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/urd/encryption"
 )
 
 // testKeyStore is an in-memory key store for testing

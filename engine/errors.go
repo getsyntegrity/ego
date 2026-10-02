@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 var (

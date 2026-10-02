@@ -33,9 +33,9 @@ import (
 	"fmt"
 	"time"
 
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 const (

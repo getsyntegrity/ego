@@ -29,7 +29,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/port/runtime"
 )
 
 func TestErrUnsupportedWrapsStandardError(t *testing.T) {

@@ -395,7 +395,7 @@ func TestInstrumentationStaysRuntimeNeutral(t *testing.T) {
 
 			deps := strings.Fields(string(out))
 			// The guard first: an empty or truncated graph would prove nothing.
-			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/ego/internal/instrumentation"))
+			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/urd/internal/instrumentation"))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"a GoAkt package: internal/instrumentation must not depend on GoAkt",
 				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))

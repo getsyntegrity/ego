@@ -1,10 +1,10 @@
-module github.com/getsyntegrity/ego/publisher/websocket
+module github.com/getsyntegrity/urd/publisher/websocket
 
 go 1.26.0
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
 	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
@@ -30,4 +30,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego => ../../
+replace github.com/getsyntegrity/urd => ../../

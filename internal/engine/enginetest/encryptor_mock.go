@@ -27,7 +27,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/mock"
 
-	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/urd/encryption"
 )
 
 // EncryptorMock is an encryption.Encryptor backed by a go-specs

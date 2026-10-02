@@ -54,7 +54,7 @@ func hermeticGoEnv() []string {
 // rootModule and compositionRoot are the root module's path and the
 // composition root under it.
 const (
-	rootModule      = "github.com/getsyntegrity/ego"
+	rootModule      = "github.com/getsyntegrity/urd"
 	compositionRoot = rootModule + "/compose"
 	// enginePackage is the runtime engine package; the module root itself
 	// holds no Go files.
@@ -134,14 +134,14 @@ func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
 			rootDependency   = "adapter depends on the composition root: "
 		)
 		rows := []closureCase{
-			{"rejects the composition root", "github.com/getsyntegrity/ego/compose", rootDependency},
-			{"rejects a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt", rootDependency},
-			{"rejects a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle", rootDependency},
-			{"rejects the engine package", "github.com/getsyntegrity/ego/engine", runtimeRegressed},
+			{"rejects the composition root", "github.com/getsyntegrity/urd/compose", rootDependency},
+			{"rejects a package under the composition root", "github.com/getsyntegrity/urd/compose/goakt", rootDependency},
+			{"rejects a nested package under the composition root", "github.com/getsyntegrity/urd/compose/internal/lifecycle", rootDependency},
+			{"rejects the engine package", "github.com/getsyntegrity/urd/engine", runtimeRegressed},
 			{"rejects a GoAkt package", "github.com/tochemey/goakt/v4/actor", runtimeRegressed},
-			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer", ""},
-			{"allows the publishing port", "github.com/getsyntegrity/ego/port/publishing", ""},
-			{"allows the protobuf package", "github.com/getsyntegrity/ego/egopb", ""},
+			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/urd/composer", ""},
+			{"allows the publishing port", "github.com/getsyntegrity/urd/port/publishing", ""},
+			{"allows the protobuf package", "github.com/getsyntegrity/urd/egopb", ""},
 		}
 		specs.Table(s, rows, func(c closureCase) string { return c.name }, func(ctx *specs.Context, c closureCase) {
 			got := closureViolation(c.dep)

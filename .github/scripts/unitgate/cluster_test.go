@@ -73,7 +73,7 @@ func TestScanRequiresTestClusterNamesForMultiNodeTests(t *testing.T) {
 				src:  clusterHead + "func TestOne(t *testing.T) { _ = dynaport.Get(1) }\nfunc TestTwo(t *testing.T) { _ = " + startsCluster + " }\n",
 				want: []string{"TestOne: calls dynaport.Get" + misnamed, "TestTwo: calls goakt actor.WithCluster" + misnamed}},
 			{name: "reports the compose goakt WithCluster option too", path: "compose/goakt/a_test.go",
-				src:  "package x\nimport (\n\t\"testing\"\n\tegoakt \"github.com/getsyntegrity/ego/compose/goakt\"\n)\nfunc TestApp(t *testing.T) { _ = egoakt.WithCluster(nil) }\n",
+				src:  "package x\nimport (\n\t\"testing\"\n\tegoakt \"github.com/getsyntegrity/urd/compose/goakt\"\n)\nfunc TestApp(t *testing.T) { _ = egoakt.WithCluster(nil) }\n",
 				want: []string{"TestApp: calls compose/goakt.WithCluster" + misnamed}},
 
 			{name: "allows a TestCluster test that calls goakt.WithCluster", path: "engine/a_test.go",

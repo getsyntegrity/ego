@@ -27,7 +27,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/extensions"
 )
 
 // engRestErrText is err's message, or "" for nil, so a text expectation on a

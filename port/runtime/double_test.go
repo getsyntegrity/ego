@@ -34,10 +34,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/port/runtime"
 )
 
 // The contract is implementable without GoAkt and without package ego:

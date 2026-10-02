@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 	"github.com/getsyntegrity/go-specs/assert"
 	"github.com/getsyntegrity/go-specs/specs"
 )

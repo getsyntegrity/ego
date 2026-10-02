@@ -18,11 +18,11 @@ GO_TEST     = go test -v -run='^$$' -benchtime=$(BENCHTIME) -count=$(BENCHCOUNT)
 .PHONY: _use-local _use-released
 
 _use-local:
-	@go mod edit -replace github.com/getsyntegrity/ego=../
+	@go mod edit -replace github.com/getsyntegrity/urd=../
 	@go mod tidy
 
 _use-released:
-	@go mod edit -dropreplace github.com/getsyntegrity/ego 2>/dev/null || true
+	@go mod edit -dropreplace github.com/getsyntegrity/urd 2>/dev/null || true
 	@go mod tidy
 
 # ---------------------------------------------------------------------------

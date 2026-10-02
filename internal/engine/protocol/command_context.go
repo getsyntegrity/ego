@@ -25,7 +25,7 @@ package protocol
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/urd/command"
 )
 
 // commandCarrierContextKey is this package's own unexported context.Context

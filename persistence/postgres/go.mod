@@ -1,13 +1,13 @@
-module github.com/getsyntegrity/ego/persistence/postgres
+module github.com/getsyntegrity/urd/persistence/postgres
 
 go 1.26.0
 
 // Use the local ego module so this module always builds against the current source.
-replace github.com/getsyntegrity/ego => ../../
+replace github.com/getsyntegrity/urd => ../../
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
 	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 )
 

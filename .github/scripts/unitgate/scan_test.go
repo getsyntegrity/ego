@@ -62,14 +62,14 @@ import _ "github.com/stretchr/testify/mock"
 			{
 				name: "generated mocks outside mocks/ fail",
 				files: map[string]string{"internal/b/b_test.go": `package b
-import _ "github.com/getsyntegrity/ego/mocks/persistence"
+import _ "github.com/getsyntegrity/urd/mocks/persistence"
 `},
-				want: []Finding{{Path: "internal/b/b_test.go", Rule: RuleMocks, Detail: "imports github.com/getsyntegrity/ego/mocks/persistence"}},
+				want: []Finding{{Path: "internal/b/b_test.go", Rule: RuleMocks, Detail: "imports github.com/getsyntegrity/urd/mocks/persistence"}},
 			},
 			{
 				name: "the mocks package itself may import its siblings",
 				files: map[string]string{"mocks/persistence/a.go": `package persistence
-import _ "github.com/getsyntegrity/ego/mocks/ego"
+import _ "github.com/getsyntegrity/urd/mocks/ego"
 `},
 			},
 			{

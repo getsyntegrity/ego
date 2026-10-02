@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // ErrUnreachable is the only error that makes a check skip. A Target

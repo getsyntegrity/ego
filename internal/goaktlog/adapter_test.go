@@ -36,7 +36,7 @@ import (
 	"github.com/pablogore/kit-logger/pkg/logger/kitlogtest"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/internal/logging"
+	"github.com/getsyntegrity/urd/internal/logging"
 )
 
 // capturedRecord is one record that reached the kit-logger sink.

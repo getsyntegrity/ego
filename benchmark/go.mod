@@ -1,9 +1,9 @@
-module github.com/getsyntegrity/ego/benchmark
+module github.com/getsyntegrity/urd/benchmark
 
 go 1.26.0
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/tochemey/goakt/v4 v4.5.4
 )
@@ -69,7 +69,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/getsyntegrity/ego => ../
+replace github.com/getsyntegrity/urd => ../
 
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail

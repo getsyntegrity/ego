@@ -37,12 +37,12 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/compose"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/eventstream"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/compose"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/eventstream"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // ledger is a serializable event-sourced behavior: account's command and

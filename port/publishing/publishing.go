@@ -35,7 +35,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/urd/egopb"
 )
 
 // ErrPublisherNotStarted is returned when an operation is attempted on a publisher that has not been started.

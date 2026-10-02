@@ -27,8 +27,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/egopb"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/egopb"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // TestSagaStatusWireRoundTrip pins the runtimeport.SagaStatus <-> SagaLifecycleStatus

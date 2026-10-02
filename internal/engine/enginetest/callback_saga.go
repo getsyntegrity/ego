@@ -29,8 +29,8 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	samplepb "github.com/getsyntegrity/urd/internal/samplepb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // CallbackSagaBehavior is a configurable saga behavior for testing

@@ -33,10 +33,10 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	samplepb "github.com/getsyntegrity/urd/internal/samplepb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
 )
 
 // errSagaCompensationG4 is the failure a saga's compensation returns when the

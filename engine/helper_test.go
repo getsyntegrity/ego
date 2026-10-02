@@ -30,9 +30,9 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
 
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	samplepb "github.com/getsyntegrity/ego/internal/samplepb"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	samplepb "github.com/getsyntegrity/urd/internal/samplepb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine

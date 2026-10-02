@@ -28,7 +28,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // concurrentMigrators is how many migrators the concurrency check runs at the

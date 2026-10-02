@@ -31,9 +31,9 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/tenancy"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // TenancyProbeEventSourcedBehavior is a minimal event sourced behavior that

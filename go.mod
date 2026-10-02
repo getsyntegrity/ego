@@ -1,4 +1,4 @@
-module github.com/getsyntegrity/ego
+module github.com/getsyntegrity/urd
 
 go 1.26.0
 

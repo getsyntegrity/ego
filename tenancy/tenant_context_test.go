@@ -28,7 +28,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 func TestNewTenantContext_RejectsEmptyTenantID(t *testing.T) {

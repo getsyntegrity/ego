@@ -29,9 +29,9 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/persistence/conformance"
-	"github.com/getsyntegrity/ego/persistence/postgres"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/persistence/conformance"
+	"github.com/getsyntegrity/urd/persistence/postgres"
 )
 
 // postgresLatestSchemaVersion is the version of the newest file in persistence/postgres/schema. Adding a file

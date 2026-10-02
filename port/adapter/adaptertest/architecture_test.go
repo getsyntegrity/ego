@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	adapterPath     = "github.com/getsyntegrity/ego/port/adapter"
+	adapterPath     = "github.com/getsyntegrity/urd/port/adapter"
 	adaptertestPath = adapterPath + "/adaptertest"
 )
 

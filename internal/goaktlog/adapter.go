@@ -46,7 +46,7 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/internal/logging"
+	"github.com/getsyntegrity/urd/internal/logging"
 )
 
 // adapter presents a kit-logger Logger through GoAkt's log.Logger

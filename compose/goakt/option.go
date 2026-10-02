@@ -30,8 +30,8 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/compose"
-	"github.com/getsyntegrity/ego/engine"
+	"github.com/getsyntegrity/urd/compose"
+	"github.com/getsyntegrity/urd/engine"
 )
 
 var (

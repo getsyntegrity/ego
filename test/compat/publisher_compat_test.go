@@ -27,12 +27,12 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/publisher/kafka"
-	"github.com/getsyntegrity/ego/publisher/nats"
-	"github.com/getsyntegrity/ego/publisher/pulsar"
-	"github.com/getsyntegrity/ego/publisher/websocket"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/publisher/kafka"
+	"github.com/getsyntegrity/urd/publisher/nats"
+	"github.com/getsyntegrity/urd/publisher/pulsar"
+	"github.com/getsyntegrity/urd/publisher/websocket"
 )
 
 // The publishers still satisfy the compatibility aliases in package engine (ADR

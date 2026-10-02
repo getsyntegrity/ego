@@ -22,7 +22,7 @@
 
 package saga
 
-import behaviorport "github.com/getsyntegrity/ego/port/behavior"
+import behaviorport "github.com/getsyntegrity/urd/port/behavior"
 
 // actionIsNoop reports whether the action has no observable effect: nothing
 // to persist, no command to dispatch, no completion, no compensation. A saga

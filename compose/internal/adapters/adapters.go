@@ -35,7 +35,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // Owned is one adapter a composition root owns, with what it takes to name

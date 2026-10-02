@@ -33,15 +33,15 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Config captures every option an Engine needs.
@@ -562,7 +562,7 @@ func isNilResolver(r tenancy.TenantResolver) bool {
 // picking one.
 //
 // Known limitation: a Saga step dispatched through NoSender resets
-// context.Context (getsyntegrity/ego#54) and therefore loses any
+// context.Context (getsyntegrity/urd#54) and therefore loses any
 // TenantContext SendCommand attached upstream. In tenant-aware mode this
 // fails closed at the actor's pre-handler gate (T4-A) rather than silently
 // running without an identity, but a saga cannot currently complete a

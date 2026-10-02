@@ -27,7 +27,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // Compiles only if the types are identical (i.e. aliases).

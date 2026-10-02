@@ -25,7 +25,7 @@ package protocol
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // ExpectedRevisionFromContext extracts the ExpectedRevision metadata field

@@ -49,7 +49,7 @@ func hermeticGoEnv() []string {
 
 // modulePrefix is the root module's import path; every first-party package
 // starts with it.
-const modulePrefix = "github.com/getsyntegrity/ego"
+const modulePrefix = "github.com/getsyntegrity/urd"
 
 // allowedFirstParty is the closed set of first-party packages the
 // consumer's production build may contain besides itself: the two

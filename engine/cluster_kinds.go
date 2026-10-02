@@ -25,10 +25,10 @@ package engine
 import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/internal/engine/durablestate"
-	"github.com/getsyntegrity/ego/internal/engine/eventsource"
-	"github.com/getsyntegrity/ego/internal/engine/projection"
-	"github.com/getsyntegrity/ego/internal/engine/saga"
+	"github.com/getsyntegrity/urd/internal/engine/durablestate"
+	"github.com/getsyntegrity/urd/internal/engine/eventsource"
+	"github.com/getsyntegrity/urd/internal/engine/projection"
+	"github.com/getsyntegrity/urd/internal/engine/saga"
 )
 
 // The four actor types below are the cluster kinds of eGo. Each one stays

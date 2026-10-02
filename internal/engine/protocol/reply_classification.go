@@ -25,8 +25,8 @@ package protocol
 import (
 	"strings"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // resultBuilder builds the command.Result for an egopb.ErrorReply message

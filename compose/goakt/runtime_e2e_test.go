@@ -29,11 +29,11 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/compose"
-	egoakt "github.com/getsyntegrity/ego/compose/goakt"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/internal/runtimeconsumer"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/compose"
+	egoakt "github.com/getsyntegrity/urd/compose/goakt"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/internal/runtimeconsumer"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // TestRuntime_ConsumerDrivesTheAppEndToEnd is #147's end-to-end criterion
