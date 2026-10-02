@@ -74,7 +74,7 @@ replace github.com/getsyntegrity/urd => ../
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (
