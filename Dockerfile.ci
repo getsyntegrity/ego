@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.26
-# CI tooling image for ego. Mirrors the toolchain previously declared in the
+# CI tooling image for Urd. Mirrors the toolchain previously declared in the
 # Earthfile so that Makefile targets (docker-lint, docker-test,
 # docker-protogen) can run in a hermetic container.
 

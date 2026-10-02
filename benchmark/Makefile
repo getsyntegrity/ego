@@ -1,6 +1,6 @@
 # Benchmark Makefile
 #
-# By default benchmarks run against the released ego module.
+# By default benchmarks run against the released urd module.
 # Use `make <target>-local` to benchmark against your local working copy.
 #
 # Examples:
@@ -193,7 +193,7 @@ bench-durable-multi-local: _use-local
 
 ## help: show available targets
 help:
-	@echo "Available targets (append -local to run against local ego module):"
+	@echo "Available targets (append -local to run against local urd module):"
 	@echo ""
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | sort
 	@echo ""
