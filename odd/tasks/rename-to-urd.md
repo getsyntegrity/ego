@@ -45,7 +45,7 @@ the root module in T4.
   `buf.gen.example.yaml`; regenerate with `make docker-protogen`;
   `go mod tidy` in every module. Check: `go build ./... && go vet ./...` in
   every module. Route: delegated (writer trigger: hundreds of files).
-- [ ] T2 — Approved group-E changes: E7 publisher IDs, E9 env vars with
+- [x] T2 — Approved group-E changes: E7 publisher IDs, E9 env vars with
   fallback, E10 free-text error messages, local `ego*` identifiers and
   `Package ego` doc comments. Check: unit tests per module. Route: delegated.
 - [ ] T3 — Docs, CI and branding: README (title, tagline, install, "Formerly
@@ -65,3 +65,5 @@ the root module in T4.
 Base: `origin/develop` at `afaafb3`. Branch: `refactor/rename-to-urd`.
 
 - T1 done (dfe3462 module path, ce18478 proto go_package + regen). `make docker-protogen` ran; pb.go changed only the go_package string (same length, no version-header changes). Per module `go build ./... && go vet ./...` clean (10 modules); root `go test ./...` 39 packages ok, none failing. Also fixed `.github/scripts/count-tests.sh`. Leftover `getsyntegrity/ego` only in `.github/ISSUE_TEMPLATE/*.yml` (URLs, T3).
+- T2 done (5c4a26b publisher/client IDs, 3659bcb URD_* env vars with EGO_* fallback, 365a38b `urd:` error messages, f8f0e79 identifiers and doc comments, plus a final one-line comment fix in the docs commit). RED/GREEN: new `publisher/*/id_test.go` failed with `"ego-kafka"`, `"ego-nats"`, `"ego-pulsar"`, `"ego-websocket"`, `"ego-kafka-publisher"` and passed after the change; `engine/telemetry_dump_env_test.go` failed to compile (helper missing) then passed; `port/runtime/errors_test.go` expectations failed on `eGo:` then passed. Per-module build/vet clean; `go test ./...` passes in root, 4 publishers, persistence/postgres, test/compat, benchmark, inttest; `example` has no tests. The only env var with a code reader was `EGO_TELEMETRY_CONTRACT_DUMP`; no workflow or Makefile sets any `EGO_*` variable.
+- Release-note deprecations: env var `EGO_TELEMETRY_CONTRACT_DUMP` (test-only) now `URD_TELEMETRY_CONTRACT_DUMP`, old name still read; publisher `ID()` values and Kafka client ID now `urd-*`; free-text error messages now start with `urd:` (and name `engine.WithProjection` / `engine.WithTenant` / `engine.WithEntityFamilies`); `ErrMissingRequiredExtensions` text says "urd extensions"; the `ego: concurrency conflict` grammar is unchanged.
