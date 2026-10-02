@@ -27,12 +27,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // valueTypeEventSourcedBehavior implements the old EventSourcedBehavior
@@ -74,21 +73,26 @@ func (v valueTypeEventSourcedBehavior) UnmarshalBinary([]byte) error { return ni
 // test with a short timeout (-timeout 90s) so either the panic or the
 // timeout ends the binary.
 func TestEngineEntityValueTypeBehaviorSingleNode(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine Entity Value Type Behavior Single Node", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	engine := newTestEngine(t, "ValueTypeBehavior", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "ValueTypeBehavior", store, WithLogger(DiscardLogger))
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, valueTypeEventSourcedBehavior{id: entityID}))
+			entityID := uuid.NewString()
+			sc.Expect(engine.Entity(ctx, valueTypeEventSourcedBehavior{id: entityID})).To(specs.BeNil())
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 42}, time.Minute)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, revision)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 42, acct.GetAccountBalance())
+			state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 42}, time.Minute)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(revision).To(specs.Equal(uint64(1)))
+			acct, ok := state.(*testpb.Account)
+			sc.Expect(ok).To(specs.BeTrue())
+			sc.Expect(acct.GetAccountBalance()).To(specs.Equal(float64(42)))
+		})
+	})
 }

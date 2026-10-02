@@ -27,8 +27,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/getsyntegrity/ego/compose"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/getsyntegrity/urd/compose"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // TestRuntime_NilBeforeStart pins design ego-runtime-001 §D6: before Start
@@ -36,69 +38,63 @@ import (
 // holds. Returning the atomic pointer directly would wrap a nil *engine.Engine
 // in a non-nil interface and fail this test.
 func TestRuntime_NilBeforeStart(t *testing.T) {
-	app := mustNew(t, newFixture(t, "runtime-nil-before-start").spec)
+	specs.Describe(t, "Runtime returns an untyped nil interface before Start", func(s *specs.Spec) {
+		s.It("compares equal to nil, not a non-nil interface wrapping a nil engine", func(ctx *specs.Context) {
+			app := mustNew(ctx, newFixture(ctx, "runtime-nil-before-start").spec)
 
-	var rt runtimeport.Runtime = app.Runtime()
-	if rt != nil {
-		t.Fatalf("Runtime() before Start = %#v, want an untyped nil interface", rt)
-	}
+			rt := app.Runtime()
+			// Compared as an interface on purpose: a typed-nil *engine.Engine inside
+			// the interface must fail here.
+			ctx.Expect(rt == nil).To(specs.BeTrue())
+		})
+	})
 }
 
 // TestRuntime_IsTheEngineAfterStartAndAfterStop: after Start the accessor
 // hands out the same engine as Engine(); after Stop it keeps returning that
 // stopped engine, which refuses work with ErrEngineNotStarted (§D6, §7 #24).
 func TestRuntime_IsTheEngineAfterStartAndAfterStop(t *testing.T) {
-	ctx := context.Background()
-	app := mustNew(t, newFixture(t, "runtime-after-start").spec)
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	specs.Describe(t, "Runtime after Start and Stop", func(s *specs.Spec) {
+		s.It("is the started engine after Start and the stopped engine after Stop", func(ctx *specs.Context) {
+			bg := context.Background()
+			app := mustNew(ctx, newFixture(ctx, "runtime-after-start").spec)
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
 
-	rt := app.Runtime()
-	if rt == nil {
-		t.Fatal("Runtime() after Start must not be nil")
-	}
-	engine := app.Engine()
-	if engine == nil || !engine.Started() || rt != runtimeport.Runtime(engine) {
-		t.Fatalf("Runtime() after Start = %#v, want the started engine Engine() returns (%p)", rt, engine)
-	}
+			rt := app.Runtime()
+			ctx.Expect(rt == nil).To(specs.BeFalse())
+			engine := app.Engine()
+			ctx.Expect(engine != nil && engine.Started() && rt == runtimeport.Runtime(engine)).To(specs.BeTrue())
 
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	after := app.Runtime()
-	if after == nil || after != runtimeport.Runtime(engine) {
-		t.Fatalf("Runtime() after Stop = %#v, want the stopped engine", after)
-	}
-	if _, err := after.EntityExists(ctx, "any"); !errors.Is(err, runtimeport.ErrEngineNotStarted) {
-		t.Fatalf("EntityExists after Stop = %v, want ErrEngineNotStarted", err)
-	}
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+			after := app.Runtime()
+			ctx.Expect(after != nil && after == runtimeport.Runtime(engine)).To(specs.BeTrue())
+			_, err := after.EntityExists(bg, "any")
+			ctx.Expect(err).To(specs.MatchError(runtimeport.ErrEngineNotStarted))
+		})
+	})
 }
 
 // TestRuntime_NilAfterFailedStart: a failed Start leaves the accessor nil
 // for good, like Engine() (§D6).
 func TestRuntime_NilAfterFailedStart(t *testing.T) {
-	ctx := context.Background()
-	app := mustNew(t, newFixture(t, "runtime-failed-start").spec)
-	injected := errors.New("injected failure")
-	app.hooks.afterStep = func(name string) error {
-		if name == StepStartEngine {
-			return injected
-		}
-		return nil
-	}
+	specs.Describe(t, "Runtime after a failed Start", func(s *specs.Spec) {
+		s.It("stays nil for good, like Engine()", func(ctx *specs.Context) {
+			bg := context.Background()
+			app := mustNew(ctx, newFixture(ctx, "runtime-failed-start").spec)
+			injected := errors.New("injected failure")
+			app.hooks.afterStep = func(name string) error {
+				if name == StepStartEngine {
+					return injected
+				}
+				return nil
+			}
 
-	var se *compose.StartError
-	if err := app.Start(ctx); !errors.As(err, &se) || !errors.Is(se.Err, injected) {
-		t.Fatalf("Start = %v, want a StartError carrying the injected failure", err)
-	}
-	if rt := app.Runtime(); rt != nil {
-		t.Fatalf("Runtime() after a failed Start = %#v, want nil", rt)
-	}
-	if err := app.Start(ctx); !errors.Is(err, ErrNotStartable) {
-		t.Fatalf("second Start = %v, want ErrNotStartable", err)
-	}
-	if rt := app.Runtime(); rt != nil {
-		t.Fatalf("Runtime() after a refused Start = %#v, want nil for good", rt)
-	}
+			var se *compose.StartError
+			ctx.Expect(app.Start(bg)).To(specs.MatchErrorAs(&se))
+			ctx.Expect(se.Err).To(specs.MatchError(injected))
+			ctx.Expect(app.Runtime() == nil).To(specs.BeTrue())
+			ctx.Expect(app.Start(bg)).To(specs.MatchError(ErrNotStartable))
+			ctx.Expect(app.Runtime() == nil).To(specs.BeTrue())
+		})
+	})
 }

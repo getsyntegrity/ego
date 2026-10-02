@@ -31,12 +31,12 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/projection"
 )
 
 const (
@@ -385,7 +385,7 @@ func (x *EntityConfig) UnmarshalBinary(data []byte) error {
 }
 
 // errLocalOnly is returned by LocalBehavior's serialization methods.
-var errLocalOnly = errors.New("eGo: this behavior has no MarshalBinary/UnmarshalBinary; it runs on its local node only and cannot be serialized")
+var errLocalOnly = errors.New("urd: this behavior has no MarshalBinary/UnmarshalBinary; it runs on its local node only and cannot be serialized")
 
 // LocalBehavior carries a behavior that cannot be serialized to a spawn on
 // the local node, as a GoAkt spawn dependency. The engine hands one to GoAkt

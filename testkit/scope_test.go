@@ -34,82 +34,108 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
 )
+
+// The payload builders below fail the spec through ctx when a payload cannot
+// be built. They run inside each case, so every case owns its own records.
+
+func scopeGuardEvents(ctx *specs.Context) []*egopb.Event {
+	ctx.T.Helper()
+	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
+	ctx.Expect(err).To(specs.BeNil())
+	return []*egopb.Event{
+		{PersistenceId: "scope-guard", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
+	}
+}
+
+func scopeGuardState(ctx *specs.Context) *egopb.DurableState {
+	ctx.T.Helper()
+	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
+	ctx.Expect(err).To(specs.BeNil())
+	return &egopb.DurableState{PersistenceId: "scope-guard-ds", ResultingState: anyState, VersionNumber: 1}
+}
+
+func scopeGuardSnapshot(ctx *specs.Context) *egopb.Snapshot {
+	ctx.T.Helper()
+	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
+	ctx.Expect(err).To(specs.BeNil())
+	return &egopb.Snapshot{PersistenceId: "scope-guard-snap", SequenceNumber: 1, State: anyState}
+}
 
 // ---------------------------------------------------------------------------
 // EventStore: invalid scope rejection
 // ---------------------------------------------------------------------------
 
 func TestEventStore_InvalidScopeRejected(t *testing.T) {
-	ctx := context.TODO()
-	var invalid persistence.Scope
+	specs.Describe(t, "EventStore rejects the zero-value scope with ErrInvalidScope and leaves state untouched", func(s *specs.Spec) {
+		bg := context.TODO()
+		var invalid persistence.Scope
 
-	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	require.NoError(t, err)
-	events := []*egopb.Event{
-		{PersistenceId: "scope-guard", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-	}
+		s.It("WriteEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			err := store.WriteEvents(bg, invalid, events, persistence.Unconditional())
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
 
-	t.Run("WriteEvents", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		err := store.WriteEvents(ctx, invalid, events, persistence.Unconditional())
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
+			ids, _, listErr := store.PersistenceIDs(bg, persistence.Unscoped(), 10, "")
+			ctx.Expect(listErr).To(specs.BeNil())
+			ctx.Expect(ids).To(specs.BeEmpty())
+		})
 
-		ids, _, listErr := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, "")
-		require.NoError(t, listErr)
-		assert.Empty(t, ids, "an invalid scope must not have written anything")
-	})
+		s.It("DeleteEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("DeleteEvents", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
+			err := store.DeleteEvents(bg, invalid, "scope-guard", 1)
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
 
-		err := store.DeleteEvents(ctx, invalid, "scope-guard", 1)
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
+			replayed, replayErr := store.ReplayEvents(bg, persistence.Unscoped(), "scope-guard", 1, 1, 10)
+			ctx.Expect(replayErr).To(specs.BeNil())
+			ctx.Expect(replayed).To(specs.HaveLen(1))
+		})
 
-		replayed, replayErr := store.ReplayEvents(ctx, persistence.Unscoped(), "scope-guard", 1, 1, 10)
-		require.NoError(t, replayErr)
-		assert.Len(t, replayed, 1, "the invalid-scope delete must not have touched the unscoped record")
-	})
+		s.It("ReplayEvents", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("ReplayEvents", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
+			got, err := store.ReplayEvents(bg, invalid, "scope-guard", 1, 1, 10)
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			ctx.Expect(got).To(specs.BeNil())
+		})
 
-		got, err := store.ReplayEvents(ctx, invalid, "scope-guard", 1, 1, 10)
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-		assert.Nil(t, got)
-	})
+		s.It("GetLatestEvent", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("GetLatestEvent", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
+			got, err := store.GetLatestEvent(bg, invalid, "scope-guard")
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			ctx.Expect(got).To(specs.BeNil())
+		})
 
-		got, err := store.GetLatestEvent(ctx, invalid, "scope-guard")
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-		assert.Nil(t, got)
-	})
+		s.It("PersistenceIDs", func(ctx *specs.Context) {
+			events := scopeGuardEvents(ctx)
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("PersistenceIDs", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
-
-		ids, token, err := store.PersistenceIDs(ctx, invalid, 10, "")
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-		assert.Empty(t, ids)
-		assert.Empty(t, token)
+			ids, token, err := store.PersistenceIDs(bg, invalid, 10, "")
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			ctx.Expect(ids).To(specs.BeEmpty())
+			ctx.Expect(token).To(specs.BeEmpty())
+		})
 	})
 }
 
@@ -118,32 +144,32 @@ func TestEventStore_InvalidScopeRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDurableStore_InvalidScopeRejected(t *testing.T) {
-	ctx := context.TODO()
-	var invalid persistence.Scope
+	specs.Describe(t, "DurableStore rejects the zero-value scope with ErrInvalidScope and leaves state untouched", func(s *specs.Spec) {
+		bg := context.TODO()
+		var invalid persistence.Scope
 
-	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-	require.NoError(t, err)
-	state := &egopb.DurableState{PersistenceId: "scope-guard-ds", ResultingState: anyState, VersionNumber: 1}
+		s.It("WriteState", func(ctx *specs.Context) {
+			state := scopeGuardState(ctx)
+			store := NewDurableStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			err := store.WriteState(bg, invalid, state, persistence.Unconditional())
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
 
-	t.Run("WriteState", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		err := store.WriteState(ctx, invalid, state, persistence.Unconditional())
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
+			got, getErr := store.GetLatestState(bg, persistence.Unscoped(), "scope-guard-ds")
+			ctx.Expect(getErr).To(specs.BeNil())
+			ctx.Expect(got).To(specs.BeNil())
+		})
 
-		got, getErr := store.GetLatestState(ctx, persistence.Unscoped(), "scope-guard-ds")
-		require.NoError(t, getErr)
-		assert.Nil(t, got, "an invalid scope must not have written anything")
-	})
+		s.It("GetLatestState", func(ctx *specs.Context) {
+			state := scopeGuardState(ctx)
+			store := NewDurableStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteState(bg, persistence.Unscoped(), state, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("GetLatestState", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), state, persistence.Unconditional()))
-
-		got, err := store.GetLatestState(ctx, invalid, "scope-guard-ds")
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-		assert.Nil(t, got)
+			got, err := store.GetLatestState(bg, invalid, "scope-guard-ds")
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			ctx.Expect(got).To(specs.BeNil())
+		})
 	})
 }
 
@@ -152,45 +178,46 @@ func TestDurableStore_InvalidScopeRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSnapshotStore_InvalidScopeRejected(t *testing.T) {
-	ctx := context.TODO()
-	var invalid persistence.Scope
+	specs.Describe(t, "SnapshotStore rejects the zero-value scope with ErrInvalidScope and leaves state untouched", func(s *specs.Spec) {
+		bg := context.TODO()
+		var invalid persistence.Scope
 
-	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-	require.NoError(t, err)
-	snapshot := &egopb.Snapshot{PersistenceId: "scope-guard-snap", SequenceNumber: 1, State: anyState}
+		s.It("WriteSnapshot", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
+			store := NewSnapshotStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			err := store.WriteSnapshot(bg, invalid, snapshot)
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
 
-	t.Run("WriteSnapshot", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Connect(ctx))
-		err := store.WriteSnapshot(ctx, invalid, snapshot)
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
+			got, getErr := store.GetLatestSnapshot(bg, persistence.Unscoped(), "scope-guard-snap")
+			ctx.Expect(getErr).To(specs.BeNil())
+			ctx.Expect(got).To(specs.BeNil())
+		})
 
-		got, getErr := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "scope-guard-snap")
-		require.NoError(t, getErr)
-		assert.Nil(t, got, "an invalid scope must not have written anything")
-	})
+		s.It("GetLatestSnapshot", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
+			store := NewSnapshotStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteSnapshot(bg, persistence.Unscoped(), snapshot)).To(specs.BeNil())
 
-	t.Run("GetLatestSnapshot", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
+			got, err := store.GetLatestSnapshot(bg, invalid, "scope-guard-snap")
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
+			ctx.Expect(got).To(specs.BeNil())
+		})
 
-		got, err := store.GetLatestSnapshot(ctx, invalid, "scope-guard-snap")
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-		assert.Nil(t, got)
-	})
+		s.It("DeleteSnapshots", func(ctx *specs.Context) {
+			snapshot := scopeGuardSnapshot(ctx)
+			store := NewSnapshotStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(store.WriteSnapshot(bg, persistence.Unscoped(), snapshot)).To(specs.BeNil())
 
-	t.Run("DeleteSnapshots", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshot))
+			err := store.DeleteSnapshots(bg, invalid, "scope-guard-snap", 1)
+			ctx.Expect(err).To(specs.MatchError(persistence.ErrInvalidScope))
 
-		err := store.DeleteSnapshots(ctx, invalid, "scope-guard-snap", 1)
-		require.ErrorIs(t, err, persistence.ErrInvalidScope)
-
-		got, getErr := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "scope-guard-snap")
-		require.NoError(t, getErr)
-		assert.NotNil(t, got, "the invalid-scope delete must not have touched the unscoped record")
+			got, getErr := store.GetLatestSnapshot(bg, persistence.Unscoped(), "scope-guard-snap")
+			ctx.Expect(getErr).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+		})
 	})
 }
 
@@ -205,34 +232,38 @@ func TestSnapshotStore_InvalidScopeRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEventStore_UnscopedDoesNotCollideWithTenantScope(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore keeps Unscoped and tenant scope records apart for the same persistence id", func(s *specs.Spec) {
+		s.It("a tenant can genesis-write an id already written unscoped, and both remain readable", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewEventsStore()
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
 
-	tenantA, err := persistence.NewTenantScope("tenant-a")
-	require.NoError(t, err)
+			tenantA, err := persistence.NewTenantScope("tenant-a")
+			ctx.Expect(err).To(specs.BeNil())
 
-	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	require.NoError(t, err)
+			anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
 
-	unscopedEvents := []*egopb.Event{
-		{PersistenceId: "shared-id", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-	}
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), unscopedEvents, persistence.Unconditional()))
+			unscopedEvents := []*egopb.Event{
+				{PersistenceId: "shared-id", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
+			}
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), unscopedEvents, persistence.Unconditional())).To(specs.BeNil())
 
-	// tenantA writing the SAME persistenceID with ExpectGenesis() must
-	// succeed, proving the precondition's persisted revision is scoped to
-	// (scope, persistenceID), not persistenceID alone.
-	tenantEvents := []*egopb.Event{
-		{PersistenceId: "shared-id", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-	}
-	require.NoError(t, store.WriteEvents(ctx, tenantA, tenantEvents, persistence.ExpectGenesis()))
+			// tenantA writing the SAME persistenceID with ExpectGenesis() must
+			// succeed, proving the precondition's persisted revision is scoped to
+			// (scope, persistenceID), not persistenceID alone.
+			tenantEvents := []*egopb.Event{
+				{PersistenceId: "shared-id", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
+			}
+			ctx.Expect(store.WriteEvents(bg, tenantA, tenantEvents, persistence.ExpectGenesis())).To(specs.BeNil())
 
-	unscopedLatest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "shared-id")
-	require.NoError(t, err)
-	require.NotNil(t, unscopedLatest)
+			unscopedLatest, err := store.GetLatestEvent(bg, persistence.Unscoped(), "shared-id")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(unscopedLatest).To(specs.Not(specs.BeNil()))
 
-	tenantLatest, err := store.GetLatestEvent(ctx, tenantA, "shared-id")
-	require.NoError(t, err)
-	require.NotNil(t, tenantLatest)
+			tenantLatest, err := store.GetLatestEvent(bg, tenantA, "shared-id")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(tenantLatest).To(specs.Not(specs.BeNil()))
+		})
+	})
 }

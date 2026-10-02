@@ -1,0 +1,61 @@
+# PR metadata. A separate workflow from the CI because it also runs when the
+# description is EDITED (the "edited" event), and that must not re-run the tests.
+# Required check: "pr-meta".
+name: pr-meta
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+concurrency:
+  group: pr-meta-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # Kubernetes style: the CHANGELOG note is written by the author in the PR.
+      - name: release-note block
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          if [ "$HEAD" = "develop" ] && [ "$BASE" = "main" ]; then
+            echo "Release PR: its notes come from the PRs it includes"; exit 0
+          fi
+          case ",$LABELS," in
+            *,skip-changelog,*|*,kind/deps,*) echo "Exempt by label ($LABELS)"; exit 0 ;;
+          esac
+          note=$(printf '%s\n' "$BODY" | tr -d '\r' | awk '/^```release-note/ { f = 1; next } f && /^```/ { exit } f')
+          if [ -z "$(printf '%s' "$note" | tr -d '[:space:]')" ]; then
+            echo "::error::Fill in the \`\`\`release-note block of the PR with the CHANGELOG note, or write NONE if there is no user-visible change."
+            exit 1
+          fi
+          echo "Release note:"; echo "$note"
+          { echo "### CHANGELOG note"; echo; echo "$note"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            OWNERS
+            .github/CODEOWNERS
+          sparse-checkout-cone-mode: false
+
+      - name: OWNERS and CODEOWNERS match
+        run: |
+          owners=$(awk '/^approvers:/ { f = 1; next } /^[a-z_]+:/ { f = 0 } f && /^[[:space:]]*- / { print $2 }' OWNERS | sort -u)
+          codeowners=$(grep -v '^[[:space:]]*#' .github/CODEOWNERS | grep -oE '@[A-Za-z0-9_.-]+' | tr -d '@' | sort -u)
+          if [ "$owners" != "$codeowners" ]; then
+            echo "::error::The approvers in OWNERS and the owners in CODEOWNERS do not match"
+            diff <(echo "$owners") <(echo "$codeowners") | sed 's/^</  only in OWNERS:/; s/^>/  only in CODEOWNERS:/' | grep only
+            exit 1
+          fi
+          echo "OK: $(echo $owners)"

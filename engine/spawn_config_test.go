@@ -26,61 +26,63 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 func TestSpawnOption(t *testing.T) {
-	t.Run("WithPassivateAfter with options", func(t *testing.T) {
-		config := newSpawnConfig(WithPassivateAfter(time.Second))
-		require.EqualValues(t, time.Second, config.passivateAfter)
-	})
-	t.Run("WithPassivateAfter changes only passivateAfter", func(t *testing.T) {
-		config := newSpawnConfig(WithPassivateAfter(time.Second))
-		require.Equal(t, withDefaults(spawnConfig{passivateAfter: time.Second}), config)
-	})
-	t.Run("WithRelocation", func(t *testing.T) {
-		config := newSpawnConfig(WithRelocation(true))
-		require.Equal(t, withDefaults(spawnConfig{toRelocate: true}), config)
-	})
-	t.Run("WithSupervisorDirective", func(t *testing.T) {
-		config := newSpawnConfig(WithSupervisorDirective(StopDirective))
-		require.Equal(t, &spawnConfig{supervisorDirective: StopDirective, entitiesPlacement: RoundRobin}, config)
-	})
-	t.Run("WithEntitiesPlacement", func(t *testing.T) {
-		config := newSpawnConfig(WithPlacement(LeastLoad))
-		require.Equal(t, &spawnConfig{supervisorDirective: RestartDirective, entitiesPlacement: LeastLoad}, config)
-	})
-	t.Run("WithSnapshotInterval", func(t *testing.T) {
-		config := newSpawnConfig(WithSnapshotInterval(10))
-		require.Equal(t, withDefaults(spawnConfig{snapshotInterval: 10}), config)
-	})
-	t.Run("WithSnapshotInterval zero is default", func(t *testing.T) {
-		config := newSpawnConfig()
-		require.EqualValues(t, 0, config.snapshotInterval)
-	})
-	t.Run("WithRetentionPolicy", func(t *testing.T) {
-		policy := RetentionPolicy{
-			DeleteEventsOnSnapshot:    true,
-			DeleteSnapshotsOnSnapshot: true,
-			EventsRetentionCount:      100,
-		}
-		config := newSpawnConfig(WithRetentionPolicy(policy))
-		require.NotNil(t, config.retentionPolicy)
-		require.True(t, config.retentionPolicy.DeleteEventsOnSnapshot)
-		require.True(t, config.retentionPolicy.DeleteSnapshotsOnSnapshot)
-		require.EqualValues(t, 100, config.retentionPolicy.EventsRetentionCount)
-	})
-	t.Run("default config has no retention policy", func(t *testing.T) {
-		config := newSpawnConfig()
-		require.Nil(t, config.retentionPolicy)
-	})
-	t.Run("default config has RestartDirective", func(t *testing.T) {
-		config := newSpawnConfig()
-		require.Equal(t, RestartDirective, config.supervisorDirective)
-	})
-	t.Run("default config has RoundRobin placement", func(t *testing.T) {
-		config := newSpawnConfig()
-		require.Equal(t, RoundRobin, config.entitiesPlacement)
+	specs.Describe(t, "newSpawnConfig applies each spawn option and the defaults", func(s *specs.Spec) {
+		s.It("WithPassivateAfter with options", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithPassivateAfter(time.Second))
+			specs.ExpectT(ctx, config.passivateAfter).ToEqual(time.Second)
+		})
+		s.It("WithPassivateAfter changes only passivateAfter", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithPassivateAfter(time.Second))
+			ctx.Expect(config).ToEqual(withDefaults(spawnConfig{passivateAfter: time.Second}))
+		})
+		s.It("WithRelocation", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithRelocation(true))
+			ctx.Expect(config).ToEqual(withDefaults(spawnConfig{toRelocate: true}))
+		})
+		s.It("WithSupervisorDirective", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithSupervisorDirective(StopDirective))
+			ctx.Expect(config).ToEqual(&spawnConfig{supervisorDirective: StopDirective, entitiesPlacement: RoundRobin})
+		})
+		s.It("WithEntitiesPlacement", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithPlacement(LeastLoad))
+			ctx.Expect(config).ToEqual(&spawnConfig{supervisorDirective: RestartDirective, entitiesPlacement: LeastLoad})
+		})
+		s.It("WithSnapshotInterval", func(ctx *specs.Context) {
+			config := newSpawnConfig(WithSnapshotInterval(10))
+			ctx.Expect(config).ToEqual(withDefaults(spawnConfig{snapshotInterval: 10}))
+		})
+		s.It("WithSnapshotInterval zero is default", func(ctx *specs.Context) {
+			config := newSpawnConfig()
+			specs.ExpectT(ctx, config.snapshotInterval).ToEqual(0)
+		})
+		s.It("WithRetentionPolicy", func(ctx *specs.Context) {
+			policy := RetentionPolicy{
+				DeleteEventsOnSnapshot:    true,
+				DeleteSnapshotsOnSnapshot: true,
+				EventsRetentionCount:      100,
+			}
+			config := newSpawnConfig(WithRetentionPolicy(policy))
+			ctx.Expect(config.retentionPolicy != nil).To(specs.BeTrue())
+			ctx.Expect(config.retentionPolicy.DeleteEventsOnSnapshot).To(specs.BeTrue())
+			ctx.Expect(config.retentionPolicy.DeleteSnapshotsOnSnapshot).To(specs.BeTrue())
+			specs.ExpectT(ctx, config.retentionPolicy.EventsRetentionCount).ToEqual(100)
+		})
+		s.It("default config has no retention policy", func(ctx *specs.Context) {
+			config := newSpawnConfig()
+			ctx.Expect(config.retentionPolicy == nil).To(specs.BeTrue())
+		})
+		s.It("default config has RestartDirective", func(ctx *specs.Context) {
+			config := newSpawnConfig()
+			ctx.Expect(config.supervisorDirective).ToEqual(RestartDirective)
+		})
+		s.It("default config has RoundRobin placement", func(ctx *specs.Context) {
+			config := newSpawnConfig()
+			ctx.Expect(config.entitiesPlacement).ToEqual(RoundRobin)
+		})
 	})
 }
 

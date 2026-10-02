@@ -29,10 +29,10 @@ import (
 
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // persistEventsRequest is sent from the entity actor to the events writer, through askEventsWriter, to

@@ -31,11 +31,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // persistSnapshotRequest is sent from the Actor to the
@@ -153,7 +153,7 @@ func (a *snapshotsWriterActor) handlePersistSnapshot(ctx *goakt.ReceiveContext, 
 		snapshot = encrypted
 	}
 
-	if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
+	if err := retryWithBackoff(ctx.Context(), defaultBackoff(), defaultMaxRetries, func() error {
 		return a.snapshotStore.WriteSnapshot(ctx.Context(), req.scope, snapshot)
 	}); err != nil {
 		a.logger.ErrorContext(ctx.Context(), "failed to persist snapshot",

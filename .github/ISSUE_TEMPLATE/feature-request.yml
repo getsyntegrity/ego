@@ -1,0 +1,54 @@
+name: Feature or API change
+description: Propose something new or a change to Urd's public API
+labels: ["kind/feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        In a library, every API change is paid for by all the services that use it.
+        Describe the **problem** first; we discuss the solution here before writing code.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem do you want to solve?
+      description: The concrete use case, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API
+      description: Signature of the new or modified functions or types, and a usage example.
+      render: go
+      placeholder: |
+        // New
+        func WithTimeout(d time.Duration) Option
+
+        // Usage
+        c := engine.New(engine.WithTimeout(5 * time.Second))
+
+  - type: dropdown
+    id: compat
+    attributes:
+      label: Does it break compatibility?
+      description: "If it does, it requires a major (a new vN in go.mod) and all consumers have to migrate."
+      options:
+        - "No: it only adds API"
+        - "Yes: it changes or removes existing API (major)"
+        - "I don't know"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Can it be solved without changing Urd? Why is that not enough?
+
+  - type: input
+    id: consumers
+    attributes:
+      label: Interested services
+      placeholder: my-service, ...

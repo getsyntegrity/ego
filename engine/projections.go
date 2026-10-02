@@ -29,8 +29,8 @@ import (
 
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/extensions"
 )
 
 // StartProjection starts the named projection previously registered on the
@@ -42,7 +42,7 @@ import (
 // position across restarts.
 //
 // Key behavior:
-//   - Projections once created, will persist for the entire lifespan of the running eGo system.
+//   - Projections once created, will persist for the entire lifespan of the running Urd system.
 //   - In cluster mode, the projection runs as a singleton on the oldest node. If that node
 //     leaves the cluster, the singleton is automatically restarted on the new oldest node.
 //   - In standalone (non-cluster) mode, the projection runs as a regular long-lived actor.
@@ -222,7 +222,7 @@ func (engine *Engine) RebuildProjection(ctx context.Context, name string, from t
 // Implementation overview:
 //  1. Enumerate every shard known to the events store.
 //  2. For each shard, read the projection's committed offset from the offset
-//     store. In ego, this offset is stored as the timestamp (in milliseconds)
+//     store. In Urd, this offset is stored as the timestamp (in milliseconds)
 //     of the last event processed by the projection for that shard.
 //  3. Determine the timestamp of the newest event currently persisted in the
 //     shard.

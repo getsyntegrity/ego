@@ -25,8 +25,8 @@ package engine
 import (
 	"time"
 
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	"github.com/getsyntegrity/ego/tenancy"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine
@@ -83,7 +83,7 @@ type spawnConfig struct {
 }
 
 // Keys of the write-side spawn settings. They are unexported types of package
-// ego, so only the GoAkt adapter can name them: these settings travel through
+// engine, so only the GoAkt adapter can name them: these settings travel through
 // runtimeport.WithAdapterSetting and every other runtime ignores them. Whether
 // they belong in the runtime contract is #12's decision
 // (openspec/changes/ego-runtime-001/design.md §D3).
@@ -96,7 +96,7 @@ type (
 
 // newSpawnConfig resolves opts with runtimeport.ResolveSpawnOptions and builds
 // the GoAkt adapter's private spawnConfig from the result: the five neutral
-// settings from its getters, the four write-side settings from ego's adapter
+// settings from its getters, the four write-side settings from the engine's adapter
 // settings. A nil option is skipped.
 func newSpawnConfig(opts ...SpawnOption) *spawnConfig {
 	settings := runtimeport.ResolveSpawnOptions(opts...)

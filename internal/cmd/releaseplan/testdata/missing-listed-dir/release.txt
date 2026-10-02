@@ -1,3 +1,0 @@
-# "ghost" has no go.mod: releasedSet must refuse it.
-.
-ghost

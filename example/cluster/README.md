@@ -1,6 +1,6 @@
-# eGo Cluster Example
+# Urd Cluster Example
 
-A production-ready example that runs a 3-node eGo cluster on Kubernetes using [Kind](https://kind.sigs.k8s.io/). It demonstrates event sourcing, CQRS with a projection read side, Kubernetes-native peer discovery, PostgreSQL persistence, and full observability with OpenTelemetry, Jaeger, Prometheus, and Grafana.
+A production-ready example that runs a 3-node Urd cluster on Kubernetes using [Kind](https://kind.sigs.k8s.io/). It demonstrates event sourcing, CQRS with a projection read side, Kubernetes-native peer discovery, PostgreSQL persistence, and full observability with OpenTelemetry, Jaeger, Prometheus, and Grafana.
 
 ## What This Example Shows
 
@@ -18,7 +18,7 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
 ```text
                           ┌──────────────────────┐
                           │     HTTP Client      │
-                          │  (curl / make test)  │
+                          │  (curl)              │
                           └──────────┬───────────┘
                                      │
                           ┌──────────▼───────────┐
@@ -30,10 +30,10 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
               ┌──────────────────────┼──────────────────────┐
               │                      │                      │
      ┌────────▼────────┐   ┌────────▼────────┐   ┌────────▼────────┐
-     │  ego-cluster-0  │   │  ego-cluster-1  │   │  ego-cluster-2  │
+     │  urd-cluster-0  │   │  urd-cluster-1  │   │  urd-cluster-2  │
      │  (oldest node)  │   │                 │   │                 │
      │                 │   │                 │   │                 │
-     │  eGo Engine     │   │  eGo Engine     │   │  eGo Engine     │
+     │  Urd Engine     │   │  Urd Engine     │   │  Urd Engine     │
      │  HTTP API :8080 │   │  HTTP API :8080 │   │  HTTP API :8080 │
      │  ┌────────────┐ │   │                 │   │                 │
      │  │ Projection │ │   │  (no projection │   │  (no projection │
@@ -68,7 +68,7 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
               └─────────────────────────────────────────┘
 
 Projection singleton: In cluster mode the projection runs on exactly ONE
-node — the oldest (ego-cluster-0). If that node leaves the cluster, the
+node — the oldest (urd-cluster-0). If that node leaves the cluster, the
 projection automatically migrates to the new oldest node. This prevents
 duplicate event processing across pods.
 ```
@@ -93,12 +93,11 @@ make all
 
 This will:
 
-1. Create a Kind cluster named `ego-cluster` with ingress port mappings
+1. Create a Kind cluster named `urd-cluster` with ingress port mappings
 2. Build the Docker image and load it into Kind
 3. Install NGINX Ingress Controller for load balancing
 4. Deploy PostgreSQL, the observability stack (OTel Collector, Jaeger, Prometheus, Grafana), RBAC, and the 3-replica app with an Ingress
 5. Wait for all pods and the ingress to become ready
-6. Run integration tests via `http://localhost` (load-balanced across pods)
 
 After `make all` completes you can explore the cluster further:
 
@@ -112,7 +111,7 @@ make dashboard   # Kubernetes dashboard https://localhost:8443
 # Load & inspect
 make load-test   # create 1000 accounts (sequential) and report throughput/pod distribution
 make db          # snapshot PostgreSQL tables (events, offsets, balances) — no psql needed
-make status      # show all Kubernetes resources in the ego-example namespace
+make status      # show all Kubernetes resources in the urd-example namespace
 make logs        # tail logs from all app pods
 make reset       # truncate all tables for a clean re-run (no teardown needed)
 
@@ -145,10 +144,10 @@ make deploy
 This applies the manifests in order:
 
 - NGINX Ingress Controller — installed from the official Kind-compatible manifest
-- `k8s/namespace.yaml` — creates the `ego-example` namespace
+- `k8s/namespace.yaml` — creates the `urd-example` namespace
 - `k8s/postgres.yaml` — deploys PostgreSQL with init SQL (events, offsets, and account_balances tables)
 - `k8s/rbac.yaml` — creates ServiceAccount, Role, and RoleBinding for pod discovery
-- `k8s/grafana-dashboard.yaml` — pre-built Grafana dashboard for eGo metrics
+- `k8s/grafana-dashboard.yaml` — pre-built Grafana dashboard for Urd metrics
 - `k8s/observability.yaml` — OTel Collector, Jaeger, Prometheus, and Grafana
 - `k8s/app.yaml` — 3-replica StatefulSet + headless Service (gossip) + ClusterIP Service (HTTP) + Ingress
 
@@ -158,23 +157,11 @@ This applies the manifests in order:
 make wait
 ```
 
-### 5. Run the integration tests
+This example has no automated test of its own. Integration tests live in the `inttest` module, which starts
+its own containers with Testcontainers (see [Integration tests](../../docs/ci.md#integration-tests)); the
+flow that restarts the engine on a Postgres events store is `inttest/flows/restart`.
 
-```bash
-make test
-```
-
-The test hits `http://localhost` through the NGINX Ingress (requests are round-robin distributed across pods):
-
-1. Health check
-2. Creates an account with balance **1000**
-3. Sends **30 credit requests** of 10 each (load-balanced across pods)
-4. Sends **10 debit requests** of 5 each (load-balanced across pods)
-5. Waits for the projection to catch up
-6. Queries the projection read table and verifies the balance is **1250** (1000 + 30x10 - 10x5)
-7. Sends 30 health checks and collects the `X-Served-By` response header to **verify requests hit multiple pods**
-
-### 6. Run the load test (optional)
+### 5. Run the load test (optional)
 
 ```bash
 make load-test
@@ -186,7 +173,7 @@ Creates **1000 accounts** sequentially via NGINX Ingress, distributed round-robi
 - Total duration and throughput (~accounts/s)
 - Pod distribution via `X-Served-By` headers (shows how load was spread across pods)
 
-### 7. Inspect the database (optional)
+### 6. Inspect the database (optional)
 
 ```bash
 make db
@@ -212,7 +199,7 @@ make grafana
 
 Opens Grafana at [http://localhost:3000](http://localhost:3000) (login: `admin` / `admin`).
 
-The pre-built **eGo Cluster** dashboard is automatically provisioned and includes:
+The pre-built **Urd Cluster** dashboard is automatically provisioned and includes:
 
 | Panel | Description |
 | --- | --- |
@@ -227,7 +214,7 @@ The pre-built **eGo Cluster** dashboard is automatically provisioned and include
 | Projection Lag (ms) | How far behind each projection shard is |
 | Projection Events Behind | Approximate unprocessed event count per shard |
 
-Direct link: [http://localhost:3000/d/ego-cluster-dashboard](http://localhost:3000/d/ego-cluster-dashboard)
+Direct link: [http://localhost:3000/d/urd-cluster-dashboard](http://localhost:3000/d/urd-cluster-dashboard)
 
 ### Jaeger
 
@@ -235,7 +222,7 @@ Direct link: [http://localhost:3000/d/ego-cluster-dashboard](http://localhost:30
 make jaeger
 ```
 
-Opens Jaeger at [http://localhost:16686](http://localhost:16686). Select service `ego-cluster` to see traces for command processing, including:
+Opens Jaeger at [http://localhost:16686](http://localhost:16686). Select service `urd-cluster` to see traces for command processing, including:
 
 - Span name: `ego.command`
 - Attributes: `ego.persistence_id`, `ego.command_type`
@@ -248,7 +235,7 @@ make prometheus
 
 Opens Prometheus at [http://localhost:9090](http://localhost:9090). Available metrics:
 
-eGo defines OpenTelemetry instruments with dotted names; the OpenTelemetry Collector exposes them to Prometheus with underscores.
+Urd defines OpenTelemetry instruments with dotted names; the OpenTelemetry Collector exposes them to Prometheus with underscores.
 
 | Metric | Type | Description |
 | --- | --- | --- |
@@ -262,6 +249,8 @@ eGo defines OpenTelemetry instruments with dotted names; the OpenTelemetry Colle
 | `ego_projection_latest_offset` | Gauge | Current projection offset per shard |
 | `ego_projection_events_behind` | Gauge | Unprocessed events per shard |
 
+The instrument, span and attribute names keep their `ego` spelling after the rename to Urd, so existing dashboards and alerts keep working. See [`MIGRATION.md`](../../MIGRATION.md).
+
 ### Kubernetes Dashboard
 
 ```bash
@@ -274,12 +263,11 @@ Installs and opens the Kubernetes Dashboard. A token is printed to the terminal 
 
 | Target | Description |
 | --- | --- |
-| `make all` | Full flow: create cluster, build, deploy, wait, test |
+| `make all` | Full flow: create cluster, build, deploy, wait |
 | `make kind-create` | Create the Kind cluster with ingress port mappings |
 | `make docker-build` | Build the Docker image and load it into Kind |
 | `make deploy` | Apply all Kubernetes manifests |
 | `make wait` | Wait for StatefulSet rollout and ingress readiness |
-| `make test` | Run integration tests via ingress (balance check + pod spread) |
 | `make load-test` | Create 1000 accounts (sequential); report throughput + pod dist |
 | `make db` | Snapshot PostgreSQL tables (events, offsets, balances) in-cluster |
 | `make grafana` | Port-forward Grafana to localhost:3000 (admin / admin) |
@@ -287,7 +275,7 @@ Installs and opens the Kubernetes Dashboard. A token is printed to the terminal 
 | `make prometheus` | Port-forward Prometheus to localhost:9090 |
 | `make dashboard` | Install and open the Kubernetes dashboard at `https://localhost:8443` |
 | `make reset` | Truncate all tables for a clean re-run (no teardown needed) |
-| `make status` | Show all Kubernetes resources in the ego-example namespace |
+| `make status` | Show all Kubernetes resources in the urd-example namespace |
 | `make logs` | Tail logs from all app pods |
 | `make teardown` | Delete the Kind cluster and all resources |
 | `make clean` | Alias for `teardown` |
@@ -313,21 +301,20 @@ example/cluster/
 ├── main.go                  # Engine setup, HTTP API, graceful shutdown
 ├── behavior.go              # AccountBehavior (event-sourced entity)
 ├── discovery.go             # Kubernetes cluster discovery provider
-├── stores.go                # PostgreSQL EventsStore and OffsetStore
 ├── projection.go            # Projection handler (materializes account balances)
 ├── telemetry.go             # OpenTelemetry setup (OTLP/gRPC exporters)
 ├── Dockerfile               # Multi-stage build (golang → distroless)
 ├── Makefile                 # All build, deploy, and test targets
 ├── kind-config.yaml         # Kind cluster config with ingress port mappings
-├── go.mod                   # Separate module (isolates k8s/pgx/otel dependencies)
+├── go.mod                   # Separate module (isolates k8s/pgx/otel dependencies); the Postgres stores live in ../../persistence/postgres
 ├── go.sum
 ├── README.md
 └── k8s/
-    ├── namespace.yaml       # ego-example namespace
+    ├── namespace.yaml       # urd-example namespace
     ├── postgres.yaml        # PostgreSQL StatefulSet + init SQL
     ├── rbac.yaml            # ServiceAccount + Role + RoleBinding
     ├── observability.yaml   # OTel Collector, Jaeger, Prometheus, Grafana
-    ├── grafana-dashboard.yaml # Pre-built Grafana dashboard for eGo metrics
+    ├── grafana-dashboard.yaml # Pre-built Grafana dashboard for Urd metrics
     └── app.yaml             # 3-replica StatefulSet + headless Service
 ```
 
@@ -335,9 +322,30 @@ example/cluster/
 
 All HTTP requests go through the **NGINX Ingress Controller**, which distributes them across the 3 app pods using round-robin. After `make all`, the API is accessible at `http://localhost` — no port-forwarding needed.
 
-The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so that host port 80 maps into the cluster's ingress controller node. The Ingress resource in `k8s/app.yaml` routes all paths (`/`) to the `ego-cluster` ClusterIP service.
+The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so that host port 80 maps into the cluster's ingress controller node. The Ingress resource in `k8s/app.yaml` routes all paths (`/`) to the `urd-cluster` ClusterIP service.
 
-A separate headless service (`ego-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
+A separate headless service (`urd-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
+
+## Schema migrations
+
+The tables of this example belong to the `persistence/postgres` module, which
+versions them: five SQL files, an `ego_schema_migrations` table that records which
+ones a database has, and a Postgres advisory lock so that several nodes can
+start at once. An engine opts in with `engine.WithSchemaMigration()`; the
+stores are connected first, and `Engine.Start` then migrates them before the
+engine accepts a command. See
+[`persistence/postgres/README.md`](../../persistence/postgres/README.md).
+
+The Kubernetes manifest in `k8s/postgres.yaml` still creates the schema in its
+`init.sql`, so this example works as it always did. `WithSchemaMigration()` is
+the preferred path for a real deployment: it needs no hand-kept SQL and it
+upgrades an older database by itself. A database created from `init.sql` has no
+version record; the first `Migrate` recognises its shape and records the
+version instead of applying the files again.
+
+The one case it refuses is an `events_store` with no `tenant_id` column, which
+predates the scoped stores. Add that column first, with the recipe in the next
+section, then migrate.
 
 ## Tenant column (`tenant_id`)
 
@@ -351,7 +359,10 @@ collides with a real one.
 
 Migrating an existing deployment's database needs no data rewrite: every
 existing row keeps reading back as `Unscoped()` once the column is added with
-its default.
+its default. This is the one step `Migrate` does not do for you, because it
+changes the primary key of a table that may be large: a database whose
+`events_store` has no `tenant_id` is refused with `ErrUnsupportedSchema` until
+you run the statements below.
 
 ```sql
 ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255) DEFAULT '' NOT NULL;
@@ -386,30 +397,14 @@ that would make a persistence id that was never written look established,
 so a later `ExpectGenesis()` would wrongly conflict. It never modifies the
 revision either way.
 
-To migrate an existing database, run the statements below (they are also the
-tail of `k8s/postgres.yaml`'s `init.sql`, and are safe to re-run). The backfill
-takes each record's highest *retained* sequence number, so a record whose
-latest events were already deleted before this migration cannot recover its
-old revision.
+`Migrate` creates this table (schema file `003_events_store_revisions.sql`) and,
+on a database that had `events_store` before it, backfills each record's
+revision from its highest *retained* sequence number. A record whose latest
+events were already deleted before this migration cannot recover its old
+revision. The backfill never lowers a revision that is already stored.
 
-```sql
-CREATE TABLE IF NOT EXISTS events_store_revisions
-(
-    tenant_id      VARCHAR(255) DEFAULT '' NOT NULL,
-    persistence_id VARCHAR(255)            NOT NULL,
-    revision       BIGINT                  NOT NULL,
-    PRIMARY KEY (tenant_id, persistence_id)
-);
-INSERT INTO events_store_revisions (tenant_id, persistence_id, revision)
-SELECT tenant_id, persistence_id, MAX(sequence_number)
-FROM events_store
-GROUP BY tenant_id, persistence_id
-ON CONFLICT (tenant_id, persistence_id)
-DO UPDATE SET revision = GREATEST(events_store_revisions.revision, EXCLUDED.revision);
-```
-
-Run it while no writer is active, so no event commits between the backfill
-and the new code taking over.
+Run the migration while no writer is active, so no event commits between the
+backfill and the new code taking over.
 
 ## Tenant metadata column (`tenant_metadata`)
 
@@ -423,17 +418,13 @@ tenant-scoped actor rejected its own recovered events after a restart.
 The column is nullable rather than `NOT NULL DEFAULT '{}'` on purpose:
 proto3 cannot distinguish a nil map from an empty one on the wire, so an
 event written with no tenant metadata — and every pre-existing legacy row —
-stores `NULL` and reads back as a nil map. Migrating an existing deployment's
-database needs no backfill and invents no tenant identity for a row that
-never had one:
-
-```sql
-ALTER TABLE events_store ADD COLUMN IF NOT EXISTS tenant_metadata JSONB;
-```
+stores `NULL` and reads back as a nil map. `Migrate` adds the column (schema
+file `004_events_store_tenant_metadata.sql`) with no backfill, so it invents no
+tenant identity for a row that never had one.
 
 ## Dependency Isolation
 
-This example is a **separate Go module** (`github.com/getsyntegrity/ego/example/cluster`) with its own `go.mod`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are confined to this module and do not affect the core eGo library.
+This example is the package `github.com/getsyntegrity/urd/example/cluster` of the **`example` module** (`example/go.mod`), which holds every example. CI builds, vets and tests that module on every pull request with Go changes. The example imports the generated messages from `example/examplepb`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are listed in the `example` module only, so they do not affect the core Urd library. Go only compiles what each program imports, so the simple examples in the same module do not link them.
 
 ## Cleanup
 

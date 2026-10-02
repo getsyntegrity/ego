@@ -1,0 +1,540 @@
+# PR CI. Goal: < 5 min. Single required check: "ci-ok".
+# The Go version comes from .go-version (see go-setup). Nothing here pins it by hand.
+#
+# Tests in the docker/buildx style:
+#   plan        -> are tests needed? + splits the packages into shards using real timings
+#                  (.github/scripts/test-matrix.sh): regular packages go whole into TEST_SHARDS
+#                  shards; a package slower than SPLIT_THRESHOLD is split by test into several
+#                  shards, so one slow package cannot dominate the wall time
+#   test (N)    -> each shard on its own runner, in parallel; the TestCluster* tests are skipped (cluster job)
+#   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
+#   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
+#   modules     -> build, vet and test of every nested module (persistence/postgres, publishers, compat,
+#                  example, which also holds example/cluster); inttest and benchmark are only built and vetted here, their
+#                  tests run in their own jobs. The examples are compiled, never run
+#   inttest     -> the integration tests of the inttest module, on real containers (Testcontainers):
+#                  every push to develop (each merge), the develop -> main release PR and workflow_dispatch;
+#                  never on feature or hotfix PRs
+#   benchmark   -> every benchmark of the benchmark module once (-benchtime=1x; a manual run can choose a
+#                  longer benchtime), same triggers as inttest; fails if no benchmark ran
+#   cluster     -> every TestCluster* test of the root module, alone (the shards skip them); every pull request
+#                  with Go changes, like the unit shards, plus pushes to develop; fails if no TestCluster* test passed
+#   race        -> the whole root module under -race, TestCluster* skipped; every pull request with Go
+#                  changes, like the unit shards, plus pushes to develop
+#   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
+#                  plus the no-skip rule for inttest/
+name: ci
+
+on:
+  # push to develop: validates the real result of the merge (like buildx with master)
+  # and stores the test timings that PRs use to split the shards.
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main]
+    # labeled/unlabeled: recomputes the version when the release:* labels change
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      benchtime:
+        description: "go test -benchtime for the benchmark job (1x = every benchmark once; e.g. 2s for a real measurement)"
+        required: false
+        default: "1x"
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read   # golangci-lint only-new-issues
+
+env:
+  COVERAGE_MIN: "0"       # minimum total coverage %. 0 = report only. Raise it once there is a baseline.
+  TEST_SHARDS: "2"        # parallel runners for the regular (not split) packages. 1 = no shards.
+  SPLIT_THRESHOLD: "90"   # seconds. A package slower than this (by real timings) is split by test.
+  SPLIT_TARGET: "90"      # seconds. Aimed duration of each shard of a split package.
+  TESTFLAGS: "-timeout=20m"
+  # Top-level tests that start a multi-node cluster (named TestCluster*, see docs/ci.md). The test shards and
+  # the race job skip them (-skip), the cluster job runs only them (-run), and test-matrix.sh leaves them
+  # out of the lists it distributes, so every test runs in exactly one lane.
+  CLUSTER_TESTS: "^TestCluster"
+  GOTESTSUM_VERSION: "v1.13.0"
+
+jobs:
+  flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      BASE: ${{ github.base_ref }}
+      HEAD: ${{ github.head_ref }}
+      LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+    steps:
+      - name: Only develop or hotfix/* may target main
+        run: |
+          if [ "$BASE" = "main" ] && [ "$HEAD" != "develop" ] && [[ "$HEAD" != hotfix/* ]]; then
+            echo "::error::Only PRs from develop or hotfix/* may target main (source: $HEAD)"
+            exit 1
+          fi
+      - if: github.base_ref == 'main'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # Fails HERE (before the merge) if the bump cannot be published, e.g. a major
+      # without updating the /vN path in go.mod.
+      - if: github.base_ref == 'main'
+        name: Version to publish
+        run: |
+          out=$(.github/scripts/next-version.sh "$HEAD" "$LABELS")
+          echo "$out"
+          v=$(sed -n 's/^version=//p' <<<"$out"); prev=$(sed -n 's/^previous=//p' <<<"$out")
+          echo "### Merging this PR publishes **${v}** (previous: ${prev})" >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    if: github.event_name == 'pull_request'   # not on develop: it would block on inherited issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0      # built with Go 1.27: when bumping the Go minor, check that it supports it
+          # Gradual adoption: on PRs it only blocks NEW issues in the diff.
+          # Once the code base is clean, set it to false.
+          only-new-issues: ${{ github.event_name == 'pull_request' }}
+
+  # ── Tests ────────────────────────────────────────────────────────
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.changes.outputs.go || 'true' }}
+      matrix: ${{ steps.matrix.outputs.matrix || '{"include":[{"id":0,"packages":"./...","run":""}]}' }}
+    steps:
+      - uses: actions/checkout@v7
+      # PRs that only touch docs/CHANGELOG/templates do not run tests (the automatic
+      # changelog PR, for example). It is skipped at job level: ci-ok still reports.
+      - uses: dorny/paths-filter@v4
+        id: changes
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: every
+          filters: |
+            go:
+              - '**'
+              - '!**/*.md'
+              - '!CHANGELOG/**'
+              - '!OWNERS'
+              - '!.github/ISSUE_TEMPLATE/**'
+      - if: steps.changes.outputs.go != 'false'
+        uses: ./.github/actions/go-setup
+      - if: steps.changes.outputs.go != 'false'
+        uses: actions/cache/restore@v6
+        with:
+          path: .test-timings
+          key: test-timings-${{ github.run_id }}
+          restore-keys: test-timings-
+      - name: Split packages into shards
+        id: matrix
+        if: steps.changes.outputs.go != 'false'
+        run: |
+          go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
+          mkdir -p .test-timings
+          echo "Timings available: $(ls .test-timings | wc -l) file(s)"
+          matrix=$(.github/scripts/test-matrix.sh)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Test shards"
+            echo "| Shard | Estimated | Packages | Tests |"
+            echo "|---|---|---|---|"
+            jq -r '.include[] | "| \(.id) | \(.estimatedRuntime) | \(.packages | split(" ") | length) | \(if .run == "" then "all" else "\(.run | split("|") | length) (split)" end) |"' <<<"$matrix"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: test (shard ${{ matrix.id }})
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false            # let every shard report, like buildx
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - run: go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
+      - name: Tests
+        env:
+          PACKAGES: ${{ matrix.packages }}
+          ID: ${{ matrix.id }}
+          RUN: ${{ matrix.run }}   # regex of top-level tests when the package is split; empty = all
+        run: |
+          mkdir -p reports
+          args=()
+          [ -z "$RUN" ] || args+=(-run "$RUN")
+          # -run selects the share of a split package and -skip removes the cluster tests from it;
+          # both apply at once. The cluster tests run in the cluster job.
+          args+=(-skip "$CLUSTER_TESTS")
+          # shellcheck disable=SC2086  # PACKAGES is a space-separated list
+          gotestsum --format github-actions \
+            --jsonfile "reports/test-$ID.json" --junitfile "reports/junit-$ID.xml" \
+            -- $TESTFLAGS "${args[@]}" -covermode=atomic -coverprofile="reports/coverage-$ID.out" $PACKAGES
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-report-${{ matrix.id }}
+          path: reports/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  test-report:
+    needs: [plan, test]
+    if: ${{ !cancelled() && needs.plan.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: test-report-*
+          path: reports
+          merge-multiple: true
+      - name: Coverage and slowest tests
+        run: |
+          go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
+          ls reports/coverage-*.out >/dev/null 2>&1 || { echo "::error::No shard produced coverage"; exit 1; }
+          # A split package has one profile per shard with the same blocks: `go tool cover`
+          # sums the counts of duplicated blocks, so plain concatenation is enough.
+          { echo "mode: atomic"; tail -q -n +2 reports/coverage-*.out; } > coverage.out
+          go tool cover -html=coverage.out -o coverage.html
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
+          {
+            echo "### Coverage: **${total}%** (required minimum: ${COVERAGE_MIN}%)"
+            echo
+            echo "### Slowest tests (> 1s)"
+            echo '```'
+            cat reports/test-*.json | gotestsum tool slowest --threshold 1s | head -25
+            echo '```'
+            echo "<details><summary>Coverage by function</summary>"
+            echo
+            echo '```'
+            go tool cover -func=coverage.out
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if awk -v t="$total" -v m="$COVERAGE_MIN" 'BEGIN { exit !(t < m) }'; then
+            echo "::error::Coverage ${total}% is below the minimum ${COVERAGE_MIN}%"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+          retention-days: 14
+      # Timings to split the shards better on the next run.
+      # Saved from develop (visible to every PR) and from each PR (for its re-runs).
+      - name: Save timings
+        # Only this run's files: test-matrix.sh sums the package times across files.
+        run: rm -rf .test-timings && mkdir -p .test-timings && cp reports/test-*.json .test-timings/
+      - uses: actions/cache/save@v6
+        with:
+          path: .test-timings
+          key: test-timings-${{ github.run_id }}
+
+  # Minimum version the library promises (the go directive of go.mod).
+  #   PR to develop: build and vet (fast; detects use of newer stdlib API).
+  #   PR to main:    runs ALL the tests with the minimum before publishing.
+  # Uses plain `go test`: gotestsum 1.13 needs Go >= 1.24 and the minimum may be lower.
+  # It does NOT skip the TestCluster tests, on purpose: it is the only job that runs them with the minimum
+  # Go. (The cluster job also runs on every PR with Go changes, hotfix PRs included, but with the toolchain
+  # of .go-version.) It keeps running everything.
+  test-min:
+    name: test (min)
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - name: Minimum version from go.mod
+        id: min
+        run: |
+          echo "version=$(awk '$1 == "go" { print $2; exit }' go.mod)" >> "$GITHUB_OUTPUT"
+          # Without this, the "toolchain" line of go.mod would make Go upgrade itself to the SDK.
+          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/go-setup
+        with:
+          go-version: ${{ steps.min.outputs.version }}
+      - run: go build ./... && go vet ./...
+      - if: github.base_ref == 'main'
+        run: go test $TESTFLAGS ./...
+
+  # Nested modules (benchmark, persistence/postgres, publisher/*, test/compat, example (all the examples,
+  # example/cluster included), inttest) are separate Go modules: `./...` at the root does not reach them, so each one is built, vetted
+  # and tested on its own. No race detector. The examples are compiled here on every pull request with Go
+  # changes (they are never executed), so a change that breaks one fails before the merge. inttest and
+  # benchmark are built and vetted only (go vet compiles their test files): their tests are heavy (Docker,
+  # a real actor system) and run in the inttest and benchmark jobs, after the merge.
+  modules:
+    name: modules (${{ matrix.dir }})
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - example
+          - persistence/postgres
+          - publisher/kafka
+          - publisher/nats
+          - publisher/pulsar
+          - publisher/websocket
+          - test/compat
+        include:
+          # Build and vet only. A string flag, because an absent matrix key is null and null == false.
+          # Their tests run after the merge, in the inttest and benchmark jobs.
+          - dir: inttest
+            vet-only: "yes"
+          - dir: benchmark
+            vet-only: "yes"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Build and vet
+        working-directory: ${{ matrix.dir }}
+        run: |
+          go build ./...
+          go vet ./...
+      - name: Test
+        if: matrix.vet-only != 'yes'
+        working-directory: ${{ matrix.dir }}
+        run: go test $TESTFLAGS ./...
+
+  # Integration tests: the inttest module starts its own containers with Testcontainers (Docker is already
+  # on ubuntu-latest), so there are no services: and no DSN variables. A missing Docker fails the job, a test
+  # under inttest/ never skips (the no-skip rule of unit-gate). It runs on every push to develop (the result
+  # of each merge), on the develop -> main release PR (the gate that keeps main from receiving a red
+  # integration run, through ci-ok) and on manual runs. Feature and hotfix PRs never run it; a hotfix is
+  # covered once its main -> develop sync PR is merged and develop is pushed. ci-ok accepts "skipped".
+  inttest:
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.base_ref == 'main' && github.head_ref == 'develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Integration tests
+        working-directory: inttest
+        run: go test -count=1 -timeout=15m ./...
+
+  # The benchmarks of the benchmark module. The module has no Test functions, only Benchmark ones, which
+  # start a real in-process goakt actor system, so plain `go test` would compile them and run nothing.
+  # They follow the inttest rule: compiled and vetted on every pull request by modules, executed only
+  # after the merge (push to develop), on the develop -> main release PR and on manual runs. Automatic runs
+  # use -benchtime=1x (every benchmark once, about two minutes) to prove they still run; a manual run can
+  # pass a longer benchtime for a real measurement. The step fails if no benchmark reported a result.
+  benchmark:
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.base_ref == 'main' && github.head_ref == 'develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Run every benchmark
+        working-directory: benchmark
+        shell: bash
+        env:
+          BENCHTIME: ${{ inputs.benchtime || '1x' }}
+        run: |
+          out="$RUNNER_TEMP/benchmark.txt"
+          go test -count=1 -timeout=20m -run '^$' -bench . -benchtime="$BENCHTIME" ./... | tee "$out"
+          n=$(grep -cE '^Benchmark[^[:space:]]+[[:space:]]+[0-9]+' "$out" || true)
+          {
+            echo "### Benchmarks (benchtime $BENCHTIME): $n results"
+            echo '```'
+            grep -E '^Benchmark' "$out" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no benchmark reported a result"
+            exit 1
+          fi
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results
+          path: ${{ runner.temp }}/benchmark.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The multi-node cluster tests: every top-level test named TestCluster* in the root module. They start real
+  # clustered actor systems on loopback ports, so the test shards skip them (-skip) and they run here, alone.
+  # They run on every pull request with Go changes, like the unit shards, plus pushes to develop and manual
+  # runs: they are in-process (no Docker) and every PR ran them before the lanes existed. The command takes
+  # ./... on purpose. A hardcoded package list would let a new TestCluster* in another package be skipped by
+  # the shards and never run here, and the zero-pass guard would not notice while other packages still pass.
+  # `go test` reports "no tests to run" as a pass, so the step counts the top-level TestCluster* pass events in
+  # the -json output and fails if there is none (a rename that left the lane empty would otherwise stay
+  # green). No retries: a flaky cluster test is fixed in its own PR.
+  cluster:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Cluster tests
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/cluster.json"
+          status=0
+          go test -count=1 -timeout=8m -run "$CLUSTER_TESTS" -json ./... > "$out" || status=$?
+          # Top-level tests only (no "/" in the name) that passed.
+          passed=$(jq -Rr --arg re "$CLUSTER_TESTS" 'fromjson? | select(.Action == "pass" and .Test != null and (.Test | contains("/") | not) and (.Test | test($re))) | .Test' "$out" | sort -u)
+          n=$(printf '%s' "$passed" | grep -c . || true)
+          {
+            echo "### Cluster tests: $n top-level tests passed (go test exit status $status)"
+            echo '```'
+            echo "$passed"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$n top-level $CLUSTER_TESTS tests passed (go test exit status $status)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test failed in the cluster lane (exit status $status)"
+            exit 1
+          fi
+          if [ "$n" -eq 0 ]; then
+            echo "::error::the cluster lane ran no top-level $CLUSTER_TESTS test"
+            exit 1
+          fi
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cluster-results
+          path: ${{ runner.temp }}/cluster.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The whole root module under the race detector (#206), TestCluster* skipped: they are not run under -race
+  # yet (out of scope for #206, a follow-up once the in-process suites are known to be race-free). It runs on
+  # every pull request with Go changes, like the unit shards, plus pushes to develop and manual runs. A race
+  # found here is fixed in its own pull request, never by silencing the job. No retries. A package with a
+  # known race is excluded only via an explicit list here with a linked issue and exit condition, never
+  # silently, never with retries. The race detector is never run locally.
+  race:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Race detector
+        run: go test -race -count=1 -timeout=8m -skip "$CLUSTER_TESTS" ./...
+
+  # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
+  # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
+  unit-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: The gate's own tests
+        run: go test ./.github/scripts/unitgate
+      - name: Scan the repository
+        # The pending list is empty, so stale entries are errors.
+        run: go run ./.github/scripts/unitgate -strict
+
+  # go.mod/go.sum sorted, for the root module and every nested module (a cheap job of its own).
+  tidy:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - run: |
+          status=0
+          while IFS= read -r mod; do
+            dir=$(dirname "$mod")
+            (cd "$dir" && go mod tidy)
+            if ! git diff --exit-code -- "$mod" "${mod%go.mod}go.sum"; then
+              echo "::error::Run 'go mod tidy' in '$dir' and commit the result"
+              status=1
+            fi
+          done < <(git ls-files 'go.mod' '**/go.mod')
+          exit "$status"
+
+  # Changes in the public API (apidiff).
+  #   PR to develop: compares against develop -> informs (warning if it breaks the API).
+  #   PR to main:    compares against the latest tag -> BLOCKS if it breaks the API without release:major.
+  api:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: ${{ github.base_ref }}
+      HEAD: ${{ github.head_ref }}
+      LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/go-setup
+      - name: Install apidiff
+        run: |
+          go install golang.org/x/exp/cmd/apidiff@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Compare API
+        run: |
+          if [ "$BASE" = "main" ]; then
+            ref=$(git tag --merged HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+            if [ -z "$ref" ]; then echo "First release: nothing to compare against"; exit 0; fi
+            bump=$(.github/scripts/next-version.sh "$HEAD" "$LABELS" 2>/dev/null | sed -n 's/^bump=//p' || true)
+            if [ -z "$bump" ]; then
+              echo "::notice::Could not compute the bump (the error is in the flow job, e.g. /vN missing in go.mod). Reporting without blocking."
+            fi
+          else
+            ref="origin/$BASE"; bump=""
+          fi
+          .github/scripts/api-check.sh "$ref" "$bump"
+
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      # Fails only if the code CALLS something vulnerable. Strict mode is in security.yml.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # A new check in the future = add the job and list it here. Branch protection is not touched.
+  ci-ok:
+    if: always()
+    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, benchmark, cluster, race, unit-gate, tidy, api, vuln]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' >/dev/null

@@ -25,8 +25,8 @@ package engine
 import (
 	"github.com/tochemey/goakt/v4/extension"
 
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // SagaBehavior defines a long-running business process that coordinates

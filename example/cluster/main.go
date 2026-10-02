@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package main demonstrates a production-ready eGo cluster running on
+// Package main demonstrates a production-ready Urd cluster running on
 // Kubernetes with:
 //
 //   - Kubernetes-native peer discovery (pods find each other via the k8s API)
@@ -53,22 +53,23 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/urd/engine"
+	samplepb "github.com/getsyntegrity/urd/example/examplepb"
+	"github.com/getsyntegrity/urd/persistence/postgres"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/projection"
 )
 
 const projectionName = "account-balances"
 
 // logger is the kit-logger Logger the whole process logs through: this
-// program, eGo, and the actor system. Records carry the OpenTelemetry
+// program, Urd, and the actor system. Records carry the OpenTelemetry
 // trace_id/span_id of the context they are written with, so a log line can
 // be joined to its trace in Jaeger.
 var logger = kitlog.New(kitlog.Config{
 	Level:          kitlog.LevelInfo,
 	Format:         kitlog.FormatJSON,
-	GlobalFields:   map[string]string{"service": "ego-cluster"},
+	GlobalFields:   map[string]string{"service": "urd-cluster"},
 	ContextHandler: kitotel.Decorator(kitotel.Options{}),
 })
 
@@ -84,7 +85,7 @@ func main() {
 	peersPort := envInt("PEERS_PORT", 9002)
 	httpPort := envInt("HTTP_PORT", 8080)
 
-	tel, telShutdown, err := setupTelemetry(ctx, "ego-cluster")
+	tel, telShutdown, err := setupTelemetry(ctx, "urd-cluster")
 	if err != nil {
 		logger.Error("failed to setup telemetry", "error", err)
 		os.Exit(1)
@@ -98,14 +99,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	eventStore := NewPostgresEventStore(dsn)
+	eventStore := postgres.NewEventStore(dsn)
 	if err := eventStore.Connect(ctx); err != nil {
 		logger.Error("failed to connect event store", "error", err)
 		os.Exit(1)
 	}
 	defer eventStore.Disconnect(ctx)
 
-	offsetStore := NewPostgresOffsetStore(dsn)
+	offsetStore := postgres.NewOffsetStore(dsn)
 	if err := offsetStore.Connect(ctx); err != nil {
 		logger.Error("failed to connect offset store", "error", err)
 		os.Exit(1)
@@ -114,7 +115,7 @@ func main() {
 
 	provider := NewKubernetesProvider(
 		namespace,
-		map[string]string{"app": "ego-cluster"},
+		map[string]string{"app": "urd-cluster"},
 		"discovery",
 		"remoting",
 		"peers",
@@ -122,7 +123,7 @@ func main() {
 
 	projectionHandler := NewAccountBalanceHandler(pool, logger)
 
-	// Build the eGo Config once; the same instance is passed to both the
+	// Build the Urd Config once; the same instance is passed to both the
 	// actor system (for extension wiring) and the engine.
 	cfg := engine.NewConfig(eventStore,
 		engine.WithLogger(logger),
@@ -162,7 +163,7 @@ func main() {
 		goakt.WithRemote(remote.NewConfig(nodeIP, remotingPort)),
 	)
 
-	sys, err := goakt.NewActorSystem("ego-cluster", goaktOpts...)
+	sys, err := goakt.NewActorSystem("urd-cluster", goaktOpts...)
 	if err != nil {
 		logger.Error("failed to build actor system", "error", err)
 		os.Exit(1)
@@ -329,8 +330,8 @@ func main() {
 	// Explicitly wire the tracer provider and propagator so otelhttp never
 	// falls back to a noop global (guards against subtle init-order races).
 	// spanNameFromRequest gives each route a clean name in Jaeger, e.g.
-	// "POST /accounts/{id}" instead of the generic "ego-cluster-http".
-	handler := servedByMiddleware(otelhttp.NewHandler(mux, "ego-cluster-http",
+	// "POST /accounts/{id}" instead of the generic "urd-cluster-http".
+	handler := servedByMiddleware(otelhttp.NewHandler(mux, "urd-cluster-http",
 		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
 		otelhttp.WithPropagators(otel.GetTextMapPropagator()),
 		otelhttp.WithSpanNameFormatter(spanNameFromRequest),

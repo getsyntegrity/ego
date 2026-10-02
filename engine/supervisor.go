@@ -23,7 +23,7 @@
 package engine
 
 import (
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // SupervisorDirective defines the action a supervisor takes when an entity

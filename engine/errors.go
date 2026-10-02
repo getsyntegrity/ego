@@ -27,18 +27,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 var (
-	// ErrEngineNotStarted is returned when the eGo engine has not started
+	// ErrEngineNotStarted is returned when the urd engine has not started
 	ErrEngineNotStarted = runtimeport.ErrEngineNotStarted
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
 	ErrUndefinedEntityID = runtimeport.ErrUndefinedEntityID
 	// ErrCommandReplyUnmarshalling is returned when the unmarshalling command reply failed
 	ErrCommandReplyUnmarshalling = errors.New("failed to parse command reply")
-	// ErrDurableStateStoreRequired is returned when the eGo engine durable store is not set
+	// ErrDurableStateStoreRequired is returned when the Urd engine durable store is not set
 	ErrDurableStateStoreRequired = runtimeport.ErrDurableStateStoreRequired
 	// ErrEventsStoreRequired is returned by Entity and Saga when the engine's
 	// Config has no events store (NewConfig was given a nil
@@ -56,7 +56,7 @@ var (
 	ErrProjectionNotRegistered = runtimeport.ErrProjectionNotRegistered
 	// ErrActorSystemRequired is returned when NewEngine is called with a nil
 	// actor system. The caller must construct and start the actor system
-	// themselves before plugging eGo in.
+	// themselves before plugging Urd in.
 	ErrActorSystemRequired = errors.New("actor system is required")
 	// ErrAmbiguousTenantResolver is returned when NewEngine finds that a
 	// Config recorded more than one non-nil WithTenantResolver registration.
@@ -69,7 +69,7 @@ var (
 	// system whose Start has not yet been called or has not yet succeeded.
 	ErrActorSystemNotStarted = errors.New("actor system must be started before NewEngine")
 	// ErrMissingRequiredExtensions is returned when NewEngine validates the
-	// actor system and finds that one or more extensions eGo needs are
+	// actor system and finds that one or more extensions Urd needs are
 	// absent. The error message lists the missing extension IDs. Callers
 	// typically hit this when the actor system was built from a different
 	// Config than the one passed to NewEngine, or when cfg.GoaktOptions()
@@ -126,7 +126,7 @@ var (
 	// serializes every spawn's dependencies, so it can place the behavior on,
 	// or relocate it to, another node. Outside cluster mode such a behavior
 	// runs on the local node.
-	ErrBehaviorNotSerializable = errors.New("eGo: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
+	ErrBehaviorNotSerializable = errors.New("urd: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
 	// ErrBehaviorNotPointer is the cause carried by a *BehaviorPlacementError
 	// when a behavior cannot be handed to GoAkt's type registry, which names
 	// a type through a pointer and panics on anything else. A spawned
@@ -135,7 +135,7 @@ var (
 	// WithBehaviorKinds or WithEntityKinds only needs a pointer type: a typed
 	// nil such as (*T)(nil) registers T, while an untyped nil or a value type
 	// is rejected.
-	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	ErrBehaviorNotPointer = errors.New("urd: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 	// ErrEntityFamilyNotDeclared is returned by SpawnEventSourced,
 	// SpawnDurableState and SpawnSaga, and by their deprecated predecessors
 	// Entity, DurableStateEntity and Saga, when the engine's Config declares
@@ -171,9 +171,9 @@ type BehaviorPlacementError struct {
 func (e *BehaviorPlacementError) Error() string {
 	if e.EntityID == "" {
 		// Kind registration, or a nil behavior with no readable ID.
-		return fmt.Sprintf("eGo: cannot register or place behavior %s: %v", e.Kind, e.Err)
+		return fmt.Sprintf("urd: cannot register or place behavior %s: %v", e.Kind, e.Err)
 	}
-	return fmt.Sprintf("eGo: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
+	return fmt.Sprintf("urd: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
 }
 
 // Unwrap returns the cause, ErrBehaviorNotSerializable or ErrBehaviorNotPointer.

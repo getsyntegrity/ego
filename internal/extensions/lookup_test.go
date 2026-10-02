@@ -27,24 +27,35 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // discardGoaktLogger returns a GoAkt logger that drops every record, so the
 // hand-built actor systems below stay quiet.
 func discardGoaktLogger() log.Logger {
 	return goaktlog.New(kitlog.New(kitlog.Config{Sink: slog.DiscardHandler}))
+}
+
+// startActorSystem builds and starts an in-process actor system and registers
+// its shutdown with the case, so it stops even when an expectation fails.
+func startActorSystem(ctx *specs.Context, name string, opts ...goakt.Option) goakt.ActorSystem {
+	bg := context.Background()
+	opts = append([]goakt.Option{goakt.WithLogger(discardGoaktLogger()), goakt.WithActorInitMaxRetries(1)}, opts...)
+	system, err := goakt.NewActorSystem(name, opts...)
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(system.Start(bg)).To(specs.BeNil())
+	ctx.Cleanup(func() { ctx.Expect(system.Stop(bg)).To(specs.BeNil()) })
+	return system
 }
 
 // requireProbeActor exercises Require directly from
@@ -64,6 +75,12 @@ func (a *requireProbeActor) PostStop(_ *goakt.Context) error { return nil }
 
 func (a *requireProbeActor) Receive(ctx *goakt.ReceiveContext) { ctx.Unhandled() }
 
+// expectPing declares the Ping the extension wrapper may issue on the store;
+// the lookup tests do not depend on whether it happens.
+func expectPing(ctrl *mock.Controller) {
+	ctrl.Method("Ping").Expect(mock.Any()).Return(nil).AnyTimes()
+}
+
 // TestRequireExtension pins down Require's behavior: it must return
 // a descriptive error — never panic — whenever the requested extension is
 // absent or was registered under an unexpected type, and it must return the
@@ -73,94 +90,71 @@ func (a *requireProbeActor) Receive(ctx *goakt.ReceiveContext) { ctx.Unhandled()
 // golang.org/x/sync/singleflight.Group that deliberately re-panics on a
 // fresh, unrecoverable goroutine (see extension_lookup.go).
 func TestRequireExtension(t *testing.T) {
-	t.Run("returns an error instead of panicking when the extension is absent", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "Require", func(s *specs.Spec) {
+		s.It("returns an error instead of panicking when the extension is absent", func(ctx *specs.Context) {
+			bg := context.Background()
+			system := startActorSystem(ctx, "TestRequireExtensionMissingSystem")
 
-		actorSystem, err := goakt.NewActorSystem("TestRequireExtensionMissingSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				_, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
-				return err
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "require-ext-missing", probe)
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
-
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("returns an error instead of panicking when the extension is registered under a mismatched type", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestRequireExtensionMismatchSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithExtensions(
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				// The events-stream extension is registered, but under the
-				// events-store ID it is asked for here: simulates an
-				// extension registered with an unexpected concrete type.
-				_, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStreamExtensionID)
-				return err
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "require-ext-mismatch", probe)
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
-		assert.ErrorContains(t, err, "was registered with unexpected type")
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("returns the typed extension when registered correctly", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestRequireExtensionOKSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		var got persistence.EventsStore
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				ext, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
-				if err != nil {
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					_, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 					return err
-				}
-				got = ext.Underlying()
-				return nil
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "require-ext-ok", probe)
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		assert.Equal(t, persistence.EventsStore(eventStore), got)
+				},
+			}
+			pid, err := system.Spawn(bg, "require-ext-missing", probe)
 
-		require.NoError(t, actorSystem.Stop(ctx))
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrMissingRequiredExtensions))
+			ctx.Expect(pid).To(specs.BeNil())
+		})
+
+		s.It("returns an error instead of panicking when the extension is registered under a mismatched type", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStream := eventstream.New()
+			ctx.Cleanup(eventStream.Close)
+			system := startActorSystem(ctx, "TestRequireExtensionMismatchSystem",
+				goakt.WithExtensions(extensions.NewEventsStream(eventStream)))
+
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					// The events-stream extension is registered, but under the
+					// events-store ID it is asked for here: simulates an
+					// extension registered with an unexpected concrete type.
+					_, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStreamExtensionID)
+					return err
+				},
+			}
+			pid, err := system.Spawn(bg, "require-ext-mismatch", probe)
+
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrMissingRequiredExtensions))
+			ctx.Expect(err.Error()).To(specs.Contain("was registered with unexpected type"))
+			ctx.Expect(pid).To(specs.BeNil())
+		})
+
+		s.It("returns the typed extension when registered correctly", func(ctx *specs.Context) {
+			bg := context.Background()
+			ctrl := mock.NewController(ctx)
+			expectPing(ctrl)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			system := startActorSystem(ctx, "TestRequireExtensionOKSystem",
+				goakt.WithExtensions(extensions.NewEventsStore(store)))
+
+			var got persistence.EventsStore
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					ext, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+					if err != nil {
+						return err
+					}
+					got = ext.Underlying()
+					return nil
+				},
+			}
+			pid, err := system.Spawn(bg, "require-ext-ok", probe)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(specs.Equal(persistence.EventsStore(store)))
+		})
 	})
 }
 
@@ -173,97 +167,75 @@ func TestRequireExtension(t *testing.T) {
 // mismatch and crashes the whole process the same way an unguarded
 // required-extension assertion did (see extension_lookup.go).
 func TestOptionalExtension(t *testing.T) {
-	t.Run("returns the zero value and no error when the extension is absent", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "Optional", func(s *specs.Spec) {
+		s.It("returns the zero value and no error when the extension is absent", func(ctx *specs.Context) {
+			bg := context.Background()
+			system := startActorSystem(ctx, "TestOptionalExtensionMissingSystem")
 
-		actorSystem, err := goakt.NewActorSystem("TestOptionalExtensionMissingSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		var got *extensions.SnapshotStoreExt
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				ext, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
-				got = ext
-				return err
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "optional-ext-missing", probe)
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		assert.Nil(t, got)
-
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("returns an error instead of panicking when the extension is registered under a mismatched type", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestOptionalExtensionMismatchSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithExtensions(
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				// The events-stream extension is registered, but under the
-				// snapshot-store ID it is asked for here: simulates an
-				// extension registered with an unexpected concrete type.
-				_, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.EventsStreamExtensionID)
-				return err
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "optional-ext-mismatch", probe)
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
-		assert.ErrorContains(t, err, "was registered with unexpected type")
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
-	})
-
-	t.Run("returns the typed extension when registered correctly", func(t *testing.T) {
-		ctx := context.TODO()
-
-		eventStore := new(mocks.EventsStore)
-		eventStore.EXPECT().Ping(mock.Anything).Return(nil).Maybe()
-
-		actorSystem, err := goakt.NewActorSystem("TestOptionalExtensionOKSystem",
-			goakt.WithLogger(discardGoaktLogger()),
-			goakt.WithExtensions(
-				extensions.NewEventsStore(eventStore),
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		var got persistence.EventsStore
-		probe := &requireProbeActor{
-			lookup: func(ctx *goakt.Context) error {
-				ext, err := extensions.Optional[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
-				if err != nil {
+			var got *extensions.SnapshotStoreExt
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					ext, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.SnapshotStoreExtensionID)
+					got = ext
 					return err
-				}
-				if ext != nil {
-					got = ext.Underlying()
-				}
-				return nil
-			},
-		}
-		pid, err := actorSystem.Spawn(ctx, "optional-ext-ok", probe)
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-		assert.Equal(t, persistence.EventsStore(eventStore), got)
+				},
+			}
+			pid, err := system.Spawn(bg, "optional-ext-missing", probe)
 
-		require.NoError(t, actorSystem.Stop(ctx))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(specs.BeNil())
+		})
+
+		s.It("returns an error instead of panicking when the extension is registered under a mismatched type", func(ctx *specs.Context) {
+			bg := context.Background()
+			eventStream := eventstream.New()
+			ctx.Cleanup(eventStream.Close)
+			system := startActorSystem(ctx, "TestOptionalExtensionMismatchSystem",
+				goakt.WithExtensions(extensions.NewEventsStream(eventStream)))
+
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					// The events-stream extension is registered, but under the
+					// snapshot-store ID it is asked for here: simulates an
+					// extension registered with an unexpected concrete type.
+					_, err := extensions.Optional[*extensions.SnapshotStoreExt](ctx, extensions.EventsStreamExtensionID)
+					return err
+				},
+			}
+			pid, err := system.Spawn(bg, "optional-ext-mismatch", probe)
+
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrMissingRequiredExtensions))
+			ctx.Expect(err.Error()).To(specs.Contain("was registered with unexpected type"))
+			ctx.Expect(pid).To(specs.BeNil())
+		})
+
+		s.It("returns the typed extension when registered correctly", func(ctx *specs.Context) {
+			bg := context.Background()
+			ctrl := mock.NewController(ctx)
+			expectPing(ctrl)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			system := startActorSystem(ctx, "TestOptionalExtensionOKSystem",
+				goakt.WithExtensions(extensions.NewEventsStore(store)))
+
+			var got persistence.EventsStore
+			probe := &requireProbeActor{
+				lookup: func(ctx *goakt.Context) error {
+					ext, err := extensions.Optional[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
+					if err != nil {
+						return err
+					}
+					if ext != nil {
+						got = ext.Underlying()
+					}
+					return nil
+				},
+			}
+			pid, err := system.Spawn(bg, "optional-ext-ok", probe)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(pid).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(specs.Equal(persistence.EventsStore(store)))
+		})
 	})
 }

@@ -26,18 +26,16 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
 
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	samplepb "github.com/getsyntegrity/urd/internal/samplepb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
-// newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine
+// newTestEngine bootstraps a goakt.ActorSystem and a plugged-in Urd Engine
 // the way callers are expected to do it post-refactor, and registers a
 // t.Cleanup hook that stops both at the end of the test.
 //
@@ -49,11 +47,17 @@ func newTestEngine(t *testing.T, name string, eventsStore persistence.EventsStor
 
 	cfg := NewConfig(eventsStore, opts...)
 	sys, err := goakt.NewActorSystem(name, cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
+	if err != nil {
+		t.Fatalf("new actor system: %v", err)
+	}
+	if err := sys.Start(ctx); err != nil {
+		t.Fatalf("start actor system: %v", err)
+	}
 
 	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
 
 	t.Cleanup(func() {
 		_ = engine.Stop(context.Background())
@@ -139,9 +143,6 @@ func (s *testSagaBehavior) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// ensure time is used
-var _ = time.Second
-
 // The event sourced fixtures live in enginetest so that the actor packages
 // share one definition with these tests.
 type (
@@ -160,18 +161,11 @@ var (
 	newEnvelopeCapturingEventSourcedBehavior = enginetest.NewEnvelopeCapturingEventSourcedBehavior
 )
 
-type envelopeCapturingEventSourcedBehavior = enginetest.EnvelopeCapturingEventSourcedBehavior
-
-type (
-	AccountDurableStateBehavior      = enginetest.AccountDurableStateBehavior
-	tenancyProbeDurableStateBehavior = enginetest.TenancyProbeDurableStateBehavior
-)
+type AccountDurableStateBehavior = enginetest.AccountDurableStateBehavior
 
 var (
 	NewAccountDurableStateBehavior      = enginetest.NewAccountDurableStateBehavior
 	newTenancyProbeDurableStateBehavior = enginetest.NewTenancyProbeDurableStateBehavior
 )
-
-type envelopeCapturingDurableStateBehavior = enginetest.EnvelopeCapturingDurableStateBehavior
 
 var newEnvelopeCapturingDurableStateBehavior = enginetest.NewEnvelopeCapturingDurableStateBehavior

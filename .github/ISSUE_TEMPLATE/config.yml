@@ -1,0 +1,9 @@
+# No blank issues: everything goes through a template, so it arrives with the information needed.
+blank_issues_enabled: false
+contact_links:
+  - name: Usage question
+    url: https://github.com/getsyntegrity/urd/discussions
+    about: Questions about how to use Urd. An issue is for concrete bugs or changes.
+  - name: Security vulnerability
+    url: https://github.com/getsyntegrity/urd/security/advisories/new
+    about: Do NOT open a public issue. Follow the security policy to report it privately.

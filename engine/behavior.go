@@ -28,8 +28,8 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/command"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/command"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // Command is a command sent to an entity. It is an alias for [proto.Message],

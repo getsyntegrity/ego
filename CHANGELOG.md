@@ -2,15 +2,24 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions will follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-eGo is pre-release: no version has been published yet, and the entries below describe the current state of the repository, not a release.
+Urd is pre-release: no version has been published yet, and the entries below describe the current state of the repository, not a release.
 
 ## Unreleased
+
+### Renamed to Urd
+
+- **The project is now Urd, at `github.com/getsyntegrity/urd`.** Every module path changed its prefix from `github.com/getsyntegrity/ego`; the `engine` package and its API are unchanged, and there is still no root package. Rewrite imports with the command in [`MIGRATION.md`](./MIGRATION.md). The first release under the new path is `v0.1.0`.
+- **Publisher IDs and the Kafka client ID are now `urd-*`.** `ID()` returns `urd-kafka`, `urd-nats`, `urd-pulsar` and `urd-websocket`; the Kafka `ClientID` is `urd-kafka-publisher`.
+- **Free-text error messages start with `urd:`** instead of `ego:` or `eGo:`. The concurrency-conflict grammar `ego: concurrency conflict: grammar=v1` is unchanged because callers parse it.
+- **`URD_TELEMETRY_CONTRACT_DUMP` replaces `EGO_TELEMETRY_CONTRACT_DUMP`.** The old name is still read as a fallback and is deprecated.
+- **Internal identifiers and doc comments no longer say `ego`.** Persisted and wire-level names (`egopb`, `ego.*` metadata keys, GoAkt extension IDs, OpenTelemetry names, NATS stream names, `ego_schema_migrations`) keep their spelling on purpose; see [`MIGRATION.md`](./MIGRATION.md).
 
 ### Breaking changes
 
 - **The root module path is `github.com/getsyntegrity/ego`, with no `/vN` suffix.** A path without a suffix carries `v0` and `v1` versions only. Publisher modules keep their own paths, `github.com/getsyntegrity/ego/publisher/<name>` (`kafka`, `nats`, `pulsar`, `websocket`). In the repository the nested modules require the root at the development placeholder `v0.0.0`, resolved through a local `replace` directive; `v0.0.0` is not a tag and is not installable.
 - **The root package moved to `github.com/getsyntegrity/ego/engine` (package `engine`).** The module root holds no Go files. Replace the import path and the qualifier: `ego.NewEngine` is `engine.NewEngine`, `ego.EventSourcedBehavior` is `engine.EventSourcedBehavior`, and so on; no symbol was renamed, added or removed. A local variable named `engine` shadows the package after its declaration, so rename the variable or alias the import. `archcheck` enforces the empty root with a `root-no-go-files` check.
 - **Generated protobuf code carries the new package path.** `egopb` and `test/data/testpb` were regenerated with `protoc-gen-go` v1.36.12 (never text-edited: `go_package` sits inside the serialized descriptor).
+- **`persistence/conformance` no longer depends on `github.com/stretchr/testify` (action required if you call a `Check` directly).** The exported field `Check[S].Run` changed from `func(ctx context.Context, t require.TestingT, store S)` to `func(ctx context.Context, t conformance.TestingT, store S)`, and so did `EventsStoreChecks`, `StateStoreChecks` and `SnapshotStoreChecks`. `conformance.TestingT` is a new interface with `Errorf(format string, args ...any)`, `FailNow()` and `Helper()`; `*testing.T` satisfies it. Nothing changes if you only call `RunEventsStoreConformance`, `RunStateStoreConformance`, `RunSnapshotStoreConformance` or the `Capture*StoreChecks` functions. If you call `check.Run(ctx, t, store)` with a `*testing.T`, it still compiles. If you wrote your own `Check` or passed a value typed `require.TestingT`, change the parameter type to `conformance.TestingT`. Failure text, including `CheckResult.Errors`, is now `<rule>: <expected/actual>` instead of testify's `Error Trace` blocks.
 
 ### Release process
 

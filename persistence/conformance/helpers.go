@@ -25,28 +25,27 @@ package conformance
 import (
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // mustTenantScope builds a valid tenant persistence.Scope for id.
-func mustTenantScope(t require.TestingT, id string) persistence.Scope {
+func mustTenantScope(t TestingT, id string) persistence.Scope {
 	scope, err := persistence.NewTenantScope(tenancy.TenantID(id))
-	require.NoError(t, err)
+	requireNoError(t, err)
 	return scope
 }
 
 // eventBatch builds a single-event batch for persistenceID carrying marker
 // in its payload, so a later read can identify whose record was actually
 // returned (see eventMarker).
-func eventBatch(t require.TestingT, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
+func eventBatch(t TestingT, persistenceID string, sequenceNumber uint64, marker float64) []*egopb.Event {
 	payload, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	requireNoError(t, err)
 	return []*egopb.Event{{
 		PersistenceId:  persistenceID,
 		SequenceNumber: sequenceNumber,
@@ -57,40 +56,40 @@ func eventBatch(t require.TestingT, persistenceID string, sequenceNumber uint64,
 }
 
 // eventMarker recovers the marker written by eventBatch.
-func eventMarker(t require.TestingT, event *egopb.Event) float64 {
+func eventMarker(t TestingT, event *egopb.Event) float64 {
 	var msg testpb.AccountCreated
-	require.NoError(t, event.GetEvent().UnmarshalTo(&msg))
+	requireNoError(t, event.GetEvent().UnmarshalTo(&msg))
 	return msg.GetAccountBalance()
 }
 
 // stateRecord builds an *egopb.DurableState for persistenceID carrying
 // marker in its payload, so a later read can identify whose record was
 // actually returned (see stateMarker).
-func stateRecord(t require.TestingT, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
+func stateRecord(t TestingT, persistenceID string, versionNumber uint64, marker float64) *egopb.DurableState {
 	payload, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	requireNoError(t, err)
 	return &egopb.DurableState{PersistenceId: persistenceID, ResultingState: payload, VersionNumber: versionNumber}
 }
 
 // stateMarker recovers the marker written by stateRecord.
-func stateMarker(t require.TestingT, state *egopb.DurableState) float64 {
+func stateMarker(t TestingT, state *egopb.DurableState) float64 {
 	var msg testpb.Account
-	require.NoError(t, state.GetResultingState().UnmarshalTo(&msg))
+	requireNoError(t, state.GetResultingState().UnmarshalTo(&msg))
 	return msg.GetAccountBalance()
 }
 
 // snapshotRecord builds an *egopb.Snapshot for persistenceID carrying marker
 // in its payload, so a later read can identify whose record was actually
 // returned (see snapshotMarker).
-func snapshotRecord(t require.TestingT, persistenceID string, sequenceNumber uint64, marker float64) *egopb.Snapshot {
+func snapshotRecord(t TestingT, persistenceID string, sequenceNumber uint64, marker float64) *egopb.Snapshot {
 	payload, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: marker})
-	require.NoError(t, err)
+	requireNoError(t, err)
 	return &egopb.Snapshot{PersistenceId: persistenceID, SequenceNumber: sequenceNumber, State: payload}
 }
 
 // snapshotMarker recovers the marker written by snapshotRecord.
-func snapshotMarker(t require.TestingT, snapshot *egopb.Snapshot) float64 {
+func snapshotMarker(t TestingT, snapshot *egopb.Snapshot) float64 {
 	var msg testpb.Account
-	require.NoError(t, snapshot.GetState().UnmarshalTo(&msg))
+	requireNoError(t, snapshot.GetState().UnmarshalTo(&msg))
 	return msg.GetAccountBalance()
 }

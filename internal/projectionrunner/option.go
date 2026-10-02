@@ -27,11 +27,11 @@ import (
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/projection"
 )
 
 // Option is the interface that applies a configuration option.
@@ -77,6 +77,17 @@ func WithStartOffset(startOffset time.Time) Option {
 func WithResetOffset(resetOffset time.Time) Option {
 	return optionFunc(func(runner *Runner) {
 		runner.resetOffsetTo = resetOffset
+	})
+}
+
+// WithClock replaces the real clock the runner reads time from. The clock type
+// is package-private, so only this package's tests can build one: the option
+// exists to drive the pull loop, the retries, the store backoff and the offset
+// timestamps with a manual clock instead of sleeping. A nil clock is ignored
+// and the runner keeps the real one.
+func WithClock(c clock) Option {
+	return optionFunc(func(runner *Runner) {
+		runner.clock = c
 	})
 }
 

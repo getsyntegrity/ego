@@ -25,14 +25,27 @@ package engine
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/extensions"
 )
 
+// engRestErrText is err's message, or "" for nil, so a text expectation on a
+// missing error fails on the expectation instead of panicking.
+func engRestErrText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func TestMissingRequiredExtensionsSentinel(t *testing.T) {
-	// Actors outside this package (internal/engine/...) wrap the sentinel
-	// owned by internal/extensions; callers match it through the public name.
-	assert.Same(t, extensions.ErrMissingRequiredExtensions, ErrMissingRequiredExtensions)
-	assert.EqualError(t, ErrMissingRequiredExtensions, "actor system is missing required ego extensions")
+	specs.Describe(t, "ErrMissingRequiredExtensions is the sentinel owned by the extensions package", func(s *specs.Spec) {
+		s.It("is the same error value under the public name and states the missing extensions", func(ctx *specs.Context) {
+			// Actors outside this package (internal/engine/...) wrap the sentinel
+			// owned by internal/extensions; callers match it through the public name.
+			ctx.Expect(extensions.ErrMissingRequiredExtensions == ErrMissingRequiredExtensions).To(specs.BeTrue()) //nolint:errorlint // identity is the point
+			ctx.Expect(engRestErrText(ErrMissingRequiredExtensions)).ToEqual("actor system is missing required urd extensions")
+		})
+	})
 }

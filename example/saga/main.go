@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package main demonstrates a fund transfer saga using eGo's saga process manager.
+// Package main demonstrates a fund transfer saga using Urd's saga process manager.
 //
 // This example implements a classic distributed transaction pattern: transferring
 // funds between two bank accounts. The saga coordinates the following steps:
@@ -74,16 +74,16 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/engine"
+	samplepb "github.com/getsyntegrity/urd/example/examplepb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// create the kit-logger Logger the whole runtime logs through: Urd, the
 	// actor system it sits on, and this program
 	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
 
@@ -94,8 +94,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build the eGo Config once and reuse it for both the actor system and
-	// the engine. cfg.GoaktOptions() wires the extensions eGo needs (events
+	// Build the Urd Config once and reuse it for both the actor system and
+	// the engine. cfg.GoaktOptions() wires the extensions Urd needs (events
 	// store, event stream, default supervisor, pubsub, logger adapter) at
 	// construction time.
 	cfg := engine.NewConfig(eventStore, engine.WithLogger(logger))
@@ -109,7 +109,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Plug eGo into the running actor system.
+	// Plug Urd into the running actor system.
 	engine, err := engine.NewEngine(sys, cfg)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err)

@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - "/"
+      - "/benchmark"
+      - "/example"
+      - "/inttest"
+      - "/persistence/postgres"
+      - "/publisher/kafka"
+      - "/publisher/nats"
+      - "/publisher/pulsar"
+      - "/publisher/websocket"
+      - "/test/compat"
+    target-branch: develop
+    labels: ["kind/deps"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      major:
+        patterns: ["*"]
+        update-types: [major]
+
+  # Keeps the action versions (checkout, setup-go, goreleaser...) up to date
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: develop
+    labels: ["kind/deps"]
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

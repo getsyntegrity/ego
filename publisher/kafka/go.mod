@@ -1,10 +1,11 @@
-module github.com/getsyntegrity/ego/publisher/kafka
+module github.com/getsyntegrity/urd/publisher/kafka
 
 go 1.26.0
 
 require (
 	github.com/IBM/sarama v1.60.2
-	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
@@ -33,7 +34,7 @@ require (
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (
@@ -47,4 +48,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego => ../../
+replace github.com/getsyntegrity/urd => ../../

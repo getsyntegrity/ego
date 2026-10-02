@@ -29,17 +29,16 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // -----------------------------------------------------------------------
@@ -115,65 +114,89 @@ func (x *revisionProbeDurableStateBehavior) observedPriorVersions() []uint64 {
 	return append([]uint64(nil), x.priorVersions...)
 }
 
+// durableStateRevisionRig is a started engine over a connected in-memory state
+// store with one account entity spawned on it, which most cases here start from.
+type durableStateRevisionRig struct {
+	store    *testkit.DurableStore
+	engine   *Engine
+	entityID string
+}
+
+// newDurableStateRevisionRig starts an engine named name over a fresh state
+// store and spawns the standard account behavior on it.
+func newDurableStateRevisionRig(ctx *specs.Context, name string) durableStateRevisionRig {
+	store := connectedDurableStore(ctx)
+	engine := startEngine(ctx, name, nil, WithLogger(DiscardLogger), WithStateStore(store))
+	entityID := uuid.NewString()
+	ctx.Expect(engine.DurableStateEntity(context.Background(), NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
+	return durableStateRevisionRig{store: store, engine: engine, entityID: entityID}
+}
+
+// createAccount commits the genesis command (balance 500, revision 1).
+func (r durableStateRevisionRig) createAccount(ctx *specs.Context) {
+	created := dispatch(ctx, r.engine, r.entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+	expectSuccess(ctx, created)
+	specs.ExpectT(ctx, created.Revision()).ToEqual(1)
+}
+
+// credit dispatches a credit declaring expectedRevision.
+func (r durableStateRevisionRig) credit(ctx *specs.Context, balance float64, expectedRevision uint64) command.Result {
+	return dispatch(ctx, r.engine, r.entityID, &testpb.CreditAccount{AccountId: r.entityID, Balance: balance}, command.WithExpectedRevision(expectedRevision))
+}
+
+// storedVersion returns the persisted version number of the entity.
+func (r durableStateRevisionRig) storedVersion(ctx *specs.Context) uint64 {
+	durable, err := r.store.GetLatestState(context.Background(), persistence.Unscoped(), r.entityID)
+	ctx.Expect(err).To(specs.BeNil())
+	return durable.GetVersionNumber()
+}
+
 // DS-handler-shape (tasks 4.8/4.9): a command carrying ExpectedRevision=N
 // must reach HandleCommand with the same (ctx, cmd, priorVersion, priorState)
 // shape it always had, and N must never appear as priorVersion (or anywhere
 // else in the handler's arguments) — it only travels to the conditional
 // write step.
 func TestDurableStateHandlerShapeUnchangedByExpectedRevision(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "the arguments a durable state handler receives", func(s *specs.Spec) {
+		s.It("never carry the declared ExpectedRevision", func(ctx *specs.Context) {
+			store := connectedDurableStore(ctx)
+			engine := startEngine(ctx, "DS-handler-shape", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
-	engine := newTestEngine(t, "DS-handler-shape", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			behavior := newRevisionProbeDurableStateBehavior(entityID)
+			ctx.Expect(engine.DurableStateEntity(context.Background(), behavior)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newRevisionProbeDurableStateBehavior(entityID)
-	require.NoError(t, engine.DurableStateEntity(ctx, behavior))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
+			// A second call declaring an ExpectedRevision of its own: if N ever
+			// leaked into the handler as priorVersion, the recorded value would
+			// differ from the actor's real version.
+			credited := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, credited)
 
-	// A deliberately large, unrelated-to-version ExpectedRevision: if N ever
-	// leaked into the handler as priorVersion, this call's recorded
-	// priorVersion would read 999999 instead of the actor's real version (1).
-	credited := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, credited.Outcome())
-
-	priorVersions := behavior.observedPriorVersions()
-	require.Len(t, priorVersions, 2)
-	assert.EqualValues(t, 0, priorVersions[0], "genesis call must see priorVersion=0, not ExpectedRevision=0 reinterpreted as anything else")
-	assert.EqualValues(t, 1, priorVersions[1], "second call must see the actor's real currentVersion (1), never the declared ExpectedRevision")
+			// The genesis call sees priorVersion=0, not ExpectedRevision=0
+			// reinterpreted as anything else; the second call sees the actor's
+			// real currentVersion (1), never the declared ExpectedRevision.
+			ctx.Expect(behavior.observedPriorVersions()).ToEqual([]uint64{0, 1})
+		})
+	})
 }
 
 // DS-exact-match (task 4.10): a command whose ExpectedRevision matches the
 // persisted revision commits, and the new state lands at N+1.
 func TestDurableStateExpectedRevisionExactMatchCommits(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a durable state command whose ExpectedRevision matches the persisted revision", func(s *specs.Spec) {
+		s.It("commits and the new state lands at N+1", func(ctx *specs.Context) {
+			rig := newDurableStateRevisionRig(ctx, "DS-exact-match")
+			rig.createAccount(ctx)
 
-	engine := newTestEngine(t, "DS-exact-match", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
-
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	assert.EqualValues(t, 1, created.Revision())
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
-
-	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	assert.EqualValues(t, 2, durable.GetVersionNumber())
+			result := rig.credit(ctx, 250, 1)
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
+			specs.ExpectT(ctx, rig.storedVersion(ctx)).ToEqual(2)
+		})
+	})
 }
 
 // DS-stale-store-not-cache (task 4.11): a second, independent actor instance
@@ -184,108 +207,87 @@ func TestDurableStateExpectedRevisionExactMatchCommits(t *testing.T) {
 // currentVersion, must be rejected against the real store, not accepted
 // because its local cache still agrees.
 func TestDurableStateStaleExpectedRevisionRejectedAtStoreNotCache(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an actor whose in-memory version is behind the store", func(s *specs.Spec) {
+		s.It("rejects a command that matches its own stale cache", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedDurableStore(ctx)
+			entityID := uuid.NewString()
 
-	entityID := uuid.NewString()
+			engineA := startEngine(ctx, "DS-stale-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			ctx.Expect(engineA.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	engineA := newTestEngine(t, "DS-stale-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engineA.Start(ctx))
-	require.NoError(t, engineA.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			created := dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engineA, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			// A second, independent actor instance for the same persistence ID,
+			// against the same underlying store, advances StorageRevision to 2
+			// without engineA's actor ever observing it.
+			engineB := startEngine(ctx, "DS-stale-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			ctx.Expect(engineB.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	// A second, independent actor instance for the same persistence ID,
-	// against the same underlying store, advances StorageRevision to 2
-	// without engineA's actor ever observing it.
-	engineB := newTestEngine(t, "DS-stale-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engineB.Start(ctx))
-	require.NoError(t, engineB.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			advanced := dispatch(ctx, engineB, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 100}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, advanced)
+			specs.ExpectT(ctx, advanced.Revision()).ToEqual(2)
 
-	advanced := dispatchWithMetadata(t, engineB, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 100}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, advanced.Outcome())
-	require.EqualValues(t, 2, advanced.Revision())
-
-	// engineA's actor still believes currentVersion==1; it declares
-	// ExpectedRevision=1 to match its own stale cache, but the real store is
-	// already at revision 2.
-	result := dispatchWithMetadata(t, engineA, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(result.Err(), &conflict))
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 2, actual)
+			// engineA's actor still believes currentVersion==1; it declares
+			// ExpectedRevision=1 to match its own stale cache, but the real store is
+			// already at revision 2.
+			result := dispatch(ctx, engineA, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, actual).ToEqual(2)
+		})
+	})
 }
 
 // DS-genesis-race (task 4.12): two independent DurableStateActor instances
 // (separate Engine/actor systems), both declaring ExpectedRevision=0 against
 // the same persistence ID with no prior record, race concurrently. Exactly
-// one commits, exactly one is rejected with concurrency_conflict. Run with
-// -race to prove the store's CompareAndSwap/LoadOrStore path, not an
-// external lock, is what serializes the two writers.
+// one commits, exactly one is rejected with concurrency_conflict. The store's
+// CompareAndSwap/LoadOrStore path, not an external lock, is what serializes
+// the two writers.
 func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "two durable state actors racing the genesis revision on one store", func(s *specs.Spec) {
+		s.It("commits exactly one and rejects the other with a concurrency conflict", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedDurableStore(ctx)
+			entityID := uuid.NewString()
 
-	entityID := uuid.NewString()
+			engineA := startEngine(ctx, "DS-race-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			ctx.Expect(engineA.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	engineA := newTestEngine(t, "DS-race-a", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engineA.Start(ctx))
-	require.NoError(t, engineA.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			engineB := startEngine(ctx, "DS-race-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
+			ctx.Expect(engineB.DurableStateEntity(bg, NewAccountDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	engineB := newTestEngine(t, "DS-race-b", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engineB.Start(ctx))
-	require.NoError(t, engineB.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			var wg sync.WaitGroup
+			results := make([]command.Result, 2)
+			wg.Add(2)
+			ctx.Go(func(ctx *specs.Context) {
+				defer wg.Done()
+				results[0] = dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
+			})
+			ctx.Go(func(ctx *specs.Context) {
+				defer wg.Done()
+				results[1] = dispatch(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
+			})
+			wg.Wait()
 
-	var wg sync.WaitGroup
-	results := make([]command.Result, 2)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		results[0] = dispatchWithMetadata(t, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
-	}()
-	go func() {
-		defer wg.Done()
-		results[1] = dispatchWithMetadata(t, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
-	}()
-	wg.Wait()
+			outcomes := []command.Outcome{results[0].Outcome(), results[1].Outcome()}
+			ctx.Expect(outcomes).To(specs.ContainTheSameElementsAs([]command.Outcome{command.OutcomeSuccess, command.OutcomeRejected}))
+			for _, result := range results {
+				if result.Outcome() == command.OutcomeRejected {
+					expectConcurrencyConflict(ctx, result)
+				}
+			}
 
-	successes, conflicts := 0, 0
-	for _, result := range results {
-		switch result.Outcome() {
-		case command.OutcomeSuccess:
-			successes++
-		case command.OutcomeRejected:
-			failure, ok := result.Failure()
-			require.True(t, ok)
-			code, hasCode := failure.Code()
-			require.True(t, hasCode)
-			assert.Equal(t, command.CodeConcurrencyConflict, code)
-			conflicts++
-		default:
-			t.Fatalf("unexpected outcome %v", result.Outcome())
-		}
-	}
-	assert.Equal(t, 1, successes)
-	assert.Equal(t, 1, conflicts)
-
-	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	assert.EqualValues(t, 1, durable.GetVersionNumber())
+			durable, err := store.GetLatestState(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, durable.GetVersionNumber()).ToEqual(1)
+		})
+	})
 }
 
 // DS-both-checks-independent (task 4.13): the handler returns a version
@@ -294,31 +296,18 @@ func TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit(t *testing.T)
 // command must still fail with concurrency_conflict — checkPreconditions
 // passing is not sufficient for the write to succeed.
 func TestDurableStateCheckPreconditionsPassesYetExpectedRevisionConflicts(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a handler version that passes checkPreconditions", func(s *specs.Spec) {
+		s.It("still conflicts when the declared ExpectedRevision no longer matches", func(ctx *specs.Context) {
+			rig := newDurableStateRevisionRig(ctx, "DS-both-checks")
+			rig.createAccount(ctx)
 
-	engine := newTestEngine(t, "DS-both-checks", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
-
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
-
-	// priorVersion=1, handler returns priorVersion+1=2: adjacent, so
-	// checkPreconditions passes. ExpectedRevision=99 does not match the
-	// persisted revision (1), so the conditional write still rejects.
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
+			// priorVersion=1, handler returns priorVersion+1=2: adjacent, so
+			// checkPreconditions passes. ExpectedRevision=99 does not match the
+			// persisted revision (1), so the conditional write still rejects.
+			result := rig.credit(ctx, 250, 99)
+			expectConcurrencyConflict(ctx, result)
+		})
+	})
 }
 
 // DS-non-adjacent-not-conflict (task 4.14): a handler-produced non-adjacent
@@ -326,26 +315,24 @@ func TestDurableStateCheckPreconditionsPassesYetExpectedRevisionConflicts(t *tes
 // concurrency_conflict — its Failure.Code() must not read
 // "concurrency_conflict".
 func TestDurableStateNonAdjacentVersionIsNeverConcurrencyConflict(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a handler-produced non-adjacent version", func(s *specs.Spec) {
+		s.It("fails without the concurrency_conflict code", func(ctx *specs.Context) {
+			store := connectedDurableStore(ctx)
+			engine := startEngine(ctx, "DS-non-adjacent", nil, WithLogger(DiscardLogger), WithStateStore(store))
 
-	engine := newTestEngine(t, "DS-non-adjacent", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.DurableStateEntity(context.Background(), enginetest.NewBadVersionDurableStateBehavior(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, enginetest.NewBadVersionDurableStateBehavior(entityID)))
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			ctx.Expect(result.Outcome()).To(specs.NotEqual(command.OutcomeSuccess))
 
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.NotEqual(t, command.OutcomeSuccess, result.Outcome())
-
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	if hasCode {
-		assert.NotEqual(t, command.CodeConcurrencyConflict, code)
-	}
+			failure, ok := result.Failure()
+			ctx.Expect(ok).To(specs.BeTrue())
+			if code, hasCode := failure.Code(); hasCode {
+				ctx.Expect(code).To(specs.NotEqual(command.CodeConcurrencyConflict))
+			}
+		})
+	})
 }
 
 // DS-no-partial-commit (task 4.15): on conflict, the actor's in-memory
@@ -354,73 +341,44 @@ func TestDurableStateNonAdjacentVersionIsNeverConcurrencyConflict(t *testing.T) 
 // (pre-conflict) revision, which must still succeed against the
 // uncorrupted state.
 func TestDurableStateNoPartialCommitOnConflict(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a durable state actor after a rejected conflicting write", func(s *specs.Spec) {
+		s.It("keeps its state and the stored revision untouched", func(ctx *specs.Context) {
+			rig := newDurableStateRevisionRig(ctx, "DS-no-partial-commit")
+			rig.createAccount(ctx)
 
-	engine := newTestEngine(t, "DS-no-partial-commit", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			conflicted := rig.credit(ctx, 999, 99)
+			ctx.Expect(conflicted.Outcome()).ToEqual(command.OutcomeRejected)
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
+			// The rejected write's 999-credit must never have been applied, and the
+			// stored revision must still read 1 — proving both the in-memory state
+			// and the durable record are untouched by the conflicting attempt.
+			specs.ExpectT(ctx, rig.storedVersion(ctx)).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
-
-	conflicted := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 999}, command.WithExpectedRevision(99))
-	require.Equal(t, command.OutcomeRejected, conflicted.Outcome())
-
-	// The rejected write's 999-credit must never have been applied, and the
-	// stored revision must still read 1 — proving both the in-memory state
-	// and the durable record are untouched by the conflicting attempt.
-	durable, err := store.GetLatestState(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, durable)
-	assert.EqualValues(t, 1, durable.GetVersionNumber())
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
-
-	state, ok := result.State()
-	require.True(t, ok)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance(), "the rejected +999 credit must not have landed, only the earlier 500 plus this +250")
+			// The follow-up balance is the earlier 500 plus this +250 only.
+			result := rig.credit(ctx, 250, 1)
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
+		})
+	})
 }
 
 // DS-conflict-result-shape (task 4.16): the caller's command.Result on a
 // conflict reports OutcomeRejected and Failure.Code()==("concurrency_conflict", true).
 func TestDurableStateConflictResultShape(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "the command result of a conflicting durable state write", func(s *specs.Spec) {
+		s.It("reports a rejected outcome with the concurrency_conflict code", func(ctx *specs.Context) {
+			rig := newDurableStateRevisionRig(ctx, "DS-conflict-shape")
+			rig.createAccount(ctx)
 
-	engine := newTestEngine(t, "DS-conflict-shape", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			result := dispatch(ctx, rig.engine, rig.entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
+			ctx.Expect(result.Err()).To(specs.MatchError(command.ErrRejected))
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	require.True(t, errors.Is(result.Err(), command.ErrRejected))
-
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(result.Err(), &conflict))
-	assert.Equal(t, persistence.ExpectGenesis(), conflict.Expected())
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
+			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectGenesis())
+		})
+	})
 }
 
 // DS-storage-revision-authority (task 4.17): when the actor's currentVersion
@@ -430,39 +388,24 @@ func TestDurableStateConflictResultShape(t *testing.T) {
 // even though nothing about the actor's own in-memory bookkeeping ever
 // changed.
 func TestDurableStateConditionalWriteEvaluatedAgainstStorageRevision(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a durable state actor whose version fell behind the store", func(s *specs.Spec) {
+		s.It("evaluates the conditional write against the real StorageRevision", func(ctx *specs.Context) {
+			rig := newDurableStateRevisionRig(ctx, "DS-storage-authority")
+			rig.createAccount(ctx)
 
-	engine := newTestEngine(t, "DS-storage-authority", nil, WithLogger(DiscardLogger), WithStateStore(store))
-	require.NoError(t, engine.Start(ctx))
+			// Another process writes directly to the store, bypassing this actor
+			// entirely (no dispatch, no command) — this actor's currentVersion still
+			// reads 1, but the real StorageRevision is now 2.
+			ctx.Expect(writeDirectDurableState(context.Background(), rig.store, rig.entityID, 2, &testpb.Account{AccountId: rig.entityID, AccountBalance: 999})).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior(entityID)))
-
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
-
-	// Another process writes directly to the store, bypassing this actor
-	// entirely (no dispatch, no command) — this actor's currentVersion still
-	// reads 1, but the real StorageRevision is now 2.
-	require.NoError(t, writeDirectDurableState(ctx, store, entityID, 2, &testpb.Account{AccountId: entityID, AccountBalance: 999}))
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(result.Err(), &conflict))
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 2, actual)
+			result := rig.credit(ctx, 250, 1)
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, actual).ToEqual(2)
+		})
+	})
 }
 
 // writeDirectDurableState writes state directly to store, unconditionally,

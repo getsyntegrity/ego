@@ -27,595 +27,204 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
-	goakt "github.com/tochemey/goakt/v4/actor"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	mocks "github.com/getsyntegrity/ego/mocks/persistence"
-	"github.com/getsyntegrity/ego/persistence"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
+// errStoreFailure is the error the mocked state store returns in the failure
+// cases.
+var errStoreFailure = errors.New("durable state actor test: state store failure")
+
+// expectAccountState asserts that reply carries a state reply at sequence
+// number sequence whose state is the account id with the given balance.
+func expectAccountState(ctx *specs.Context, reply *egopb.CommandReply, sequence uint64, id string, balance float64) {
+	stateReply, ok := reply.GetReply().(*egopb.CommandReply_StateReply)
+	ctx.Expect(ok).To(specs.BeTrue())
+	ctx.Expect(stateReply.StateReply.GetSequenceNumber()).ToEqual(sequence)
+
+	resulting := new(testpb.Account)
+	ctx.Expect(stateReply.StateReply.GetState().UnmarshalTo(resulting)).To(specs.BeNil())
+	expected := &testpb.Account{AccountId: id, AccountBalance: balance}
+	ctx.Expect(proto.Equal(expected, resulting)).To(specs.BeTrue())
+}
+
 func TestDurableStateActorPreStartExtensions(t *testing.T) {
-	t.Run("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("returns an error instead of panicking when the telemetry extension is registered with an unexpected type", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			rig := startActorRig(ctx, durableStore,
+				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID})
 
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestDurableStateMistypedTelemetrySystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				&enginetest.MistypedExtension{Name: extensions.TelemetryExtensionID},
-			),
-			goakt.WithActorInitMaxRetries(1))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
-
-		pid, err := actorSystem.Spawn(ctx, "durable-state-mistyped-telemetry", New())
-		require.Error(t, err)
-		require.Nil(t, pid)
-		assert.ErrorIs(t, err, extensions.ErrMissingRequiredExtensions)
-
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			pid, err := rig.system.Spawn(context.Background(), "durable-state-mistyped-telemetry", New())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(pid).To(specs.BeNil())
+			ctx.Expect(err).To(specs.MatchError(extensions.ErrMissingRequiredExtensions))
+		})
 	})
 }
 
 func TestDurableStateBehavior(t *testing.T) {
-	t.Run("with state reply", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-		err := durableStore.Connect(ctx)
-		require.NoError(t, err)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		actor := New()
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NotNil(t, pid)
-
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		require.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		require.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: persistenceID,
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		require.True(t, proto.Equal(expected, resultingState))
-
-		// stop the actor system
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		err = durableStore.Disconnect(ctx)
-		require.NoError(t, err)
-
-		eventStream.Close()
-	})
-	t.Run("with error reply", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-		// create a persistence id
-		persistenceID := uuid.NewString()
-		// create the persistence behavior
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		err := durableStore.Connect(ctx)
-		require.NoError(t, err)
-
-		// create an instance of events stream
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		// create the persistence actor using the behavior previously created
-		persistentActor := New()
-		// spawn the actor
-		pid, _ := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NotNil(t, pid)
-
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
-		// send the command to the actor
-		reply, err := goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: "different-id",
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Equal(t, "command sent to the wrong entity", errorReply.ErrorReply.GetMessage())
-
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		err = durableStore.Disconnect(ctx)
-		require.NoError(t, err)
-
-		eventStream.Close()
-	})
-	t.Run("with state recovery from state store", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		err := durableStore.Connect(ctx)
-		require.NoError(t, err)
-
-		eventStream := eventstream.New()
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		persistentActor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		var command proto.Message
-
-		command = &testpb.CreateAccount{AccountBalance: 500.00}
-
-		reply, err := goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState := new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected := &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 500.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		// send another command to credit the balance
-		command = &testpb.CreditAccount{
-			AccountId: persistenceID,
-			Balance:   250,
-		}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state = commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		assert.EqualValues(t, 2, state.StateReply.GetSequenceNumber())
-
-		// marshal the resulting state
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-
-		assert.True(t, proto.Equal(expected, resultingState))
-		// wait a while
-
-		// restart the actor
-		pid, err = actorSystem.ReSpawn(ctx, behavior.ID())
-		require.NoError(t, err)
-
-		// fetch the current state
-		command = &egopb.GetStateCommand{}
-		reply, err = goakt.Ask(ctx, pid, command, time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply = reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		resultingState = new(testpb.Account)
-		err = state.StateReply.GetState().UnmarshalTo(resultingState)
-		require.NoError(t, err)
-		expected = &testpb.Account{
-			AccountId:      persistenceID,
-			AccountBalance: 750.00,
-		}
-		assert.True(t, proto.Equal(expected, resultingState))
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-
-		// free resources
-		assert.NoError(t, durableStore.Disconnect(ctx))
-		eventStream.Close()
-	})
-	t.Run("with state recovery from state store failure", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(nil, assert.AnError)
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		persistentActor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-
-		eventStream.Close()
-		durableStore.AssertExpectations(t)
-	})
-	t.Run("with state recovery from state store with initial parsing failure", func(t *testing.T) {
-		ctx := context.TODO()
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		latestState := &egopb.DurableState{
-			ResultingState: &anypb.Any{
-				TypeUrl: "invalid-type-url",
-				Value:   []byte("invalid-value"),
-			},
-		}
-		durableStore := new(mocks.StateStore)
-		durableStore.EXPECT().Ping(mock.Anything).Return(nil)
-		durableStore.EXPECT().GetLatestState(mock.Anything, persistence.Unscoped(), behavior.ID()).Return(latestState, nil)
-
-		// create an actor system
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		assert.NotNil(t, actorSystem)
-
-		// start the actor system
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		persistentActor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), persistentActor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.Error(t, err)
-		require.Nil(t, pid)
-
-		err = actorSystem.Stop(ctx)
-		assert.NoError(t, err)
-
-		eventStream.Close()
-		durableStore.AssertExpectations(t)
-	})
-	t.Run("with telemetry extension", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		noopTracer := tracenoop.NewTracerProvider().Tracer("test")
-		noopMeter := noop.NewMeterProvider().Meter("test")
-
-		// create an actor system with telemetry extension
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTelemetryExtension(noopTracer, noopMeter),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NotNil(t, actorSystem)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		command := &testpb.CreateAccount{AccountBalance: 500.00}
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-		state := commandReply.GetReply().(*egopb.CommandReply_StateReply)
-		require.EqualValues(t, 1, state.StateReply.GetSequenceNumber())
-
-		// stop the actor system (exercises PostStop metrics path)
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		err = durableStore.Disconnect(ctx)
-		require.NoError(t, err)
-
-		eventStream.Close()
-	})
-	t.Run("with mismatched state types from HandleCommand", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-
-		persistenceID := uuid.NewString()
-		behavior := &badStateDurableStateBehavior{id: persistenceID}
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NotNil(t, actorSystem)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		command := &testpb.CreateAccount{AccountBalance: 500.00}
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Contains(t, errorReply.ErrorReply.GetMessage(), "mismatch state types")
-
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		err = durableStore.Disconnect(ctx)
-		require.NoError(t, err)
-
-		eventStream.Close()
-	})
-	t.Run("with invalid version increment from HandleCommand", func(t *testing.T) {
-		ctx := context.TODO()
-
-		durableStore := testkit.NewDurableStore()
-		require.NoError(t, durableStore.Connect(ctx))
-
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewBadVersionDurableStateBehavior(persistenceID)
-
-		eventStream := eventstream.New()
-
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NotNil(t, actorSystem)
-
-		err = actorSystem.Start(ctx)
-		require.NoError(t, err)
-
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor, goakt.WithDependencies(behavior), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		command := &testpb.CreateAccount{AccountBalance: 500.00}
-		reply, err := goakt.Ask(ctx, pid, command, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-		require.IsType(t, new(egopb.CommandReply), reply)
-
-		commandReply := reply.(*egopb.CommandReply)
-		require.IsType(t, new(egopb.CommandReply_ErrorReply), commandReply.GetReply())
-
-		errorReply := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		assert.Contains(t, errorReply.ErrorReply.GetMessage(), "received version")
-
-		err = actorSystem.Stop(ctx)
-		require.NoError(t, err)
-
-		err = durableStore.Disconnect(ctx)
-		require.NoError(t, err)
-
-		eventStream.Close()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		bg := context.Background()
+
+		s.It("with state reply", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
+			rig := startActorRig(ctx, durableStore)
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			expectAccountState(ctx, reply, 1, persistenceID, 500.00)
+
+			// credit the balance
+			reply = ask(ctx, bg, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250})
+			expectAccountState(ctx, reply, 2, persistenceID, 750.00)
+		})
+
+		s.It("with error reply", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
+			rig := startActorRig(ctx, durableStore)
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			expectAccountState(ctx, reply, 1, persistenceID, 500.00)
+
+			// a command addressed to another entity is rejected in the reply
+			reply = ask(ctx, bg, pid, &testpb.CreditAccount{AccountId: "different-id", Balance: 250})
+			message, isError := errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			ctx.Expect(message).To(specs.Equal("command sent to the wrong entity"))
+		})
+
+		s.It("with state recovery from state store", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
+			rig := startActorRig(ctx, durableStore)
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			expectAccountState(ctx, reply, 1, persistenceID, 500.00)
+
+			reply = ask(ctx, bg, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 250})
+			expectAccountState(ctx, reply, 2, persistenceID, 750.00)
+
+			// restart the actor: it must come back with the committed state
+			pid, err := rig.system.ReSpawn(bg, behavior.ID())
+			ctx.Expect(err).To(specs.BeNil())
+			waitRunning(ctx, pid)
+
+			reply = ask(ctx, bg, pid, &egopb.GetStateCommand{})
+			expectAccountState(ctx, reply, 2, persistenceID, 750.00)
+		})
+
+		s.It("with telemetry extension", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountDurableStateBehavior(persistenceID)
+
+			noopTracer := tracenoop.NewTracerProvider().Tracer("test")
+			noopMeter := noop.NewMeterProvider().Meter("test")
+			rig := startActorRig(ctx, durableStore, extensions.NewTelemetryExtension(noopTracer, noopMeter))
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			expectAccountState(ctx, reply, 1, persistenceID, 500.00)
+
+			// the rig stops the system in cleanup, which exercises the PostStop
+			// metrics path
+		})
+
+		s.It("with mismatched state types from HandleCommand", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			behavior := &badStateDurableStateBehavior{id: uuid.NewString()}
+			rig := startActorRig(ctx, durableStore)
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			message, isError := errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			ctx.Expect(message).To(specs.Contain("mismatch state types"))
+		})
+
+		s.It("with invalid version increment from HandleCommand", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			behavior := enginetest.NewBadVersionDurableStateBehavior(uuid.NewString())
+			rig := startActorRig(ctx, durableStore)
+			pid := rig.spawn(ctx, behavior)
+
+			reply := ask(ctx, bg, pid, &testpb.CreateAccount{AccountBalance: 500.00})
+			message, isError := errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
+			ctx.Expect(message).To(specs.Contain("received version"))
+		})
+
+		// The two store-failure cases below need no actor system: recoverFromStore
+		// is the whole behavior under test, so they run on the actor struct with a
+		// StateStoreMock.
+		s.It("with state recovery from state store failure", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("GetLatestState").
+				Expect(mock.Any(), persistence.Unscoped(), persistenceID).
+				Return(nil, errStoreFailure)
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    enginetest.NewStateStoreMock(ctrl),
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.MatchError(errStoreFailure))
+			ctx.Expect(entity.currentState).To(specs.BeNil())
+			ctx.Expect(entity.currentVersion).ToEqual(uint64(0))
+		})
+
+		s.It("with state recovery from state store with initial parsing failure", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			latestState := &egopb.DurableState{
+				ResultingState: &anypb.Any{
+					TypeUrl: "invalid-type-url",
+					Value:   []byte("invalid-value"),
+				},
+			}
+			ctrl := mock.NewController(ctx)
+			ctrl.Method("GetLatestState").
+				Expect(mock.Any(), persistence.Unscoped(), persistenceID).
+				Return(latestState, nil)
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountDurableStateBehavior(persistenceID),
+				stateStore:    enginetest.NewStateStoreMock(ctrl),
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recoverFromStore(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.MatchRegex("failed to unmarshal the latest state"))
+			ctx.Expect(entity.currentState).To(specs.BeNil())
+			ctx.Expect(entity.currentVersion).ToEqual(uint64(0))
+		})
 	})
 }
 
@@ -667,58 +276,32 @@ func (x *badStateDurableStateBehavior) UnmarshalBinary(data []byte) error {
 // goakt.Ask with a plain context, deliberately bypassing
 // Engine.SendCommand's resolve-and-attach step.
 func TestDurableStateActorTenancyGate(t *testing.T) {
-	t.Run("missing TenantContext blocks HandleCommand and persistence", func(t *testing.T) {
-		ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("missing TenantContext blocks HandleCommand and persistence", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-		durableStore := testkit.NewDurableStore()
-		persistenceID := uuid.NewString()
-		behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-		require.NoError(t, durableStore.Connect(ctx))
+			// No TenantContext attached: mirrors a caller that bypasses
+			// Engine.SendCommand entirely.
+			reply := ask(ctx, context.Background(), pid, &testpb.CreateAccount{AccountBalance: 500})
+			message, isError := errorReplyMessage(reply)
+			ctx.Expect(isError).To(specs.BeTrue())
 
-		eventStream := eventstream.New()
+			_, wantErr := tenancy.Require(context.Background())
+			ctx.Expect(message).To(specs.Equal(wantErr.Error()))
 
-		actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-			goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-			goakt.WithExtensions(
-				extensions.NewDurableStateStore(durableStore),
-				extensions.NewEventsStream(eventStream),
-				extensions.NewTenancyMarker(),
-			),
-			goakt.WithActorInitMaxRetries(3))
-		require.NoError(t, err)
-		require.NoError(t, actorSystem.Start(ctx))
+			// HandleCommand must never run without an attached TenantContext
+			ctx.Expect(behavior.InvocationCount()).ToEqual(0)
 
-		actor := New()
-		pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-			goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-		require.NoError(t, err)
-		require.NotNil(t, pid)
-
-		// No TenantContext attached: mirrors a caller that bypasses
-		// Engine.SendCommand entirely.
-		reply, err := goakt.Ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-		require.NoError(t, err)
-		require.NotNil(t, reply)
-
-		commandReply, ok := reply.(*egopb.CommandReply)
-		require.True(t, ok)
-		errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-		require.True(t, ok, "expected an error reply because no TenantContext was attached")
-
-		_, wantErr := tenancy.Require(context.Background())
-		assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage())
-
-		assert.Zero(t, behavior.InvocationCount(), "HandleCommand must never run without an attached TenantContext")
-
-		scopeA, err := persistence.NewTenantScope("acme")
-		require.NoError(t, err)
-		latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-		require.NoError(t, err)
-		assert.Nil(t, latest, "no state may be persisted when the gate blocks the command")
-
-		require.NoError(t, durableStore.Disconnect(ctx))
-		eventStream.Close()
-		require.NoError(t, actorSystem.Stop(ctx))
+			// no state may be persisted when the gate blocks the command
+			scopeA := tenantScopeFor(ctx, "acme")
+			latest, err := durableStore.GetLatestState(context.Background(), scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.BeNil())
+		})
 	})
 }
 
@@ -730,43 +313,44 @@ func TestDurableStateActorTenancyGate(t *testing.T) {
 // holds no resolver field at all — see Actor.tenantAware's doc
 // comment) when one is already attached.
 func TestDurableStateActorVerifyTenantForPersist(t *testing.T) {
-	t.Run("legacy mode is always a no-op", func(t *testing.T) {
-		entity := &Actor{}
-		assert.NoError(t, entity.verifyTenantForPersist(context.Background()))
-	})
+	specs.Describe(t, "verifyTenantForPersist fails closed in tenant-aware mode when no valid TenantContext is attached", func(s *specs.Spec) {
+		s.It("legacy mode is always a no-op", func(ctx *specs.Context) {
+			entity := &Actor{}
+			ctx.Expect(entity.verifyTenantForPersist(context.Background())).To(specs.BeNil())
+		})
 
-	t.Run("tenant-aware mode fails closed when no TenantContext is attached", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
-		err := entity.verifyTenantForPersist(context.Background())
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
-	})
+		s.It("tenant-aware mode fails closed when no TenantContext is attached", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
+			err := entity.verifyTenantForPersist(context.Background())
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 
-	t.Run("tenant-aware mode succeeds against an already-attached TenantContext", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
-		tc, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
-		ctx, err := tenancy.Attach(context.Background(), tc)
-		require.NoError(t, err)
-		assert.NoError(t, entity.verifyTenantForPersist(ctx))
-	})
+		s.It("tenant-aware mode succeeds against an already-attached TenantContext", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
+			tc := tenantContextFor(ctx, "acme")
+			attached, err := tenancy.Attach(context.Background(), tc)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(entity.verifyTenantForPersist(attached)).To(specs.BeNil())
+		})
 
-	// Blocker 2 inheritance (EGO-TENANT-006 review fix): a resolver
-	// returning the zero-value tenancy.TenantContext{} (Blocker 1) is now
-	// rejected by tenancy.Attach itself (design.md Decision D8) before the
-	// command ever reaches this actor, so ctx here ends up with nothing
-	// attached — the same "missing" case this gate already covered. No
-	// code change to verifyTenantForPersist was needed to inherit this
-	// protection; it fails closed purely because tenancy.Require now
-	// rejects malformed content, and Attach never let one through.
-	t.Run("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
+		// Blocker 2 inheritance (EGO-TENANT-006 review fix): a resolver
+		// returning the zero-value tenancy.TenantContext{} (Blocker 1) is now
+		// rejected by tenancy.Attach itself (design.md Decision D8) before the
+		// command ever reaches this actor, so ctx here ends up with nothing
+		// attached — the same "missing" case this gate already covered. No
+		// code change to verifyTenantForPersist was needed to inherit this
+		// protection; it fails closed purely because tenancy.Require now
+		// rejects malformed content, and Attach never let one through.
+		s.It("a resolver-invalid TenantContext never gets attached, so persistence still fails closed", func(ctx *specs.Context) {
+			entity := &Actor{tenantAware: true}
 
-		ctx, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
-		require.Error(t, attachErr)
-		assert.True(t, errors.Is(attachErr, tenancy.ErrInvalid))
+			attached, attachErr := tenancy.Attach(context.Background(), tenancy.TenantContext{})
+			ctx.Expect(attachErr).To(specs.Not(specs.BeNil()))
+			ctx.Expect(attachErr).To(specs.MatchError(tenancy.ErrInvalid))
 
-		err := entity.verifyTenantForPersist(ctx)
-		assert.True(t, errors.Is(err, tenancy.ErrMissing))
+			err := entity.verifyTenantForPersist(attached)
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrMissing))
+		})
 	})
 }
 
@@ -779,58 +363,33 @@ func TestDurableStateActorVerifyTenantForPersist(t *testing.T) {
 // it (there is no resolver reachable from the actor to re-resolve with in
 // the first place).
 func TestDurableStateActorTenancyWritePath(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("persists through a TenantContext attached at the trust boundary", func(ctx *specs.Context) {
+			durableStore := connectedDurableStore(ctx)
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
+			rig := startActorRig(ctx, durableStore, extensions.NewTenancyMarker())
+			pid := rig.spawnForTenant(ctx, behavior, "acme")
 
-	durableStore := testkit.NewDurableStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewTenancyProbeDurableStateBehavior(persistenceID)
-	require.NoError(t, durableStore.Connect(ctx))
+			tenant := tenantContextFor(ctx, "acme")
+			reply := ask(ctx, attachedTo(ctx, tenant), pid, &testpb.CreateAccount{AccountBalance: 500})
 
-	eventStream := eventstream.New()
+			// a command with a TenantContext already attached must succeed
+			// through persistStateAndPublish
+			ctx.Expect(isStateReply(reply)).To(specs.BeTrue())
+			ctx.Expect(behavior.InvocationCount()).ToEqual(1)
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewDurableStateStore(durableStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// HandleCommand must observe the exact TenantContext attached at the
+			// trust boundary
+			observed, ok := behavior.ObservedTenant()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(observed).To(specs.Equal(tenant))
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")), goakt.WithLongLived())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-
-	tenant, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantCtx, err := tenancy.Attach(ctx, tenant)
-	require.NoError(t, err)
-
-	reply, err := goakt.Ask(tenantCtx, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	require.NotNil(t, reply)
-
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"a command with a TenantContext already attached must succeed through persistStateAndPublish")
-
-	assert.EqualValues(t, 1, behavior.InvocationCount())
-	observed, ok := behavior.ObservedTenant()
-	require.True(t, ok)
-	assert.Equal(t, tenant, observed, "HandleCommand must observe the exact TenantContext attached at the trust boundary")
-
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	latest, err := durableStore.GetLatestState(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latest, "the state must be persisted once the tenant is confirmed present")
-
-	require.NoError(t, durableStore.Disconnect(ctx))
-	eventStream.Close()
-	require.NoError(t, actorSystem.Stop(ctx))
+			// the state must be persisted once the tenant is confirmed present
+			scopeA := tenantScopeFor(ctx, "acme")
+			latest, err := durableStore.GetLatestState(context.Background(), scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+		})
+	})
 }

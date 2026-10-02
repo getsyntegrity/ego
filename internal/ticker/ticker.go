@@ -34,11 +34,26 @@ type Ticker struct {
 	mutex     sync.Mutex
 	ticking   bool
 	stopCh    chan bool
+	source    tickSource
+}
+
+// tickSource starts a periodic source of time and returns its channel and a function that releases it.
+// It is the only seam between the ticker and the wall clock: production uses realSource, tests pass a
+// source they fire by hand.
+type tickSource func(interval time.Duration) (ticks <-chan time.Time, stop func())
+
+func realSource(interval time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(interval)
+	return t.C, t.Stop
 }
 
 // New creates an instance of Ticker that ticks every intervals.
 // It includes some kind of back-pressure for slow receivers
 func New(intervals time.Duration) *Ticker {
+	return newWithSource(intervals, realSource)
+}
+
+func newWithSource(intervals time.Duration, source tickSource) *Ticker {
 	if intervals <= 0 {
 		panic("intervals must be greater than zero")
 	}
@@ -47,6 +62,7 @@ func New(intervals time.Duration) *Ticker {
 		intervals: intervals,
 		stopCh:    make(chan bool),
 		ticking:   false,
+		source:    source,
 	}
 }
 
@@ -81,16 +97,16 @@ func (t *Ticker) Ticking() bool {
 }
 
 func (t *Ticker) tickingLoop() {
-	ticker := time.NewTicker(t.intervals)
+	ticks, stop := t.source(t.intervals)
 	for {
 		select {
-		case tc := <-ticker.C:
+		case tc := <-ticks:
 			select {
 			case t.Ticks <- tc:
 			default:
 			}
 		case <-t.stopCh:
-			ticker.Stop()
+			stop()
 			return
 		}
 	}

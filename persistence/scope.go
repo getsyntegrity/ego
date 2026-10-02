@@ -25,7 +25,7 @@ package persistence
 import (
 	"errors"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // ErrInvalidScope is returned when an empty/invalid tenancy.TenantID is

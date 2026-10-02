@@ -1,0 +1,47 @@
+# Allowlist of the unit-test gate for rule 4 (real resources in test files), issue #204.
+#
+# Each line is a test file that is legitimately outside the unit lane, with the one-line reason. The check is
+# static and per file: it names the call, it does not prove the call runs in every test of the file.
+# A listed file that no longer makes such a call is a WARNING (an error with -strict), so this list stays honest.
+#
+# Format: path | reason
+benchmark/benchmark_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+compose/goakt/app_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/behavior_dependency_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/behavior_kind_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/engine_lifecycle_fixes_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/engine_tenant_cluster_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/engine_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/helper_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/logger_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/option_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/projection_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/publisher_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/specs_helpers_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+engine/tenancy_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+internal/engine/durablestate/durable_state_actor_rig_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/eventsource/event_sourced_actor_rig_test.go | shared rig that starts a real in-process goakt actor system for the eventsource actor specs (component test, outside the unit lane per #201)
+internal/engine/eventsource/events_writer_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/eventsource/snapshots_writer_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/eventsource/snapshots_writer_contract_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/projection/projection_actor_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/saga/saga_actor_tenant_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/engine/saga/saga_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/extensions/lookup_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+internal/instrumentation/instrumentation_test.go | architecture test: shells out to `go list -deps` to check the import closure
+internal/logging/logging_test.go | architecture test: shells out to `go list -deps` to check the import closure
+internal/projectionrunner/runner_test.go | architecture test: shells out to `go list -deps` to check the import closure
+internal/runtimeconsumer/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+migration/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+migration/tenant_adoption_test.go | starts a real in-process goakt actor system (component test, outside the unit lane per #201)
+port/adapter/adapter_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+port/adapter/adaptertest/architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+port/behavior/behavior_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+port/publishing/publishing_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+port/publishing/publishingtest/architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+port/runtime/runtime_architecture_test.go | architecture test: shells out to `go list -deps` to check the import closure
+publisher/kafka/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+publisher/nats/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+publisher/pulsar/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+publisher/websocket/closure_test.go | architecture test: shells out to `go list -deps` to check the import closure
+publisher/websocket/server_test.go | websocket conformance against a loopback httptest server, no external network

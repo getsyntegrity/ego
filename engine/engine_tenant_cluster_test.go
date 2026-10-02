@@ -29,18 +29,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/tenancy"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
-// TestEngineRemoteSpawnTenantBinding runs the spawn-binding contract
+// TestClusterEngineRemoteSpawnTenantBinding runs the spawn-binding contract
 // against a real two-node cluster. With RoundRobin placement over two
 // members, a run of spawns from node1 places some entities on node2, so
 // node1 receives REMOTE PIDs: the only way node1 can learn such an actor's
@@ -48,101 +46,108 @@ import (
 // landed locally or remotely, a same-tenant re-spawn must be an idempotent
 // success and a different-tenant re-spawn must fail with
 // ErrSpawnTenantMismatch — from either node.
-func TestEngineRemoteSpawnTenantBinding(t *testing.T) {
-	ctx := context.Background()
-	host := "127.0.0.1"
+func TestClusterEngineRemoteSpawnTenantBinding(t *testing.T) {
+	specs.Describe(t, "spawn tenant binding across a two-node cluster", func(s *specs.Spec) {
+		s.It("keeps same-tenant respawns idempotent and rejects other tenants, local or remote", func(ctx *specs.Context) {
+			bg := context.Background()
+			host := "127.0.0.1"
 
-	ports := dynaport.Get(6)
-	gossipAddrs := []string{
-		net.JoinHostPort(host, strconv.Itoa(ports[0])),
-		net.JoinHostPort(host, strconv.Itoa(ports[3])),
-	}
+			ports := dynaport.Get(6)
+			gossipAddrs := []string{
+				net.JoinHostPort(host, strconv.Itoa(ports[0])),
+				net.JoinHostPort(host, strconv.Itoa(ports[3])),
+			}
 
-	newNode := func(gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			newNode := func(gossipPort, peersPort, remotingPort int) (goakt.ActorSystem, *Config) {
+				store := connectedEventsStore(ctx)
 
-		cfg := NewConfig(store,
-			WithLogger(DiscardLogger),
-			WithEntityKinds(new(AccountEventSourcedBehavior)),
-			WithTenantResolver(perCallerTenantResolver{}),
-		)
+				cfg := NewConfig(store,
+					WithLogger(DiscardLogger),
+					WithEntityKinds(new(AccountEventSourcedBehavior)),
+					WithTenantResolver(perCallerTenantResolver{}),
+				)
 
-		provider := &mockClusterProvider{id: "test", peers: gossipAddrs}
-		clusterCfg := goakt.NewClusterConfig().
-			WithDiscovery(provider).
-			WithDiscoveryPort(gossipPort).
-			WithPeersPort(peersPort).
-			WithMinimumPeersQuorum(1).
-			WithReplicaCount(1).
-			WithPartitionCount(7).
-			WithKinds(ClusterKinds()...)
+				provider := &mockClusterProvider{id: "test", peers: gossipAddrs}
+				clusterCfg := goakt.NewClusterConfig().
+					WithDiscovery(provider).
+					WithDiscoveryPort(gossipPort).
+					WithPeersPort(peersPort).
+					WithMinimumPeersQuorum(1).
+					WithReplicaCount(1).
+					WithPartitionCount(7).
+					WithKinds(ClusterKinds()...)
 
-		goaktOpts := append(cfg.GoaktOptions(),
-			goakt.WithCluster(clusterCfg),
-			goakt.WithRemote(remote.NewConfig(host, remotingPort)),
-		)
+				goaktOpts := append(cfg.GoaktOptions(),
+					goakt.WithCluster(clusterCfg),
+					goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+				)
 
-		sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
-		require.NoError(t, err)
-		return sys, cfg
-	}
+				sys, err := goakt.NewActorSystem("Sample", goaktOpts...)
+				ctx.Expect(err).To(specs.BeNil())
+				return sys, cfg
+			}
 
-	sys1, cfg1 := newNode(ports[0], ports[1], ports[2])
-	sys2, cfg2 := newNode(ports[3], ports[4], ports[5])
+			sys1, cfg1 := newNode(ports[0], ports[1], ports[2])
+			sys2, cfg2 := newNode(ports[3], ports[4], ports[5])
 
-	errs := make(chan error, 2)
-	go func() { errs <- sys1.Start(ctx) }()
-	go func() { errs <- sys2.Start(ctx) }()
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	t.Cleanup(func() {
-		_ = sys1.Stop(context.Background())
-		_ = sys2.Stop(context.Background())
+			errs := make(chan error, 2)
+			go func() { errs <- sys1.Start(bg) }()
+			go func() { errs <- sys2.Start(bg) }()
+			ctx.Expect(<-errs).To(specs.BeNil())
+			ctx.Expect(<-errs).To(specs.BeNil())
+			ctx.Cleanup(func() {
+				_ = sys1.Stop(bg)
+				_ = sys2.Stop(bg)
+			})
+
+			// The two nodes must form a cluster.
+			ctx.Eventually(func() any {
+				peers1, err1 := sys1.Peers(bg, time.Second)
+				peers2, err2 := sys2.Peers(bg, time.Second)
+				return err1 == nil && err2 == nil && len(peers1) == 1 && len(peers2) == 1
+			}, specs.BeTrue(), specs.WithTimeout(30*time.Second), specs.WithInterval(500*time.Millisecond))
+
+			engine1, err := NewEngine(sys1, cfg1)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(engine1.Start(bg)).To(specs.BeNil())
+			engine2, err := NewEngine(sys2, cfg2)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(engine2.Start(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() {
+				_ = engine1.Stop(bg)
+				_ = engine2.Stop(bg)
+			})
+
+			acme := WithTenant(tenancy.TenantID("acme"))
+			globex := WithTenant(tenancy.TenantID("globex"))
+
+			remoteSeen := 0
+			for range 8 {
+				entityID := uuid.NewString()
+				// a valid tenant-aware spawn must succeed wherever it is placed
+				ctx.Expect(engine1.Entity(bg, NewAccountEventSourcedBehavior(entityID), acme)).To(specs.BeNil())
+
+				pid, err := sys1.ActorOf(bg, entityID)
+				ctx.Expect(err).To(specs.BeNil())
+				if pid.IsRemote() {
+					remoteSeen++
+				}
+
+				for _, node := range []struct {
+					name   string
+					engine *Engine
+				}{{"node1", engine1}, {"node2", engine2}} {
+					// a same-tenant re-spawn must be an idempotent success
+					ctx.Expect(node.engine.Entity(bg, NewAccountEventSourcedBehavior(entityID), acme)).To(specs.BeNil())
+
+					// a different-tenant re-spawn must be rejected
+					err := node.engine.Entity(bg, NewAccountEventSourcedBehavior(entityID), globex)
+					ctx.Expect(err).To(specs.MatchError(ErrSpawnTenantMismatch))
+					ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+				}
+			}
+			// RoundRobin over two members must place at least one entity on node2
+			ctx.Expect(remoteSeen).To(specs.BeGreaterThan(0))
+		})
 	})
-
-	require.Eventually(t, func() bool {
-		peers1, err1 := sys1.Peers(ctx, time.Second)
-		peers2, err2 := sys2.Peers(ctx, time.Second)
-		return err1 == nil && err2 == nil && len(peers1) == 1 && len(peers2) == 1
-	}, 30*time.Second, 500*time.Millisecond, "the two nodes never formed a cluster")
-
-	engine1, err := NewEngine(sys1, cfg1)
-	require.NoError(t, err)
-	require.NoError(t, engine1.Start(ctx))
-	engine2, err := NewEngine(sys2, cfg2)
-	require.NoError(t, err)
-	require.NoError(t, engine2.Start(ctx))
-	t.Cleanup(func() {
-		_ = engine1.Stop(context.Background())
-		_ = engine2.Stop(context.Background())
-	})
-
-	acme := WithTenant(tenancy.TenantID("acme"))
-	globex := WithTenant(tenancy.TenantID("globex"))
-
-	remoteSeen := 0
-	for range 8 {
-		entityID := uuid.NewString()
-		require.NoError(t, engine1.Entity(ctx, NewAccountEventSourcedBehavior(entityID), acme),
-			"a valid tenant-aware spawn must succeed wherever it is placed")
-
-		pid, err := sys1.ActorOf(ctx, entityID)
-		require.NoError(t, err)
-		if pid.IsRemote() {
-			remoteSeen++
-		}
-
-		for name, engine := range map[string]*Engine{"node1": engine1, "node2": engine2} {
-			require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(entityID), acme),
-				"%s: a same-tenant re-spawn must be an idempotent success (remote=%v)", name, pid.IsRemote())
-
-			err := engine.Entity(ctx, NewAccountEventSourcedBehavior(entityID), globex)
-			require.Error(t, err, "%s: a different-tenant re-spawn must be rejected (remote=%v)", name, pid.IsRemote())
-			assert.ErrorIs(t, err, ErrSpawnTenantMismatch, "%s (remote=%v)", name, pid.IsRemote())
-			assert.ErrorIs(t, err, tenancy.ErrDenied, "%s (remote=%v)", name, pid.IsRemote())
-		}
-	}
-	require.Positive(t, remoteSeen, "RoundRobin over two members must place at least one entity on node2")
 }

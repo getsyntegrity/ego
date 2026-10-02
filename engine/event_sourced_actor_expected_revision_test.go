@@ -30,16 +30,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // -----------------------------------------------------------------------
@@ -50,49 +48,26 @@ import (
 // reason since the machinery is already in place.
 // -----------------------------------------------------------------------
 
-// dispatchWithMetadata wraps payload in a command.Envelope carrying opts and
-// sends it through engine.Dispatch, returning the resulting command.Result.
-// It is a test-only convenience over the canonical entry point real callers
-// use to declare an ExpectedRevision (design.md D5); SendCommand (the legacy
-// path exercised separately by TestEventSourcedLegacyCommandIsUnconditional)
-// never carries one.
-func dispatchWithMetadata(t *testing.T, engine *Engine, entityID string, payload proto.Message, opts ...command.MetadataOption) command.Result {
-	t.Helper()
-	md, err := command.NewMetadata(command.OperationID(uuid.NewString()), opts...)
-	require.NoError(t, err)
-	env, err := command.NewEnvelope(payload, md)
-	require.NoError(t, err)
-	result, err := engine.Dispatch(context.Background(), entityID, env, time.Minute)
-	require.NoError(t, err)
-	return result
-}
-
 // ES-success: expected revision matches the aggregate's current revision.
 func TestEventSourcedExpectedRevisionSuccessMatchesCurrent(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an ExpectedRevision that matches the aggregate's current revision", func(s *specs.Spec) {
+		s.It("commits each command and advances the revision", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-success", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-success", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(1)
 
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 1, result.Revision())
-
-	result = dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
-
-	state, ok := result.State()
-	require.True(t, ok)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance())
+			result = dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
+		})
+	})
 }
 
 // ES-stale: expected revision is behind the aggregate's current revision.
@@ -101,121 +76,104 @@ func TestEventSourcedExpectedRevisionSuccessMatchesCurrent(t *testing.T) {
 // CodeConcurrencyConflict, and errors.As recovers the underlying
 // *persistence.ConflictError with the store's real actual/expected revisions.
 func TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an ExpectedRevision that is behind the aggregate's current revision", func(s *specs.Spec) {
+		s.It("is rejected as a concurrency conflict carrying the real revisions", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-stale", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-stale", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
 
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
-
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-	require.True(t, errors.Is(result.Err(), command.ErrRejected))
-
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(result.Err(), &conflict))
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
-	assert.Equal(t, persistence.ExpectRevision(99), conflict.Expected())
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
+			ctx.Expect(result.Err()).To(specs.MatchError(command.ErrRejected))
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, actual).ToEqual(1)
+			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectRevision(99))
+		})
+	})
 }
 
 // ES-genesis-success: expected revision 0 (genesis) on a brand-new aggregate.
 func TestEventSourcedExpectedRevisionGenesisSucceedsOnNewAggregate(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "the genesis ExpectedRevision on a brand-new aggregate", func(s *specs.Spec) {
+		s.It("commits the first event", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-genesis-success", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-genesis-success", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 1, result.Revision())
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(1)
+		})
+	})
 }
 
 // ES-genesis-conflict: expected revision 0 (genesis) against an aggregate
 // that already has committed events. Mandatorily verified end-to-end
 // through command.Result, same contract as ES-stale.
 func TestEventSourcedExpectedRevisionGenesisConflictsOnExistingAggregate(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "the genesis ExpectedRevision on an aggregate that already has events", func(s *specs.Spec) {
+		s.It("is rejected as a concurrency conflict carrying the real revisions", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-genesis-conflict", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-genesis-conflict", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
 
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 999}, command.WithExpectedRevision(0))
-
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	var conflict *persistence.ConflictError
-	require.True(t, errors.As(result.Err(), &conflict))
-	actual, ok := conflict.ActualRevision()
-	require.True(t, ok)
-	assert.EqualValues(t, 1, actual)
-	assert.Equal(t, persistence.ExpectGenesis(), conflict.Expected())
+			expectConcurrencyConflict(ctx, result)
+			conflict := conflictError(ctx, result)
+			actual, ok := conflict.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, actual).ToEqual(1)
+			ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectGenesis())
+		})
+	})
 }
 
 // ES-legacy: a command sent through the legacy SendCommand entry point never
 // declares an ExpectedRevision, so it must keep writing unconditionally
 // exactly as before WRITE-004 (backward compatibility, design.md D4/D8).
 func TestEventSourcedLegacyCommandIsUnconditional(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a command sent through the legacy SendCommand entry point", func(s *specs.Spec) {
+		s.It("keeps writing unconditionally", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-legacy", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-legacy", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			state, revision, err := engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
+			acct, ok := state.(*testpb.Account)
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, acct.GetAccountBalance()).ToEqual(500)
+			specs.ExpectT(ctx, revision).ToEqual(1)
 
-	state, revision, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 500, acct.GetAccountBalance())
-	assert.EqualValues(t, 1, revision)
-
-	state, revision, err = engine.SendCommand(ctx, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, time.Minute)
-	require.NoError(t, err)
-	acct, ok = state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance())
-	assert.EqualValues(t, 2, revision)
+			state, revision, err = engine.SendCommand(bg, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
+			acct, ok = state.(*testpb.Account)
+			ctx.Expect(ok).To(specs.BeTrue())
+			specs.ExpectT(ctx, acct.GetAccountBalance()).ToEqual(750)
+			specs.ExpectT(ctx, revision).ToEqual(2)
+		})
+	})
 }
 
 // preconditionSpyEventsStore wraps a real testkit.EventStore, recording every
@@ -235,36 +193,44 @@ func (s *preconditionSpyEventsStore) WriteEvents(ctx context.Context, scope pers
 	return s.EventStore.WriteEvents(ctx, scope, events, precondition)
 }
 
+// recorded returns a copy of the preconditions seen so far, in call order.
+func (s *preconditionSpyEventsStore) recorded() []persistence.WritePrecondition {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]persistence.WritePrecondition(nil), s.preconditions...)
+}
+
 // ES-propagation: proves the D4 ExpectedRevision -> WritePrecondition mapping
 // is exactly what reaches persistence.EventsStore.WriteEvents, for all three
 // cases (absent, genesis, exact revision) - not just that the command
 // eventually succeeds or fails.
 func TestEventSourcedExpectedRevisionPropagatesToPersistencePrecondition(t *testing.T) {
-	ctx := context.Background()
-	underlying := testkit.NewEventsStore()
-	require.NoError(t, underlying.Connect(ctx))
-	t.Cleanup(func() { _ = underlying.Disconnect(ctx) })
-	spy := &preconditionSpyEventsStore{EventStore: underlying}
+	specs.Describe(t, "the ExpectedRevision of a dispatched command", func(s *specs.Spec) {
+		s.It("reaches WriteEvents as the matching write precondition", func(ctx *specs.Context) {
+			underlying := connectedEventsStore(ctx)
+			spy := &preconditionSpyEventsStore{EventStore: underlying}
 
-	engine := newTestEngine(t, "ES-propagation", spy, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := startEngine(ctx, "ES-propagation", spy, WithLogger(DiscardLogger))
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500})
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
+			result := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500})
+			expectSuccess(ctx, result)
 
-	result = dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
+			result = dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
 
-	result = dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 1}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
+			result = dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 1}, command.WithExpectedRevision(0))
+			ctx.Expect(result.Outcome()).ToEqual(command.OutcomeRejected)
 
-	require.Len(t, spy.preconditions, 3)
-	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0])
-	assert.Equal(t, persistence.ExpectRevision(1), spy.preconditions[1])
-	assert.Equal(t, persistence.ExpectGenesis(), spy.preconditions[2])
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{
+				persistence.Unconditional(),
+				persistence.ExpectRevision(1),
+				persistence.ExpectGenesis(),
+			})
+		})
+	})
 }
 
 // ES-conflict-state: after a rejected conflicting write, the actor must
@@ -274,33 +240,27 @@ func TestEventSourcedExpectedRevisionPropagatesToPersistencePrecondition(t *test
 // write's declared actual revision equals what this actor already holds in
 // memory), so the actor stays alive rather than being torn down.
 func TestEventSourcedActorStaysConsistentAfterConflict(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an event sourced actor after a rejected conflicting write", func(s *specs.Spec) {
+		s.It("accepts the next command that declares the correct revision", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-conflict-state", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-conflict-state", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
+			ctx.Expect(conflicted.Outcome()).ToEqual(command.OutcomeRejected)
 
-	conflicted := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
-	require.Equal(t, command.OutcomeRejected, conflicted.Outcome())
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
-
-	state, ok := result.State()
-	require.True(t, ok)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance())
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
+		})
+	})
 }
 
 // TestEventSourcedBatchedExpectedRevisionSuccessAndConflict exercises D9's
@@ -310,32 +270,26 @@ func TestEventSourcedActorStaysConsistentAfterConflict(t *testing.T) {
 // on its own so the assertions stay deterministic without needing concurrent
 // callers to exercise the multi-command admission gate.
 func TestEventSourcedBatchedExpectedRevisionSuccessAndConflict(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an ExpectedRevision on a batched event sourced actor", func(s *specs.Spec) {
+		s.It("commits the matching command and rejects the conflicting one", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-batched", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-batched", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(context.Background(), NewEventSourcedEntity(entityID), WithBatchThreshold(1))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID), WithBatchThreshold(1)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
+			expectConcurrencyConflict(ctx, conflicted)
 
-	conflicted := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(99))
-	require.Equal(t, command.OutcomeRejected, conflicted.Outcome())
-	failure, ok := conflicted.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
+		})
+	})
 }
 
 // -----------------------------------------------------------------------
@@ -442,34 +396,36 @@ func (x *revisionProbeEventSourcedBehavior) observedPriorBalances() []float64 {
 }
 
 func TestEventSourcedHandlerArgumentsNeverCarryExpectedRevision(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "the arguments an event sourced handler receives", func(s *specs.Spec) {
+		s.It("never carry the declared ExpectedRevision", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-handler-shape", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-handler-shape", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			behavior := newRevisionProbeEventSourcedBehavior(entityID)
+			ctx.Expect(engine.Entity(context.Background(), behavior)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	behavior := newRevisionProbeEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			// A deliberately bogus ExpectedRevision, unrelated to the real revision
+			// (1): if it ever leaked into priorState, the handler's observed
+			// balance would read something other than the actor's real,
+			// store-confirmed balance (500). The write itself is later rejected
+			// downstream as a concurrency_conflict (proven by
+			// TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict), but that
+			// must have no bearing on what the handler already saw.
+			conflicted := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(999999))
+			ctx.Expect(conflicted.Outcome()).ToEqual(command.OutcomeRejected)
 
-	// A deliberately bogus ExpectedRevision, unrelated to the real revision
-	// (1): if it ever leaked into priorState, the handler's observed
-	// balance would read something other than the actor's real,
-	// store-confirmed balance (500). The write itself is later rejected
-	// downstream as a concurrency_conflict (proven by
-	// TestEventSourcedExpectedRevisionStaleIsConcurrencyConflict), but that
-	// must have no bearing on what the handler already saw.
-	conflicted := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(999999))
-	require.Equal(t, command.OutcomeRejected, conflicted.Outcome())
-
-	balances := behavior.observedPriorBalances()
-	require.Len(t, balances, 2, "HandleCommand must still be invoked for the rejected command -- ExpectedRevision is extracted only after dispatchToBehavior returns")
-	assert.EqualValues(t, 0, balances[0], "genesis call must see the initial zero-value state, not ExpectedRevision=0 reinterpreted as anything else")
-	assert.EqualValues(t, 500, balances[1], "second call must see the actor's real, store-confirmed balance (500), never anything derived from the declared ExpectedRevision (999999)")
+			// HandleCommand must still be invoked for the rejected command --
+			// ExpectedRevision is extracted only after dispatchToBehavior returns.
+			// The genesis call sees the initial zero-value state, not
+			// ExpectedRevision=0 reinterpreted as anything else; the second call
+			// sees the actor's real, store-confirmed balance (500), never anything
+			// derived from the declared ExpectedRevision (999999).
+			ctx.Expect(behavior.observedPriorBalances()).ToEqual([]float64{0, 500})
+		})
+	})
 }

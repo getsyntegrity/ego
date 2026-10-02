@@ -1,5 +1,5 @@
 .PHONY: run-eventsourced run-durablestate run-saga proto \
-        docker-image docker-lint docker-test docker-mock docker-protogen docker-ci
+        docker-image docker-lint docker-test docker-protogen docker-ci
 
 # ---------------------------------------------------------------------------
 # Local developer targets
@@ -8,17 +8,17 @@
 # Run the event-sourced example
 run-eventsourced:
 	@echo "Running event-sourced example..."
-	go run ./example/eventssourced
+	cd example && go run ./eventssourced
 
 # Run the durable state example
 run-durablestate:
 	@echo "Running durable state example..."
-	go run ./example/durablestate
+	cd example && go run ./durablestate
 
 # Run the fund transfer saga example
 run-saga:
 	@echo "Running fund transfer saga example..."
-	go run ./example/saga
+	cd example && go run ./saga
 
 # Regenerate protobuf code (uses the locally installed `buf`).
 # buf writes everything under gen/ (per buf.gen.yaml). We then copy each
@@ -28,21 +28,24 @@ proto:
 	@echo "Generating protobuf code..."
 	buf generate
 	cp -R gen/ego/.    egopb/
-	cp -R gen/test/.   test/data/testpb/
-	cp -R gen/sample/. example/examplepb/
+	cp -R gen/test/.   internal/testpb/
+	cp -R gen/sample/. internal/samplepb/
 	rm -rf gen
+	buf generate --template buf.gen.example.yaml --path protos/sample
+	mkdir -p example/examplepb
+	cp -R gen-example/sample/. example/examplepb/
+	rm -rf gen-example
 	@echo "Done."
 
 # ---------------------------------------------------------------------------
 # Docker-based CI targets
 #
 # These targets replicate what the Earthfile used to do: build a hermetic
-# tooling image (Dockerfile.ci) and run lint, tests, mock generation, and
-# protobuf generation inside a container so contributors and CI do not need
+# tooling image (Dockerfile.ci) and run lint, tests, and protobuf generation inside a container so contributors and CI do not need
 # the toolchain installed locally.
 # ---------------------------------------------------------------------------
 
-DOCKER_IMAGE       ?= ego-ci:latest
+DOCKER_IMAGE       ?= urd-ci:latest
 DOCKER_DOCKERFILE  ?= Dockerfile.ci
 WORKDIR_IN_CONT    ?= /workspace
 
@@ -51,8 +54,8 @@ WORKDIR_IN_CONT    ?= /workspace
 # inherit world-writable permissions and can be used by any host UID.
 # Versioned suffix ('-v2') so older volumes from earlier (broken) versions
 # of this Makefile are not reused.
-GO_BUILD_CACHE_VOL ?= ego-go-build-cache-v2
-GO_MOD_CACHE_VOL   ?= ego-go-mod-cache-v2
+GO_BUILD_CACHE_VOL ?= urd-go-build-cache-v2
+GO_MOD_CACHE_VOL   ?= urd-go-mod-cache-v2
 
 # Run the tooling image with the working tree mounted at $(WORKDIR_IN_CONT)
 # and shared Go caches under /cache (prepared 0777 in Dockerfile.ci).
@@ -81,29 +84,11 @@ docker-lint: docker-image
 	@echo "Running golangci-lint..."
 	$(DOCKER_RUN) golangci-lint run --timeout 10m
 
-# Run the test suite with race detection and coverage inside the CI image.
-# Package selection and exclusions come from internal/cmd/ciselect (-all:
-# the same full-suite selection build.yml runs on push to main), matched
-# by whole path segment rather than the substring list this target used to
-# grep with -- that old list silently dropped ./testkit ("test" matched as
-# a substring). Coverage is native `go test`, not go-acc.
+# Run the root module test suite with coverage inside the CI image (no race
+# detector; coverage is native `go test`).
 docker-test: docker-image
-	@echo "Running tests with race detector..."
-	$(DOCKER_RUN) sh -c '\
-		go run ./internal/cmd/ciselect -all -out-dir /tmp/ci && \
-		GOFLAGS=-mod=vendor GO_TEST_RACE=1 scripts/ci/go-test.sh /tmp/ci coverage.out'
-
-# Regenerate mocks via mockery inside the CI image. Output is written to ./mocks.
-docker-mock: docker-image
-	@echo "Generating mocks..."
-	$(DOCKER_RUN) sh -c '\
-		mockery --dir persistence  --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/persistence  --case snake && \
-		mockery --dir offsetstore  --name OffsetStore     --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/offsetstore  --case snake && \
-		mockery --dir engine       --name EventPublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
-		mockery --dir engine       --name StatePublisher  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/ego          --case snake && \
-		mockery --dir encryption   --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/encryption   --case snake && \
-		mockery --dir eventadapter --all                  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/eventadapter --case snake && \
-		mockery --dir tenancy      --name TenantResolver  --keeptree --exported=true --with-expecter=true --inpackage=true --disable-version-string=true --output ./mocks/tenancy      --case snake'
+	@echo "Running tests..."
+	$(DOCKER_RUN) go test -coverprofile=coverage.out ./...
 
 # Regenerate protobuf code inside the CI image. buf writes everything under
 # gen/ (per buf.gen.yaml); we then copy each subtree to its destination —
@@ -117,9 +102,15 @@ docker-protogen: docker-image
 			--path protos/test \
 			--path protos/sample && \
 		cp -R gen/ego/.    egopb/ && \
-		cp -R gen/test/.   test/data/testpb/ && \
-		cp -R gen/sample/. example/examplepb/ && \
-		rm -rf gen'
+		cp -R gen/test/.   internal/testpb/ && \
+		cp -R gen/sample/. internal/samplepb/ && \
+		rm -rf gen && \
+		buf generate \
+			--template buf.gen.example.yaml \
+			--path protos/sample && \
+		mkdir -p example/examplepb && \
+		cp -R gen-example/sample/. example/examplepb/ && \
+		rm -rf gen-example'
 
 # Composite target: lint + test, the same combination the Earthfile `test`
 # target used to BUILD.

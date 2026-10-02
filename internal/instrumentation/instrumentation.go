@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package instrumentation owns ego's OpenTelemetry contract: the metric
+// Package instrumentation owns Urd's OpenTelemetry contract: the metric
 // instruments (names, kinds, descriptions), the span names and attribute
 // keys, and the global propagator the engine installs. It builds the
 // instruments from a configured meter and records operations on them.

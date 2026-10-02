@@ -28,204 +28,283 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
+	"google.golang.org/protobuf/encoding/prototext"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/urd/command"
 )
 
-func mustMetadata(t *testing.T) command.Metadata {
-	t.Helper()
-	op := mustOperationID(t, "op-1")
+func mustMetadata(ctx *specs.Context) command.Metadata {
+	op := mustOperationID(ctx, "op-1")
 	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	ctx.Expect(err).To(specs.BeNil())
 	return md
 }
 
+// equalProto matches a proto.Message that proto.Equal reports equal to want. ToEqual would compare the
+// internal state of the generated struct, and its failure would print that state instead of the fields.
+func equalProto(want proto.Message) specs.Matcher {
+	return specs.Satisfy("proto-equal to "+prototext.Format(want), func(a any) bool {
+		got, ok := a.(proto.Message)
+		return ok && proto.Equal(want, got)
+	})
+}
+
 func TestOutcomeZeroValueInvalid(t *testing.T) {
-	var zero command.Outcome
-	require.Equal(t, "unknown", zero.String())
+	specs.Describe(t, "the zero Outcome is not a valid outcome", func(s *specs.Spec) {
+		s.It("renders as unknown", func(ctx *specs.Context) {
+			var zero command.Outcome
+			ctx.Expect(zero.String()).ToEqual("unknown")
+		})
+	})
 }
 
 func TestOutcomeStringPerKind(t *testing.T) {
-	cases := map[command.Outcome]string{
-		command.OutcomeSuccess:        "success",
-		command.OutcomeSuccessNoState: "success_no_state",
-		command.OutcomeRejected:       "rejected",
-		command.OutcomeFailed:         "failed",
-		command.OutcomeTimedOut:       "timed_out",
-		command.OutcomeCanceled:       "canceled",
-	}
-	for outcome, want := range cases {
-		require.Equal(t, want, outcome.String())
-	}
+	specs.Describe(t, "Outcome.String names each outcome kind", func(s *specs.Spec) {
+		s.It("renders every kind with its canonical name", func(ctx *specs.Context) {
+			cases := map[command.Outcome]string{
+				command.OutcomeSuccess:        "success",
+				command.OutcomeSuccessNoState: "success_no_state",
+				command.OutcomeRejected:       "rejected",
+				command.OutcomeFailed:         "failed",
+				command.OutcomeTimedOut:       "timed_out",
+				command.OutcomeCanceled:       "canceled",
+			}
+			for outcome, want := range cases {
+				ctx.Expect(outcome.String()).ToEqual(want)
+			}
+		})
+	})
 }
 
 func TestNewRejectedConcurrencyConflictCodeCheckableWithoutStringInspection(t *testing.T) {
-	op := mustOperationID(t, "op-1")
-	md, err := command.NewMetadata(op)
-	require.NoError(t, err)
+	specs.Describe(t, "a rejected result carries a concurrency conflict code checkable without string inspection", func(s *specs.Spec) {
+		s.It("exposes CodeConcurrencyConflict on the failure", func(ctx *specs.Context) {
+			op := mustOperationID(ctx, "op-1")
+			md, err := command.NewMetadata(op)
+			ctx.Expect(err).To(specs.BeNil())
 
-	f, err := command.NewFailure("expected revision mismatch", command.WithFailureCode(command.CodeConcurrencyConflict))
-	require.NoError(t, err)
+			f, err := command.NewFailure("expected revision mismatch", command.WithFailureCode(command.CodeConcurrencyConflict))
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewRejected(md, f)
-	require.NoError(t, err)
+			r, err := command.NewRejected(md, f)
+			ctx.Expect(err).To(specs.BeNil())
 
-	failure, ok := r.Failure()
-	require.True(t, ok)
-	code, ok := failure.Code()
-	require.True(t, ok)
-	require.Equal(t, command.CodeConcurrencyConflict, code)
+			failure, ok := r.Failure()
+			ctx.Expect(ok).To(specs.BeTrue())
+			code, ok := failure.Code()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(code).ToEqual(command.CodeConcurrencyConflict)
+		})
+	})
 }
 
 func TestOutcomeKindsMutuallyExclusive(t *testing.T) {
-	kinds := []command.Outcome{
-		command.OutcomeSuccess, command.OutcomeSuccessNoState, command.OutcomeRejected,
-		command.OutcomeFailed, command.OutcomeTimedOut, command.OutcomeCanceled,
-	}
-	seen := map[command.Outcome]bool{}
-	for _, k := range kinds {
-		require.False(t, seen[k], "duplicate outcome value %v", k)
-		seen[k] = true
-	}
-	require.Len(t, seen, 6)
+	specs.Describe(t, "the outcome kinds are mutually exclusive", func(s *specs.Spec) {
+		kinds := []command.Outcome{
+			command.OutcomeSuccess, command.OutcomeSuccessNoState, command.OutcomeRejected,
+			command.OutcomeFailed, command.OutcomeTimedOut, command.OutcomeCanceled,
+		}
+
+		// One case per kind, named by its string, so a duplicated value says which kind collided.
+		specs.Table(s, kinds, command.Outcome.String, func(ctx *specs.Context, k command.Outcome) {
+			ctx.Expect(kinds).To(specs.ExactlyNElements(1, specs.Equal(k)))
+		})
+
+		s.It("all kinds together are six distinct values", func(ctx *specs.Context) {
+			seen := map[command.Outcome]struct{}{}
+			for _, k := range kinds {
+				seen[k] = struct{}{}
+			}
+			ctx.Expect(seen).To(specs.HaveLen(6))
+		})
+	})
 }
 
 func TestNewSuccessRequiresState(t *testing.T) {
-	md := mustMetadata(t)
+	specs.Describe(t, "NewSuccess requires a state", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidResult for a nil state", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
 
-	_, err := command.NewSuccess(md, nil, 1)
-	require.ErrorIs(t, err, command.ErrInvalidResult)
+			_, err := command.NewSuccess(md, nil, 1)
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidResult))
+		})
+	})
 }
 
 func TestNewSuccessWithState(t *testing.T) {
-	md := mustMetadata(t)
-	state := timestamppb.New(time.Unix(1, 0))
+	specs.Describe(t, "NewSuccess builds a success result carrying state", func(s *specs.Spec) {
+		s.It("exposes the outcome, revision and state, with no error", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			state := timestamppb.New(time.Unix(1, 0))
 
-	r, err := command.NewSuccess(md, state, 7)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeSuccess, r.Outcome())
-	require.Equal(t, uint64(7), r.Revision())
+			r, err := command.NewSuccess(md, state, 7)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeSuccess)
+			ctx.Expect(r.Revision()).ToEqual(uint64(7))
 
-	got, ok := r.State()
-	require.True(t, ok)
-	require.Equal(t, state, got)
+			got, ok := r.State()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(got).To(equalProto(state))
 
-	require.NoError(t, r.Err())
+			ctx.Expect(r.Err()).To(specs.BeNil())
+		})
+	})
 }
 
 func TestNewSuccessNoState(t *testing.T) {
-	md := mustMetadata(t)
+	specs.Describe(t, "NewSuccessNoState builds a success result without state", func(s *specs.Spec) {
+		s.It("has the success-no-state outcome, no state and no error", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
 
-	r, err := command.NewSuccessNoState(md)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeSuccessNoState, r.Outcome())
+			r, err := command.NewSuccessNoState(md)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeSuccessNoState)
 
-	_, ok := r.State()
-	require.False(t, ok)
-	require.NoError(t, r.Err())
+			_, ok := r.State()
+			ctx.Expect(ok).To(specs.BeFalse())
+			ctx.Expect(r.Err()).To(specs.BeNil())
+		})
+	})
 }
 
 func TestNewRejected(t *testing.T) {
-	md := mustMetadata(t)
-	f, err := command.NewFailure("domain rejected")
-	require.NoError(t, err)
+	specs.Describe(t, "NewRejected builds a rejected result", func(s *specs.Spec) {
+		s.It("exposes the outcome and failure and classifies as ErrRejected", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			f, err := command.NewFailure("domain rejected")
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewRejected(md, f)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeRejected, r.Outcome())
+			r, err := command.NewRejected(md, f)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeRejected)
 
-	got, ok := r.Failure()
-	require.True(t, ok)
-	require.Equal(t, f, got)
+			got, ok := r.Failure()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(got).ToEqual(f)
 
-	require.ErrorIs(t, r.Err(), command.ErrRejected)
+			ctx.Expect(r.Err()).To(specs.MatchError(command.ErrRejected))
+		})
+	})
 }
 
 func TestNewFailed(t *testing.T) {
-	md := mustMetadata(t)
-	cause := errors.New("boom")
-	f, err := command.NewFailure("runtime failure", command.WithFailureCause(cause))
-	require.NoError(t, err)
+	specs.Describe(t, "NewFailed builds a failed result", func(s *specs.Spec) {
+		s.It("classifies as ErrFailed and wraps the failure cause", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			cause := errors.New("boom")
+			f, err := command.NewFailure("runtime failure", command.WithFailureCause(cause))
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewFailed(md, f)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeFailed, r.Outcome())
-	require.ErrorIs(t, r.Err(), command.ErrFailed)
-	require.ErrorIs(t, r.Err(), cause)
+			r, err := command.NewFailed(md, f)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeFailed)
+			ctx.Expect(r.Err()).To(specs.MatchError(command.ErrFailed))
+			ctx.Expect(r.Err()).To(specs.MatchError(cause))
+		})
+	})
 }
 
 func TestNewTimedOutDefaultCause(t *testing.T) {
-	md := mustMetadata(t)
-	f, err := command.NewFailure("deadline exceeded")
-	require.NoError(t, err)
+	specs.Describe(t, "NewTimedOut defaults its cause to context.DeadlineExceeded", func(s *specs.Spec) {
+		s.It("classifies as ErrTimedOut and wraps the deadline error", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			f, err := command.NewFailure("deadline exceeded")
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewTimedOut(md, f)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeTimedOut, r.Outcome())
-	require.ErrorIs(t, r.Err(), command.ErrTimedOut)
-	require.ErrorIs(t, r.Err(), context.DeadlineExceeded)
+			r, err := command.NewTimedOut(md, f)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeTimedOut)
+			ctx.Expect(r.Err()).To(specs.MatchError(command.ErrTimedOut))
+			ctx.Expect(r.Err()).To(specs.MatchError(context.DeadlineExceeded))
+		})
+	})
 }
 
 func TestNewCanceledDefaultCause(t *testing.T) {
-	md := mustMetadata(t)
-	f, err := command.NewFailure("canceled")
-	require.NoError(t, err)
+	specs.Describe(t, "NewCanceled defaults its cause to context.Canceled", func(s *specs.Spec) {
+		s.It("classifies as ErrCanceled and wraps the cancellation error", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			f, err := command.NewFailure("canceled")
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewCanceled(md, f)
-	require.NoError(t, err)
-	require.Equal(t, command.OutcomeCanceled, r.Outcome())
-	require.ErrorIs(t, r.Err(), command.ErrCanceled)
-	require.ErrorIs(t, r.Err(), context.Canceled)
+			r, err := command.NewCanceled(md, f)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Outcome()).ToEqual(command.OutcomeCanceled)
+			ctx.Expect(r.Err()).To(specs.MatchError(command.ErrCanceled))
+			ctx.Expect(r.Err()).To(specs.MatchError(context.Canceled))
+		})
+	})
 }
 
 func TestFailureWithCode(t *testing.T) {
-	f, err := command.NewFailure("bad input", command.WithFailureCode("INVALID_ARGUMENT"))
-	require.NoError(t, err)
+	specs.Describe(t, "NewFailure honors WithFailureCode", func(s *specs.Spec) {
+		s.It("exposes the code and the message", func(ctx *specs.Context) {
+			f, err := command.NewFailure("bad input", command.WithFailureCode("INVALID_ARGUMENT"))
+			ctx.Expect(err).To(specs.BeNil())
 
-	code, ok := f.Code()
-	require.True(t, ok)
-	require.Equal(t, "INVALID_ARGUMENT", code)
-	require.Equal(t, "bad input", f.Message())
+			code, ok := f.Code()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(code).ToEqual("INVALID_ARGUMENT")
+			ctx.Expect(f.Message()).ToEqual("bad input")
+		})
+	})
 }
 
 func TestNewFailureRequiresMessage(t *testing.T) {
-	_, err := command.NewFailure("")
-	require.ErrorIs(t, err, command.ErrInvalidResult)
+	specs.Describe(t, "NewFailure requires a message", func(s *specs.Spec) {
+		s.It("fails with ErrInvalidResult for an empty message", func(ctx *specs.Context) {
+			_, err := command.NewFailure("")
+			ctx.Expect(err).To(specs.MatchError(command.ErrInvalidResult))
+		})
+	})
 }
 
 func TestResultErrAsCommandError(t *testing.T) {
-	md := mustMetadata(t)
-	f, err := command.NewFailure("domain rejected")
-	require.NoError(t, err)
+	specs.Describe(t, "Result.Err is recoverable as a command Error", func(s *specs.Spec) {
+		s.It("yields the command Error that still matches ErrRejected", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			f, err := command.NewFailure("domain rejected")
+			ctx.Expect(err).To(specs.BeNil())
 
-	r, err := command.NewRejected(md, f)
-	require.NoError(t, err)
+			r, err := command.NewRejected(md, f)
+			ctx.Expect(err).To(specs.BeNil())
 
-	var cmdErr *command.Error
-	require.ErrorAs(t, r.Err(), &cmdErr)
-	require.ErrorIs(t, cmdErr, command.ErrRejected)
+			var cmdErr *command.Error
+			ctx.Expect(r.Err()).To(specs.MatchErrorAs(&cmdErr))
+			ctx.Expect(cmdErr).To(specs.MatchError(command.ErrRejected))
+		})
+	})
 }
 
 func TestStateAsTypedExtraction(t *testing.T) {
-	md := mustMetadata(t)
-	state := timestamppb.New(time.Unix(42, 0))
+	specs.Describe(t, "StateAs extracts the state as a concrete type", func(s *specs.Spec) {
+		s.It("returns the state for its own type", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
+			state := timestamppb.New(time.Unix(42, 0))
 
-	r, err := command.NewSuccess(md, state, 1)
-	require.NoError(t, err)
+			r, err := command.NewSuccess(md, state, 1)
+			ctx.Expect(err).To(specs.BeNil())
 
-	got, ok := command.StateAs[*timestamppb.Timestamp](r)
-	require.True(t, ok)
-	require.Equal(t, int64(42), got.GetSeconds())
+			got, ok := command.StateAs[*timestamppb.Timestamp](r)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(got.GetSeconds()).ToEqual(int64(42))
+		})
+	})
 }
 
 func TestStateAsFalseWhenNoState(t *testing.T) {
-	md := mustMetadata(t)
+	specs.Describe(t, "StateAs reports absence when the result has no state", func(s *specs.Spec) {
+		s.It("returns false for a success without state", func(ctx *specs.Context) {
+			md := mustMetadata(ctx)
 
-	r, err := command.NewSuccessNoState(md)
-	require.NoError(t, err)
+			r, err := command.NewSuccessNoState(md)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, ok := command.StateAs[*timestamppb.Timestamp](r)
-	require.False(t, ok)
+			_, ok := command.StateAs[*timestamppb.Timestamp](r)
+			ctx.Expect(ok).To(specs.BeFalse())
+		})
+	})
 }

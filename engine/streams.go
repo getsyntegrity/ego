@@ -28,9 +28,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
 )
 
 type eventsStream struct {
@@ -47,7 +47,7 @@ type statesStream struct {
 
 // Subscribe creates an events' subscriber.
 //
-// This function initializes a new subscriber for the event stream managed by the eGo engine. The subscriber
+// This function initializes a new subscriber for the event stream managed by the Urd engine. The subscriber
 // will receive events from the topics specified by the engine's configuration.
 //
 // Returns:
@@ -96,7 +96,7 @@ func duplicatePublisherIDs(ids []string, registered func(id string) bool) error 
 	return fmt.Errorf("%w: %s", ErrDuplicatePublisherID, strings.Join(duplicates, ", "))
 }
 
-// AddEventPublishers registers one or more event publishers with the eGo engine.
+// AddEventPublishers registers one or more event publishers with the Urd engine.
 // This function subscribes the publishers to the event stream, allowing them to receive events.
 //
 // Note: Event publishers are responsible for publishing events to external systems. They need to be added to the engine before processing any events.
@@ -150,7 +150,7 @@ func (engine *Engine) AddEventPublishers(publishers ...EventPublisher) error {
 	return nil
 }
 
-// AddStatePublishers registers one or more state publishers with the eGo engine.
+// AddStatePublishers registers one or more state publishers with the Urd engine.
 // This function subscribes the publishers to the event stream, allowing them to receive state changes.
 //
 // Note: State publishers are responsible for publishing durable state changes to external systems.

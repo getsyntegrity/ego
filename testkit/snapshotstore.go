@@ -29,8 +29,8 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // SnapshotKey is a composite key for snapshot storage. Scope and

@@ -24,19 +24,17 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	mockpersistence "github.com/getsyntegrity/ego/mocks/persistence"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // This file covers TENANT-003 T4's corrected spawn-time tenant design: CI
@@ -58,64 +56,55 @@ import (
 // typed ErrSpawnTenantUndetermined, and — because the engine never calls
 // Resolve to find this out — no store method may be invoked at all.
 func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "a spawn without WithTenant is refused when the resolver has no fixed tenant", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("Entity refuses to spawn and touches no store", func(t *testing.T) {
-		store := mockpersistence.NewEventsStore(t)
+		s.It("Entity refuses to spawn and touches no store", func(ctx *specs.Context) {
+			// A controller with no expectation: any store call fails the case. ANY
+			// call to it (Ping, GetLatestEvent, WriteEvents, ...) is reported as an
+			// unexpected call, and spawnTenantScope must reject before the actor is
+			// ever created, let alone reaches a store.
+			store := enginetest.NewEventsStoreMock(mock.NewController(ctx))
 
-		engine := newTestEngine(t, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
-		require.NoError(t, engine.Start(ctx))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(&stubTenantResolver{id: "acme"}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		entityID := uuid.NewString()
-		probe := newTenancyProbeEventSourcedBehavior(entityID)
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
 
-		err := engine.Entity(ctx, probe)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, ErrSpawnTenantUndetermined),
-			"the rejection must be the typed ErrSpawnTenantUndetermined, not an invented error")
+			// The rejection must be the typed ErrSpawnTenantUndetermined, not an invented error.
+			ctx.Expect(engine.Entity(bg, probe)).To(specs.MatchError(ErrSpawnTenantUndetermined))
 
-		exists, existsErr := engine.EntityExists(ctx, entityID)
-		require.NoError(t, existsErr)
-		require.False(t, exists, "no actor may be spawned when the tenant cannot be determined")
-		require.Zero(t, probe.InvocationCount(), "HandleCommand must never run: the entity was never spawned")
+			// No actor may be spawned when the tenant cannot be determined.
+			exists, existsErr := engine.EntityExists(bg, entityID)
+			ctx.Expect(existsErr).To(specs.BeNil())
+			ctx.Expect(exists).To(specs.BeFalse())
+			// HandleCommand must never run: the entity was never spawned.
+			ctx.Expect(probe.InvocationCount()).To(specs.BeZero())
 
-		// No expectation was registered on this mock at all, so ANY call to
-		// it (Ping, GetLatestEvent, WriteEvents, ...) would already fail the
-		// test via testify's unexpected-call panic; these are an explicit,
-		// named assertion of that guarantee rather than an accident of test
-		// ordering. spawnTenantScope must reject before the actor is ever
-		// created, let alone reaches a store.
-		store.AssertExpectations(t)
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
 
-		require.NoError(t, engine.Stop(ctx))
-	})
+		s.It("DurableStateEntity refuses to spawn and touches no store", func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
+			durableStore := enginetest.NewStateStoreMock(mock.NewController(ctx))
 
-	t.Run("DurableStateEntity refuses to spawn and touches no store", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			engine := newSpecsEngine(ctx, "Sample", store,
+				WithTenantResolver(&stubTenantResolver{id: "acme"}),
+				WithStateStore(durableStore))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		durableStore := mockpersistence.NewStateStore(t)
+			entityID := uuid.NewString()
+			behavior := NewAccountDurableStateBehavior(entityID)
 
-		engine := newTestEngine(t, "Sample", store,
-			WithTenantResolver(&stubTenantResolver{id: "acme"}),
-			WithStateStore(durableStore))
-		require.NoError(t, engine.Start(ctx))
+			ctx.Expect(engine.DurableStateEntity(bg, behavior)).To(specs.MatchError(ErrSpawnTenantUndetermined))
 
-		entityID := uuid.NewString()
-		behavior := NewAccountDurableStateBehavior(entityID)
+			exists, existsErr := engine.EntityExists(bg, entityID)
+			ctx.Expect(existsErr).To(specs.BeNil())
+			ctx.Expect(exists).To(specs.BeFalse())
 
-		err := engine.DurableStateEntity(ctx, behavior)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, ErrSpawnTenantUndetermined))
-
-		exists, existsErr := engine.EntityExists(ctx, entityID)
-		require.NoError(t, existsErr)
-		require.False(t, exists)
-
-		durableStore.AssertExpectations(t)
-
-		require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
 	})
 }
 
@@ -128,27 +117,31 @@ func TestEngineEntitySpawnRequiresExplicitTenantWhenResolverHasNoFixedTenant(t *
 // subtest (engine_test.go), which proves the same invariant end to end
 // against SendCommand's observed TenantContext.
 func TestEngineEntitySpawnWithExplicitTenantResolvesOnce(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Resolve is invoked once per spawn-plus-command sequence, by SendCommand", func(s *specs.Spec) {
+		s.It("never resolves at spawn when the tenant was declared via WithTenant", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
 
-	resolver := &countingTenantResolver{id: "acme"}
-	engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
-	require.NoError(t, engine.Start(ctx))
+			resolver := &countingTenantResolver{id: "acme"}
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(resolver))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	probe := newTenancyProbeEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
+			ctx.Expect(engine.Entity(bg, probe, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	assert.Zero(t, resolver.callCount(), "spawn must never call Resolve when the tenant was declared via WithTenant")
+			// spawn must never call Resolve when the tenant was declared via WithTenant
+			ctx.Expect(resolver.callCount()).To(specs.BeZero())
 
-	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
+			_, _, err := engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once, by SendCommand, never at spawn")
+			// Resolve must be invoked exactly once, by SendCommand, never at spawn
+			ctx.Expect(resolver.callCount()).To(specs.Equal(int64(1)))
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineWithSingleTenantSpawnNeedsNoWithTenant covers acceptance
@@ -159,37 +152,41 @@ func TestEngineEntitySpawnWithExplicitTenantResolvesOnce(t *testing.T) {
 // bound to that tenant's scope (proven by a subsequent command observing
 // it).
 func TestEngineWithSingleTenantSpawnNeedsNoWithTenant(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a single-tenant resolver spawns an entity without WithTenant", func(s *specs.Spec) {
+		s.It("binds the entity to the resolver's fixed tenant scope", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
 
-	resolver, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
-	require.NoError(t, err)
+			resolver, err := tenancy.WithSingleTenant(tenancy.TenantID("acme"))
+			ctx.Expect(err).To(specs.BeNil())
 
-	engine := newTestEngine(t, "Sample", store, WithTenantResolver(resolver))
-	require.NoError(t, engine.Start(ctx))
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(resolver))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	probe := newTenancyProbeEventSourcedBehavior(entityID)
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
 
-	// No engine.WithTenant option at all.
-	require.NoError(t, engine.Entity(ctx, probe))
+			// No engine.WithTenant option at all.
+			ctx.Expect(engine.Entity(bg, probe)).To(specs.BeNil())
 
-	exists, err := engine.EntityExists(ctx, entityID)
-	require.NoError(t, err)
-	require.True(t, exists, "the entity must spawn using the resolver's fixed tenant, with no WithTenant declaration")
+			// The entity must spawn using the resolver's fixed tenant.
+			exists, err := engine.EntityExists(bg, entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists).To(specs.BeTrue())
 
-	_, _, err = engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
+			_, _, err = engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	scope, err := persistence.NewTenantScope(tenancy.TenantID("acme"))
-	require.NoError(t, err)
-	latest, err := store.GetLatestEvent(ctx, scope, entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest, "the entity must have been bound to and written under the resolver's fixed tenant scope")
+			scope, err := persistence.NewTenantScope(tenancy.TenantID("acme"))
+			ctx.Expect(err).To(specs.BeNil())
+			latest, err := store.GetLatestEvent(bg, scope, entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			// The entity must have been bound to and written under the resolver's fixed tenant scope.
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineEntitySpawnWithoutResolverStaysUnscoped covers the legacy-mode
@@ -198,26 +195,28 @@ func TestEngineWithSingleTenantSpawnNeedsNoWithTenant(t *testing.T) {
 // engine.WithTenant, injects no tenant scope, and every store call still
 // carries persistence.Unscoped(), exactly as before TENANT-003.
 func TestEngineEntitySpawnWithoutResolverStaysUnscoped(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "legacy mode without a resolver", func(s *specs.Spec) {
+		s.It("spawns without WithTenant and writes under persistence.Unscoped()", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
 
-	engine := newTestEngine(t, "Sample", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			engine := newSpecsEngine(ctx, "Sample", store, WithLogger(DiscardLogger))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	probe := newTenancyProbeEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, probe))
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
+			ctx.Expect(engine.Entity(bg, probe)).To(specs.BeNil())
 
-	_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
+			_, _, err := engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest, "legacy mode must still write under persistence.Unscoped()")
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineCommandRejectsTenantMismatchWithSpawnDeclaredTenant proves the
@@ -226,27 +225,29 @@ func TestEngineEntitySpawnWithoutResolverStaysUnscoped(t *testing.T) {
 // was actually spawned under must be rejected by the actor's existing
 // cross-check (tenancy.VerifyUnchanged), before HandleCommand ever runs.
 func TestEngineCommandRejectsTenantMismatchWithSpawnDeclaredTenant(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a command resolved to another tenant than the spawn-declared one", func(s *specs.Spec) {
+		s.It("is rejected before HandleCommand runs", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
 
-	// perCallerTenantResolver (option_test.go) resolves whichever tenant id
-	// the caller placed on ctx, simulating a resolver that derives identity
-	// from request-scoped data rather than a fixed value.
-	engine := newTestEngine(t, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
-	require.NoError(t, engine.Start(ctx))
+			// perCallerTenantResolver (option_test.go) resolves whichever tenant id
+			// the caller placed on ctx, simulating a resolver that derives identity
+			// from request-scoped data rather than a fixed value.
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	probe := newTenancyProbeEventSourcedBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, probe, WithTenant(tenancy.TenantID("acme"))))
+			entityID := uuid.NewString()
+			probe := newTenancyProbeEventSourcedBehavior(entityID)
+			ctx.Expect(engine.Entity(bg, probe, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	// SendCommand's ctx resolves to "globex", a different tenant than the
-	// one this entity was spawned under.
-	mismatchedCtx := context.WithValue(ctx, perCallerTenantKey{}, "globex")
-	_, _, err := engine.SendCommand(mismatchedCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.Error(t, err, "a command resolved to a different tenant than the entity was spawned under must be rejected")
-	assert.Zero(t, probe.InvocationCount(), "HandleCommand must never run for a mismatched tenant")
+			// SendCommand's ctx resolves to "globex", a different tenant than the
+			// one this entity was spawned under.
+			mismatchedCtx := context.WithValue(bg, perCallerTenantKey{}, "globex")
+			_, _, err := engine.SendCommand(mismatchedCtx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(probe.InvocationCount()).To(specs.BeZero())
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }

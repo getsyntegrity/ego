@@ -1,0 +1,11 @@
+# Temporary allowlist of the unit-test gate (.github/scripts/unitgate), issue #204.
+#
+# Each line is a file that still breaks rule 1, 2 or 3 (testify, generated mocks, no specs.Describe) because
+# the pull request named after the "|" is migrating it. A trailing "/" covers a whole directory.
+# A listed file that no longer violates (migrated or deleted) is reported as a WARNING in the job log; the gate
+# only fails on it with -strict, which CI switches on once this list is empty. Migration PRs merge in parallel,
+# so each one should still delete its own lines. New violations that are not listed always fail.
+# The list is empty and CI runs the gate with -strict. The file stays because the gate reads it.
+#
+# Format: path | owner (PR number, or what is pending when no PR is open yet)
+

@@ -27,14 +27,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // TestEngineEraseEntityCannotEraseAnotherTenantsRecord covers TENANT-003
@@ -54,47 +53,51 @@ import (
 // actor system itself would only ever let one of them claim a live actor
 // for that id.
 func TestEngineEraseEntityCannotEraseAnotherTenantsRecord(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := uuid.NewString()
+	specs.Describe(t, "EraseEntity confines its delete to the caller's own tenant scope", func(s *specs.Spec) {
+		s.It("erases the caller's record and leaves another tenant's record at the same persistenceID", func(ctx *specs.Context) {
+			bg := context.Background()
+			persistenceID := uuid.NewString()
 
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			store := connectedEventsStore(ctx)
 
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
-	scopeB, err := persistence.NewTenantScope("globex")
-	require.NoError(t, err)
+			scopeA, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			scopeB, err := persistence.NewTenantScope("globex")
+			ctx.Expect(err).To(specs.BeNil())
 
-	newEvent := func() *egopb.Event {
-		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		return &egopb.Event{
-			PersistenceId:  persistenceID,
-			SequenceNumber: 1,
-			Event:          eventAny,
-			Timestamp:      time.Now().UnixNano(),
-		}
-	}
+			newEvent := func() *egopb.Event {
+				eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+				ctx.Expect(err).To(specs.BeNil())
+				return &egopb.Event{
+					PersistenceId:  persistenceID,
+					SequenceNumber: 1,
+					Event:          eventAny,
+					Timestamp:      time.Now().UnixNano(),
+				}
+			}
 
-	require.NoError(t, store.WriteEvents(ctx, scopeA, []*egopb.Event{newEvent()}, persistence.Unconditional()))
-	require.NoError(t, store.WriteEvents(ctx, scopeB, []*egopb.Event{newEvent()}, persistence.Unconditional()))
+			ctx.Expect(store.WriteEvents(bg, scopeA, []*egopb.Event{newEvent()}, persistence.Unconditional())).To(specs.BeNil())
+			ctx.Expect(store.WriteEvents(bg, scopeB, []*egopb.Event{newEvent()}, persistence.Unconditional())).To(specs.BeNil())
 
-	// perCallerTenantResolver (option_test.go) resolves whichever tenant id
-	// the caller placed on ctx under perCallerTenantKey.
-	engine := newTestEngine(t, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
-	require.NoError(t, engine.Start(ctx))
+			// perCallerTenantResolver (option_test.go) resolves whichever tenant id
+			// the caller placed on ctx under perCallerTenantKey.
+			engine := newSpecsEngine(ctx, "Sample", store, WithTenantResolver(perCallerTenantResolver{}))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	ctxA := context.WithValue(ctx, perCallerTenantKey{}, "acme")
-	require.NoError(t, engine.EraseEntity(ctxA, persistenceID, true))
+			ctxA := context.WithValue(bg, perCallerTenantKey{}, "acme")
+			ctx.Expect(engine.EraseEntity(ctxA, persistenceID, true)).To(specs.BeNil())
 
-	latestA, err := store.GetLatestEvent(ctx, scopeA, persistenceID)
-	require.NoError(t, err)
-	require.Nil(t, latestA, "tenant A's own record must be erased by its own EraseEntity call")
+			// tenant A's own record must be erased by its own EraseEntity call
+			latestA, err := store.GetLatestEvent(bg, scopeA, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latestA).To(specs.BeNil())
 
-	latestB, err := store.GetLatestEvent(ctx, scopeB, persistenceID)
-	require.NoError(t, err)
-	require.NotNil(t, latestB, "tenant B's record at the same persistenceID must survive tenant A's erasure call")
+			// tenant B's record at the same persistenceID must survive tenant A's erasure call
+			latestB, err := store.GetLatestEvent(bg, scopeB, persistenceID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latestB).To(specs.Not(specs.BeNil()))
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }

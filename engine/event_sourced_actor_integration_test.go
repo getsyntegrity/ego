@@ -27,14 +27,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/command"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // This file is task 3.17's integration proof (spec: "End-to-End Propagation
@@ -55,50 +53,44 @@ import (
 //     systems, following the same concurrency-proof pattern as
 //     TestDurableStateConcurrentGenesisWritersYieldExactlyOneCommit) both
 //     racing ExpectedRevision=0 (genesis) against one shared testkit
-//     EventsStore yield exactly one commit and one conflict, proven under
-//     -race so the store's own CAS -- not caller/mailbox ordering -- is
-//     shown to be what decides the winner.
+//     EventsStore yield exactly one commit and one conflict, so the store's
+//     own CAS -- not caller/mailbox ordering -- is shown to be what decides
+//     the winner.
 
 // TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore proves an
 // exact-match ExpectedRevision commits end-to-end and the real store's
 // persisted revision advances accordingly.
 func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "an exact-match ExpectedRevision on a real event sourced actor", func(s *specs.Spec) {
+		s.It("commits and advances the store's persisted revision", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-integration-exact", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-integration-exact", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(1)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	require.EqualValues(t, 1, latest.GetSequenceNumber())
+			// A second exact-match command: ExpectedRevision matches the real
+			// persisted revision (1), so it commits and advances the store to 2.
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
+			expectSuccess(ctx, result)
+			specs.ExpectT(ctx, result.Revision()).ToEqual(2)
 
-	// A second exact-match command: ExpectedRevision matches the real
-	// persisted revision (1), so it commits and advances the store to 2.
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(1))
-	require.Equal(t, command.OutcomeSuccess, result.Outcome())
-	assert.EqualValues(t, 2, result.Revision())
+			latest, err = store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(2)
 
-	latest, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 2, latest.GetSequenceNumber())
-
-	state, ok := result.State()
-	require.True(t, ok)
-	acct, ok := state.(*testpb.Account)
-	require.True(t, ok)
-	assert.EqualValues(t, 750, acct.GetAccountBalance())
+			specs.ExpectT(ctx, accountOf(ctx, result).GetAccountBalance()).ToEqual(750)
+		})
+	})
 }
 
 // TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged proves a
@@ -106,41 +98,34 @@ func TestEventSourcedIntegrationExactRevisionCommitsAndAdvancesStore(t *testing.
 // observed by the actor's own bookkeeping -- and that the store's
 // persisted revision is left unchanged by the rejected write.
 func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a stale ExpectedRevision on a real event sourced actor", func(s *specs.Spec) {
+		s.It("is rejected at the store and leaves the persisted revision unchanged", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
+			engine := startEngine(ctx, "ES-integration-stale", store, WithLogger(DiscardLogger))
 
-	engine := newTestEngine(t, "ES-integration-stale", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+			entityID := uuid.NewString()
+			ctx.Expect(engine.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	entityID := uuid.NewString()
-	require.NoError(t, engine.Entity(ctx, NewEventSourcedEntity(entityID)))
+			created := dispatch(ctx, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
+			expectSuccess(ctx, created)
+			specs.ExpectT(ctx, created.Revision()).ToEqual(1)
 
-	created := dispatchWithMetadata(t, engine, entityID, &testpb.CreateAccount{AccountBalance: 500}, command.WithExpectedRevision(0))
-	require.Equal(t, command.OutcomeSuccess, created.Outcome())
-	require.EqualValues(t, 1, created.Revision())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(1)
 
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	require.EqualValues(t, 1, latest.GetSequenceNumber())
+			// A stale command: ExpectedRevision does not match the real persisted
+			// revision (1).
+			result := dispatch(ctx, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
+			expectConcurrencyConflict(ctx, result)
 
-	// A stale command: ExpectedRevision does not match the real persisted
-	// revision (1).
-	result := dispatchWithMetadata(t, engine, entityID, &testpb.CreditAccount{AccountId: entityID, Balance: 250}, command.WithExpectedRevision(7))
-	require.Equal(t, command.OutcomeRejected, result.Outcome())
-	failure, ok := result.Failure()
-	require.True(t, ok)
-	code, hasCode := failure.Code()
-	require.True(t, hasCode)
-	assert.Equal(t, command.CodeConcurrencyConflict, code)
-
-	// The store must be unchanged by the rejected write.
-	latest, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			// The store must be unchanged by the rejected write.
+			latest, err = store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(1)
+		})
+	})
 }
 
 // TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit is the
@@ -150,60 +135,46 @@ func TestEventSourcedIntegrationStaleRevisionRejectedStoreUnchanged(t *testing.T
 // both declaring ExpectedRevision=0 against the same persistence ID with no
 // prior record, race concurrently against one shared testkit.EventsStore.
 // Exactly one commits, exactly one is rejected with concurrency_conflict.
-// Run with -race to prove the store's own CompareAndSwap/LoadOrStore path
-// -- not an external lock, not mailbox/caller ordering -- is what
-// serializes the two writers, satisfying the spec's "not merely observed
-// in isolation" requirement.
+// The store's own CompareAndSwap/LoadOrStore path -- not an external lock,
+// not mailbox/caller ordering -- is what serializes the two writers,
+// satisfying the spec's "not merely observed in isolation" requirement.
 func TestEventSourcedIntegrationConcurrentGenesisYieldsExactlyOneCommit(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "two event sourced actors racing the genesis revision on one store", func(s *specs.Spec) {
+		s.It("commits exactly one and rejects the other with a concurrency conflict", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
+			entityID := uuid.NewString()
 
-	entityID := uuid.NewString()
+			engineA := startEngine(ctx, "ES-race-a", store, WithLogger(DiscardLogger))
+			ctx.Expect(engineA.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	engineA := newTestEngine(t, "ES-race-a", store, WithLogger(DiscardLogger))
-	require.NoError(t, engineA.Start(ctx))
-	require.NoError(t, engineA.Entity(ctx, NewEventSourcedEntity(entityID)))
+			engineB := startEngine(ctx, "ES-race-b", store, WithLogger(DiscardLogger))
+			ctx.Expect(engineB.Entity(bg, NewEventSourcedEntity(entityID))).To(specs.BeNil())
 
-	engineB := newTestEngine(t, "ES-race-b", store, WithLogger(DiscardLogger))
-	require.NoError(t, engineB.Start(ctx))
-	require.NoError(t, engineB.Entity(ctx, NewEventSourcedEntity(entityID)))
+			var wg sync.WaitGroup
+			results := make([]command.Result, 2)
+			wg.Add(2)
+			ctx.Go(func(ctx *specs.Context) {
+				defer wg.Done()
+				results[0] = dispatch(ctx, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
+			})
+			ctx.Go(func(ctx *specs.Context) {
+				defer wg.Done()
+				results[1] = dispatch(ctx, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
+			})
+			wg.Wait()
 
-	var wg sync.WaitGroup
-	results := make([]command.Result, 2)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		results[0] = dispatchWithMetadata(t, engineA, entityID, &testpb.CreateAccount{AccountBalance: 100}, command.WithExpectedRevision(0))
-	}()
-	go func() {
-		defer wg.Done()
-		results[1] = dispatchWithMetadata(t, engineB, entityID, &testpb.CreateAccount{AccountBalance: 200}, command.WithExpectedRevision(0))
-	}()
-	wg.Wait()
+			outcomes := []command.Outcome{results[0].Outcome(), results[1].Outcome()}
+			ctx.Expect(outcomes).To(specs.ContainTheSameElementsAs([]command.Outcome{command.OutcomeSuccess, command.OutcomeRejected}))
+			for _, result := range results {
+				if result.Outcome() == command.OutcomeRejected {
+					expectConcurrencyConflict(ctx, result)
+				}
+			}
 
-	successes, conflicts := 0, 0
-	for _, result := range results {
-		switch result.Outcome() {
-		case command.OutcomeSuccess:
-			successes++
-		case command.OutcomeRejected:
-			failure, ok := result.Failure()
-			require.True(t, ok)
-			code, hasCode := failure.Code()
-			require.True(t, hasCode)
-			assert.Equal(t, command.CodeConcurrencyConflict, code)
-			conflicts++
-		default:
-			t.Fatalf("unexpected outcome %v", result.Outcome())
-		}
-	}
-	assert.Equal(t, 1, successes)
-	assert.Equal(t, 1, conflicts)
-
-	latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.NotNil(t, latest)
-	assert.EqualValues(t, 1, latest.GetSequenceNumber())
+			latest, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, latest.GetSequenceNumber()).ToEqual(1)
+		})
+	})
 }

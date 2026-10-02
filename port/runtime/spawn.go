@@ -26,7 +26,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // EntitiesPlacement defines the algorithm used by the entity system to determine
@@ -242,7 +242,7 @@ func WithPlacement(placement EntitiesPlacement) SpawnOption {
 // (TENANT-003 T4). The application, which knows the tenant at the trust
 // boundary, states it here; a runtime never asks the tenancy.TenantResolver at
 // spawn (Resolve-Once, Propagate-After, openspec/specs/tenancy-core/spec.md).
-// A runtime consults it only when tenancy is active; see ego.WithTenant for
+// A runtime consults it only when tenancy is active; see engine.WithTenant for
 // the GoAkt adapter's rules.
 func WithTenant(id tenancy.TenantID) SpawnOption {
 	return spawnOption(func(config *spawnConfig) {
@@ -261,10 +261,10 @@ func WithTenant(id tenancy.TenantID) SpawnOption {
 // option is built.
 func WithAdapterSetting(key, value any) SpawnOption {
 	if key == nil {
-		panic("eGo: runtime.WithAdapterSetting: nil key")
+		panic("urd: runtime.WithAdapterSetting: nil key")
 	}
 	if !isComparableKey(key) {
-		panic("eGo: runtime.WithAdapterSetting: key of type " + reflect.TypeOf(key).String() + " is not comparable")
+		panic("urd: runtime.WithAdapterSetting: key of type " + reflect.TypeOf(key).String() + " is not comparable")
 	}
 	return spawnOption(func(config *spawnConfig) {
 		if config.adapter == nil {

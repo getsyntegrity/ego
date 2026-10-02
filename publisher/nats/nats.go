@@ -30,12 +30,12 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // EventsPublisher defines a NATS publisher.
-// This publisher is responsible for delivering ego events to a NATS server.
+// This publisher is responsible for delivering Urd events to a NATS server.
 type EventsPublisher struct {
 	config     *Config
 	started    *atomic.Bool
@@ -127,7 +127,7 @@ func (x *EventsPublisher) Close(context.Context) error {
 
 // ID returns the ID of the NATS publisher.
 func (x *EventsPublisher) ID() string {
-	return "ego-nats"
+	return "urd-nats"
 }
 
 // Publish sends an event to the NATS server.
@@ -243,7 +243,7 @@ func (e *DurableStatePublisher) Close(context.Context) error {
 
 // ID returns the ID of the NATS publisher.
 func (e *DurableStatePublisher) ID() string {
-	return "ego-nats"
+	return "urd-nats"
 }
 
 // Publish sends a message to the NATS server.

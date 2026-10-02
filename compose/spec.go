@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package compose is the runtime-neutral half of Ego's composition root
+// Package compose is the runtime-neutral half of Urd's composition root
 // (openspec/changes/ego-arch-003/design.md). It holds Spec, the plain
 // description of what a deployment wires together, its static validation
 // (Spec.Validate), and the StartError type a composition root returns when
@@ -36,7 +36,7 @@
 // (ego-arch-004 design §D6).
 //
 // This package imports contract packages only. It must not import package
-// ego, internal/extensions or the GoAkt runtime; internal/cmd/archcheck's
+// engine, internal/extensions or the GoAkt runtime; the former architecture checker's
 // composition-no-runtime rule enforces that, and its composition-leaf rule
 // keeps every other production package in the root module, except main
 // packages and examples, from importing compose (design §D8).
@@ -49,14 +49,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/port/adapter"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/port/adapter"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Family is a bit set of the entity families a deployment runs. Which

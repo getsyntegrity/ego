@@ -27,11 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/port/behavior"
 )
 
 // The types below implement only ID() and the domain methods: no
@@ -107,29 +107,33 @@ var (
 // through the interfaces, so the assertions above are exercised at run time
 // and not only at compile time.
 func TestDomainOnlyBehaviorsRunThroughTheContracts(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "Domain-only behaviors run through the neutral contracts", func(s *specs.Spec) {
+		s.It("runs an event-sourced, a durable-state and a saga behavior through their interfaces", func(ctx *specs.Context) {
+			bg := context.Background()
 
-	var es behavior.EventSourced = eventSourcedEnvelope{eventSourced{id: "es-1"}}
-	require.Equal(t, "es-1", es.ID())
-	events, err := es.HandleCommand(ctx, new(emptypb.Empty), es.InitialState())
-	require.NoError(t, err)
-	require.Empty(t, events)
-	_, isEnvelope := es.(behavior.EventSourcedEnvelope)
-	require.True(t, isEnvelope, "the envelope extension must be discoverable by type assertion")
+			var es behavior.EventSourced = eventSourcedEnvelope{eventSourced{id: "es-1"}}
+			ctx.Expect(es.ID()).ToEqual("es-1")
+			events, err := es.HandleCommand(bg, new(emptypb.Empty), es.InitialState())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(events).To(specs.BeEmpty())
+			_, isEnvelope := es.(behavior.EventSourcedEnvelope)
+			ctx.Expect(isEnvelope).To(specs.BeTrue())
 
-	var ds behavior.DurableState = durableState{id: "ds-1"}
-	_, version, err := ds.HandleCommand(ctx, new(emptypb.Empty), 0, ds.InitialState())
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), version)
-	_, isEnvelope = ds.(behavior.DurableStateEnvelope)
-	require.False(t, isEnvelope, "a behavior without HandleEnvelope must not satisfy the envelope extension")
+			var ds behavior.DurableState = durableState{id: "ds-1"}
+			_, version, err := ds.HandleCommand(bg, new(emptypb.Empty), 0, ds.InitialState())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(version).ToEqual(uint64(1))
+			_, isEnvelope = ds.(behavior.DurableStateEnvelope)
+			ctx.Expect(isEnvelope).To(specs.BeFalse())
 
-	var sg behavior.Saga = saga{id: "saga-1"}
-	action, err := sg.HandleEvent(ctx, new(emptypb.Empty), sg.InitialState())
-	require.NoError(t, err)
-	require.True(t, action.Complete)
-	compensation, err := sg.Compensate(ctx, sg.InitialState())
-	require.NoError(t, err)
-	require.Len(t, compensation, 1)
-	require.Equal(t, "account-1", compensation[0].EntityID)
+			var sg behavior.Saga = saga{id: "saga-1"}
+			action, err := sg.HandleEvent(bg, new(emptypb.Empty), sg.InitialState())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(action.Complete).To(specs.BeTrue())
+			compensation, err := sg.Compensate(bg, sg.InitialState())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(compensation).To(specs.HaveLen(1))
+			ctx.Expect(compensation[0].EntityID).ToEqual("account-1")
+		})
+	})
 }

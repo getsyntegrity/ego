@@ -33,15 +33,15 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/supervisor"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Config captures every option an Engine needs.
@@ -62,6 +62,11 @@ type Config struct {
 	encryptor     encryption.Encryptor
 	behaviorKinds []BehaviorKind
 
+	// schemaMigration is set by WithSchemaMigration: Engine.Start then runs
+	// Migrate on every configured store that implements
+	// persistence.SchemaMigrator.
+	schemaMigration bool
+
 	// entityFamilies is the set declared with WithEntityFamilies; zero
 	// means nothing was declared and every family may be spawned.
 	entityFamilies EntityFamily
@@ -80,7 +85,7 @@ type Config struct {
 	// ordering the way WithLogger/WithTelemetry do (DP2).
 	tenantResolverCount int
 
-	// eventStream is the in-process pub/sub stream eGo's entity actors
+	// eventStream is the in-process pub/sub stream Urd's entity actors
 	// publish to and the engine's publishers/subscribers consume from. It is
 	// allocated by NewConfig and the same instance is wired into the actor
 	// system (as the EventsStream extension) by GoaktOptions and into the
@@ -90,7 +95,7 @@ type Config struct {
 
 // NewConfig builds a Config from a list of Options.
 //
-// eventsStore is the events store eGo persists event-sourced state to; pass
+// eventsStore is the events store Urd persists event-sourced state to; pass
 // nil for durable-state-only deployments that never host event-sourced
 // entities.
 //
@@ -113,12 +118,12 @@ func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 	return c
 }
 
-// GoaktOptions returns the goakt.Options eGo requires when the caller
+// GoaktOptions returns the goakt.Options Urd requires when the caller
 // constructs the actor system that hosts it.
 //
 // Pass the returned slice to goakt.NewActorSystem alongside any other
 // goakt.Options the deployment needs (cluster, remote, TLS, custom
-// extensions, …). eGo cannot register its extensions on an
+// extensions, …). Urd cannot register its extensions on an
 // already-constructed actor system, so this handoff at construction time is
 // the only supported entry point.
 //
@@ -209,9 +214,9 @@ func (f OptionFunc) Apply(c *Config) {
 // WithLogger sets the kit-logger Logger used by the engine and the goakt
 // actor system it sits on.
 //
-// When unset, or when the given logger is nil or a typed-nil pointer, eGo
+// When unset, or when the given logger is nil or a typed-nil pointer, Urd
 // logs through DefaultLogger(): kit-logger's process-wide logger. The same
-// logger is adapted into the goakt logger so the actor system, eGo's
+// logger is adapted into the goakt logger so the actor system, Urd's
 // internals, and the caller log through one backend.
 func WithLogger(logger kitlog.Logger) Option {
 	return OptionFunc(func(c *Config) {
@@ -226,6 +231,24 @@ func WithLogger(logger kitlog.Logger) Option {
 func WithStateStore(stateStore persistence.StateStore) Option {
 	return OptionFunc(func(c *Config) {
 		c.stateStore = stateStore
+	})
+}
+
+// WithSchemaMigration makes Engine.Start bring the schema of the configured
+// stores up to date before the engine accepts any command.
+//
+// Start calls Migrate on each store that implements persistence.SchemaMigrator,
+// in this order: events store, state store, offset store, snapshot store. A
+// store that does not implement it is left alone. The first Migrate error
+// stops Start, which returns it, wrapped with the kind of store that failed,
+// and the engine does not start.
+//
+// The option is off by default, so an engine never changes a database schema
+// unless asked to. The stores must be connected before Start: Urd does not
+// connect them.
+func WithSchemaMigration() Option {
+	return OptionFunc(func(c *Config) {
+		c.schemaMigration = true
 	})
 }
 
@@ -315,7 +338,7 @@ func WithEventAdapters(adapters ...eventadapter.EventAdapter) Option {
 	})
 }
 
-// EntityKind is the common contract satisfied by every behavior eGo spawns
+// EntityKind is the common contract satisfied by every behavior Urd spawns
 // as an entity: EventSourcedBehavior, DurableStateBehavior, and SagaBehavior
 // values are all EntityKinds.
 //
@@ -341,7 +364,7 @@ type EntityKind = extension.Dependency
 //
 // Pass one value per behavior type (a zero value is fine; only its concrete
 // type is registered): event-sourced behaviors, durable-state behaviors, and
-// saga behaviors all qualify. NewEngine registers them, alongside eGo's
+// saga behaviors all qualify. NewEngine registers them, alongside Urd's
 // internal spawn-configuration types, on the node's actor system.
 //
 // Single-node deployments may omit this option; the lazy registration done by
@@ -539,7 +562,7 @@ func isNilResolver(r tenancy.TenantResolver) bool {
 // picking one.
 //
 // Known limitation: a Saga step dispatched through NoSender resets
-// context.Context (getsyntegrity/ego#54) and therefore loses any
+// context.Context (getsyntegrity/urd#54) and therefore loses any
 // TenantContext SendCommand attached upstream. In tenant-aware mode this
 // fails closed at the actor's pre-handler gate (T4-A) rather than silently
 // running without an identity, but a saga cannot currently complete a

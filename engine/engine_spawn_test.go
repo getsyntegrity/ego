@@ -27,12 +27,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // TestEngineSpawnMethodsDomainOnlySingleNode spawns behaviors that implement
@@ -41,63 +40,60 @@ import (
 // 2). Each answers a command round trip, and an envelope-capable behavior
 // still receives HandleEnvelope.
 func TestEngineSpawnMethodsDomainOnlySingleNode(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "the Spawn methods spawn behaviors that implement only the port contracts", func(s *specs.Spec) {
+		bg := context.Background()
 
-	t.Run("SpawnEventSourced, envelope-capable", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-		engine := newTestEngine(t, "SpawnEventSourced", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
+		s.It("SpawnEventSourced, envelope-capable", func(ctx *specs.Context) {
+			engine := newTestEngine(ctx.T, "SpawnEventSourced", connectedEventsStore(ctx), WithLogger(DiscardLogger))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		b := &domainOnlyEventSourced{id: uuid.NewString()}
-		require.NoError(t, engine.SpawnEventSourced(ctx, b))
+			b := &domainOnlyEventSourced{id: uuid.NewString()}
+			ctx.Expect(engine.SpawnEventSourced(bg, b)).To(specs.BeNil())
 
-		state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 7}, time.Minute)
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, revision)
-		assert.EqualValues(t, 7, state.(*testpb.Account).GetAccountBalance())
-		assert.Equal(t, 1, b.envelopeHits(), "an envelope-capable behavior still receives HandleEnvelope")
-	})
+			state, revision, err := engine.SendCommand(bg, b.ID(), &testpb.CreateAccount{AccountBalance: 7}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(revision).ToEqual(uint64(1))
+			ctx.Expect(state.(*testpb.Account).GetAccountBalance()).ToEqual(float64(7))
+			// an envelope-capable behavior still receives HandleEnvelope
+			ctx.Expect(b.envelopeHits()).ToEqual(1)
+		})
 
-	t.Run("SpawnDurableState", func(t *testing.T) {
-		stateStore := testkit.NewDurableStore()
-		require.NoError(t, stateStore.Connect(ctx))
-		t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
-		engine := newTestEngine(t, "SpawnDurableState", nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
-		require.NoError(t, engine.Start(ctx))
+		s.It("SpawnDurableState", func(ctx *specs.Context) {
+			engine := newTestEngine(ctx.T, "SpawnDurableState", nil, WithLogger(DiscardLogger),
+				WithStateStore(connectedDurableStore(ctx)))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		b := &domainOnlyDurableState{id: uuid.NewString()}
-		require.NoError(t, engine.SpawnDurableState(ctx, b))
+			b := &domainOnlyDurableState{id: uuid.NewString()}
+			ctx.Expect(engine.SpawnDurableState(bg, b)).To(specs.BeNil())
 
-		state, revision, err := engine.SendCommand(ctx, b.ID(), &testpb.CreateAccount{AccountBalance: 9}, time.Minute)
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, revision)
-		assert.EqualValues(t, 9, state.(*testpb.Account).GetAccountBalance())
-	})
+			state, revision, err := engine.SendCommand(bg, b.ID(), &testpb.CreateAccount{AccountBalance: 9}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(revision).ToEqual(uint64(1))
+			ctx.Expect(state.(*testpb.Account).GetAccountBalance()).ToEqual(float64(9))
+		})
 
-	t.Run("SpawnSaga", func(t *testing.T) {
-		store := testkit.NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		t.Cleanup(func() { _ = store.Disconnect(ctx) })
-		engine := newTestEngine(t, "SpawnSaga", store, WithLogger(DiscardLogger))
-		require.NoError(t, engine.Start(ctx))
+		s.It("SpawnSaga", func(ctx *specs.Context) {
+			engine := newTestEngine(ctx.T, "SpawnSaga", connectedEventsStore(ctx), WithLogger(DiscardLogger))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-		b := &domainOnlySaga{id: "saga-" + uuid.NewString()}
-		require.NoError(t, engine.SpawnSaga(ctx, b, 0))
+			b := &domainOnlySaga{id: "saga-" + uuid.NewString()}
+			ctx.Expect(engine.SpawnSaga(bg, b, 0)).To(specs.BeNil())
 
-		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			info, err := engine.SagaStatus(ctx, b.ID(), time.Second)
-			require.NoError(c, err)
-			require.NotNil(c, info)
-			assert.Equal(c, b.ID(), info.ID)
-		}, 10*time.Second, 50*time.Millisecond)
-	})
+			// the spawned saga answers a status query under its own ID
+			ctx.Eventually(func() any {
+				info, err := engine.SagaStatus(bg, b.ID(), time.Second)
+				if err != nil || info == nil {
+					return ""
+				}
+				return info.ID
+			}, specs.Equal(b.ID()), specs.WithTimeout(waitTimeout), specs.WithInterval(50*time.Millisecond))
+		})
 
-	t.Run("not started", func(t *testing.T) {
-		engine := newTestEngine(t, "SpawnNotStarted", testkit.NewEventsStore(), WithLogger(DiscardLogger))
-		assert.ErrorIs(t, engine.SpawnEventSourced(ctx, &domainOnlyEventSourced{id: "a"}), ErrEngineNotStarted)
-		assert.ErrorIs(t, engine.SpawnDurableState(ctx, &domainOnlyDurableState{id: "b"}), ErrEngineNotStarted)
-		assert.ErrorIs(t, engine.SpawnSaga(ctx, &domainOnlySaga{id: "c"}, 0), ErrEngineNotStarted)
+		s.It("not started", func(ctx *specs.Context) {
+			engine := newTestEngine(ctx.T, "SpawnNotStarted", testkit.NewEventsStore(), WithLogger(DiscardLogger))
+			ctx.Expect(engine.SpawnEventSourced(bg, &domainOnlyEventSourced{id: "a"})).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(engine.SpawnDurableState(bg, &domainOnlyDurableState{id: "b"})).To(specs.MatchError(ErrEngineNotStarted))
+			ctx.Expect(engine.SpawnSaga(bg, &domainOnlySaga{id: "c"}, 0)).To(specs.MatchError(ErrEngineNotStarted))
+		})
 	})
 }

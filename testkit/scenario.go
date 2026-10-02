@@ -25,18 +25,17 @@ package testkit
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
 // EventSourcedBehavior is the subset of engine.EventSourcedBehavior the scenarios
-// exercise, declared here because the testkit cannot import ego (ego's own tests
+// exercise, declared here because the testkit cannot import engine (engine's own tests
 // import the testkit). Every engine.EventSourcedBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
-// for the test. A compile-time assertion in the ego package keeps it that way.
+// for the test. A compile-time assertion in the engine package keeps it that way.
 //
 // The runtime-neutral contract lives in port/behavior
 // (behaviorport.EventSourced); this interface is its structural subset for
@@ -48,10 +47,10 @@ type EventSourcedBehavior interface {
 }
 
 // DurableStateBehavior is the subset of engine.DurableStateBehavior the scenarios
-// exercise, declared here because the testkit cannot import ego (ego's own tests
+// exercise, declared here because the testkit cannot import engine (engine's own tests
 // import the testkit). Every engine.DurableStateBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
-// for the test. A compile-time assertion in the ego package keeps it that way.
+// for the test. A compile-time assertion in the engine package keeps it that way.
 //
 // The runtime-neutral contract lives in port/behavior
 // (behaviorport.DurableState); this interface is its structural subset for
@@ -152,7 +151,7 @@ func (s *EventSourcedScenario) When(command proto.Message) *EventSourcedScenario
 // broken arrangement is never reported as an outcome of the command under test.
 func (r *EventSourcedScenarioResult) requireArranged(t testing.TB) {
 	t.Helper()
-	require.NoError(t, r.arrangeErr, "scenario arrangement failed")
+	failNowIfErr(t, r.arrangeErr, "scenario arrangement failed")
 }
 
 // ThenEvents asserts that the command produced exactly these events
@@ -160,11 +159,14 @@ func (r *EventSourcedScenarioResult) requireArranged(t testing.TB) {
 func (r *EventSourcedScenarioResult) ThenEvents(t testing.TB, expected ...proto.Message) *EventSourcedScenarioResult {
 	t.Helper()
 	r.requireArranged(t)
-	require.NoError(t, r.err, "command processing returned an error")
-	require.Len(t, r.events, len(expected), "unexpected number of events")
+	failNowIfErr(t, r.err, "command processing returned an error")
+	if len(r.events) != len(expected) {
+		failNow(t, "unexpected number of events: expected %d, got %d", len(expected), len(r.events))
+	}
 	for i, exp := range expected {
-		assert.True(t, proto.Equal(exp, r.events[i]),
-			"event at index %d: expected %v, got %v", i, exp, r.events[i])
+		if !proto.Equal(exp, r.events[i]) {
+			t.Errorf("event at index %d: expected %v, got %v", i, exp, r.events[i])
+		}
 	}
 	return r
 }
@@ -173,9 +175,10 @@ func (r *EventSourcedScenarioResult) ThenEvents(t testing.TB, expected ...proto.
 func (r *EventSourcedScenarioResult) ThenState(t testing.TB, expected proto.Message) *EventSourcedScenarioResult {
 	t.Helper()
 	r.requireArranged(t)
-	require.NoError(t, r.err, "command processing returned an error")
-	assert.True(t, proto.Equal(expected, r.state),
-		"state mismatch: expected %v, got %v", expected, r.state)
+	failNowIfErr(t, r.err, "command processing returned an error")
+	if !proto.Equal(expected, r.state) {
+		t.Errorf("state mismatch: expected %v, got %v", expected, r.state)
+	}
 	return r
 }
 
@@ -183,8 +186,12 @@ func (r *EventSourcedScenarioResult) ThenState(t testing.TB, expected proto.Mess
 func (r *EventSourcedScenarioResult) ThenError(t testing.TB, errSubstring string) *EventSourcedScenarioResult {
 	t.Helper()
 	r.requireArranged(t)
-	require.Error(t, r.err, "expected an error but got none")
-	assert.Contains(t, r.err.Error(), errSubstring)
+	if r.err == nil {
+		failNow(t, "expected an error but got none")
+	}
+	if !strings.Contains(r.err.Error(), errSubstring) {
+		t.Errorf("error %q does not contain %q", r.err.Error(), errSubstring)
+	}
 	return r
 }
 
@@ -192,8 +199,10 @@ func (r *EventSourcedScenarioResult) ThenError(t testing.TB, errSubstring string
 func (r *EventSourcedScenarioResult) ThenNoEvents(t testing.TB) *EventSourcedScenarioResult {
 	t.Helper()
 	r.requireArranged(t)
-	require.NoError(t, r.err, "command processing returned an error")
-	assert.Empty(t, r.events, "expected no events but got %d", len(r.events))
+	failNowIfErr(t, r.err, "command processing returned an error")
+	if len(r.events) != 0 {
+		t.Errorf("expected no events but got %d", len(r.events))
+	}
 	return r
 }
 
@@ -246,24 +255,48 @@ func (s *DurableStateScenario) When(command proto.Message) *DurableStateScenario
 // ThenState asserts the resulting state matches expected.
 func (r *DurableStateScenarioResult) ThenState(t testing.TB, expected proto.Message) *DurableStateScenarioResult {
 	t.Helper()
-	require.NoError(t, r.err, "command processing returned an error")
-	assert.True(t, proto.Equal(expected, r.state),
-		"state mismatch: expected %v, got %v", expected, r.state)
+	failNowIfErr(t, r.err, "command processing returned an error")
+	if !proto.Equal(expected, r.state) {
+		t.Errorf("state mismatch: expected %v, got %v", expected, r.state)
+	}
 	return r
 }
 
 // ThenVersion asserts the resulting version matches expected.
 func (r *DurableStateScenarioResult) ThenVersion(t testing.TB, expected uint64) *DurableStateScenarioResult {
 	t.Helper()
-	require.NoError(t, r.err, "command processing returned an error")
-	assert.Equal(t, expected, r.version)
+	failNowIfErr(t, r.err, "command processing returned an error")
+	if r.version != expected {
+		t.Errorf("version mismatch: expected %d, got %d", expected, r.version)
+	}
 	return r
 }
 
 // ThenError asserts the command returned an error containing the given substring.
 func (r *DurableStateScenarioResult) ThenError(t testing.TB, errSubstring string) *DurableStateScenarioResult {
 	t.Helper()
-	require.Error(t, r.err, "expected an error but got none")
-	assert.Contains(t, r.err.Error(), errSubstring)
+	if r.err == nil {
+		failNow(t, "expected an error but got none")
+	}
+	if !strings.Contains(r.err.Error(), errSubstring) {
+		t.Errorf("error %q does not contain %q", r.err.Error(), errSubstring)
+	}
 	return r
+}
+
+// failNow reports a failure and stops the test, like testify's require did:
+// Errorf marks the test failed with the message, FailNow ends it.
+func failNow(t testing.TB, format string, args ...any) {
+	t.Helper()
+	t.Errorf(format, args...)
+	t.FailNow()
+}
+
+// failNowIfErr stops the test when err is not nil, prefixing the error with what
+// the scenario was doing.
+func failNowIfErr(t testing.TB, err error, what string) {
+	t.Helper()
+	if err != nil {
+		failNow(t, "%s: %v", what, err)
+	}
 }

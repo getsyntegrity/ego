@@ -23,96 +23,100 @@
 package command_test
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/urd/command"
 )
 
 func TestNewOperationID(t *testing.T) {
-	t.Run("valid", func(t *testing.T) {
-		op, err := command.NewOperationID("order-123")
-		require.NoError(t, err)
-		require.EqualValues(t, "order-123", op)
-	})
+	specs.Describe(t, "NewOperationID validates an operation id", func(s *specs.Spec) {
+		s.It("valid", func(ctx *specs.Context) {
+			op, err := command.NewOperationID("order-123")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(op).ToEqual(command.OperationID("order-123"))
+		})
 
-	t.Run("empty rejected", func(t *testing.T) {
-		_, err := command.NewOperationID("")
-		require.Error(t, err)
-	})
-
-	t.Run("not valid UTF-8 rejected", func(t *testing.T) {
-		_, err := command.NewOperationID(string([]byte{0xff, 0xfe}))
-		require.Error(t, err)
-	})
-
-	t.Run("leading or trailing whitespace rejected", func(t *testing.T) {
-		_, err := command.NewOperationID(" order-123")
-		require.Error(t, err)
-
-		_, err = command.NewOperationID("order-123 ")
-		require.Error(t, err)
-	})
-
-	t.Run("control rune rejected", func(t *testing.T) {
-		_, err := command.NewOperationID("order-123\n")
-		require.Error(t, err)
-	})
-
-	t.Run("exceeds max length rejected", func(t *testing.T) {
-		long := make([]byte, 129)
-		for i := range long {
-			long[i] = 'a'
+		type rejection struct {
+			name   string
+			inputs []string
 		}
-		_, err := command.NewOperationID(string(long))
-		require.Error(t, err)
-	})
+		specs.Table(s, []rejection{
+			{name: "empty rejected", inputs: []string{""}},
+			{name: "not valid UTF-8 rejected", inputs: []string{string([]byte{0xff, 0xfe})}},
+			{name: "leading or trailing whitespace rejected", inputs: []string{" order-123", "order-123 "}},
+			{name: "control rune rejected", inputs: []string{"order-123\n", "order\x00123"}},
+			{name: "exceeds max length rejected", inputs: []string{strings.Repeat("a", 129)}},
+		}, func(r rejection) string { return r.name }, func(ctx *specs.Context, r rejection) {
+			for _, in := range r.inputs {
+				_, err := command.NewOperationID(in)
+				ctx.Expect(err).To(specs.MatchError(command.ErrInvalidMetadata))
+			}
+		})
 
-	t.Run("interior whitespace accepted", func(t *testing.T) {
-		op, err := command.NewOperationID("order 123")
-		require.NoError(t, err)
-		require.EqualValues(t, "order 123", op)
+		s.It("interior whitespace accepted", func(ctx *specs.Context) {
+			op, err := command.NewOperationID("order 123")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(op).ToEqual(command.OperationID("order 123"))
+		})
 	})
 }
 
 func TestGenerateOperationID(t *testing.T) {
-	op1, err := command.GenerateOperationID()
-	require.NoError(t, err)
-	require.NotEmpty(t, op1)
+	specs.Describe(t, "GenerateOperationID produces distinct, valid operation ids", func(s *specs.Spec) {
+		s.It("returns non-empty ids that differ and pass NewOperationID validation", func(ctx *specs.Context) {
+			op1, err := command.GenerateOperationID()
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(string(op1)).To(specs.Not(specs.BeEmpty()))
 
-	op2, err := command.GenerateOperationID()
-	require.NoError(t, err)
-	require.NotEmpty(t, op2)
+			op2, err := command.GenerateOperationID()
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(string(op2)).To(specs.Not(specs.BeEmpty()))
 
-	require.NotEqual(t, op1, op2)
+			ctx.Expect(op1).To(specs.NotEqual(op2))
 
-	// GenerateOperationID's output must itself satisfy NewOperationID's
-	// validation rules.
-	_, err = command.NewOperationID(string(op1))
-	require.NoError(t, err)
+			// GenerateOperationID's output must itself satisfy NewOperationID's
+			// validation rules.
+			_, err = command.NewOperationID(string(op1))
+			ctx.Expect(err).To(specs.BeNil())
+		})
+	})
 }
 
 func TestGenerateOperationIDUniqueness(t *testing.T) {
-	seen := make(map[command.OperationID]struct{})
-	for i := 0; i < 1000; i++ {
-		op, err := command.GenerateOperationID()
-		require.NoError(t, err)
-		_, exists := seen[op]
-		require.False(t, exists, "duplicate operation id generated: %s", op)
-		seen[op] = struct{}{}
-	}
+	specs.Describe(t, "GenerateOperationID does not repeat an id", func(s *specs.Spec) {
+		s.It("generates 1000 unique ids", func(ctx *specs.Context) {
+			// Duplicates are collected rather than asserted one by one, so a failure lists the repeated ids.
+			seen := make(map[command.OperationID]struct{})
+			var duplicates []command.OperationID
+			for i := 0; i < 1000; i++ {
+				op, err := command.GenerateOperationID()
+				ctx.Expect(err).To(specs.BeNil())
+				if _, exists := seen[op]; exists {
+					duplicates = append(duplicates, op)
+				}
+				seen[op] = struct{}{}
+			}
+			ctx.Expect(duplicates).To(specs.BeEmpty())
+		})
+	})
 }
 
 func TestIdentityDefinedTypesAreDistinct(t *testing.T) {
-	// OperationID, CorrelationID and CausationID are distinct defined
-	// types over string, not aliases of each other or of tenancy's
-	// correlation concept — this is a compile-time assertion.
-	var op command.OperationID = "op-1"
-	var corr command.CorrelationID = "corr-1"
-	var caus command.CausationID = "caus-1"
+	specs.Describe(t, "OperationID, CorrelationID and CausationID are distinct defined types", func(s *specs.Spec) {
+		s.It("converts each to its underlying string", func(ctx *specs.Context) {
+			// OperationID, CorrelationID and CausationID are distinct defined
+			// types over string, not aliases of each other or of tenancy's
+			// correlation concept — this is a compile-time assertion.
+			var op command.OperationID = "op-1"
+			var corr command.CorrelationID = "corr-1"
+			var caus command.CausationID = "caus-1"
 
-	require.Equal(t, "op-1", string(op))
-	require.Equal(t, "corr-1", string(corr))
-	require.Equal(t, "caus-1", string(caus))
+			ctx.Expect(string(op)).ToEqual("op-1")
+			ctx.Expect(string(corr)).ToEqual("corr-1")
+			ctx.Expect(string(caus)).ToEqual("caus-1")
+		})
+	})
 }

@@ -23,15 +23,16 @@
 package compat_test
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/publisher/kafka"
-	"github.com/getsyntegrity/ego/publisher/nats"
-	"github.com/getsyntegrity/ego/publisher/pulsar"
-	"github.com/getsyntegrity/ego/publisher/websocket"
+	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/publisher/kafka"
+	"github.com/getsyntegrity/urd/publisher/nats"
+	"github.com/getsyntegrity/urd/publisher/pulsar"
+	"github.com/getsyntegrity/urd/publisher/websocket"
 )
 
 // The publishers still satisfy the compatibility aliases in package engine (ADR
@@ -52,7 +53,7 @@ var (
 	_ engine.StatePublisher = (*websocket.DurableStatePublisher)(nil)
 )
 
-// TestEgoSentinelIsThePublishingSentinel is the module-crossing half of the
+// TestUrdSentinelIsThePublishingSentinel is the module-crossing half of the
 // historical runtime check "a stopped publisher's error matches
 // engine.ErrPublisherNotStarted" (ADR ego-arch-006, §6 S1). The other half runs
 // inside each publisher module: TestPublishBeforeStartMatchesPublishingSentinel
@@ -61,15 +62,18 @@ var (
 // Because the two sentinels are the same error value, every error that
 // matches one matches the other, so together the two checks prove the
 // original assertion for every publisher.
-func TestEgoSentinelIsThePublishingSentinel(t *testing.T) {
-	if engine.ErrPublisherNotStarted != publishing.ErrPublisherNotStarted {
-		t.Errorf("engine.ErrPublisherNotStarted (%p) is not the same value as publishing.ErrPublisherNotStarted (%p)",
-			engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted)
-	}
-	if !errors.Is(engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) {
-		t.Error("errors.Is(engine.ErrPublisherNotStarted, publishing.ErrPublisherNotStarted) = false")
-	}
-	if !errors.Is(publishing.ErrPublisherNotStarted, engine.ErrPublisherNotStarted) {
-		t.Error("errors.Is(publishing.ErrPublisherNotStarted, engine.ErrPublisherNotStarted) = false")
-	}
+func TestUrdSentinelIsThePublishingSentinel(t *testing.T) {
+	specs.Describe(t, "engine.ErrPublisherNotStarted is the publishing sentinel", func(s *specs.Spec) {
+		s.It("is the same error value", func(ctx *specs.Context) {
+			// Identity, not errors.Is, is the claim: the alias is the very same value.
+			same := engine.ErrPublisherNotStarted == publishing.ErrPublisherNotStarted //nolint:errorlint // identity is what this case proves
+			ctx.Expect(same).To(specs.BeTrue())
+		})
+		s.It("the engine alias matches the publishing sentinel", func(ctx *specs.Context) {
+			ctx.Expect(engine.ErrPublisherNotStarted).To(specs.MatchError(publishing.ErrPublisherNotStarted))
+		})
+		s.It("the publishing sentinel matches the engine alias", func(ctx *specs.Context) {
+			ctx.Expect(publishing.ErrPublisherNotStarted).To(specs.MatchError(engine.ErrPublisherNotStarted))
+		})
+	})
 }

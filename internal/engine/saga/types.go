@@ -25,7 +25,7 @@ package saga
 import (
 	"google.golang.org/protobuf/proto"
 
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // Event, State and the saga action types mirror the aliases the engine

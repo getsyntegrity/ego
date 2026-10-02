@@ -26,97 +26,112 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
-func TestOption(t *testing.T) {
-	ts := time.Second
-	from := time.Now()
-	to := time.Now().Add(ts)
-	recovery := projection.NewRecovery()
+// optionCase pairs one runner option with the Runner field it must set.
+type optionCase struct {
+	name  string
+	opt   Option
+	field func(*Runner) any
+	want  any
+}
 
-	t.Run("WithRefreshInterval", func(t *testing.T) {
-		var r Runner
-		WithPullInterval(ts).Apply(&r)
-		assert.Equal(t, ts, r.pullInterval)
-	})
-	t.Run("WithMaxBufferSize", func(t *testing.T) {
-		var r Runner
-		WithMaxBufferSize(5).Apply(&r)
-		assert.Equal(t, 5, r.maxBufferSize)
-	})
-	t.Run("WithStartOffset", func(t *testing.T) {
-		var r Runner
-		WithStartOffset(from).Apply(&r)
-		assert.Equal(t, from, r.startingOffset)
-	})
-	t.Run("WithResetOffset", func(t *testing.T) {
-		var r Runner
-		WithResetOffset(to).Apply(&r)
-		assert.Equal(t, to, r.resetOffsetTo)
-	})
-	t.Run("WithLogger", func(t *testing.T) {
-		var r Runner
-		WithLogger(discardLogger).Apply(&r)
-		assert.Same(t, discardLogger, r.logger)
-	})
-	t.Run("WithRecoveryStrategy", func(t *testing.T) {
-		var r Runner
-		WithRecoveryStrategy(recovery).Apply(&r)
-		assert.Equal(t, recovery, r.recovery)
+func TestOption(t *testing.T) {
+	specs.Describe(t, "each runner option applies its value to the Runner", func(s *specs.Spec) {
+		ts := time.Second
+		from := time.Now()
+		to := time.Now().Add(ts)
+		recovery := projection.NewRecovery()
+
+		specs.Table(s, []optionCase{
+			{"WithRefreshInterval", WithPullInterval(ts), func(r *Runner) any { return r.pullInterval }, ts},
+			{"WithMaxBufferSize", WithMaxBufferSize(5), func(r *Runner) any { return r.maxBufferSize }, 5},
+			{"WithStartOffset", WithStartOffset(from), func(r *Runner) any { return r.startingOffset }, from},
+			{"WithResetOffset", WithResetOffset(to), func(r *Runner) any { return r.resetOffsetTo }, to},
+			{"WithLogger", WithLogger(discardLogger), func(r *Runner) any { return r.logger }, discardLogger},
+			{"WithRecoveryStrategy", WithRecoveryStrategy(recovery), func(r *Runner) any { return r.recovery }, recovery},
+		}, func(c optionCase) string { return c.name }, func(ctx *specs.Context, c optionCase) {
+			var r Runner
+			c.opt.Apply(&r)
+			ctx.Expect(c.field(&r)).ToEqual(c.want)
+		})
 	})
 }
 
 func TestWithDeadLetterHandler(t *testing.T) {
-	dlh := projection.NewDiscardDeadLetterHandler()
-	var r Runner
-	WithDeadLetterHandler(dlh).Apply(&r)
-	require.NotNil(t, r.deadLetterHandler)
-	assert.Equal(t, dlh, r.deadLetterHandler)
+	specs.Describe(t, "WithDeadLetterHandler sets the dead-letter handler", func(s *specs.Spec) {
+		s.It("stores the given handler", func(ctx *specs.Context) {
+			dlh := projection.NewDiscardDeadLetterHandler()
+			var r Runner
+			WithDeadLetterHandler(dlh).Apply(&r)
+			ctx.Expect(r.deadLetterHandler).To(specs.Not(specs.BeNil()))
+			ctx.Expect(r.deadLetterHandler).ToEqual(dlh)
+		})
+	})
 }
 
 func TestWithDeadLetterHandlerNil(t *testing.T) {
-	var r Runner
-	WithDeadLetterHandler(nil).Apply(&r)
-	assert.Nil(t, r.deadLetterHandler)
+	specs.Describe(t, "WithDeadLetterHandler with nil leaves the handler unset", func(s *specs.Spec) {
+		s.It("keeps the dead-letter handler nil", func(ctx *specs.Context) {
+			var r Runner
+			WithDeadLetterHandler(nil).Apply(&r)
+			ctx.Expect(r.deadLetterHandler).To(specs.BeNil())
+		})
+	})
 }
 
 func TestWithEventAdapters(t *testing.T) {
-	adapter := &runnerTestAdapter{}
-	adapters := []eventadapter.EventAdapter{adapter}
-	var r Runner
-	WithEventAdapters(adapters).Apply(&r)
-	require.Len(t, r.eventAdapters, 1)
-	assert.Equal(t, adapter, r.eventAdapters[0])
+	specs.Describe(t, "WithEventAdapters sets the event adapters", func(s *specs.Spec) {
+		s.It("stores the given adapters", func(ctx *specs.Context) {
+			adapter := &runnerTestAdapter{}
+			adapters := []eventadapter.EventAdapter{adapter}
+			var r Runner
+			WithEventAdapters(adapters).Apply(&r)
+			ctx.Expect(r.eventAdapters).To(specs.HaveLen(1))
+			ctx.Expect(r.eventAdapters[0]).ToEqual(eventadapter.EventAdapter(adapter))
+		})
+	})
 }
 
 func TestWithEventAdaptersEmpty(t *testing.T) {
-	var r Runner
-	WithEventAdapters(nil).Apply(&r)
-	assert.Nil(t, r.eventAdapters)
+	specs.Describe(t, "WithEventAdapters with nil leaves the adapters unset", func(s *specs.Spec) {
+		s.It("keeps the event adapters nil", func(ctx *specs.Context) {
+			var r Runner
+			WithEventAdapters(nil).Apply(&r)
+			ctx.Expect(r.eventAdapters).To(specs.BeNil())
+		})
+	})
 }
 
 func TestWithMetrics(t *testing.T) {
-	m := &instrumentation.Instruments{}
-	var r Runner
-	WithMetrics(m).Apply(&r)
-	assert.Equal(t, m, r.metrics)
+	specs.Describe(t, "WithMetrics sets the instruments", func(s *specs.Spec) {
+		s.It("stores the given instruments", func(ctx *specs.Context) {
+			m := &instrumentation.Instruments{}
+			var r Runner
+			WithMetrics(m).Apply(&r)
+			ctx.Expect(r.metrics).ToEqual(m)
+		})
+	})
 }
 
 func TestWithEncryptor(t *testing.T) {
-	enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
-	var r Runner
-	WithEncryptor(enc).Apply(&r)
-	require.NotNil(t, r.encryptor)
-	assert.Equal(t, enc, r.encryptor)
+	specs.Describe(t, "WithEncryptor sets the encryptor", func(s *specs.Spec) {
+		s.It("stores the given encryptor", func(ctx *specs.Context) {
+			enc := encryption.NewAESEncryptor(testkit.NewKeyStore())
+			var r Runner
+			WithEncryptor(enc).Apply(&r)
+			ctx.Expect(r.encryptor).To(specs.Not(specs.BeNil()))
+			ctx.Expect(r.encryptor).ToEqual(enc)
+		})
+	})
 }
 
 // runnerTestAdapter is a no-op EventAdapter for testing

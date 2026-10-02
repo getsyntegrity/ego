@@ -30,14 +30,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // tenancyProbeCreditEventSourcedBehavior is entity B's behavior in
@@ -137,70 +135,74 @@ func (x *tenancyProbeCreditEventSourcedBehavior) observedTenant() (tenancy.Tenan
 // asserts entity B's HandleCommand observes the *same* TenantContext entity
 // A's did (tasks.md 5.1/5.2, design.md SG1-SG5).
 func TestTenantWritePathE2E(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "a command resolved at Engine.SendCommand keeps its tenant across the saga hop to another entity", func(s *specs.Spec) {
+		s.It("reaches entity B's HandleCommand under the same tenant", func(ctx *specs.Context) {
+			bg := context.Background()
+			store := connectedEventsStore(ctx)
 
-	resolver := &countingTenantResolver{id: "acme"}
-	engine := newTestEngine(t, "TenantWritePathE2E", store, WithTenantResolver(resolver))
-	require.NoError(t, engine.Start(ctx))
+			resolver := &countingTenantResolver{id: "acme"}
+			engine := newSpecsEngine(ctx, "TenantWritePathE2E", store, WithTenantResolver(resolver))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	entityAID := uuid.NewString()
-	entityBID := uuid.NewString()
+			entityAID := uuid.NewString()
+			entityBID := uuid.NewString()
 
-	entityA := NewAccountEventSourcedBehavior(entityAID)
-	require.NoError(t, engine.Entity(ctx, entityA, WithTenant(tenancy.TenantID("acme"))))
+			entityA := NewAccountEventSourcedBehavior(entityAID)
+			ctx.Expect(engine.Entity(bg, entityA, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	entityB := newTenancyProbeCreditEventSourcedBehavior(entityBID)
-	require.NoError(t, engine.Entity(ctx, entityB, WithTenant(tenancy.TenantID("acme"))))
+			entityB := newTenancyProbeCreditEventSourcedBehavior(entityBID)
+			ctx.Expect(engine.Entity(bg, entityB, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	sagaID := "saga-" + uuid.NewString()
-	saga := &enginetest.CallbackSagaBehavior{
-		SagaID: sagaID,
-		HandleEventFn: func(_ context.Context, event Event, state State) (*SagaAction, error) {
-			created, ok := event.(*testpb.AccountCreated)
-			if !ok || created.GetAccountId() != entityAID {
-				return &SagaAction{}, nil
-			}
-			return &SagaAction{
-				Commands: []SagaCommand{
-					{EntityID: entityBID, Command: &testpb.CreditAccount{AccountId: entityBID, Balance: created.GetAccountBalance()}, Timeout: 5 * time.Second},
+			sagaID := "saga-" + uuid.NewString()
+			saga := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, event Event, state State) (*SagaAction, error) {
+					created, ok := event.(*testpb.AccountCreated)
+					if !ok || created.GetAccountId() != entityAID {
+						return &SagaAction{}, nil
+					}
+					return &SagaAction{
+						Commands: []SagaCommand{
+							{EntityID: entityBID, Command: &testpb.CreditAccount{AccountId: entityBID, Balance: created.GetAccountBalance()}, Timeout: 5 * time.Second},
+						},
+					}, nil
 				},
-			}, nil
-		},
-		HandleResultFn: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
-			return &SagaAction{Complete: true}, nil
-		},
-	}
-	require.NoError(t, engine.Saga(ctx, saga, 0, WithTenant(tenancy.TenantID("acme"))))
+				HandleResultFn: func(_ context.Context, _ string, _ State, _ State) (*SagaAction, error) {
+					return &SagaAction{Complete: true}, nil
+				},
+			}
+			ctx.Expect(engine.Saga(bg, saga, 0, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	_, _, err := engine.SendCommand(ctx, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
+			_, _, err := engine.SendCommand(bg, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.Eventually(t, func() bool {
-		return entityB.invocationCount() == 1
-	}, 10*time.Second, 50*time.Millisecond, "entity B's HandleCommand must eventually run via the saga hop")
+			// Entity B's HandleCommand must eventually run via the saga hop.
+			ctx.Eventually(func() any { return entityB.invocationCount() }, specs.Equal(1),
+				specs.WithTimeout(waitTimeout), specs.WithInterval(50*time.Millisecond))
 
-	// TENANT-003 T4 (corrected): Engine.Entity/Engine.Saga never call
-	// Resolve at spawn — entity A, entity B, and the saga each declare their
-	// tenant via engine.WithTenant instead. Only Engine.SendCommand's own
-	// resolve, at the command trust boundary, counts here. The saga's own
-	// dispatch to entity B (sendCommand) never re-resolves either: it
-	// reuses the already-bound/reconstructed TenantContext on its ctx,
-	// which is what the observedTenant assertion below proves.
-	assert.EqualValues(t, 1, resolver.callCount(), "Resolve must be invoked exactly once, at Engine.SendCommand, never at any spawn or downstream")
+			// TENANT-003 T4 (corrected): Engine.Entity/Engine.Saga never call
+			// Resolve at spawn — entity A, entity B, and the saga each declare their
+			// tenant via engine.WithTenant instead. Only Engine.SendCommand's own
+			// resolve, at the command trust boundary, counts here. The saga's own
+			// dispatch to entity B (sendCommand) never re-resolves either: it
+			// reuses the already-bound/reconstructed TenantContext on its ctx,
+			// which is what the observedTenant assertion below proves.
+			ctx.Expect(resolver.callCount()).To(specs.Equal(int64(1)))
 
-	tcA, err := tenancy.NewTenantID("acme")
-	require.NoError(t, err)
-	wantTenant, err := tenancy.NewTenantContext(tcA)
-	require.NoError(t, err)
+			tcA, err := tenancy.NewTenantID("acme")
+			ctx.Expect(err).To(specs.BeNil())
+			wantTenant, err := tenancy.NewTenantContext(tcA)
+			ctx.Expect(err).To(specs.BeNil())
 
-	observed, ok := entityB.observedTenant()
-	require.True(t, ok, "entity B's HandleCommand must observe a TenantContext attached to its ctx")
-	assert.Equal(t, wantTenant, observed, "entity B must observe the same tenant entity A's command was resolved under")
+			// Entity B must observe a TenantContext, and the same one entity A's
+			// command was resolved under.
+			observed, ok := entityB.observedTenant()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(observed).ToEqual(wantTenant)
 
-	require.NoError(t, engine.Stop(ctx))
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }
 
 // TestEngineSagaStatusTenantIsolation covers the PR#78 review round 2 P1
@@ -210,53 +212,67 @@ func TestTenantWritePathE2E(t *testing.T) {
 // resolver would reject every caller, tenant-matching or not, defeating the
 // isolation checkStateReadTenant is supposed to enforce.
 func TestEngineSagaStatusTenantIsolation(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine.SagaStatus resolves and attaches the caller's tenant", func(s *specs.Spec) {
+		bg := context.Background()
 
-	resolver := &countingTenantResolver{id: "acme"}
-	engine := newTestEngine(t, "SagaStatusTenantIsolation", store, WithTenantResolver(resolver))
-	require.NoError(t, engine.Start(ctx))
+		var (
+			engine   *Engine
+			resolver *countingTenantResolver
+			sagaID   string
+		)
 
-	entityAID := uuid.NewString()
-	entityA := NewAccountEventSourcedBehavior(entityAID)
-	require.NoError(t, engine.Entity(ctx, entityA, WithTenant(tenancy.TenantID("acme"))))
+		s.BeforeEach(func(ctx *specs.Context) {
+			store := connectedEventsStore(ctx)
 
-	sagaID := "saga-" + uuid.NewString()
-	saga := &enginetest.CallbackSagaBehavior{
-		SagaID: sagaID,
-		HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
-			created, ok := event.(*testpb.AccountCreated)
-			if !ok || created.GetAccountId() != entityAID {
-				return &SagaAction{}, nil
+			resolver = &countingTenantResolver{id: "acme"}
+			engine = newSpecsEngine(ctx, "SagaStatusTenantIsolation", store, WithTenantResolver(resolver))
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+
+			entityAID := uuid.NewString()
+			entityA := NewAccountEventSourcedBehavior(entityAID)
+			ctx.Expect(engine.Entity(bg, entityA, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
+
+			sagaID = "saga-" + uuid.NewString()
+			saga := &enginetest.CallbackSagaBehavior{
+				SagaID: sagaID,
+				HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+					created, ok := event.(*testpb.AccountCreated)
+					if !ok || created.GetAccountId() != entityAID {
+						return &SagaAction{}, nil
+					}
+					return &SagaAction{Complete: true}, nil
+				},
 			}
-			return &SagaAction{Complete: true}, nil
-		},
-	}
-	require.NoError(t, engine.Saga(ctx, saga, 0, WithTenant(tenancy.TenantID("acme"))))
+			ctx.Expect(engine.Saga(bg, saga, 0, WithTenant(tenancy.TenantID("acme")))).To(specs.BeNil())
 
-	_, _, err := engine.SendCommand(ctx, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-	require.NoError(t, err)
+			_, _, err := engine.SendCommand(bg, entityAID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+			ctx.Expect(err).To(specs.BeNil())
 
-	require.Eventually(t, func() bool {
-		_, statusErr := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-		return statusErr == nil
-	}, 10*time.Second, 50*time.Millisecond, "the saga must bind to acme via the triggering event before SagaStatus can succeed")
+			// The saga must bind to acme via the triggering event before SagaStatus can succeed.
+			ctx.Eventually(func() any {
+				_, statusErr := engine.SagaStatus(bg, sagaID, 5*time.Second)
+				return statusErr
+			}, specs.BeNil(), specs.WithTimeout(waitTimeout), specs.WithInterval(50*time.Millisecond))
+		})
 
-	t.Run("the tenant the saga bound to can read its own status", func(t *testing.T) {
-		info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-		require.NoError(t, err, "SagaStatus must resolve and attach the caller's tenant, not send the query under a bare ctx")
-		assert.NotNil(t, info)
+		s.It("the tenant the saga bound to can read its own status", func(ctx *specs.Context) {
+			// SagaStatus must resolve and attach the caller's tenant, not send the query under a bare ctx.
+			info, err := engine.SagaStatus(bg, sagaID, 5*time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(info).To(specs.Not(specs.BeNil()))
+
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+
+		s.It("a different resolved tenant is rejected, not just any tenant-less caller", func(ctx *specs.Context) {
+			resolver.id = "globex"
+			ctx.Cleanup(func() { resolver.id = "acme" })
+
+			// SagaStatus for a saga bound to a different tenant must be rejected.
+			_, err := engine.SagaStatus(bg, sagaID, 5*time.Second)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
 	})
-
-	t.Run("a different resolved tenant is rejected, not just any tenant-less caller", func(t *testing.T) {
-		resolver.id = "globex"
-		defer func() { resolver.id = "acme" }()
-
-		_, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-		require.Error(t, err, "SagaStatus for a saga bound to a different tenant must be rejected")
-	})
-
-	require.NoError(t, engine.Stop(ctx))
 }

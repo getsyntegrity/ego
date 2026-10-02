@@ -1,9 +1,9 @@
-module github.com/getsyntegrity/ego/publisher/nats
+module github.com/getsyntegrity/urd/publisher/nats
 
 go 1.26.0
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/nats-io/nats.go v1.53.1
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/multierr v1.11.0 // indirect
@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/flowchartsman/retry v1.2.0
+	github.com/getsyntegrity/go-specs v0.3.3
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -26,7 +27,7 @@ require (
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (
@@ -40,4 +41,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego => ../../
+replace github.com/getsyntegrity/urd => ../../

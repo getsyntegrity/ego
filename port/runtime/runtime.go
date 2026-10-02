@@ -26,9 +26,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/port/behavior"
 )
 
 // The interfaces below are the application side of the runtime SPI. Each
@@ -142,14 +142,14 @@ type Sagas interface {
 	// SagaInfo.Status is the saga's lifecycle status when it answers:
 	// SagaRunning, SagaCompensating, SagaCompleted or SagaFailed. An adapter
 	// that runs a compensation to its end before answering (the GoAkt adapter,
-	// *ego.Engine, does) reports SagaCompleted or SagaFailed rather than
+	// *engine.Engine, does) reports SagaCompleted or SagaFailed rather than
 	// SagaCompensating.
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
 
 // Projections controls the projections registered with the runtime. A
 // projection is registered by name when the runtime is built (with
-// ego.WithProjection for the GoAkt adapter); these methods address it by that
+// engine.WithProjection for the GoAkt adapter); these methods address it by that
 // name.
 type Projections interface {
 	// StartProjection starts the named projection. Once started, it processes
@@ -193,7 +193,7 @@ type Events interface {
 
 // Runtime is every capability together. It is what a composition root hands
 // out; a consumer narrows it to the capability it needs, for example
-// var entities runtime.Entities = r. *ego.Engine, the GoAkt adapter,
+// var entities runtime.Entities = r. *engine.Engine, the GoAkt adapter,
 // implements it.
 type Runtime interface {
 	Entities

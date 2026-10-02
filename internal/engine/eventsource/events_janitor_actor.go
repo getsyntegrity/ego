@@ -26,9 +26,9 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // applyRetentionRequest is sent from the [snapshotsWriterActor] to the
@@ -121,7 +121,7 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 		}
 
 		if deleteUpTo > 0 {
-			if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
+			if err := retryWithBackoff(ctx.Context(), defaultBackoff(), defaultMaxRetries, func() error {
 				return a.eventsStore.DeleteEvents(ctx.Context(), req.scope, req.persistenceID, deleteUpTo)
 			}); err != nil {
 				a.logger.ErrorContext(ctx.Context(), "failed to delete events for retention policy",
@@ -134,7 +134,7 @@ func (a *eventsJanitorActor) handleApplyRetention(ctx *goakt.ReceiveContext, req
 
 	if req.deleteSnapshotsOnSnapshot && a.snapshotStore != nil && req.eventsCounter > req.snapshotInterval {
 		previousSnapshotSeqNr := req.eventsCounter - req.snapshotInterval
-		if err := retryWithBackoff(ctx.Context(), defaultMaxRetries, func() error {
+		if err := retryWithBackoff(ctx.Context(), defaultBackoff(), defaultMaxRetries, func() error {
 			return a.snapshotStore.DeleteSnapshots(ctx.Context(), req.scope, req.persistenceID, previousSnapshotSeqNr)
 		}); err != nil {
 			a.logger.ErrorContext(ctx.Context(), "failed to delete old snapshots for retention policy",

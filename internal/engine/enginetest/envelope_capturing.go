@@ -32,9 +32,9 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/command"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/urd/command"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // EnvelopeCapturingEventSourcedBehavior implements both EventSourcedBehavior

@@ -30,12 +30,12 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // EventsPublisher defines a Kafka publisher.
-// This publisher is responsible for delivering ego events to a Kafka broker.
+// This publisher is responsible for delivering Urd events to a Kafka broker.
 type EventsPublisher struct {
 	config   *Config
 	producer sarama.SyncProducer
@@ -82,7 +82,7 @@ func (x *EventsPublisher) Close(ctx context.Context) error {
 
 // ID implements publishing.EventPublisher.
 func (x *EventsPublisher) ID() string {
-	return "ego-kafka"
+	return "urd-kafka"
 }
 
 // Publish implements publishing.EventPublisher.
@@ -162,7 +162,7 @@ func (x *DurableStatePublisher) Close(ctx context.Context) error {
 
 // ID implements publishing.StatePublisher.
 func (x *DurableStatePublisher) ID() string {
-	return "ego-kafka"
+	return "urd-kafka"
 }
 
 // Publish implements publishing.StatePublisher.

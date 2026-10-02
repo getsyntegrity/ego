@@ -27,11 +27,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getsyntegrity/ego/compose"
-	egoakt "github.com/getsyntegrity/ego/compose/goakt"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/internal/runtimeconsumer"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/getsyntegrity/urd/compose"
+	urdakt "github.com/getsyntegrity/urd/compose/goakt"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/internal/runtimeconsumer"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // TestRuntime_ConsumerDrivesTheAppEndToEnd is #147's end-to-end criterion
@@ -39,43 +41,36 @@ import (
 // neither package engine nor GoAkt, spawns a behavior, sends it two commands
 // and reads its state through App.Runtime() on a real GoAkt application.
 func TestRuntime_ConsumerDrivesTheAppEndToEnd(t *testing.T) {
-	ctx := context.Background()
-	events := testkit.NewEventsStore()
-	if err := events.Connect(ctx); err != nil {
-		t.Fatalf("connect events store: %v", err)
-	}
-	t.Cleanup(func() { _ = events.Disconnect(ctx) })
+	specs.Describe(t, "internal/runtimeconsumer driving a real GoAkt App through App.Runtime()", func(s *specs.Spec) {
+		s.It("spawns, commands and reads an entity end to end", func(ctx *specs.Context) {
+			bg := context.Background()
+			events := testkit.NewEventsStore()
+			ctx.Expect(events.Connect(bg)).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = events.Disconnect(bg) })
 
-	app, err := egoakt.New(compose.Spec{
-		Name:            "runtime-consumer-e2e",
-		Families:        compose.EventSourced,
-		EventsStore:     events,
-		ShutdownTimeout: 20 * time.Second,
-	}, egoakt.WithLogger(engine.DiscardLogger))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Stop is idempotent (a no-op after Stop or a failed Start), so this
-	// cleanup only matters when the test fails before its explicit Stop; its
-	// error is deliberately ignored, the explicit Stop below checks it.
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
-	if err := app.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+			app, err := urdakt.New(compose.Spec{
+				Name:            "runtime-consumer-e2e",
+				Families:        compose.EventSourced,
+				EventsStore:     events,
+				ShutdownTimeout: 20 * time.Second,
+			}, urdakt.WithLogger(engine.DiscardLogger))
+			ctx.Expect(err).To(specs.BeNil())
+			// Stop is idempotent (a no-op after Stop or a failed Start), so this
+			// cleanup only matters when the case fails before its explicit Stop;
+			// its error is deliberately ignored, the explicit Stop below checks it.
+			ctx.Cleanup(func() { _ = app.Stop(context.Background()) })
+			ctx.Expect(app.Start(bg)).To(specs.BeNil())
 
-	account, err := runtimeconsumer.Run(ctx, app.Runtime())
-	if err != nil {
-		t.Fatalf("runtimeconsumer.Run: %v", err)
-	}
-	if account.GetAccountId() != runtimeconsumer.AccountID || account.GetAccountBalance() != runtimeconsumer.FinalBalance {
-		t.Fatalf("final state = %v, want account %q with balance %v", account, runtimeconsumer.AccountID, runtimeconsumer.FinalBalance)
-	}
-	exists, err := app.Runtime().EntityExists(ctx, runtimeconsumer.AccountID)
-	if err != nil || !exists {
-		t.Fatalf("EntityExists(%q) = (%v, %v), want (true, nil)", runtimeconsumer.AccountID, exists, err)
-	}
+			account, err := runtimeconsumer.Run(bg, app.Runtime())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(account.GetAccountId()).To(specs.Equal(runtimeconsumer.AccountID))
+			ctx.Expect(account.GetAccountBalance()).To(specs.Equal(runtimeconsumer.FinalBalance))
 
-	if err := app.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+			exists, err := app.Runtime().EntityExists(bg, runtimeconsumer.AccountID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists).To(specs.BeTrue())
+
+			ctx.Expect(app.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }

@@ -48,8 +48,10 @@ engine ──> internal/engine/protocol, internal/extensions
 
 No internal package imports `engine`: the compiler forbids it, because `engine`
 imports them. There is no `common` package; every shared helper has a named home.
-`archcheck` also keeps `internal/engine/...` out of the application, composition and
-adapter layers (see [CI](./ci.md)).
+`internal/engine/...` is also kept out of the application, composition and adapter
+layers. That is a convention today: the `archcheck` rule that enforced it was removed with the
+old CI pipeline, and restoring an automated check is tracked in
+[#208](https://github.com/getsyntegrity/urd/issues/208).
 
 ## Why the cluster kinds stay in `engine`
 
@@ -64,7 +66,7 @@ So `EventSourcedActor`, `DurableStateActor`, `SagaActor` and `ProjectionActor`, 
 the error type `projectionRunnerError` (`engine.projectionRunnerError`), stay declared
 in `engine`. Each actor type is a struct with one unexported field that holds the
 implementation, and its three GoAkt methods (`PreStart`, `Receive`, `PostStop`) delegate
-to it. `engine/cluster_kinds.go` holds them, and `TestClusterKindsExposesEgoActors`
+to it. `engine/cluster_kinds.go` holds them, and `TestEngineClusterKindsExposesUrdActors`
 pins the four names. `TestProjectionSupervisorContract` pins the supervisor key.
 
 Two alternatives were rejected. Embedding the internal type would add an exported

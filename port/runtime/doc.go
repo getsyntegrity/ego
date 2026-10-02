@@ -21,14 +21,14 @@
 // SOFTWARE.
 
 // Package runtime is the runtime-neutral contract of the application side of
-// Ego's runtime SPI: the types, spawn options and errors that code running
+// Urd's runtime SPI: the types, spawn options and errors that code running
 // entities, sagas and projections needs, whichever runtime hosts them.
 //
 // It is a contract package: it depends only on the standard library and other
 // contracts (tenancy, port/behavior), never on the GoAkt runtime. The GoAkt
-// adapter, *ego.Engine, is one implementation; package ego keeps its older
-// names as aliases of the types and errors declared here (ego.SpawnOption,
-// ego.SagaInfo, ego.ErrEngineNotStarted, ...), so both names denote the same
+// adapter, *engine.Engine, is one implementation; package engine keeps its older
+// names as aliases of the types and errors declared here (engine.SpawnOption,
+// engine.SagaInfo, engine.ErrEngineNotStarted, ...), so both names denote the same
 // type or the same error value.
 //
 // # Spawn options
@@ -48,6 +48,6 @@
 // error. Spawn settings are not operations; what a runtime does with a
 // setting it cannot honor is decided by RUNTIME-003.
 //
-// Import this package under another name (Ego uses runtimeport) in a file
+// Import this package under another name (Urd uses runtimeport) in a file
 // that also imports the standard library's runtime package.
 package runtime

@@ -23,11 +23,14 @@
 package adaptertest
 
 import (
+	"fmt"
 	"testing"
 
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // The table of ports that imply CapReady is written as string literals,
@@ -35,19 +38,32 @@ import (
 // port/adapter. This test, which may import more, pins it to the contract
 // packages' own constants so a renamed port cannot drift silently.
 func TestImpliesReadyMatchesTheStorePortConstants(t *testing.T) {
-	for _, p := range []adapter.Port{
-		persistence.PortEventsStore, persistence.PortStateStore, persistence.PortSnapshotStore, offsetstore.PortOffsetStore,
-	} {
-		if !impliesReady(p) {
-			t.Errorf("impliesReady(%q) = false, want true: every store port has Ping", p)
-		}
+	type portCase struct {
+		name string
+		port adapter.Port
+		want bool
 	}
-	if len(readyPorts) != 4 {
-		t.Errorf("readyPorts has %d entries, want the 4 store ports", len(readyPorts))
+	implies := func(p adapter.Port) portCase {
+		return portCase{fmt.Sprintf("%s implies CapReady, since every store port has Ping", p), p, true}
 	}
-	for _, p := range []adapter.Port{"publishing.EventPublisher", "publishing.StatePublisher", "tenancy.TenantResolver", "encryption.Encryptor"} {
-		if impliesReady(p) {
-			t.Errorf("impliesReady(%q) = true, want false", p)
-		}
+	doesNotImply := func(p adapter.Port) portCase {
+		return portCase{fmt.Sprintf("%s does not imply CapReady", p), p, false}
 	}
+	specs.Describe(t, "the ports that imply CapReady match the contract packages' store port constants", func(s *specs.Spec) {
+		specs.Table(s, []portCase{
+			implies(persistence.PortEventsStore),
+			implies(persistence.PortStateStore),
+			implies(persistence.PortSnapshotStore),
+			implies(offsetstore.PortOffsetStore),
+			doesNotImply("publishing.EventPublisher"),
+			doesNotImply("publishing.StatePublisher"),
+			doesNotImply("tenancy.TenantResolver"),
+			doesNotImply("encryption.Encryptor"),
+		}, func(c portCase) string { return c.name }, func(ctx *specs.Context, c portCase) {
+			ctx.Expect(impliesReady(c.port)).To(specs.Equal(c.want))
+		})
+		s.It("lists exactly the 4 store ports", func(ctx *specs.Context) {
+			ctx.Expect(readyPorts).To(specs.HaveLen(4))
+		})
+	})
 }

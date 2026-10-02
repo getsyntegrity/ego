@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // ErrConcurrencyConflict is the sentinel a ConflictError matches via

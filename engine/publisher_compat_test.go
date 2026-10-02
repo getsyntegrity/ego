@@ -23,12 +23,11 @@
 package engine
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // Compiles only if the types are identical (i.e. aliases).
@@ -42,17 +41,20 @@ var (
 // and package engine keeps aliases, so both import paths name the same types and
 // the same sentinel error.
 func TestPublisherContractsAliasPortPublishing(t *testing.T) {
-	var (
-		eventPub publishing.EventPublisher = (*recordingEventPublisher)(nil)
-		statePub publishing.StatePublisher = (*recordingStatePublisher)(nil)
-	)
+	specs.Describe(t, "the publisher contracts in package engine alias the publishing port types and sentinel", func(s *specs.Spec) {
+		s.It("names the same types and the same sentinel error under both import paths", func(ctx *specs.Context) {
+			var (
+				eventPub publishing.EventPublisher = (*recordingEventPublisher)(nil)
+				statePub publishing.StatePublisher = (*recordingStatePublisher)(nil)
+			)
 
-	var legacyEvent EventPublisher = eventPub
-	var legacyState StatePublisher = statePub
-	assert.Equal(t, eventPub, legacyEvent)
-	assert.Equal(t, statePub, legacyState)
+			var (
+				_ EventPublisher = eventPub //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+				_ StatePublisher = statePub //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+			)
 
-	assert.Same(t, publishing.ErrPublisherNotStarted, ErrPublisherNotStarted)
-	assert.True(t, errors.Is(publishing.ErrPublisherNotStarted, ErrPublisherNotStarted))
-	assert.True(t, errors.Is(ErrPublisherNotStarted, publishing.ErrPublisherNotStarted))
+			ctx.Expect(publishing.ErrPublisherNotStarted == ErrPublisherNotStarted).To(specs.BeTrue()) //nolint:errorlint // identity is the point
+			ctx.Expect(publishing.ErrPublisherNotStarted).To(specs.MatchError(ErrPublisherNotStarted))
+		})
+	})
 }

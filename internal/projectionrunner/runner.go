@@ -38,22 +38,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flowchartsman/retry"
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/ticker"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/projection"
 )
 
 // numWorkers is the fixed size of the persistent shard-processing goroutine pool.
@@ -103,17 +101,17 @@ type Runner struct {
 	startingOffset time.Time
 	// reset the projection offset to a given timestamp
 	resetOffsetTo time.Time
-	ticker        *ticker.Ticker
+
+	// clock is the source of time for the pull loop, the retries, the store
+	// backoff and the offset timestamps. It is the real clock unless WithClock
+	// replaces it.
+	clock clock
 
 	// worker pool — initialised in Start, torn down in Stop.
 	workCh       chan shardItem // shard dispatch channel shared by all workers
 	workerErrCh  chan error     // first per-batch error reported by workers
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
-
-	// retrier is pre-created once for RetryAndFail / RetryAndSkip policies to
-	// avoid allocating a new retrier on every event.
-	retrier *retry.Retrier
 
 	// wgPool pools *sync.WaitGroup for per-batch synchronisation.
 	// Proto message pointers (*egopb.ProjectionId, *egopb.Offset) are NOT
@@ -207,17 +205,11 @@ func New(name string,
 		opt.Apply(runner)
 	}
 
-	runner.wgPool.New = func() any { return new(sync.WaitGroup) }
-
-	// Pre-create the retrier once; it is stateless between calls so it can be
-	// shared safely across concurrent workers.
-	if policy := runner.recovery.RecoveryPolicy(); policy == projection.RetryAndFail || policy == projection.RetryAndSkip {
-		runner.retrier = retry.NewRetrier(
-			int(runner.recovery.Retries()),
-			runner.recovery.RetryDelay(),
-			runner.recovery.RetryDelay(),
-		)
+	if runner.clock == nil {
+		runner.clock = realClock{}
 	}
+
+	runner.wgPool.New = func() any { return new(sync.WaitGroup) }
 
 	return runner
 }
@@ -237,17 +229,13 @@ func (x *Runner) Start(ctx context.Context) error {
 	}
 
 	// we will ping the stores 5 times to see whether there have started successfully or not.
-	// The operation will be done in an exponential backoff mechanism with an initial delay of a second and a maximum delay of a second.
+	// The attempts are one second apart, measured on the runner's clock.
 	// Once the retries have completed and still not connected we fail the start process of the projection.
 	const (
-		maxRetries   = 5
-		initialDelay = time.Second
-		maxDelay     = time.Second
+		maxRetries = 5
+		retryDelay = time.Second
 	)
-	// create a new instance of retrier that will try a maximum of five times, with
-	// an initial delay of 100 ms and a maximum delay of 1 second
-	retrier := retry.NewRetrier(maxRetries, initialDelay, maxDelay)
-	err := retrier.RunContext(ctx, func(ctx context.Context) error {
+	err := retryOn(ctx, x.clock, maxRetries, retryDelay, func(ctx context.Context) error {
 		g, ctx := errgroup.WithContext(ctx)
 		g.Go(func() error {
 			return x.eventsStore.Ping(ctx)
@@ -274,7 +262,9 @@ func (x *Runner) Start(ctx context.Context) error {
 	// One slot per worker is enough: we only ever surface the first error.
 	x.workerErrCh = make(chan error, numWorkers)
 
-	x.ticker = ticker.New(x.pullInterval)
+	if x.pullInterval <= 0 {
+		panic("intervals must be greater than zero")
+	}
 	x.running.Store(true)
 
 	// Subscribe to the in-process events stream so locally persisted events
@@ -300,7 +290,6 @@ func (x *Runner) Stop() error {
 		return nil
 	}
 	x.stopSignal <- struct{}{}
-	x.ticker.Stop()
 	x.workerCancel()
 	if x.eventsStream != nil && x.streamSubscriber != nil {
 		x.eventsStream.RemoveSubscriber(x.streamSubscriber)
@@ -318,10 +307,12 @@ func (x *Runner) Name() string {
 // once the processing loop stops permanently on an unprocessable event.
 func (x *Runner) Run(_ context.Context, onFailure func(error)) {
 	x.onFailure = onFailure
-	x.ticker.Start()
+	// The first pull timer is armed here, before the loop starts, so the runner
+	// waits one interval from Run, as the ticker it replaces did.
+	pull := x.clock.NewTimer(x.pullInterval)
 	// processingLoop receives the worker-pool context so that cancellation from
 	// Stop() propagates through both the dispatch select and the workers.
-	go x.processingLoop(x.workerCtx)
+	go x.processingLoop(x.workerCtx, pull)
 }
 
 // processingLoop is a loop that continuously runs to process events persisted onto the journal store until the projection is stopped.
@@ -330,24 +321,27 @@ func (x *Runner) Run(_ context.Context, onFailure func(error)) {
 // complete before the next pull.  No goroutines or channels are allocated per
 // pull.  A pull is triggered by the ticker, by a nudge from the local events
 // stream, or by a full-buffer read reporting that more events are pending.
-func (x *Runner) processingLoop(ctx context.Context) {
+// The interval is a timer re-armed after every pass, so the next interval-based
+// pull starts one pullInterval after the previous pass ended.
+func (x *Runner) processingLoop(ctx context.Context, pull timer) {
+	defer func() { pull.Stop() }()
+
 	for {
 		select {
 		case <-x.stopSignal:
 			return
 		case <-ctx.Done():
 			return
-		case <-x.ticker.Ticks:
+		case <-pull.C():
 		case <-x.nudge:
 		}
 
-		if !x.running.Load() {
-			continue
-		}
-
-		if !x.runPass(ctx) {
+		if x.running.Load() && !x.runPass(ctx) {
 			return
 		}
+
+		pull.Stop()
+		pull = x.clock.NewTimer(x.pullInterval)
 	}
 }
 
@@ -417,7 +411,6 @@ drain:
 
 	if eventErr != nil {
 		x.logger.Error("projection stopped on an unprocessable event", "projection", x.name, "error", eventErr)
-		x.ticker.Stop()
 		_ = x.Stop()
 
 		if x.onFailure != nil {
@@ -454,12 +447,15 @@ func (x *Runner) retryAfterStoreFailure(ctx context.Context, err error) bool {
 		"retry_in", delay,
 		"error", err)
 
+	backoff := x.clock.NewTimer(delay)
+	defer backoff.Stop()
+
 	select {
 	case <-x.stopSignal:
 		return false
 	case <-ctx.Done():
 		return false
-	case <-time.After(delay):
+	case <-backoff.C():
 		return true
 	}
 }
@@ -608,7 +604,7 @@ func (x *Runner) doProcess(ctx context.Context, shard uint64) error {
 		// Use wall-clock lag: how far behind real time the projection is.
 		// Event timestamps use time.UnixNano(), so compute lag in nanoseconds
 		// and convert to milliseconds for the gauge.
-		lagMs := (time.Now().UnixNano() - currOffset) / int64(time.Millisecond)
+		lagMs := (x.clock.Now().UnixNano() - currOffset) / int64(time.Millisecond)
 		if lagMs < 0 || currOffset == 0 {
 			lagMs = 0
 		}
@@ -738,9 +734,11 @@ func (x *Runner) handleWithPolicy(ctx context.Context, persistenceID string, eve
 	return nil
 }
 
-// retryHandle runs the handler with the pre-created retrier and optional per-attempt logging.
+// retryHandle runs the handler under the recovery policy's retries and delay, and optional per-attempt logging.
 func (x *Runner) retryHandle(ctx context.Context, persistenceID string, event *anypb.Any, seqNr uint64, logEachAttempt bool) error {
-	err := x.retrier.Run(func() error {
+	// The recovery retries never end early: the wait between attempts ignores
+	// the processing context, as the retrier this replaces did.
+	err := retryOn(context.Background(), x.clock, int(x.recovery.Retries()), x.recovery.RetryDelay(), func(context.Context) error {
 		handleErr := x.handleSafely(ctx, persistenceID, event, seqNr)
 		if handleErr != nil && logEachAttempt {
 			x.logHandlerError(handleErr, persistenceID, seqNr)
@@ -789,7 +787,7 @@ func (x *Runner) logHandlerError(err error, persistenceID string, seqNr uint64) 
 }
 
 // commitOffset persists the processed offset for the given shard.
-// time.Now().UnixMilli() is used directly, avoiding the two intermediate
+// The clock's Now().UnixMilli() is used directly, avoiding the two intermediate
 // allocations that timestamppb.Now().AsTime().UnixMilli() would produce.
 // Note: *egopb.Offset is NOT pooled because the OffsetStore interface permits
 // implementations to retain the pointer after WriteOffset returns.
@@ -798,7 +796,7 @@ func (x *Runner) commitOffset(ctx context.Context, shard uint64, nextOffset int6
 		ShardNumber:    shard,
 		ProjectionName: x.name,
 		Value:          nextOffset,
-		Timestamp:      time.Now().UnixMilli(),
+		Timestamp:      x.clock.Now().UnixMilli(),
 	}
 
 	if err := x.offsetsStore.WriteOffset(ctx, offset); err != nil {

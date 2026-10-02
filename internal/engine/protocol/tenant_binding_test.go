@@ -25,32 +25,36 @@ package protocol
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // TestAnswerTenantBinding pins the actors' shared query handler: it answers
 // from the bound scope only, never discloses the bound tenant, and reports
 // no binding in legacy mode or for an administrative-looking query.
 func TestAnswerTenantBinding(t *testing.T) {
-	acme, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+	specs.Describe(t, "AnswerTenantBinding answers from the bound scope without disclosing the tenant", func(s *specs.Spec) {
+		s.It("reports a match for the bound tenant, no match for another, an invalid one, or legacy mode", func(ctx *specs.Context) {
+			acme, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-	match := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.True(t, match.GetTenantAware())
-	assert.True(t, match.GetMatches())
+			match := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "acme"})
+			ctx.Expect(match.GetTenantAware()).To(specs.BeTrue())
+			ctx.Expect(match.GetMatches()).To(specs.BeTrue())
 
-	other := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "globex"})
-	assert.True(t, other.GetTenantAware())
-	assert.False(t, other.GetMatches())
+			other := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: "globex"})
+			ctx.Expect(other.GetTenantAware()).To(specs.BeTrue())
+			ctx.Expect(other.GetMatches()).To(specs.BeFalse())
 
-	invalid := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: ""})
-	assert.False(t, invalid.GetMatches(), "an invalid queried tenant never matches")
+			// an invalid queried tenant never matches
+			invalid := AnswerTenantBinding(true, acme, &egopb.TenantBindingQuery{TenantId: ""})
+			ctx.Expect(invalid.GetMatches()).To(specs.BeFalse())
 
-	legacy := AnswerTenantBinding(false, persistence.Unscoped(), &egopb.TenantBindingQuery{TenantId: "acme"})
-	assert.False(t, legacy.GetTenantAware())
-	assert.False(t, legacy.GetMatches())
+			legacy := AnswerTenantBinding(false, persistence.Unscoped(), &egopb.TenantBindingQuery{TenantId: "acme"})
+			ctx.Expect(legacy.GetTenantAware()).To(specs.BeFalse())
+			ctx.Expect(legacy.GetMatches()).To(specs.BeFalse())
+		})
+	})
 }

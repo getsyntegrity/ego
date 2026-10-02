@@ -26,11 +26,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/adapter"
-	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/port/publishing/publishingtest"
+	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter/adaptertest"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/port/publishing/publishingtest"
 )
 
 // The websocket publishers run both conformance suites against a real
@@ -58,19 +60,19 @@ var wantAdapterOutcomes = map[string]adaptertest.Outcome{
 }
 
 func requireAdapterOutcomes(t *testing.T, results []adaptertest.Result) {
-	t.Helper()
-	if len(results) != len(wantAdapterOutcomes) {
-		t.Errorf("adaptertest returned %d results, want %d", len(results), len(wantAdapterOutcomes))
-	}
-	for _, r := range results {
-		want, ok := wantAdapterOutcomes[r.Check]
-		switch {
-		case !ok:
-			t.Errorf("unexpected check %s", r.Check)
-		case r.Outcome != want:
-			t.Errorf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
-		}
-	}
+	specs.Describe(t, "the adaptertest results", func(s *specs.Spec) {
+		s.It("match the exact outcomes the websocket publishers must get", func(ctx *specs.Context) {
+			ctx.Expect(results).To(specs.HaveLen(len(wantAdapterOutcomes)))
+			for _, r := range results {
+				want, ok := wantAdapterOutcomes[r.Check]
+				ctx.Expect(ok).To(specs.BeTrue())
+				if r.Outcome != want {
+					ctx.T.Logf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
+				}
+				ctx.Expect(r.Outcome).To(specs.Equal(want))
+			}
+		})
+	})
 }
 
 func TestEventsPublisherAdapterConformance(t *testing.T) {
@@ -111,19 +113,19 @@ var wantPublishingOutcomes = map[string]publishingtest.Outcome{
 }
 
 func requirePublishingOutcomes(t *testing.T, results []publishingtest.Result) {
-	t.Helper()
-	if len(results) != len(wantPublishingOutcomes) {
-		t.Errorf("publishingtest returned %d results, want %d", len(results), len(wantPublishingOutcomes))
-	}
-	for _, r := range results {
-		want, ok := wantPublishingOutcomes[r.Check]
-		switch {
-		case !ok:
-			t.Errorf("unexpected check %s", r.Check)
-		case r.Outcome != want:
-			t.Errorf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
-		}
-	}
+	specs.Describe(t, "the publishingtest results", func(s *specs.Spec) {
+		s.It("match the exact outcomes the websocket publishers must get", func(ctx *specs.Context) {
+			ctx.Expect(results).To(specs.HaveLen(len(wantPublishingOutcomes)))
+			for _, r := range results {
+				want, ok := wantPublishingOutcomes[r.Check]
+				ctx.Expect(ok).To(specs.BeTrue())
+				if r.Outcome != want {
+					ctx.T.Logf("%s: %s (%s), want %s", r.Check, r.Outcome, r.Detail, want)
+				}
+				ctx.Expect(r.Outcome).To(specs.Equal(want))
+			}
+		})
+	})
 }
 
 func TestEventsPublisherPublishingConformance(t *testing.T) {
@@ -156,21 +158,21 @@ func TestDurableStatePublisherPublishingConformance(t *testing.T) {
 // (spec 3): one port each, the name "websocket", no declared capability
 // (no Start and no Ping, per O5).
 func TestDescriptors(t *testing.T) {
-	cases := map[string]struct {
-		value any
-		port  adapter.Port
-	}{
-		"events": {&EventsPublisher{}, publishing.PortEventPublisher},
-		"state":  {&DurableStatePublisher{}, publishing.PortStatePublisher},
-	}
-	for name, tc := range cases {
-		d, ok := adapter.Describe(tc.value)
-		if !ok {
-			t.Errorf("%s: adapter.Describe reports the publisher as undeclared", name)
-			continue
+	specs.Describe(t, "each publisher declares one port, the name websocket and no capability", func(s *specs.Spec) {
+		type descriptorCase struct {
+			name  string
+			value any
+			port  adapter.Port
 		}
-		if len(d.Ports) != 1 || d.Ports[0] != tc.port || d.Name != "websocket" || len(d.Capabilities) != 0 {
-			t.Errorf("%s: descriptor %+v, want {Ports: [%s], Name: websocket, no capabilities}", name, d, tc.port)
-		}
-	}
+		specs.Table(s, []descriptorCase{
+			{"events", &EventsPublisher{}, publishing.PortEventPublisher},
+			{"state", &DurableStatePublisher{}, publishing.PortStatePublisher},
+		}, func(c descriptorCase) string { return c.name }, func(ctx *specs.Context, c descriptorCase) {
+			d, ok := adapter.Describe(c.value)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(d.Ports).ToEqual([]adapter.Port{c.port})
+			ctx.Expect(d.Name).ToEqual("websocket")
+			ctx.Expect(d.Capabilities).To(specs.BeEmpty())
+		})
+	})
 }

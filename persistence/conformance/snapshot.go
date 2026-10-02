@@ -26,10 +26,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // RunSnapshotStoreConformance runs the full cross-tenant isolation matrix
@@ -63,108 +62,108 @@ var SnapshotStoreChecks = []Check[persistence.SnapshotStore]{
 	{Name: "Unscoped/NeverCollidesWithTenantNamedUnscoped", Run: snapshotUnscopedNeverCollidesWithForgedTenant},
 }
 
-func snapshotOtherTenantGetsNothing(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotOtherTenantGetsNothing(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "read-isolation"
 
-	require.NoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
 
 	got, err := store.GetLatestSnapshot(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.Nil(t, got, "tenant B must not see tenant A's snapshot")
+	requireNoError(t, err)
+	requireNil(t, got, "tenant B must not see tenant A's snapshot")
 }
 
-func snapshotUnscopedAndTenantDoNotCrossRead(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotUnscopedAndTenantDoNotCrossRead(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 
 	const idWrittenByTenant = "unscoped-cross-read-tenant-wrote"
-	require.NoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, idWrittenByTenant, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, idWrittenByTenant, 1, 111)))
 	gotUnscoped, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), idWrittenByTenant)
-	require.NoError(t, err)
-	require.Nil(t, gotUnscoped, "Unscoped() must not see a snapshot written only under a tenant scope")
+	requireNoError(t, err)
+	requireNil(t, gotUnscoped, "Unscoped() must not see a snapshot written only under a tenant scope")
 
 	const idWrittenByUnscoped = "unscoped-cross-read-unscoped-wrote"
-	require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshotRecord(t, idWrittenByUnscoped, 1, 222)))
+	requireNoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshotRecord(t, idWrittenByUnscoped, 1, 222)))
 	gotTenant, err := store.GetLatestSnapshot(ctx, tenantA, idWrittenByUnscoped)
-	require.NoError(t, err)
-	require.Nil(t, gotTenant, "a tenant scope must not see a snapshot written only under Unscoped()")
+	requireNoError(t, err)
+	requireNil(t, gotTenant, "a tenant scope must not see a snapshot written only under Unscoped()")
 }
 
-func snapshotBothTenantsReadOwnRecord(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotBothTenantsReadOwnRecord(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "both-write-own-read"
 
-	require.NoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
-	require.NoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 222)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 222)))
 
 	gotA, err := store.GetLatestSnapshot(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotA)
-	require.Equal(t, float64(111), snapshotMarker(t, gotA), "tenant A must read back its own snapshot, never tenant B's")
+	requireNoError(t, err)
+	requireNotNil(t, gotA)
+	requireEqual(t, float64(111), snapshotMarker(t, gotA), "tenant A must read back its own snapshot, never tenant B's")
 
 	gotB, err := store.GetLatestSnapshot(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotB)
-	require.Equal(t, float64(222), snapshotMarker(t, gotB), "tenant B must read back its own snapshot, never tenant A's")
+	requireNoError(t, err)
+	requireNotNil(t, gotB)
+	requireEqual(t, float64(222), snapshotMarker(t, gotB), "tenant B must read back its own snapshot, never tenant A's")
 }
 
-func snapshotOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotOtherTenantWriteLeavesRecordUntouched(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "write-isolation"
 
-	require.NoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
 	before, err := store.GetLatestSnapshot(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, before)
+	requireNoError(t, err)
+	requireNotNil(t, before)
 
 	// Same persistence_id AND the same sequence number, deliberately: a
 	// store keying only by (persistenceID, sequenceNumber) would let this
 	// overwrite tenant A's snapshot outright.
-	require.NoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 999)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 999)))
 
 	after, err := store.GetLatestSnapshot(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.True(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's snapshot for the same persistence_id and sequence number")
+	requireNoError(t, err)
+	requireNotNil(t, after)
+	requireTrue(t, proto.Equal(before, after), "tenant B's write must not modify tenant A's snapshot for the same persistence_id and sequence number")
 }
 
-func snapshotDeleteIsScoped(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotDeleteIsScoped(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	tenantA := mustTenantScope(t, "tenant-a")
 	tenantB := mustTenantScope(t, "tenant-b")
 	const id = "delete-isolation"
 
-	require.NoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
-	require.NoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 222)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantA, snapshotRecord(t, id, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, tenantB, snapshotRecord(t, id, 1, 222)))
 
-	require.NoError(t, store.DeleteSnapshots(ctx, tenantB, id, 100))
+	requireNoError(t, store.DeleteSnapshots(ctx, tenantB, id, 100))
 
 	gotA, err := store.GetLatestSnapshot(ctx, tenantA, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotA, "deleting tenant B's snapshots must not delete tenant A's")
-	require.Equal(t, float64(111), snapshotMarker(t, gotA))
+	requireNoError(t, err)
+	requireNotNil(t, gotA, "deleting tenant B's snapshots must not delete tenant A's")
+	requireEqual(t, float64(111), snapshotMarker(t, gotA))
 
 	gotB, err := store.GetLatestSnapshot(ctx, tenantB, id)
-	require.NoError(t, err)
-	require.Nil(t, gotB, "tenant B's own snapshot must actually be gone after its own scoped delete")
+	requireNoError(t, err)
+	requireNil(t, gotB, "tenant B's own snapshot must actually be gone after its own scoped delete")
 }
 
-func snapshotUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t require.TestingT, store persistence.SnapshotStore) {
+func snapshotUnscopedNeverCollidesWithForgedTenant(ctx context.Context, t TestingT, store persistence.SnapshotStore) {
 	forgedTenant := mustTenantScope(t, "unscoped")
 	const id = "forging-guard"
 
-	require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshotRecord(t, id, 1, 111)))
-	require.NoError(t, store.WriteSnapshot(ctx, forgedTenant, snapshotRecord(t, id, 1, 222)))
+	requireNoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snapshotRecord(t, id, 1, 111)))
+	requireNoError(t, store.WriteSnapshot(ctx, forgedTenant, snapshotRecord(t, id, 1, 222)))
 
 	gotUnscoped, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), id)
-	require.NoError(t, err)
-	require.NotNil(t, gotUnscoped)
-	require.Equal(t, float64(111), snapshotMarker(t, gotUnscoped))
+	requireNoError(t, err)
+	requireNotNil(t, gotUnscoped)
+	requireEqual(t, float64(111), snapshotMarker(t, gotUnscoped))
 
 	gotForged, err := store.GetLatestSnapshot(ctx, forgedTenant, id)
-	require.NoError(t, err)
-	require.NotNil(t, gotForged)
-	require.Equal(t, float64(222), snapshotMarker(t, gotForged))
+	requireNoError(t, err)
+	requireNotNil(t, gotForged)
+	requireEqual(t, float64(222), snapshotMarker(t, gotForged))
 }

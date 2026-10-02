@@ -1,6 +1,6 @@
 # Benchmark Makefile
 #
-# By default benchmarks run against the released ego module.
+# By default benchmarks run against the released urd module.
 # Use `make <target>-local` to benchmark against your local working copy.
 #
 # Examples:
@@ -18,11 +18,11 @@ GO_TEST     = go test -v -run='^$$' -benchtime=$(BENCHTIME) -count=$(BENCHCOUNT)
 .PHONY: _use-local _use-released
 
 _use-local:
-	@go mod edit -replace github.com/getsyntegrity/ego=../
+	@go mod edit -replace github.com/getsyntegrity/urd=../
 	@go mod tidy
 
 _use-released:
-	@go mod edit -dropreplace github.com/getsyntegrity/ego 2>/dev/null || true
+	@go mod edit -dropreplace github.com/getsyntegrity/urd 2>/dev/null || true
 	@go mod tidy
 
 # ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ bench-durable-multi-local: _use-local
 
 ## help: show available targets
 help:
-	@echo "Available targets (append -local to run against local ego module):"
+	@echo "Available targets (append -local to run against local urd module):"
 	@echo ""
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | sort
 	@echo ""

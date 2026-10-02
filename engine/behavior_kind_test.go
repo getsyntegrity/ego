@@ -30,14 +30,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // Compile-time proof that BehaviorKind and EntityKind (extension.Dependency)
@@ -59,50 +58,59 @@ var (
 //	kinds := []EntityKind{new(AccountEventSourcedBehavior)}
 //	WithBehaviorKinds(kinds...) // cannot use kinds (variable of type []EntityKind) as []BehaviorKind value
 func TestBehaviorKindAssignability(t *testing.T) {
-	account := new(AccountEventSourcedBehavior)
+	specs.Describe(t, "a behavior kind moves between EntityKind, extension.Dependency and BehaviorKind keeping its dynamic value", func(s *specs.Spec) {
+		s.It("keeps the same pointer in both directions and in the registration list", func(ctx *specs.Context) {
+			account := new(AccountEventSourcedBehavior)
 
-	var entityKind EntityKind = account
-	var behaviorKind BehaviorKind = entityKind
-	var dependency extension.Dependency = behaviorKind
-	var back EntityKind = behaviorKind
+			var entityKind EntityKind = account
+			var behaviorKind BehaviorKind = entityKind
+			var dependency extension.Dependency = behaviorKind
+			var back EntityKind = behaviorKind
 
-	assert.Same(t, account, behaviorKind)
-	assert.Same(t, account, dependency)
-	assert.Same(t, account, back)
+			ctx.Expect(behaviorKind == account).To(specs.BeTrue())
+			ctx.Expect(dependency == account).To(specs.BeTrue())
+			ctx.Expect(back == account).To(specs.BeTrue())
 
-	entityKinds := []EntityKind{account, new(AccountDurableStateBehavior)}
-	behaviorKinds := make([]BehaviorKind, 0, len(entityKinds))
-	for _, kind := range entityKinds {
-		behaviorKinds = append(behaviorKinds, kind)
-	}
-	cfg := NewConfig(testkit.NewEventsStore(), WithBehaviorKinds(behaviorKinds...))
-	assert.Equal(t, behaviorKinds, cfg.behaviorKinds)
+			entityKinds := []EntityKind{account, new(AccountDurableStateBehavior)}
+			behaviorKinds := make([]BehaviorKind, 0, len(entityKinds))
+			for _, kind := range entityKinds {
+				behaviorKinds = append(behaviorKinds, kind)
+			}
+			cfg := NewConfig(testkit.NewEventsStore(), WithBehaviorKinds(behaviorKinds...))
+			ctx.Expect(cfg.behaviorKinds).ToEqual(behaviorKinds)
+		})
+	})
 }
 
 // TestWithEntityKindsAndWithBehaviorKindsShareRegistration checks that both
 // options append, in call order, to the one registration list NewEngine
 // injects, and that an engine built with both options starts.
 func TestWithEntityKindsAndWithBehaviorKindsShareRegistration(t *testing.T) {
-	ctx := context.Background()
-	eventSourced := new(AccountEventSourcedBehavior)
-	durableState := new(AccountDurableStateBehavior)
-	legacy := []EntityKind{new(FailingHandleEventBehavior)}
+	specs.Describe(t, "With Entity Kinds And With Behavior Kinds Share Registration", func(s *specs.Spec) {
+		s.It("holds", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			eventSourced := new(AccountEventSourcedBehavior)
+			durableState := new(AccountDurableStateBehavior)
+			legacy := []EntityKind{new(FailingHandleEventBehavior)}
 
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	opts := []Option{
-		WithLogger(DiscardLogger),
-		WithEntityKinds(eventSourced),
-		WithBehaviorKinds(durableState),
-		WithEntityKinds(legacy...),
-	}
-	cfg := NewConfig(store, opts...)
-	assert.Equal(t, []BehaviorKind{eventSourced, durableState, legacy[0]}, cfg.behaviorKinds)
+			opts := []Option{
+				WithLogger(DiscardLogger),
+				WithEntityKinds(eventSourced),
+				WithBehaviorKinds(durableState),
+				WithEntityKinds(legacy...),
+			}
+			cfg := NewConfig(store, opts...)
+			sc.Expect(cfg.behaviorKinds).To(specs.Equal([]BehaviorKind{eventSourced, durableState, legacy[0]}))
 
-	engine := newTestEngine(t, "SharedKinds", store, opts...)
-	require.NoError(t, engine.Start(ctx))
+			engine := newTestEngine(t, "SharedKinds", store, opts...)
+			sc.Expect(engine.Start(ctx)).To(specs.BeNil())
+		})
+	})
 }
 
 // kindOptions are the two registration options, keyed by name.
@@ -118,10 +126,14 @@ func kindOptions() map[string]func(BehaviorKind) Option {
 // pointer in cluster mode; a registered kind must be a pointer type, and a
 // typed nil is allowed.
 func TestErrBehaviorNotPointerMessage(t *testing.T) {
-	msg := ErrBehaviorNotPointer.Error()
-	assert.Contains(t, msg, "a behavior must be non-nil to be spawned")
-	assert.Contains(t, msg, "and a pointer to be spawned in cluster mode")
-	assert.Contains(t, msg, "a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	specs.Describe(t, "ErrBehaviorNotPointer states the conditions on a spawned behavior and a registered kind", func(s *specs.Spec) {
+		s.It("names the three conditions in its message", func(ctx *specs.Context) {
+			msg := ErrBehaviorNotPointer.Error()
+			ctx.Expect(msg).To(specs.Contain("a behavior must be non-nil to be spawned"))
+			ctx.Expect(msg).To(specs.Contain("and a pointer to be spawned in cluster mode"))
+			ctx.Expect(msg).To(specs.Contain("a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)"))
+		})
+	})
 }
 
 // unregistrableKinds are kinds GoAkt's type registry cannot name, each with
@@ -147,26 +159,29 @@ func unregistrableKinds() []struct {
 // a typed-nil pointer such as (*T)(nil) registers the same type as new(T) and
 // must keep working through both options.
 func TestNewEngineAcceptsTypedNilPointerKind(t *testing.T) {
-	for optName, option := range kindOptions() {
-		t.Run(optName, func(t *testing.T) {
-			ctx := context.Background()
-			store := testkit.NewEventsStore()
-			require.NoError(t, store.Connect(ctx))
-			t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "New Engine Accepts Typed Nil Pointer Kind", func(s *specs.Spec) {
+		for optName, option := range kindOptions() {
+			s.It(optName, func(sc *specs.Context) {
+				t := sc.T
+				ctx := context.Background()
+				store := testkit.NewEventsStore()
+				sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+				t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-			cfg := NewConfig(store, WithLogger(DiscardLogger), option((*AccountEventSourcedBehavior)(nil)))
-			sys, err := goakt.NewActorSystem("TypedNilKind", cfg.GoaktOptions()...)
-			require.NoError(t, err)
-			require.NoError(t, sys.Start(ctx))
+				cfg := NewConfig(store, WithLogger(DiscardLogger), option((*AccountEventSourcedBehavior)(nil)))
+				sys, err := goakt.NewActorSystem("TypedNilKind", cfg.GoaktOptions()...)
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(sys.Start(ctx)).To(specs.BeNil())
 
-			var engine *Engine
-			require.NotPanics(t, func() { engine, err = NewEngine(sys, cfg) })
-			require.NoError(t, err)
-			require.NoError(t, engine.Start(ctx))
-			require.NoError(t, engine.Stop(ctx))
-			require.NoError(t, sys.Stop(ctx))
-		})
-	}
+				var engine *Engine
+				sc.Expect(panicValue(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
+				sc.Expect(err).To(specs.BeNil())
+				sc.Expect(engine.Start(ctx)).To(specs.BeNil())
+				sc.Expect(engine.Stop(ctx)).To(specs.BeNil())
+				sc.Expect(sys.Stop(ctx)).To(specs.BeNil())
+			})
+		}
+	})
 }
 
 // requireKindRejected builds an engine on sys with cfg and asserts that
@@ -174,81 +189,88 @@ func TestNewEngineAcceptsTypedNilPointerKind(t *testing.T) {
 // without panicking, and leaves the actor system usable: GoAkt's Inject
 // panics while holding the actor-system lock, so a successful Stop proves
 // Inject was never reached with the bad kind.
-func requireKindRejected(t *testing.T, sys goakt.ActorSystem, cfg *Config, want string) {
-	t.Helper()
+func requireKindRejected(sc *specs.Context, sys goakt.ActorSystem, cfg *Config, want string) {
 	var (
 		engine *Engine
 		err    error
 	)
-	require.NotPanics(t, func() { engine, err = NewEngine(sys, cfg) })
-	require.Nil(t, engine)
-	require.ErrorIs(t, err, ErrBehaviorNotPointer)
+	sc.Expect(panicValue(func() { engine, err = NewEngine(sys, cfg) })).To(specs.BeNil())
+	sc.Expect(engine).To(specs.BeNil())
+	sc.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
 	var placement *BehaviorPlacementError
-	require.ErrorAs(t, err, &placement)
-	assert.Equal(t, want, placement.Kind)
-	assert.Empty(t, placement.EntityID)
-	require.NoError(t, sys.Stop(context.Background()))
+	sc.Expect(err).To(specs.MatchErrorAs(&placement))
+	sc.Expect(placement.Kind).To(specs.Equal(want))
+	sc.Expect(placement.EntityID).To(specs.BeEmpty())
+	sc.Expect(sys.Stop(context.Background())).To(specs.BeNil())
 }
 
 // TestNewEngineRejectsUnregistrableKindsSingleNode covers the kind check on
 // a single node, where kind registration still goes through GoAkt's type
 // registry, for both registration options.
 func TestNewEngineRejectsUnregistrableKindsSingleNode(t *testing.T) {
-	for optName, option := range kindOptions() {
-		for _, tc := range unregistrableKinds() {
-			t.Run(optName+"/"+tc.name, func(t *testing.T) {
-				ctx := context.Background()
-				store := testkit.NewEventsStore()
-				require.NoError(t, store.Connect(ctx))
-				t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "New Engine Rejects Unregistrable Kinds Single Node", func(s *specs.Spec) {
+		for optName, option := range kindOptions() {
+			for _, tc := range unregistrableKinds() {
+				s.It(optName+"/"+tc.name, func(sc *specs.Context) {
+					t := sc.T
+					ctx := context.Background()
+					store := testkit.NewEventsStore()
+					sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+					t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-				// A valid kind first: the check covers the whole list before
-				// anything is injected.
-				cfg := NewConfig(store, WithLogger(DiscardLogger),
-					WithBehaviorKinds(new(AccountEventSourcedBehavior)), option(tc.kind))
-				sys, err := goakt.NewActorSystem("KindCheck", cfg.GoaktOptions()...)
-				require.NoError(t, err)
-				require.NoError(t, sys.Start(ctx))
+					// A valid kind first: the check covers the whole list before
+					// anything is injected.
+					cfg := NewConfig(store, WithLogger(DiscardLogger),
+						WithBehaviorKinds(new(AccountEventSourcedBehavior)), option(tc.kind))
+					sys, err := goakt.NewActorSystem("KindCheck", cfg.GoaktOptions()...)
+					sc.Expect(err).To(specs.BeNil())
+					sc.Expect(sys.Start(ctx)).To(specs.BeNil())
 
-				requireKindRejected(t, sys, cfg, tc.want)
-			})
+					requireKindRejected(sc, sys, cfg, tc.want)
+				})
+			}
 		}
-	}
+	})
 }
 
-// TestNewEngineRejectsValueTypeKindInClusterMode covers the kind check on a
+// TestClusterNewEngineRejectsValueTypeKind covers the kind check on a
 // one-member cluster.
-func TestNewEngineRejectsValueTypeKindInClusterMode(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+func TestClusterNewEngineRejectsValueTypeKind(t *testing.T) {
+	specs.Describe(t, "engine.NewEngine behavior kind check on a one-member cluster", func(s *specs.Spec) {
+		s.It("rejects a value-type event-sourced behavior kind", func(sc *specs.Context) {
+			t := sc.T
+			ctx := context.Background()
+			store := testkit.NewEventsStore()
+			sc.Expect(store.Connect(ctx)).To(specs.BeNil())
+			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
-	ports := dynaport.Get(3)
-	gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
-	host := "127.0.0.1"
-	provider := &mockClusterProvider{
-		id:    "kind-check",
-		peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
-	}
-	clusterCfg := goakt.NewClusterConfig().
-		WithDiscovery(provider).
-		WithDiscoveryPort(gossipPort).
-		WithPeersPort(clusterPort).
-		WithMinimumPeersQuorum(1).
-		WithReplicaCount(1).
-		WithPartitionCount(4).
-		WithKinds(ClusterKinds()...)
+			ports := dynaport.Get(3)
+			gossipPort, clusterPort, remotingPort := ports[0], ports[1], ports[2]
+			host := "127.0.0.1"
+			provider := &mockClusterProvider{
+				id:    "kind-check",
+				peers: []string{net.JoinHostPort(host, strconv.Itoa(clusterPort))},
+			}
+			clusterCfg := goakt.NewClusterConfig().
+				WithDiscovery(provider).
+				WithDiscoveryPort(gossipPort).
+				WithPeersPort(clusterPort).
+				WithMinimumPeersQuorum(1).
+				WithReplicaCount(1).
+				WithPartitionCount(4).
+				WithKinds(ClusterKinds()...)
 
-	cfg := NewConfig(store, WithLogger(DiscardLogger),
-		WithBehaviorKinds(valueTypeEventSourcedBehavior{id: "v-1"}))
-	sys, err := goakt.NewActorSystem("KindCheckCluster", append(cfg.GoaktOptions(),
-		goakt.WithCluster(clusterCfg),
-		goakt.WithRemote(remote.NewConfig(host, remotingPort)),
-	)...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
-	require.Eventually(t, sys.InCluster, 10*time.Second, 50*time.Millisecond)
+			cfg := NewConfig(store, WithLogger(DiscardLogger),
+				WithBehaviorKinds(valueTypeEventSourcedBehavior{id: "v-1"}))
+			sys, err := goakt.NewActorSystem("KindCheckCluster", append(cfg.GoaktOptions(),
+				goakt.WithCluster(clusterCfg),
+				goakt.WithRemote(remote.NewConfig(host, remotingPort)),
+			)...)
+			sc.Expect(err).To(specs.BeNil())
+			sc.Expect(sys.Start(ctx)).To(specs.BeNil())
+			sc.Eventually(func() any { return sys.InCluster() }, specs.BeTrue(), specs.WithTimeout(10*time.Second), specs.WithInterval(50*time.Millisecond))
 
-	requireKindRejected(t, sys, cfg, fmt.Sprintf("%T", valueTypeEventSourcedBehavior{}))
+			requireKindRejected(sc, sys, cfg, fmt.Sprintf("%T", valueTypeEventSourcedBehavior{}))
+		})
+	})
 }

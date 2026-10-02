@@ -30,12 +30,12 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/engine/saga"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/internal/engine/saga"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Saga creates a saga/process manager that coordinates multiple entities.
@@ -121,7 +121,7 @@ func (engine *Engine) spawnSaga(ctx context.Context, behavior behaviorport.Saga,
 		goakt.WithDependencies(deps...),
 		goakt.WithSupervisor(newSupervisor(RestartDirective)))
 	if err != nil {
-		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err {
+		if resolved := resolveExistingSpawn(ctx, actorSystem, behavior.ID(), tenantScope, err); resolved != err { //nolint:errorlint // identity check: detects whether resolveExistingSpawn replaced err
 			return resolved
 		}
 		return fmt.Errorf("failed to start saga %s: %w", behavior.ID(), err)

@@ -54,6 +54,24 @@
 // openspec/changes/ego-tenant-003/specs/persistence-tenant-isolation/spec.md
 // for the normative requirements this suite exists to demonstrate.
 //
+// # Schema migrators
+//
+// A store that also implements persistence.SchemaMigrator passes
+// RunSchemaMigratorConformance as well. Its harness (SchemaMigratorHarness)
+// supplies a fresh empty backend for each check and, for each pre-versioning
+// shape the backend ever had, a LegacySchema that provisions it. The suite
+// checks that Migrate is idempotent, safe under concurrent callers, and that
+// SchemaVersion reports the latest version; CaptureSchemaMigratorChecks is the
+// self-checking counterpart.
+//
+// # Writing a Check
+//
+// A Check's Run function takes a TestingT, the three methods of *testing.T
+// that a check needs to report a failure (Errorf, FailNow and Helper). The
+// package depends on the standard library only, so importing it adds no
+// assertion library to your module. A *testing.T satisfies TestingT, and the
+// Capture*StoreChecks functions pass a recorder that does too.
+//
 // # Self-checking
 //
 // A conformance suite that passes against a store with no real isolation is

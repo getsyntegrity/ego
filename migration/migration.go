@@ -39,7 +39,7 @@
 //	}
 //
 // When no logger is supplied the migrator logs through kit-logger's
-// process-wide logger — the same default ego.DefaultLogger() returns.
+// process-wide logger — the same default engine.DefaultLogger() returns.
 //
 // The migrator reads every persistence ID in its scope (see WithScope), finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),
@@ -112,10 +112,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/logging"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/logging"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // legacyResultingStateFieldNumber is the protobuf field number that was used

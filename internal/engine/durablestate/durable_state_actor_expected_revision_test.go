@@ -26,9 +26,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // -----------------------------------------------------------------------
@@ -41,26 +41,28 @@ import (
 // -----------------------------------------------------------------------
 
 func TestProvablyInSyncAfterConflict(t *testing.T) {
-	t.Run("non-conflict error is never provably in sync", func(t *testing.T) {
-		entity := &Actor{currentVersion: 3}
-		assert.False(t, entity.provablyInSyncAfterConflict(errors.New("boom")))
-	})
+	specs.Describe(t, "provablyInSyncAfterConflict is true only when a conflict proves the actor's version matches the store", func(s *specs.Spec) {
+		s.It("non-conflict error is never provably in sync", func(ctx *specs.Context) {
+			entity := &Actor{currentVersion: 3}
+			ctx.Expect(entity.provablyInSyncAfterConflict(errors.New("boom"))).To(specs.BeFalse())
+		})
 
-	t.Run("actual revision matches in-memory version: provably in sync", func(t *testing.T) {
-		entity := &Actor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
-		assert.True(t, entity.provablyInSyncAfterConflict(conflictErr))
-	})
+		s.It("actual revision matches in-memory version: provably in sync", func(ctx *specs.Context) {
+			entity := &Actor{currentVersion: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(3))
+			ctx.Expect(entity.provablyInSyncAfterConflict(conflictErr)).To(specs.BeTrue())
+		})
 
-	t.Run("actual revision diverges from in-memory version: not provably in sync", func(t *testing.T) {
-		entity := &Actor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
-		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
-	})
+		s.It("actual revision diverges from in-memory version: not provably in sync", func(ctx *specs.Context) {
+			entity := &Actor{currentVersion: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5), persistence.WithActualRevision(7))
+			ctx.Expect(entity.provablyInSyncAfterConflict(conflictErr)).To(specs.BeFalse())
+		})
 
-	t.Run("conflict without an actual revision cannot be proven in sync", func(t *testing.T) {
-		entity := &Actor{currentVersion: 3}
-		conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
-		assert.False(t, entity.provablyInSyncAfterConflict(conflictErr))
+		s.It("conflict without an actual revision cannot be proven in sync", func(ctx *specs.Context) {
+			entity := &Actor{currentVersion: 3}
+			conflictErr := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(5))
+			ctx.Expect(entity.provablyInSyncAfterConflict(conflictErr)).To(specs.BeFalse())
+		})
 	})
 }

@@ -1,20 +1,22 @@
 <!-- markdownlint-disable MD033 MD041 -->
 
 <p align="center">
-  <img src="assets/logo.png" alt="eGo" width="480" />
+  <img src="assets/logo.png" alt="Urd" width="480" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/getsyntegrity/ego/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/ego/build.yml?branch=main" alt="Build status"></a>
-  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/ego" alt="Go version"></a>
+  <a href="https://github.com/getsyntegrity/urd/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/getsyntegrity/urd/ci.yml?branch=develop" alt="Build status"></a>
+  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/github/go-mod/go-version/getsyntegrity/urd" alt="Go version"></a>
   <a href="https://human-oss.dev"><img src="https://human-oss.dev/badge.svg" alt="Open Source AI Manifesto"></a>
 </p>
 
-eGo is a protobuf-first framework for building event-sourced and durable-state CQRS applications in Go. It runs on [Go-Akt](https://github.com/Tochemey/goakt) and adds persistence, projections, publishers, sagas, encryption, and observability to an actor system that your application owns.
+**Urd — event sourcing for Go**
 
-eGo deliberately does not hide the actor runtime. Your application creates and operates the Go-Akt actor system, including clustering, discovery, remoting, TLS, supervision, and non-eGo actors. eGo contributes the extensions and actor kinds needed for its persistence model.
+Urd is a protobuf-first framework for building event-sourced and durable-state CQRS applications in Go. It runs on [Go-Akt](https://github.com/Tochemey/goakt) and adds persistence, projections, publishers, sagas, encryption, and observability to an actor system that your application owns.
 
-`github.com/getsyntegrity/ego` is a fork of [tochemey/ego](https://github.com/Tochemey/ego), maintained independently since 2026-09. Releases, module path, and CI here are this fork's own; they do not track the upstream project.
+Urd deliberately does not hide the actor runtime. Your application creates and operates the Go-Akt actor system, including clustering, discovery, remoting, TLS, supervision, and non-Urd actors. Urd contributes the extensions and actor kinds needed for its persistence model.
+
+`github.com/getsyntegrity/urd` (formerly `github.com/getsyntegrity/ego`) is a fork of [tochemey/ego](https://github.com/Tochemey/ego), maintained independently since 2026-09. Releases, module path, and CI here are this fork's own; they do not track the upstream project.
 
 ## Table of contents
 
@@ -55,7 +57,7 @@ eGo deliberately does not hide the actor runtime. Your application creates and o
 - OpenTelemetry traces and metrics
 - AES-256-GCM event and snapshot encryption
 - Entity passivation, placement, relocation, and supervision controls
-- In-memory stores, behavior scenarios, and generated mocks for testing
+- In-memory stores, and behavior scenarios for testing
 
 ## Requirements
 
@@ -67,15 +69,26 @@ For production use, provide durable implementations of the stores your applicati
 
 ## Installation
 
-eGo is **pre-release**. No version has been published yet, so there is nothing to install with `go get` today. The module path is `github.com/getsyntegrity/ego` (no `/vN` suffix, so its versions will be `v0.x` or `v1.x`); the four publishers live at `github.com/getsyntegrity/ego/publisher/<name>`. The version `v0.0.0` that appears in the nested modules' `go.mod` files is only the development placeholder resolved through a local `replace`: it is not a tag and it is not installable.
+Urd is **pre-release**. No version has been published yet, so there is nothing to install with `go get` today; the first merge from `develop` to `main` publishes `v0.1.0` automatically (see [`docs/ci.md`](./docs/ci.md)). The module path is `github.com/getsyntegrity/urd` (no `/vN` suffix, so its versions will be `v0.x` or `v1.x`); the four publishers live at `github.com/getsyntegrity/urd/publisher/<name>`. The version `v0.0.0` that appears in the nested modules' `go.mod` files is only the development placeholder resolved through a local `replace`: it is not a tag and it is not installable.
 
-To try it now, work from a checkout of this repository (`git clone https://github.com/getsyntegrity/ego`), or wait for the first tag and then run `go get github.com/getsyntegrity/ego@<version>`.
+To try it now, work from a checkout of this repository (`git clone https://github.com/getsyntegrity/urd`), or wait for the first tag and then run `go get github.com/getsyntegrity/urd/engine@<version>`.
 
-The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/ego/engine` (package `engine`). Earlier snippets that imported the module root and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md).
+The module root holds no Go files: import the runtime engine as `github.com/getsyntegrity/urd/engine` (package `engine`). Earlier snippets that imported the module root and used the `ego.` qualifier now use `engine.`; see the [changelog](./CHANGELOG.md).
+
+### Formerly ego
+
+Urd was published as `github.com/getsyntegrity/ego`. Only the module paths changed; the `engine` package and its API are the same. To migrate an application, rewrite the old path in your Go files and `go.mod`, then tidy:
+
+```sh
+grep -rl 'github.com/getsyntegrity/ego' --include='*.go' --include='go.mod' . \
+  | xargs sed -i 's#github.com/getsyntegrity/ego#github.com/getsyntegrity/urd#g' && go mod tidy
+```
+
+On macOS, use `sed -i ''` instead of `sed -i`. Some persisted and wire-level names intentionally keep their `ego` spelling. [`MIGRATION.md`](./MIGRATION.md) lists them, with the reasons.
 
 ## Quick start
 
-Build one `engine.Config`, use it to construct the Go-Akt actor system, start that system, and then plug in the eGo engine:
+Build one `engine.Config`, use it to construct the Go-Akt actor system, start that system, and then plug in the Urd engine:
 
 ```go
 package main
@@ -87,9 +100,9 @@ import (
 
     accountpb "example.com/myapp/gen/account/v1"
     goakt "github.com/tochemey/goakt/v4/actor"
-    "github.com/getsyntegrity/ego/engine"
-    "github.com/getsyntegrity/ego/projection"
-    "github.com/getsyntegrity/ego/testkit"
+    "github.com/getsyntegrity/urd/engine"
+    "github.com/getsyntegrity/urd/projection"
+    "github.com/getsyntegrity/urd/testkit"
 )
 
 func main() {
@@ -189,7 +202,7 @@ type EventSourcedBehavior interface {
 }
 ```
 
-`HandleCommand` validates a command and returns zero or more events. eGo persists those events before committing the resulting state. `HandleEvent` must be deterministic because it is also used during recovery.
+`HandleCommand` validates a command and returns zero or more events. Urd persists those events before committing the resulting state. `HandleEvent` must be deterministic because it is also used during recovery.
 
 A durable-state behavior implements `engine.DurableStateBehavior`:
 
@@ -235,7 +248,7 @@ Engine-wide options are passed to `engine.NewConfig`:
 - `WithTelemetry` enables OpenTelemetry instrumentation.
 - `WithEncryptor` encrypts persisted event and snapshot payloads.
 - `WithEntityKinds` registers behavior types on every cluster node.
-- `WithLogger` sets the [kit-logger](https://github.com/pablogore/kit-logger) logger used by eGo and the underlying actor system. See [Logging](#logging).
+- `WithLogger` sets the [kit-logger](https://github.com/pablogore/kit-logger) logger used by Urd and the underlying actor system. See [Logging](#logging).
 
 Entity-specific options are passed when an entity is spawned:
 
@@ -288,11 +301,11 @@ err := eng.Entity(ctx, behavior,
 )
 ```
 
-The threshold or flush window, whichever is reached first, triggers the write. If batching is enabled without a flush window, eGo uses a 5 ms default. Benchmark the settings with your command pattern and persistence backend; batching trades additional latency for fewer writes and does not have one ideal threshold.
+The threshold or flush window, whichever is reached first, triggers the write. If batching is enabled without a flush window, Urd uses a 5 ms default. Benchmark the settings with your command pattern and persistence backend; batching trades additional latency for fewer writes and does not have one ideal threshold.
 
 ## Performance tuning
 
-eGo can sustain hundreds of thousands of commands per second on a single node with an in-memory store, and tens of thousands with durable backends like Postgres. This section outlines the recommended approach to maximize throughput and minimize memory cost.
+Urd can sustain hundreds of thousands of commands per second on a single node with an in-memory store, and tens of thousands with durable backends like Postgres. This section outlines the recommended approach to maximize throughput and minimize memory cost.
 
 ### Enable event batching under concurrent load
 
@@ -314,7 +327,7 @@ Sequential command streams do not benefit from batching because each command wai
 
 ### Minimize allocations for high throughput
 
-eGo's hot path is optimized for low allocation overhead (~22 heap allocations per command round-trip). The dominant allocation cost comes from Protocol Buffers serialization, which is inherent to the persistence model. To keep allocation pressure low:
+Urd's hot path is optimized for low allocation overhead (~22 heap allocations per command round-trip). The dominant allocation cost comes from Protocol Buffers serialization, which is inherent to the persistence model. To keep allocation pressure low:
 
 - **Keep command and event protos small.** Smaller messages reduce marshal/unmarshal cost.
 - **Use snapshots.** They reduce recovery replay length and the number of events held in the store.
@@ -322,7 +335,7 @@ eGo's hot path is optimized for low allocation overhead (~22 heap allocations pe
 
 ### Scale horizontally with clustering
 
-For workloads beyond what a single node can handle, build a clustered Go-Akt actor system and plug eGo into it as described in [Clustering](#clustering).
+For workloads beyond what a single node can handle, build a clustered Go-Akt actor system and plug Urd into it as described in [Clustering](#clustering).
 
 ## Projections
 
@@ -389,7 +402,7 @@ if err := eng.AddEventPublishers(eventPublisher); err != nil {
 }
 ```
 
-eGo includes connector modules for:
+Urd includes connector modules for:
 
 - [Kafka](./publisher/kafka)
 - [NATS](./publisher/nats)
@@ -400,7 +413,7 @@ You can also implement `engine.EventPublisher` or `engine.StatePublisher`. Publi
 
 ## Sagas and process managers
 
-eGo includes first-class saga support for long-running business processes that coordinate multiple entities. You can:
+Urd includes first-class saga support for long-running business processes that coordinate multiple entities. You can:
 
 - Start a saga with `Engine.Saga(...)`
 - Inspect it with `Engine.SagaStatus(...)`
@@ -411,7 +424,7 @@ See the [fund-transfer saga example](./example/saga) for a complete implementati
 
 ## Clustering
 
-Cluster, discovery, remoting, and TLS are configured with Go-Akt. Register eGo's actor kinds in the cluster configuration:
+Cluster, discovery, remoting, and TLS are configured with Go-Akt. Register Urd's actor kinds in the cluster configuration:
 
 ```go
 clusterConfig := goakt.NewClusterConfig().
@@ -421,7 +434,7 @@ clusterConfig := goakt.NewClusterConfig().
     WithPartitionCount(partitions).
     WithMinimumPeersQuorum(quorum).
     WithReplicaCount(replicas).
-    WithKinds(engine.ClusterKinds()...) // eGo's actor kinds, required for relocation
+    WithKinds(engine.ClusterKinds()...) // Urd's actor kinds, required for relocation
 ```
 
 Also register every event-sourced, durable-state, and saga behavior type on every node:
@@ -449,15 +462,15 @@ sys, err := goakt.NewActorSystem("accounts",
 )
 ```
 
-You retain full control over discovery, partitioning, quorum, replicas, TLS, remoting, and any additional cluster knobs Go-Akt exposes. eGo derives cluster behavior (e.g. running projections as singletons) directly from `sys.InCluster()` at runtime — no separate cluster flag to keep in sync.
+You retain full control over discovery, partitioning, quorum, replicas, TLS, remoting, and any additional cluster knobs Go-Akt exposes. Urd derives cluster behavior (e.g. running projections as singletons) directly from `sys.InCluster()` at runtime — no separate cluster flag to keep in sync.
 
 Single-node deployments do not need `ClusterKinds` or `WithEntityKinds`.
 
 ### Remoting
 
-Go-Akt speaks a multiplexed remoting protocol — per-peer lane connections, chunked large messages, and credit-based flow control. eGo requires no configuration for it: `remote.NewConfig(host, remotingPort)` negotiates it on its own, and eGo's remote surface is unchanged.
+Go-Akt speaks a multiplexed remoting protocol — per-peer lane connections, chunked large messages, and credit-based flow control. Urd requires no configuration for it: `remote.NewConfig(host, remotingPort)` negotiates it on its own, and Urd's remote surface is unchanged.
 
-Two things follow from how eGo's traffic maps onto those lanes.
+Two things follow from how Urd's traffic maps onto those lanes.
 
 **Entity placement travels on the control lane.** Spawns, singleton placement, and death-watch are carried separately from user commands, so a burst of entity traffic can no longer delay them.
 
@@ -469,7 +482,7 @@ goakt.WithRemote(remote.NewConfig(host, remotingPort,
 )),
 ```
 
-Any lane count is safe for eGo. Ordering in eGo is per entity — each entity actor serializes its own mailbox — and Go-Akt pins a receiver to a lane by a stable hash of its address, so commands to one entity stay in order however many lanes exist. eGo never relies on ordering between different entities.
+Any lane count is safe for Urd. Ordering in Urd is per entity — each entity actor serializes its own mailbox — and Go-Akt pins a receiver to a lane by a stable hash of its address, so commands to one entity stay in order however many lanes exist. Urd never relies on ordering between different entities.
 
 Slow entities degrade gracefully rather than stalling a connection: asks are multiplexed by correlation ID and dispatched on a bounded worker pool, so an entity waiting on its events store occupies a worker instead of blocking the socket. When that pool saturates, the affected request comes back as an unavailable error and the connection stays healthy.
 
@@ -479,7 +492,7 @@ The [Kubernetes cluster example](./example/cluster) demonstrates a three-node de
 
 ## Persistence
 
-eGo defines small interfaces for:
+Urd defines small interfaces for:
 
 - [`persistence.EventsStore`](./persistence/events_store.go)
 - [`persistence.SnapshotStore`](./persistence/snapshot_store.go)
@@ -491,7 +504,7 @@ Applications may implement these interfaces directly. The [ego-contrib](https://
 - **Postgres** event store, snapshot store, offset store, and durable state store
 - **MongoDB** event store, snapshot store, offset store, and durable state store
 
-To use a contrib store, import the relevant module alongside eGo:
+To use a contrib store, import the relevant module alongside Urd:
 
 ```go
 import (
@@ -534,7 +547,7 @@ Instrumentation covers command dispatch and handling, event persistence, active 
 
 ## Logging
 
-eGo logs through [kit-logger](https://github.com/pablogore/kit-logger), a structured logging framework built on `log/slog`. One kit-logger `Logger` covers the whole runtime: the engine, its projection runners, saga actors and publishers, the migrator, and the GoAkt actor system eGo sits on.
+Urd logs through [kit-logger](https://github.com/pablogore/kit-logger), a structured logging framework built on `log/slog`. One kit-logger `Logger` covers the whole runtime: the engine, its projection runners, saga actors and publishers, the migrator, and the GoAkt actor system Urd sits on.
 
 ```go
 import kitlog "github.com/pablogore/kit-logger/pkg/logger"
@@ -548,11 +561,11 @@ logger := kitlog.New(kitlog.Config{
 cfg := engine.NewConfig(eventStore, engine.WithLogger(logger))
 ```
 
-- When `WithLogger` is not used, eGo logs through `engine.DefaultLogger()`, which is kit-logger's process-wide logger (`logger.L()`). An application that installs its own logger with `logger.SetGlobal` before building the engine therefore needs no extra wiring.
+- When `WithLogger` is not used, Urd logs through `engine.DefaultLogger()`, which is kit-logger's process-wide logger (`logger.L()`). An application that installs its own logger with `logger.SetGlobal` before building the engine therefore needs no extra wiring.
 - `engine.DiscardLogger` drops every record and reports every level as disabled. Use it in tests and benchmarks.
-- `engine.ResolveLogger` applies eGo's nil-logger rule outside the engine: a nil or typed-nil logger resolves to `engine.DefaultLogger()`.
+- `engine.ResolveLogger` applies Urd's nil-logger rule outside the engine: a nil or typed-nil logger resolves to `engine.DefaultLogger()`.
 
-eGo's own records are structured: a fixed message plus snake_case fields such as `persistence_id`, `sequence_number`, `projection`, `saga_id` and `error`. Records written with a context go through kit-logger's `*Context` methods, so enabling kit-logger's OpenTelemetry decorator stamps `trace_id` and `span_id` on them, which joins a log line to the trace `WithTelemetry` produced:
+Urd's own records are structured: a fixed message plus snake_case fields such as `persistence_id`, `sequence_number`, `projection`, `saga_id` and `error`. Records written with a context go through kit-logger's `*Context` methods, so enabling kit-logger's OpenTelemetry decorator stamps `trace_id` and `span_id` on them, which joins a log line to the trace `WithTelemetry` produced:
 
 ```go
 import kitotel "github.com/pablogore/kit-logger/pkg/logger/otel"
@@ -563,11 +576,11 @@ logger := kitlog.New(kitlog.Config{
 })
 ```
 
-Everything else kit-logger offers — level changes at runtime with `SetLevel`, redaction and filtering rules, sampling, rate limiting, `AddSource` call-site attribution, buffered output with an explicit `Flush`/`Shutdown` lifecycle — applies to eGo's records unchanged, because eGo never wraps the logger it is given. Records the actor system writes are attributed to GoAkt's own call site, not to eGo's adapter. The application owns the logger's lifecycle; eGo flushes it when the actor system stops but never shuts it down.
+Everything else kit-logger offers — level changes at runtime with `SetLevel`, redaction and filtering rules, sampling, rate limiting, `AddSource` call-site attribution, buffered output with an explicit `Flush`/`Shutdown` lifecycle — applies to Urd's records unchanged, because Urd never wraps the logger it is given. Records the actor system writes are attributed to GoAkt's own call site, not to Urd's adapter. The application owns the logger's lifecycle; Urd flushes it when the actor system stops but never shuts it down.
 
 ## Reliability and operations
 
-eGo includes several production-focused capabilities:
+Urd includes several production-focused capabilities:
 
 - Faster recovery through [snapshots](#snapshots-and-retention)
 - Storage cleanup through [retention policies](#snapshots-and-retention)
@@ -602,8 +615,6 @@ The two compose — `Given(snapshotState).GivenEvents(subsequentEvents...)` mirr
 
 The durable-state scenario reads the same way, with `Given(priorState, priorVersion)` and `ThenState`/`ThenVersion`.
 
-Generated mocks for persistence, encryption, adapters, offsets, and publishers are available under [`mocks`](./mocks).
-
 ## Examples
 
 - [Event-sourced entity](./example/eventssourced)
@@ -619,6 +630,8 @@ make run-eventsourced
 make run-durablestate
 make run-saga
 ```
+
+The examples are a separate Go module in `example/`, so `go run` has to start from there, for example `cd example && go run ./saga`. The `make` targets do that for you.
 
 ## Upgrading
 

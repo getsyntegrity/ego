@@ -1,17 +1,17 @@
-module github.com/getsyntegrity/ego
+module github.com/getsyntegrity/urd
 
 go 1.26.0
 
 require (
-	github.com/flowchartsman/retry v1.2.0
+	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/google/uuid v1.6.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
-	github.com/stretchr/testify v1.12.1
 	github.com/tochemey/goakt/v4 v4.5.4
 	github.com/travisjeffery/go-dynaport v1.0.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
+	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	go.uber.org/atomic v1.11.0
 	go.uber.org/multierr v1.11.0
@@ -31,6 +31,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
 	github.com/deckarep/golang-set/v2 v2.9.0 // indirect
+	github.com/flowchartsman/retry v1.2.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -52,7 +53,6 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/reugn/go-quartz v0.15.2 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
-	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/redcon v1.6.4 // indirect
@@ -66,7 +66,6 @@ require (
 	go.mongodb.org/mongo-driver v1.17.9 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.uber.org/zap v1.28.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
@@ -76,7 +75,7 @@ require (
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (

@@ -24,21 +24,19 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // -----------------------------------------------------------------------
@@ -105,19 +103,32 @@ type batchDispatchOutcome struct {
 	err    error
 }
 
-// runBatchSequence dispatches each of steps, in strict order, into the same
-// actor/batch cycle and returns each step's command.Result in the same
-// order. See the package doc comment above this type for the
-// synchronization argument.
-func runBatchSequence(t *testing.T, engine *Engine, entityID string, behavior *batchStepBehavior, steps []batchStep) []command.Result {
-	t.Helper()
+// receiveG2 polls ch until a value is available and returns it. what names
+// the awaited event in the failure message. The poll returns as soon as the
+// value arrives; waitTimeout is only a ceiling.
+func receiveG2[T any](ctx *specs.Context, ch <-chan T, what string) T {
+	var got T
+	received := false
+	ctx.Eventually(func() any {
+		select {
+		case got = <-ch:
+			received = true
+		default:
+		}
+		return received
+	}, specs.Satisfy(what, func(v any) bool { return v == true }),
+		specs.WithTimeout(waitTimeout), specs.WithInterval(time.Millisecond))
+	return got
+}
 
+// startBatchSteps dispatches each of steps, in strict order, into the same
+// actor/batch cycle. It returns once the last step has reached HandleCommand,
+// with one channel per step that will deliver that step's outcome. See the
+// comment above batchStepBehavior for the synchronization argument.
+func startBatchSteps(ctx *specs.Context, engine *Engine, entityID string, behavior *batchStepBehavior, steps []batchStep) []chan batchDispatchOutcome {
 	chans := make([]chan batchDispatchOutcome, len(steps))
 	for i, step := range steps {
-		md, err := command.NewMetadata(command.OperationID(uuid.NewString()), step.opts...)
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(step.payload, md)
-		require.NoError(t, err)
+		env := buildEnvelope(ctx, step.payload, step.opts...)
 
 		ch := make(chan batchDispatchOutcome, 1)
 		chans[i] = ch
@@ -126,24 +137,37 @@ func runBatchSequence(t *testing.T, engine *Engine, entityID string, behavior *b
 			ch <- batchDispatchOutcome{result: result, err: dispatchErr}
 		}()
 
-		select {
-		case <-behavior.entered:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("step %d (%T) never reached HandleCommand", i, step.payload)
-		}
+		receiveG2(ctx, behavior.entered, "a step to reach HandleCommand")
 	}
+	return chans
+}
 
-	results := make([]command.Result, len(steps))
+// collectBatchResults waits for every step started by startBatchSteps and
+// returns each step's command.Result in the same order.
+func collectBatchResults(ctx *specs.Context, chans []chan batchDispatchOutcome) []command.Result {
+	results := make([]command.Result, len(chans))
 	for i, ch := range chans {
-		select {
-		case out := <-ch:
-			require.NoError(t, out.err, "step %d dispatch error", i)
-			results[i] = out.result
-		case <-time.After(15 * time.Second):
-			t.Fatalf("step %d never returned a result", i)
-		}
+		out := receiveG2(ctx, ch, "a step to return a result")
+		ctx.Expect(out.err).To(specs.BeNil())
+		results[i] = out.result
 	}
 	return results
+}
+
+// runBatchSequence dispatches each of steps, in strict order, into the same
+// actor/batch cycle and returns each step's command.Result in the same
+// order.
+func runBatchSequence(ctx *specs.Context, engine *Engine, entityID string, behavior *batchStepBehavior, steps []batchStep) []command.Result {
+	return collectBatchResults(ctx, startBatchSteps(ctx, engine, entityID, behavior, steps))
+}
+
+// expectAllSucceededG2 asserts that every result succeeded.
+func expectAllSucceededG2(ctx *specs.Context, results []command.Result) {
+	outcomes := make([]command.Outcome, len(results))
+	for i, result := range results {
+		outcomes[i] = result.Outcome()
+	}
+	ctx.Expect(outcomes).To(specs.EveryElement(specs.Equal(command.OutcomeSuccess)))
 }
 
 // newBatchHarness spins up a fresh engine/entity pair wired through a
@@ -151,23 +175,24 @@ func runBatchSequence(t *testing.T, engine *Engine, entityID string, behavior *b
 // so the test can assert on the exact persistence.WritePrecondition each
 // physical WriteEvents call actually received, and returns the pieces a test
 // needs to drive it.
-func newBatchHarness(t *testing.T, name string, threshold int) (engine *Engine, entityID string, behavior *batchStepBehavior, spy *preconditionSpyEventsStore, store *testkit.EventStore) {
-	t.Helper()
-	ctx := context.Background()
-
-	underlying := testkit.NewEventsStore()
-	require.NoError(t, underlying.Connect(ctx))
-	t.Cleanup(func() { _ = underlying.Disconnect(ctx) })
+func newBatchHarness(ctx *specs.Context, name string, threshold int) (engine *Engine, entityID string, behavior *batchStepBehavior, spy *preconditionSpyEventsStore, store *testkit.EventStore) {
+	underlying := connectedEventsStore(ctx)
 	spy = &preconditionSpyEventsStore{EventStore: underlying}
 
-	engine = newTestEngine(t, name, spy, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
+	engine = startEngine(ctx, name, spy, WithLogger(DiscardLogger))
 
 	entityID = uuid.NewString()
 	behavior = newBatchStepBehavior(entityID)
-	require.NoError(t, engine.Entity(ctx, behavior, WithBatchThreshold(threshold)))
+	ctx.Expect(engine.Entity(context.Background(), behavior, WithBatchThreshold(threshold))).To(specs.BeNil())
 
 	return engine, entityID, behavior, spy, underlying
+}
+
+// batchMatrixCase is one U/C admission sequence of the genesis matrix.
+type batchMatrixCase struct {
+	name  string
+	build func(entityID string) []batchStep
+	want  persistence.WritePrecondition
 }
 
 // TestBatchedPreconditionMatrix_GenesisBase exercises every U/C admission
@@ -180,11 +205,7 @@ func newBatchHarness(t *testing.T, name string, threshold int) (engine *Engine, 
 // stays open across every step and flushes exactly once, right after the
 // last one.
 func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
-	tests := []struct {
-		name  string
-		build func(entityID string) []batchStep
-		want  persistence.WritePrecondition
-	}{
+	tests := []batchMatrixCase{
 		{
 			name: "U_U",
 			build: func(id string) []batchStep {
@@ -284,40 +305,35 @@ func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// entityID must be known before steps are built (CreditAccount's
-			// AccountId must match), so build a throwaway ID first, then
-			// spin the harness with it explicitly.
-			ctx := context.Background()
-			underlying := testkit.NewEventsStore()
-			require.NoError(t, underlying.Connect(ctx))
-			t.Cleanup(func() { _ = underlying.Disconnect(ctx) })
+	specs.Describe(t, "a batch founded on a brand-new aggregate", func(s *specs.Spec) {
+		specs.Table(s, tests, func(tc batchMatrixCase) string { return tc.name }, func(ctx *specs.Context, tc batchMatrixCase) {
+			bg := context.Background()
+			underlying := connectedEventsStore(ctx)
 			spy := &preconditionSpyEventsStore{EventStore: underlying}
 
+			// entityID must be known before steps are built (CreditAccount's
+			// AccountId must match), so it is generated first and the entity is
+			// spawned with it explicitly.
 			entityID := uuid.NewString()
 			steps := tc.build(entityID)
 
-			engine := newTestEngine(t, "matrix-genesis-"+tc.name, spy, WithLogger(DiscardLogger))
-			require.NoError(t, engine.Start(ctx))
+			engine := startEngine(ctx, "matrix-genesis-"+tc.name, spy, WithLogger(DiscardLogger))
 			behavior := newBatchStepBehavior(entityID)
-			require.NoError(t, engine.Entity(ctx, behavior, WithBatchThreshold(len(steps))))
+			ctx.Expect(engine.Entity(bg, behavior, WithBatchThreshold(len(steps)))).To(specs.BeNil())
 
-			results := runBatchSequence(t, engine, entityID, behavior, steps)
+			results := runBatchSequence(ctx, engine, entityID, behavior, steps)
+			expectAllSucceededG2(ctx, results)
 
-			for i, result := range results {
-				require.Equal(t, command.OutcomeSuccess, result.Outcome(), "step %d", i)
-			}
+			// Exactly one physical flush for the whole batch, with the expected
+			// precondition.
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{tc.want})
 
-			require.Len(t, spy.preconditions, 1, "exactly one physical flush for the whole batch")
-			assert.Equal(t, tc.want, spy.preconditions[0])
-
-			event, err := underlying.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-			require.NoError(t, err)
-			require.NotNil(t, event)
-			assert.EqualValues(t, len(steps), event.GetSequenceNumber(), "every step's event actually committed")
+			// Every step's event actually committed.
+			event, err := underlying.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(uint64(len(steps)))
 		})
-	}
+	})
 }
 
 // TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter is the
@@ -335,49 +351,50 @@ func TestBatchedPreconditionMatrix_GenesisBase(t *testing.T) {
 // never against 3 (C2's own declared value) nor 4 (the batch's logical end
 // revision after both commands).
 func TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter(t *testing.T) {
-	ctx := context.Background()
-	engine, entityID, behavior, spy, store := newBatchHarness(t, "physical-base-vs-logical", 2)
+	specs.Describe(t, "a batch opened on top of an already persisted revision", func(s *specs.Spec) {
+		s.It("anchors its physical CAS to the pre-batch revision, not the logical counter", func(ctx *specs.Context) {
+			bg := context.Background()
+			engine, entityID, behavior, spy, store := newBatchHarness(ctx, "physical-base-vs-logical", 2)
 
-	// Prefix phase: two unconditional commands, in their own batch cycle
-	// (batchThreshold==2 auto-flushes right after them), to establish a
-	// real, already-confirmed, non-zero storage revision R=2.
-	prefix := []batchStep{
-		stepU(&testpb.CreateAccount{AccountBalance: 500}),
-		stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),
-	}
-	prefixResults := runBatchSequence(t, engine, entityID, behavior, prefix)
-	for i, result := range prefixResults {
-		require.Equal(t, command.OutcomeSuccess, result.Outcome(), "prefix step %d", i)
-	}
-	require.Len(t, spy.preconditions, 1)
-	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0])
+			// Prefix phase: two unconditional commands, in their own batch cycle
+			// (batchThreshold==2 auto-flushes right after them), to establish a
+			// real, already-confirmed, non-zero storage revision R=2.
+			prefix := []batchStep{
+				stepU(&testpb.CreateAccount{AccountBalance: 500}),
+				stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),
+			}
+			expectAllSucceededG2(ctx, runBatchSequence(ctx, engine, entityID, behavior, prefix))
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{persistence.Unconditional()})
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, event.GetSequenceNumber(), "R=2 after the prefix batch's flush")
+			// R=2 after the prefix batch's flush.
+			event, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(2)
 
-	// Batch-under-test: U founds (batchBase seeded to eventsCounter==2),
-	// C is admitted declaring ExpectedRevision(3) (batchCounter after U's
-	// own event). The physical CAS must use base 2, not 3, and not the
-	// batch's logical end revision (4).
-	underTest := []batchStep{
-		stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),
-		stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 3),
-	}
-	results := runBatchSequence(t, engine, entityID, behavior, underTest)
-	for i, result := range results {
-		require.Equal(t, command.OutcomeSuccess, result.Outcome(), "batch-under-test step %d", i)
-	}
+			// Batch-under-test: U founds (batchBase seeded to eventsCounter==2),
+			// C is admitted declaring ExpectedRevision(3) (batchCounter after U's
+			// own event). The physical CAS must use base 2, not 3, and not the
+			// batch's logical end revision (4).
+			underTest := []batchStep{
+				stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),
+				stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 3),
+			}
+			expectAllSucceededG2(ctx, runBatchSequence(ctx, engine, entityID, behavior, underTest))
 
-	require.Len(t, spy.preconditions, 2)
-	got := spy.preconditions[1]
-	assert.Equal(t, persistence.ExpectRevision(2), got, "must anchor to the PRE-BATCH physical base (R=2), not the logical mid/end-of-batch revision")
-	assert.NotEqual(t, persistence.ExpectRevision(3), got)
-	assert.NotEqual(t, persistence.ExpectRevision(4), got)
+			recorded := spy.recorded()
+			ctx.Expect(recorded).To(specs.HaveLen(2))
+			got := recorded[1]
+			// Must anchor to the PRE-BATCH physical base (R=2), not the logical
+			// mid/end-of-batch revision.
+			ctx.Expect(got).ToEqual(persistence.ExpectRevision(2))
+			ctx.Expect(got).To(specs.Not(specs.BeOneOf(persistence.ExpectRevision(3), persistence.ExpectRevision(4))))
 
-	event, err = store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 4, event.GetSequenceNumber(), "both batches' events are committed: 2 (prefix) + 2 (under test)")
+			// Both batches' events are committed: 2 (prefix) + 2 (under test).
+			event, err = store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(4)
+		})
+	})
 }
 
 // TestBatchedZeroEventAdmittedCommandStillPreservesLaterPrecondition is
@@ -387,35 +404,39 @@ func TestBatchedPhysicalBaseAnchorsToPreBatchRevision_NotLogicalCounter(t *testi
 // batchHasPrecondition to become true — it must not be silently lost merely
 // because that particular command happened to persist nothing of its own.
 func TestBatchedZeroEventAdmittedCommandStillPreservesLaterPrecondition(t *testing.T) {
-	ctx := context.Background()
-	// threshold=2: only the two *event-producing* commands (U founder, U
-	// filler) count toward it; the zero-event C in between contributes
-	// nothing to batchNumEvents, so it does not itself trigger a flush.
-	engine, entityID, behavior, spy, store := newBatchHarness(t, "zero-event-preserves-precondition", 2)
+	specs.Describe(t, "an admitted command whose handler produces zero events", func(s *specs.Spec) {
+		s.It("still makes the flush a conditional write", func(ctx *specs.Context) {
+			bg := context.Background()
+			// threshold=2: only the two *event-producing* commands (U founder, U
+			// filler) count toward it; the zero-event C in between contributes
+			// nothing to batchNumEvents, so it does not itself trigger a flush.
+			engine, entityID, behavior, spy, store := newBatchHarness(ctx, "zero-event-preserves-precondition", 2)
 
-	// testpb.TestNoEvent is the zero-event command AccountEventSourcedBehavior
-	// recognizes (HandleCommand returns nil, nil for it).
-	realSteps := []batchStep{
-		stepU(&testpb.CreateAccount{AccountBalance: 500}),
-		stepC(&testpb.TestNoEvent{}, 1),                                // admitted (1 == batchCounter), produces 0 events
-		stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}), // filler: reaches threshold, forces the flush
-	}
+			// testpb.TestNoEvent is the zero-event command AccountEventSourcedBehavior
+			// recognizes (HandleCommand returns nil, nil for it).
+			realSteps := []batchStep{
+				stepU(&testpb.CreateAccount{AccountBalance: 500}),
+				stepC(&testpb.TestNoEvent{}, 1),                                // admitted (1 == batchCounter), produces 0 events
+				stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}), // filler: reaches threshold, forces the flush
+			}
 
-	results := runBatchSequence(t, engine, entityID, behavior, realSteps)
-	for i, result := range results {
-		require.Equal(t, command.OutcomeSuccess, result.Outcome(), "step %d", i)
-	}
+			results := runBatchSequence(ctx, engine, entityID, behavior, realSteps)
+			expectAllSucceededG2(ctx, results)
 
-	// The zero-event step's own reply must report the unchanged revision
-	// (1, from the founder alone) — it never advanced batchCounter itself.
-	assert.EqualValues(t, 1, results[1].Revision(), "zero-event command must not itself advance the batch counter")
+			// The zero-event step's own reply must report the unchanged revision
+			// (1, from the founder alone) — it never advanced batchCounter itself.
+			specs.ExpectT(ctx, results[1].Revision()).ToEqual(1)
 
-	require.Len(t, spy.preconditions, 1, "exactly one physical flush")
-	assert.Equal(t, persistence.ExpectGenesis(), spy.preconditions[0], "the zero-event command's declared ExpectedRevision(1) must still be honored as a real CAS precondition")
+			// Exactly one physical flush, and the zero-event command's declared
+			// ExpectedRevision(1) is still honored as a real CAS precondition.
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{persistence.ExpectGenesis()})
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, event.GetSequenceNumber(), "only the two real events (founder + filler) were ever persisted")
+			// Only the two real events (founder + filler) were ever persisted.
+			event, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(2)
+		})
+	})
 }
 
 // TestBatchedZeroEventFounderNeverOpensBatch documents the companion case:
@@ -424,26 +445,29 @@ func TestBatchedZeroEventAdmittedCommandStillPreservesLaterPrecondition(t *testi
 // stay untouched, and the very next (event-producing) command becomes the
 // real founder instead.
 func TestBatchedZeroEventFounderNeverOpensBatch(t *testing.T) {
-	ctx := context.Background()
-	// threshold=1: the real founder (the second command here) auto-flushes
-	// on its own, since it is alone in its batch cycle.
-	engine, entityID, behavior, spy, store := newBatchHarness(t, "zero-event-founder-noop", 1)
+	specs.Describe(t, "a would-be batch founder whose handler produces zero events", func(s *specs.Spec) {
+		s.It("never opens a batch, so the next command becomes the real founder", func(ctx *specs.Context) {
+			bg := context.Background()
+			// threshold=1: the real founder (the second command here) auto-flushes
+			// on its own, since it is alone in its batch cycle.
+			engine, entityID, behavior, spy, store := newBatchHarness(ctx, "zero-event-founder-noop", 1)
 
-	steps := []batchStep{
-		stepC(&testpb.TestNoEvent{}, 0),                   // would-be founder; produces 0 events; batch never opens
-		stepU(&testpb.CreateAccount{AccountBalance: 500}), // the real founder
-	}
-	results := runBatchSequence(t, engine, entityID, behavior, steps)
-	for i, result := range results {
-		require.Equal(t, command.OutcomeSuccess, result.Outcome(), "step %d", i)
-	}
+			steps := []batchStep{
+				stepC(&testpb.TestNoEvent{}, 0),                   // would-be founder; produces 0 events; batch never opens
+				stepU(&testpb.CreateAccount{AccountBalance: 500}), // the real founder
+			}
+			results := runBatchSequence(ctx, engine, entityID, behavior, steps)
+			expectAllSucceededG2(ctx, results)
 
-	require.Len(t, spy.preconditions, 1)
-	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0], "the zero-event command must not have anchored a genesis batchBase")
+			// The zero-event command must not have anchored a genesis batchBase.
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{persistence.Unconditional()})
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the real founder's single event was ever persisted")
+			// Only the real founder's single event was ever persisted.
+			event, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(1)
+		})
+	})
 }
 
 // TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshBatch
@@ -454,40 +478,45 @@ func TestBatchedZeroEventFounderNeverOpensBatch(t *testing.T) {
 // — where its own stale declared revision is still caught by the store's
 // real CAS at that new batch's own flush, not silently ignored.
 func TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshBatch(t *testing.T) {
-	ctx := context.Background()
-	engine, entityID, behavior, spy, store := newBatchHarness(t, "stale-revision-admission", 2)
+	specs.Describe(t, "a command declaring a revision that does not match the open batch", func(s *specs.Spec) {
+		s.It("forces an early flush, then founds a fresh batch that the store rejects", func(ctx *specs.Context) {
+			bg := context.Background()
+			engine, entityID, behavior, spy, store := newBatchHarness(ctx, "stale-revision-admission", 2)
 
-	steps := []batchStep{
-		stepU(&testpb.CreateAccount{AccountBalance: 500}),                  // founder, batch stays open (threshold=2, 1 event so far)
-		stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 99), // stale: batchCounter is 1, not 99
-		stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),     // filler for the fresh batch the stale command founds
-	}
-	results := runBatchSequence(t, engine, entityID, behavior, steps)
+			steps := []batchStep{
+				stepU(&testpb.CreateAccount{AccountBalance: 500}),                  // founder, batch stays open (threshold=2, 1 event so far)
+				stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 99), // stale: batchCounter is 1, not 99
+				stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10}),     // filler for the fresh batch the stale command founds
+			}
+			results := runBatchSequence(ctx, engine, entityID, behavior, steps)
 
-	// Step 0 (U, the original founder) is confirmed by the forced early
-	// flush (Unconditional, since nothing had declared a revision yet).
-	require.Equal(t, command.OutcomeSuccess, results[0].Outcome())
+			// Step 0 (U, the original founder) is confirmed by the forced early
+			// flush (Unconditional, since nothing had declared a revision yet).
+			ctx.Expect(results[0].Outcome()).ToEqual(command.OutcomeSuccess)
 
-	// Steps 1 and 2 land in a second batch founded by the stale command
-	// itself (batchBase=99, its own declared value); that batch's flush
-	// checks storage (real revision 1) against 99 and must conflict.
-	require.Equal(t, command.OutcomeRejected, results[1].Outcome())
-	require.Equal(t, command.OutcomeRejected, results[2].Outcome())
-	for i, result := range results[1:] {
-		failure, ok := result.Failure()
-		require.True(t, ok, "step %d", i+1)
-		code, hasCode := failure.Code()
-		require.True(t, hasCode, "step %d", i+1)
-		assert.Equal(t, command.CodeConcurrencyConflict, code, "step %d", i+1)
-	}
+			// Steps 1 and 2 land in a second batch founded by the stale command
+			// itself (batchBase=99, its own declared value); that batch's flush
+			// checks storage (real revision 1) against 99 and must conflict.
+			for _, result := range results[1:] {
+				expectConcurrencyConflict(ctx, result)
+			}
 
-	require.Len(t, spy.preconditions, 2, "the forced early flush plus the stale command's own fresh-batch flush")
-	assert.Equal(t, persistence.Unconditional(), spy.preconditions[0], "forced flush of the original open batch: nothing in it had declared a revision")
-	assert.Equal(t, persistence.ExpectRevision(99), spy.preconditions[1], "the stale command's own fresh batch anchors to its own declared (stale) revision")
+			// The forced early flush plus the stale command's own fresh-batch
+			// flush. The first one is the forced flush of the original open batch
+			// (nothing in it had declared a revision); the second anchors to the
+			// stale command's own declared revision.
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{
+				persistence.Unconditional(),
+				persistence.ExpectRevision(99),
+			})
 
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the original founder's event ever committed; the stale-founded batch's conflict must not have persisted anything")
+			// Only the original founder's event ever committed; the stale-founded
+			// batch's conflict must not have persisted anything.
+			event, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(1)
+		})
+	})
 }
 
 // TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter
@@ -500,112 +529,70 @@ func TestBatchAdmissionGateRejectsStaleRevision_ForcesEarlyFlushThenFoundsFreshB
 // Failure.Code()==CodeConcurrencyConflict, no rejected event may be
 // confirmed, and eventsCounter must not advance (design.md D9/D10).
 func TestBatchedExternalWriterWinsCAS_RejectsWholeBatchWithoutAdvancingCounter(t *testing.T) {
-	ctx := context.Background()
-	// threshold=3: after the two official commands (U founder + C, 2
-	// events), the batch stays open — giving the test a window to act as
-	// an external writer before the third (filler) command tips it over
-	// the threshold and forces the flush.
-	engine, entityID, behavior, spy, store := newBatchHarness(t, "external-writer-cas-conflict", 3)
+	specs.Describe(t, "an external writer that advances the stream before the batch flushes", func(s *specs.Spec) {
+		s.It("rejects the whole batch and keeps only the external writer's event", func(ctx *specs.Context) {
+			bg := context.Background()
+			// threshold=3: after the two official commands (U founder + C, 2
+			// events), the batch stays open — giving the test a window to act as
+			// an external writer before the third (filler) command tips it over
+			// the threshold and forces the flush.
+			engine, entityID, behavior, spy, store := newBatchHarness(ctx, "external-writer-cas-conflict", 3)
 
-	official := []batchStep{
-		stepU(&testpb.CreateAccount{AccountBalance: 500}),                 // founder: batchBase=0 (genesis)
-		stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 1), // admitted: batchHasPrecondition=true
-	}
-	officialChans := make([]chan batchDispatchOutcome, len(official))
-	for i, step := range official {
-		md, err := command.NewMetadata(command.OperationID(uuid.NewString()), step.opts...)
-		require.NoError(t, err)
-		env, err := command.NewEnvelope(step.payload, md)
-		require.NoError(t, err)
+			official := []batchStep{
+				stepU(&testpb.CreateAccount{AccountBalance: 500}),                 // founder: batchBase=0 (genesis)
+				stepC(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, 1), // admitted: batchHasPrecondition=true
+			}
+			officialChans := startBatchSteps(ctx, engine, entityID, behavior, official)
 
-		ch := make(chan batchDispatchOutcome, 1)
-		officialChans[i] = ch
-		go func() {
-			result, dispatchErr := engine.Dispatch(context.Background(), entityID, env, 15*time.Second)
-			ch <- batchDispatchOutcome{result: result, err: dispatchErr}
-		}()
+			// At this point both official commands are staged (2 events, threshold
+			// 3 not yet reached) and the actor is idle, waiting on its mailbox.
+			// Act as an independent external writer: commit an event directly to
+			// the SAME persistence-id's stream, bypassing the actor entirely, which
+			// physically advances the store to revision 1 while the batch's
+			// anchored batchBase (genesis, 0) and the actor's own eventsCounter
+			// (still 0, nothing confirmed yet) know nothing about it.
+			externalEventAny, err := anypb.New(&testpb.AccountCreated{AccountId: entityID, AccountBalance: 999})
+			ctx.Expect(err).To(specs.BeNil())
+			externalEvent := &egopb.Event{
+				PersistenceId:  entityID,
+				SequenceNumber: 1,
+				Event:          externalEventAny,
+				Timestamp:      time.Now().Unix(),
+				Shard:          0,
+			}
+			ctx.Expect(store.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{externalEvent}, persistence.Unconditional())).To(specs.BeNil())
 
-		select {
-		case <-behavior.entered:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("official step %d never reached HandleCommand", i)
-		}
-	}
+			// Now dispatch the filler command that tips batchNumEvents over the
+			// threshold, forcing the flush.
+			filler := []batchStep{stepU(&testpb.CreditAccount{AccountId: entityID, Balance: 10})}
+			fillerChans := startBatchSteps(ctx, engine, entityID, behavior, filler)
 
-	// At this point both official commands are staged (2 events, threshold
-	// 3 not yet reached) and the actor is idle, waiting on its mailbox.
-	// Act as an independent external writer: commit an event directly to
-	// the SAME persistence-id's stream, bypassing the actor entirely, which
-	// physically advances the store to revision 1 while the batch's
-	// anchored batchBase (genesis, 0) and the actor's own eventsCounter
-	// (still 0, nothing confirmed yet) know nothing about it.
-	externalEventAny, err := anypb.New(&testpb.AccountCreated{AccountId: entityID, AccountBalance: 999})
-	require.NoError(t, err)
-	externalEvent := &egopb.Event{
-		PersistenceId:  entityID,
-		SequenceNumber: 1,
-		Event:          externalEventAny,
-		Timestamp:      time.Now().Unix(),
-		Shard:          0,
-	}
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{externalEvent}, persistence.Unconditional()))
+			results := collectBatchResults(ctx, append(officialChans, fillerChans...))
 
-	// Now dispatch the filler command that tips batchNumEvents over the
-	// threshold, forcing the flush.
-	fillerMd, err := command.NewMetadata(command.OperationID(uuid.NewString()))
-	require.NoError(t, err)
-	fillerEnv, err := command.NewEnvelope(&testpb.CreditAccount{AccountId: entityID, Balance: 10}, fillerMd)
-	require.NoError(t, err)
-	fillerCh := make(chan batchDispatchOutcome, 1)
-	go func() {
-		result, dispatchErr := engine.Dispatch(context.Background(), entityID, fillerEnv, 15*time.Second)
-		fillerCh <- batchDispatchOutcome{result: result, err: dispatchErr}
-	}()
-	select {
-	case <-behavior.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("filler command never reached HandleCommand")
-	}
+			for _, result := range results {
+				expectConcurrencyConflict(ctx, result)
+				conflict := conflictError(ctx, result)
+				ctx.Expect(conflict.Expected()).ToEqual(persistence.ExpectGenesis())
+				// The actual revision is the external writer's event.
+				actual, ok := conflict.ActualRevision()
+				ctx.Expect(ok).To(specs.BeTrue())
+				specs.ExpectT(ctx, actual).ToEqual(1)
+			}
 
-	allChans := append(officialChans, fillerCh)
-	results := make([]command.Result, len(allChans))
-	for i, ch := range allChans {
-		select {
-		case out := <-ch:
-			require.NoError(t, out.err, "step %d dispatch error", i)
-			results[i] = out.result
-		case <-time.After(15 * time.Second):
-			t.Fatalf("step %d never returned a result", i)
-		}
-	}
+			ctx.Expect(spy.recorded()).ToEqual([]persistence.WritePrecondition{persistence.ExpectGenesis()})
 
-	for i, result := range results {
-		require.Equal(t, command.OutcomeRejected, result.Outcome(), "step %d", i)
-		failure, ok := result.Failure()
-		require.True(t, ok, "step %d", i)
-		code, hasCode := failure.Code()
-		require.True(t, hasCode, "step %d", i)
-		assert.Equal(t, command.CodeConcurrencyConflict, code, "step %d", i)
+			// D10 recheck: no rejected event was confirmed, and eventsCounter must
+			// not have advanced as a result of the rejected persist — only the
+			// external writer's single event is visible in the store.
+			event, err := store.GetLatestEvent(bg, persistence.Unscoped(), entityID)
+			ctx.Expect(err).To(specs.BeNil())
+			specs.ExpectT(ctx, event.GetSequenceNumber()).ToEqual(1)
 
-		var conflict *persistence.ConflictError
-		require.True(t, errors.As(result.Err(), &conflict), "step %d", i)
-		assert.Equal(t, persistence.ExpectGenesis(), conflict.Expected(), "step %d", i)
-		actual, ok := conflict.ActualRevision()
-		require.True(t, ok, "step %d", i)
-		assert.EqualValues(t, 1, actual, "step %d: the external writer's event", i)
-	}
-
-	require.Len(t, spy.preconditions, 1)
-	assert.Equal(t, persistence.ExpectGenesis(), spy.preconditions[0])
-
-	// D10 recheck: no rejected event was confirmed, and eventsCounter must
-	// not have advanced as a result of the rejected persist — only the
-	// external writer's single event is visible in the store.
-	event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), entityID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, event.GetSequenceNumber(), "only the external writer's event ever committed")
-
-	var committed testpb.AccountCreated
-	require.NoError(t, event.GetEvent().UnmarshalTo(&committed))
-	assert.EqualValues(t, 999, committed.GetAccountBalance(), "the visible event is the external writer's own, not one of the rejected batch's")
+			// The visible event is the external writer's own, not one of the
+			// rejected batch's.
+			var committed testpb.AccountCreated
+			ctx.Expect(event.GetEvent().UnmarshalTo(&committed)).To(specs.BeNil())
+			specs.ExpectT(ctx, committed.GetAccountBalance()).ToEqual(999)
+		})
+	})
 }

@@ -1,0 +1,19 @@
+# Second output for protos/sample/sample.proto: the copy that the programs under
+# example/ import. The examples may only use the public API, so they cannot
+# import internal/samplepb; they get their own package at example/examplepb.
+# Run with: buf generate --template buf.gen.example.yaml --path protos/sample
+# (the Makefile `proto` and `docker-protogen` targets do this).
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: optimize_for
+      value: CODE_SIZE
+    - file_option: go_package
+      path: sample/sample.proto
+      value: github.com/getsyntegrity/urd/example/examplepb;samplepb
+plugins:
+  - local: protoc-gen-go
+    out: gen-example
+    opt: paths=source_relative

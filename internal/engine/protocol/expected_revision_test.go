@@ -25,27 +25,52 @@ package protocol
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/getsyntegrity/go-specs/assert"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
-func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
-	tests := []struct {
-		name        string
-		revision    uint64
-		hasRevision bool
-		want        persistence.WritePrecondition
-	}{
-		{name: "absent is unconditional", revision: 0, hasRevision: false, want: persistence.Unconditional()},
-		{name: "zero is genesis, not absence", revision: 0, hasRevision: true, want: persistence.ExpectGenesis()},
-		{name: "positive revision is an exact expectation", revision: 42, hasRevision: true, want: persistence.ExpectRevision(42)},
-	}
+type revisionCase struct {
+	name        string
+	revision    uint64
+	hasRevision bool
+	want        persistence.WritePrecondition
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := PreconditionFromRevision(tc.revision, tc.hasRevision)
-			assert.Equal(t, tc.want, got)
+func TestPreconditionFromRevisionMapsPerD4(t *testing.T) {
+	specs.Describe(t, "PreconditionFromRevision maps an expected revision to a write precondition", func(s *specs.Spec) {
+		specs.Table(s, []revisionCase{
+			{name: "absent is unconditional", revision: 0, hasRevision: false, want: persistence.Unconditional()},
+			{name: "absent ignores a stray revision", revision: 7, hasRevision: false, want: persistence.Unconditional()},
+			{name: "zero is genesis, not absence", revision: 0, hasRevision: true, want: persistence.ExpectGenesis()},
+			{name: "positive revision is an exact expectation", revision: 42, hasRevision: true, want: persistence.ExpectRevision(42)},
+			{name: "max revision is an exact expectation", revision: ^uint64(0), hasRevision: true, want: persistence.ExpectRevision(^uint64(0))},
+		}, func(c revisionCase) string { return c.name }, func(ctx *specs.Context, c revisionCase) {
+			ctx.Expect(PreconditionFromRevision(c.revision, c.hasRevision)).ToEqual(c.want)
 		})
-	}
+	})
+}
+
+// FuzzPreconditionFromRevision checks the D4 mapping for every input, not only the table rows:
+// an absent revision is always unconditional, zero is always genesis, and any other value is an
+// exact expectation on that same value.
+func FuzzPreconditionFromRevision(f *testing.F) {
+	f.Add(uint64(0), false)
+	f.Add(uint64(0), true)
+	f.Add(uint64(42), true)
+	f.Add(^uint64(0), true)
+	f.Fuzz(func(t *testing.T, revision uint64, hasRevision bool) {
+		want := persistence.ExpectRevision(revision)
+		switch {
+		case !hasRevision:
+			want = persistence.Unconditional()
+		case revision == 0:
+			want = persistence.ExpectGenesis()
+		}
+		got := PreconditionFromRevision(revision, hasRevision)
+		if m := assert.Equal(want); !m.Match(got) {
+			t.Fatal(m.FailureMessage(got))
+		}
+	})
 }

@@ -25,7 +25,7 @@ package persistence
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/urd/egopb"
 )
 
 // EventsStore defines the API to write to the events store

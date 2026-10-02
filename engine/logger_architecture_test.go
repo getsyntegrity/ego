@@ -26,10 +26,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // loggerSeamFile is the one first-party file allowed to speak GoAkt's logging
@@ -38,7 +39,7 @@ import (
 const loggerSeamFile = "internal/goaktlog/adapter.go"
 
 // bannedLoggerConstructs are logging constructs first-party production code
-// must not contain anywhere. eGo logs through kit-logger, so no default may be
+// must not contain anywhere. Urd logs through kit-logger, so no default may be
 // derived from a concrete third-party backend the caller cannot replace.
 var bannedLoggerConstructs = []string{
 	"log.NewZap(",
@@ -108,53 +109,64 @@ func isScannedGoSource(path string) bool {
 // library's, because the only supported way to log is through the kit-logger
 // Logger the application passes to WithLogger.
 func TestKitLoggerIsTheOnlyLoggingBackend(t *testing.T) {
-	root := architectureModuleRoot(t)
+	specs.Describe(t, "first-party production code logs only through kit-logger", func(s *specs.Spec) {
+		s.It("has no concrete logger and no parallel logging backend outside the seam", func(ctx *specs.Context) {
+			root := architectureModuleRoot(ctx.T)
 
-	var scanned int
-	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+			// Violations are collected as "path must not use construct" lines, so
+			// a failure names every offending path and construct instead of
+			// dumping a source file.
+			var scanned int
+			var violations []string
+			walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
 
-		if entry.IsDir() {
-			if _, skipped := loggerArchitectureSkippedDirs[entry.Name()]; skipped {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+				if entry.IsDir() {
+					if _, skipped := loggerArchitectureSkippedDirs[entry.Name()]; skipped {
+						return filepath.SkipDir
+					}
+					return nil
+				}
 
-		if !isScannedGoSource(path) {
-			return nil
-		}
+				if !isScannedGoSource(path) {
+					return nil
+				}
 
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		scanned++
+				content, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				scanned++
 
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		for _, banned := range bannedLoggerConstructs {
-			// Assert on a boolean rather than the file body so a failure names
-			// the offending path and construct instead of dumping the source.
-			require.Falsef(t, strings.Contains(string(content), banned),
-				"%s must not use %q: log through kit-logger instead", rel, banned)
-		}
+				rel, err := filepath.Rel(root, path)
+				if err != nil {
+					rel = path
+				}
+				for _, banned := range bannedLoggerConstructs {
+					if strings.Contains(string(content), banned) {
+						violations = append(violations,
+							rel+" must not use "+strconv.Quote(banned)+": log through kit-logger instead")
+					}
+				}
 
-		if rel == loggerSeamFile {
-			return nil
-		}
-		for _, banned := range bannedOutsideLoggerSeam {
-			require.Falsef(t, strings.Contains(string(content), banned),
-				"%s must not use %q: log through the kit-logger Logger it was given, not a parallel backend",
-				rel, banned)
-		}
-		return nil
+				if rel == loggerSeamFile {
+					return nil
+				}
+				for _, banned := range bannedOutsideLoggerSeam {
+					if strings.Contains(string(content), banned) {
+						violations = append(violations, rel+" must not use "+strconv.Quote(banned)+
+							": log through the kit-logger Logger it was given, not a parallel backend")
+					}
+				}
+				return nil
+			})
+
+			ctx.Expect(walkErr).To(specs.BeNil())
+			ctx.Expect(violations).To(specs.BeEmpty())
+			// the scan found Go sources, so it proves something
+			ctx.Expect(scanned).To(specs.BeGreaterThan(0))
+		})
 	})
-
-	require.NoError(t, walkErr)
-	require.NotZero(t, scanned, "the scan found no Go sources, so it proves nothing")
 }

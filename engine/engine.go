@@ -35,15 +35,15 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/syncmap"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/internal/syncmap"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Done is a signal that an operation has completed
@@ -78,6 +78,10 @@ type Engine struct {
 	metrics       *instrumentation.Instruments
 	encryptor     encryption.Encryptor
 
+	// schemaMigration is carried over from Config: Start migrates the schema of
+	// every store that implements persistence.SchemaMigrator.
+	schemaMigration bool
+
 	// tenantResolver is the effective tenancy.TenantResolver carried over
 	// from Config; non-nil means tenant-aware mode is active. NewEngine has
 	// already validated there is at most one (ErrAmbiguousTenantResolver).
@@ -95,7 +99,7 @@ type Engine struct {
 	entityFamilies EntityFamily
 }
 
-// NewEngine plugs eGo into an already-constructed and started goakt.ActorSystem.
+// NewEngine plugs Urd into an already-constructed and started goakt.ActorSystem.
 //
 // The caller builds a single Config with NewConfig, passes cfg.GoaktOptions()
 // to goakt.NewActorSystem, starts the actor system, and then hands the same
@@ -107,10 +111,10 @@ type Engine struct {
 //
 //   - sys must be non-nil (otherwise returns ErrActorSystemRequired);
 //   - sys.Running() must be true (otherwise returns ErrActorSystemNotStarted);
-//   - every extension eGo needs based on cfg must be registered on sys
+//   - every extension Urd needs based on cfg must be registered on sys
 //     (otherwise returns ErrMissingRequiredExtensions with the missing IDs).
 //
-// NewEngine also registers eGo's internal spawn-configuration dependency
+// NewEngine also registers Urd's internal spawn-configuration dependency
 // types and any behavior kinds supplied via WithBehaviorKinds or
 // WithEntityKinds on the actor system, so that entity spawn requests routed
 // to this node from cluster peers can be deserialized. Every node in a
@@ -125,8 +129,8 @@ type Engine struct {
 // schedule (typically after Engine.Stop).
 //
 // Parameters:
-//   - actorSys: A running goakt.ActorSystem with eGo's required extensions registered.
-//   - config: The Config used to build the actor system's eGo extensions.
+//   - actorSys: A running goakt.ActorSystem with Urd's required extensions registered.
+//   - config: The Config used to build the actor system's Urd extensions.
 //
 // Returns:
 //   - A pointer to the newly created Engine instance, or an error.
@@ -183,20 +187,21 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		name:           actorSys.Name(),
-		eventsStore:    config.eventsStore,
-		stateStore:     config.stateStore,
-		offsetStore:    config.offsetStore,
-		snapshotStore:  config.snapshotStore,
-		logger:         config.logger,
-		eventStream:    config.eventStream,
-		eventAdapters:  config.eventAdapters,
-		telemetry:      config.telemetry,
-		encryptor:      config.encryptor,
-		tenantResolver: config.tenantResolver,
-		entityFamilies: config.entityFamilies,
-		eventsStreams:  syncmap.New[string, *eventsStream](),
-		statesStreams:  syncmap.New[string, *statesStream](),
+		name:            actorSys.Name(),
+		eventsStore:     config.eventsStore,
+		stateStore:      config.stateStore,
+		offsetStore:     config.offsetStore,
+		snapshotStore:   config.snapshotStore,
+		logger:          config.logger,
+		eventStream:     config.eventStream,
+		eventAdapters:   config.eventAdapters,
+		telemetry:       config.telemetry,
+		encryptor:       config.encryptor,
+		schemaMigration: config.schemaMigration,
+		tenantResolver:  config.tenantResolver,
+		entityFamilies:  config.entityFamilies,
+		eventsStreams:   syncmap.New[string, *eventsStream](),
+		statesStreams:   syncmap.New[string, *statesStream](),
 	}
 	e.actorSystem.Store(&actorSystemRef{
 		sys:      actorSys,
@@ -206,7 +211,7 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	return e, nil
 }
 
-// validateActorSystemExtensions asserts that every extension eGo needs given
+// validateActorSystemExtensions asserts that every extension Urd needs given
 // the engine's configuration is registered on the actor system. Missing
 // extensions are collected and reported together so the caller learns about
 // the full set of problems at once.
@@ -241,23 +246,32 @@ func validateActorSystemExtensions(sys goakt.ActorSystem, cfg *Config) error {
 	return nil
 }
 
-// Start initializes the eGo engine on top of an actor system that is already
+// Start initializes the Urd engine on top of an actor system that is already
 // running.
 //
 // In the meta-framework design, Start does no actor-system construction —
 // the caller has already built and started goakt.NewActorSystem. Start only
-// wires the OpenTelemetry propagator (when WithTelemetry is configured) and
-// flips the engine into a "ready to receive entity work" state.
+// migrates the store schemas (when WithSchemaMigration is configured), wires
+// the OpenTelemetry propagator (when WithTelemetry is configured) and flips
+// the engine into a "ready to receive entity work" state.
 //
 // Parameters:
-//   - ctx: Execution context. Currently unused but retained for API symmetry
-//     with Stop and to leave room for future async initialization.
+//   - ctx: Execution context. It is passed to the stores' Migrate when
+//     WithSchemaMigration is set; otherwise it is unused.
 //
 // Returns:
 //   - An error if the engine is in an inconsistent state; otherwise, nil.
-func (engine *Engine) Start(_ context.Context) error {
+func (engine *Engine) Start(ctx context.Context) error {
 	if engine.actorSystem.Load() == nil {
 		return ErrActorSystemRequired
+	}
+
+	// Migrate first, before anything else changes: a failure must leave the
+	// engine as it was, not started and with no telemetry side effects.
+	if engine.schemaMigration {
+		if err := engine.migrateSchemas(ctx); err != nil {
+			return err
+		}
 	}
 
 	if engine.telemetry != nil {
@@ -270,7 +284,39 @@ func (engine *Engine) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the eGo engine.
+// migrateSchemas runs Migrate on every configured store that implements
+// persistence.SchemaMigrator and stops at the first error. Stores that do not
+// implement it are skipped.
+func (engine *Engine) migrateSchemas(ctx context.Context) error {
+	stores := []struct {
+		kind  string
+		store any
+	}{
+		{"events store", engine.eventsStore},
+		{"state store", engine.stateStore},
+		{"offset store", engine.offsetStore},
+		{"snapshot store", engine.snapshotStore},
+	}
+	migrated := false
+	for _, s := range stores {
+		migrator, ok := s.store.(persistence.SchemaMigrator)
+		if !ok {
+			continue
+		}
+		migrated = true
+		if err := migrator.Migrate(ctx); err != nil {
+			return fmt.Errorf("engine: migrate the schema of the %s: %w", s.kind, err)
+		}
+	}
+	if !migrated {
+		// The option was asked for but did nothing: most likely the stores in use
+		// are not the ones that own a schema. Start still succeeds.
+		engine.logger.Warn("schema migration enabled but no store implements persistence.SchemaMigrator")
+	}
+	return nil
+}
+
+// Stop gracefully shuts down the Urd engine.
 //
 // Stop terminates all running publishers, closes the local event stream
 // adapter, and detaches the engine's reference to the actor system so
@@ -329,7 +375,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Started returns true when the eGo engine has started
+// Started returns true when the Urd engine has started
 func (engine *Engine) Started() bool {
 	return engine.started.Load()
 }

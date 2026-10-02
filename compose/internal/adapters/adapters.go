@@ -20,14 +20,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package adapters is the runtime-free start-and-probe loop Ego's
+// Package adapters is the runtime-free start-and-probe loop Urd's
 // composition roots run over the adapters they own
 // (openspec/changes/ego-arch-004/design.md §D4). compose/goakt runs it in
 // its "attach publishers" step; compose/inmem (#148) reuses it unchanged.
 //
 // It inspects adapters only through port/adapter's accessors (StarterOf,
 // PingerOf, Describe), never with its own type assertions. It imports no
-// runtime: internal/cmd/archcheck's composition-no-runtime rule covers it
+// runtime: the former architecture checker's composition-no-runtime rule covers it
 // like compose/internal/lifecycle.
 package adapters
 
@@ -35,7 +35,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // Owned is one adapter a composition root owns, with what it takes to name

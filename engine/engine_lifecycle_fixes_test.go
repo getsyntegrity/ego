@@ -25,202 +25,170 @@ package engine
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
-// failingCloseEventPublisher is an EventPublisher whose Close always fails
-// and counts how many times it was called. Close returns err.
-type failingCloseEventPublisher struct {
-	id     string
-	err    error
-	closes atomic.Int32
+// closingEventPublisherG4 returns an event publisher mock with the given ID
+// whose Close is expected exactly closes times and answers closeErr.
+func closingEventPublisherG4(ctx *specs.Context, id string, closes int, closeErr error) *enginetest.EventPublisherMock {
+	ctrl := mock.NewController(ctx)
+	ctrl.Method("ID").Expect().Return(id).AnyTimes()
+	if closes > 0 {
+		ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(closes)
+	}
+	return enginetest.NewEventPublisherMock(ctrl)
 }
 
-var _ EventPublisher = (*failingCloseEventPublisher)(nil)
-
-func (p *failingCloseEventPublisher) ID() string { return p.id }
-
-func (p *failingCloseEventPublisher) Publish(context.Context, *egopb.Event) error { return nil }
-
-func (p *failingCloseEventPublisher) Close(context.Context) error {
-	p.closes.Add(1)
-	return p.err
-}
-
-// countingStatePublisher is a StatePublisher that counts Close calls.
-type countingStatePublisher struct {
-	id     string
-	closes atomic.Int32
-}
-
-var _ StatePublisher = (*countingStatePublisher)(nil)
-
-func (p *countingStatePublisher) ID() string { return p.id }
-
-func (p *countingStatePublisher) Publish(context.Context, *egopb.DurableState) error { return nil }
-
-func (p *countingStatePublisher) Close(context.Context) error {
-	p.closes.Add(1)
-	return nil
+// closingStatePublisherG4 is closingEventPublisherG4 for a state publisher.
+func closingStatePublisherG4(ctx *specs.Context, id string, closes int, closeErr error) *enginetest.StatePublisherMock {
+	ctrl := mock.NewController(ctx)
+	ctrl.Method("ID").Expect().Return(id).AnyTimes()
+	if closes > 0 {
+		ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(closes)
+	}
+	return enginetest.NewStatePublisherMock(ctrl)
 }
 
 // TestEngineStopAttemptsEveryStep is the #126 defect 1 regression: a
 // publisher whose Close fails must not stop Engine.Stop from closing the
 // other publishers and the event stream, and the errors are joined.
 func TestEngineStopAttemptsEveryStep(t *testing.T) {
-	ctx := context.Background()
-	engine := newTestEngine(t, "stop-every-step-"+uuid.NewString(), testkit.NewEventsStore())
-	require.NoError(t, engine.Start(ctx))
+	specs.Describe(t, "Engine.Stop attempts every step even when a publisher fails to close", func(s *specs.Spec) {
+		s.It("closes every publisher and the streams, and joins the errors", func(ctx *specs.Context) {
+			bg := context.Background()
+			engine := newTestEngine(ctx.T, "stop-every-step-"+uuid.NewString(), testkit.NewEventsStore())
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-	// Both event publishers fail on Close, so whichever one the map yields
-	// first, the other is closed only if Stop carries on after the error.
-	errFirst := errors.New("close failed: events-1")
-	errSecond := errors.New("close failed: events-2")
-	first := &failingCloseEventPublisher{id: "events-1", err: errFirst}
-	second := &failingCloseEventPublisher{id: "events-2", err: errSecond}
-	states := &countingStatePublisher{id: "states-1"}
-	require.NoError(t, engine.AddEventPublishers(first, second))
-	require.NoError(t, engine.AddStatePublishers(states))
-	require.Positive(t, engine.eventStream.SubscribersCount(protocol.EventsTopic))
+			// Both event publishers fail on Close, so whichever one the map yields
+			// first, the other is closed only if Stop carries on after the error.
+			// Each Close is expected once, which also proves a second Stop closes
+			// nothing twice.
+			errFirst := errors.New("close failed: events-1")
+			errSecond := errors.New("close failed: events-2")
+			first := closingEventPublisherG4(ctx, "events-1", 1, errFirst)
+			second := closingEventPublisherG4(ctx, "events-2", 1, errSecond)
+			states := closingStatePublisherG4(ctx, "states-1", 1, nil)
+			ctx.Expect(engine.AddEventPublishers(first, second)).To(specs.BeNil())
+			ctx.Expect(engine.AddStatePublishers(states)).To(specs.BeNil())
+			ctx.Expect(engine.eventStream.SubscribersCount(protocol.EventsTopic)).To(specs.BeGreaterThan(0))
 
-	err := engine.Stop(ctx)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, `close events publisher "events-1": close failed: events-1`)
-	assert.ErrorContains(t, err, `close events publisher "events-2": close failed: events-2`)
-	assert.ErrorIs(t, err, errFirst, "the first publisher's error is reachable through the join")
-	assert.ErrorIs(t, err, errSecond, "the second publisher's error is reachable through the join")
+			err := engine.Stop(bg)
 
-	assert.EqualValues(t, 1, first.closes.Load(), "first event publisher closed once")
-	assert.EqualValues(t, 1, second.closes.Load(), "second event publisher closed once")
-	assert.EqualValues(t, 1, states.closes.Load(), "state publisher closed")
-	assert.Zero(t, engine.eventStream.SubscribersCount(protocol.EventsTopic), "event stream closed")
-	assert.Zero(t, engine.eventStream.SubscribersCount(protocol.StatesTopic), "event stream closed")
-	assert.Zero(t, engine.eventsStreams.Len())
-	assert.Zero(t, engine.statesStreams.Len())
-	assert.False(t, engine.Started())
-	assert.True(t, engine.ActorSystem() == nil, "actor system reference detached")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.Contain(`close events publisher "events-1": close failed: events-1`))
+			ctx.Expect(err.Error()).To(specs.Contain(`close events publisher "events-2": close failed: events-2`))
+			// the first and the second publisher's errors are reachable through the join
+			ctx.Expect(err).To(specs.MatchError(errFirst))
+			ctx.Expect(err).To(specs.MatchError(errSecond))
 
-	// A second Stop has nothing left to do and closes nothing twice.
-	require.NoError(t, engine.Stop(ctx))
-	assert.EqualValues(t, 1, first.closes.Load())
-	assert.EqualValues(t, 1, second.closes.Load())
+			// event stream closed
+			ctx.Expect(engine.eventStream.SubscribersCount(protocol.EventsTopic)).To(specs.BeZero())
+			ctx.Expect(engine.eventStream.SubscribersCount(protocol.StatesTopic)).To(specs.BeZero())
+			ctx.Expect(engine.eventsStreams.Len()).To(specs.BeZero())
+			ctx.Expect(engine.statesStreams.Len()).To(specs.BeZero())
+			ctx.Expect(engine.Started()).To(specs.BeFalse())
+			// actor system reference detached
+			ctx.Expect(engine.ActorSystem() == nil).To(specs.BeTrue())
+
+			// A second Stop has nothing left to do and closes nothing twice.
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+		})
+	})
 }
 
-// newStateOnlyEngine builds a started engine with a durable-state store and
+// newStateOnlyEngineG4 builds a started engine with a durable-state store and
 // no events store, which NewConfig(nil, ...) allows.
-func newStateOnlyEngine(t *testing.T) *Engine {
-	t.Helper()
-	ctx := context.Background()
-	stateStore := testkit.NewDurableStore()
-	require.NoError(t, stateStore.Connect(ctx))
-	t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
-
-	cfg := NewConfig(nil, WithStateStore(stateStore))
+func newStateOnlyEngineG4(ctx *specs.Context) *Engine {
+	bg := context.Background()
+	cfg := NewConfig(nil, WithStateStore(connectedDurableStore(ctx)))
 	sys, err := goakt.NewActorSystem("state-only-"+uuid.NewString(), cfg.GoaktOptions()...)
-	require.NoError(t, err)
-	require.NoError(t, sys.Start(ctx))
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(sys.Start(bg)).To(specs.BeNil())
 	engine, err := NewEngine(sys, cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() {
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Cleanup(func() {
 		_ = engine.Stop(context.Background())
 		_ = sys.Stop(context.Background())
 	})
-	require.NoError(t, engine.Start(ctx))
+	ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 	return engine
+}
+
+// stateOnlySpawnCaseG4 is one spawn on an engine without an events store.
+type stateOnlySpawnCaseG4 struct {
+	name     string
+	id       string
+	spawn    func(engine *Engine, id string) error
+	rejected bool
 }
 
 // TestSpawnWithoutEventsStore is the #126 defect 2 regression: spawning an
 // event-sourced entity or a saga on an engine without an events store
 // returns ErrEventsStoreRequired and spawns nothing.
 func TestSpawnWithoutEventsStore(t *testing.T) {
-	ctx := context.Background()
+	specs.Describe(t, "an engine without an events store refuses the families that need one", func(s *specs.Spec) {
+		bg := context.Background()
+		specs.Table(s, []stateOnlySpawnCaseG4{
+			{"event-sourced entity", "account-" + uuid.NewString(), func(e *Engine, id string) error {
+				return e.Entity(bg, NewAccountEventSourcedBehavior(id))
+			}, true},
+			{"saga", "saga-" + uuid.NewString(), func(e *Engine, id string) error {
+				return e.Saga(bg, &testSagaBehavior{sagaID: id}, time.Second)
+			}, true},
+			{"durable-state entity still spawns", "durable-" + uuid.NewString(), func(e *Engine, id string) error {
+				return e.DurableStateEntity(bg, NewAccountDurableStateBehavior(id))
+			}, false},
+		}, func(c stateOnlySpawnCaseG4) string { return c.name }, func(ctx *specs.Context, c stateOnlySpawnCaseG4) {
+			engine := newStateOnlyEngineG4(ctx)
 
-	t.Run("event-sourced entity", func(t *testing.T) {
-		engine := newStateOnlyEngine(t)
-		id := "account-" + uuid.NewString()
-		err := engine.Entity(ctx, NewAccountEventSourcedBehavior(id))
-		require.ErrorIs(t, err, ErrEventsStoreRequired)
-		exists, lookupErr := engine.ActorSystem().ActorExists(ctx, id)
-		require.NoError(t, lookupErr)
-		assert.False(t, exists, "no actor spawned")
+			err := c.spawn(engine, c.id)
+
+			if !c.rejected {
+				ctx.Expect(err).To(specs.BeNil())
+				return
+			}
+			ctx.Expect(err).To(specs.MatchError(ErrEventsStoreRequired))
+			exists, lookupErr := engine.ActorSystem().ActorExists(bg, c.id)
+			ctx.Expect(lookupErr).To(specs.BeNil())
+			// no actor spawned
+			ctx.Expect(exists).To(specs.BeFalse())
+		})
 	})
-
-	t.Run("saga", func(t *testing.T) {
-		engine := newStateOnlyEngine(t)
-		id := "saga-" + uuid.NewString()
-		err := engine.Saga(ctx, &testSagaBehavior{sagaID: id}, time.Second)
-		require.ErrorIs(t, err, ErrEventsStoreRequired)
-		exists, lookupErr := engine.ActorSystem().ActorExists(ctx, id)
-		require.NoError(t, lookupErr)
-		assert.False(t, exists, "no actor spawned")
-	})
-
-	t.Run("durable-state entity still spawns", func(t *testing.T) {
-		engine := newStateOnlyEngine(t)
-		require.NoError(t, engine.DurableStateEntity(ctx, NewAccountDurableStateBehavior("durable-"+uuid.NewString())))
-	})
 }
 
-// countingEventPublisher is an EventPublisher that counts Close calls.
-type countingEventPublisher struct {
-	id     string
-	closes atomic.Int32
+// publisherKindG4 is one publisher kind of AddPublishers: its topic, how many
+// publishers the engine has registered, a mock publisher of the kind and the
+// Add method that takes it.
+type publisherKindG4 struct {
+	name       string
+	topic      string
+	registered func(*Engine) int
+	// newPub builds a publisher mock with the given ID that must be closed
+	// closes times (zero: any Close call fails the case).
+	newPub func(ctx *specs.Context, id string, closes int) any
+	add    func(*Engine, ...any) error
 }
 
-var _ EventPublisher = (*countingEventPublisher)(nil)
-
-func (p *countingEventPublisher) ID() string { return p.id }
-
-func (p *countingEventPublisher) Publish(context.Context, *egopb.Event) error { return nil }
-
-func (p *countingEventPublisher) Close(context.Context) error {
-	p.closes.Add(1)
-	return nil
-}
-
-// closeCounter is what TestAddPublishersRejectsDuplicateIDs needs from a
-// fake publisher of either kind.
-type closeCounter interface {
-	closeCount() int32
-}
-
-func (p *countingEventPublisher) closeCount() int32 { return p.closes.Load() }
-func (p *countingStatePublisher) closeCount() int32 { return p.closes.Load() }
-
-// TestAddPublishersRejectsDuplicateIDs is the #126 defect 3 regression: a
-// publisher ID that is already registered for its kind, or repeated within
-// one batch, fails the whole call with ErrDuplicatePublisherID and leaves
-// the engine exactly as it was: no publisher of the batch is registered,
-// subscribed or started, and Stop closes only the publishers registered
-// before the call.
-func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
-	ctx := context.Background()
-
-	type kind struct {
-		name       string
-		topic      string
-		registered func(*Engine) int
-		newPub     func(id string) closeCounter
-		add        func(*Engine, ...closeCounter) error
-	}
-	kinds := []kind{
+func publisherKindsG4() []publisherKindG4 {
+	return []publisherKindG4{
 		{
 			name:       "events",
 			topic:      protocol.EventsTopic,
 			registered: func(e *Engine) int { return e.eventsStreams.Len() },
-			newPub:     func(id string) closeCounter { return &countingEventPublisher{id: id} },
-			add: func(e *Engine, ps ...closeCounter) error {
+			newPub: func(ctx *specs.Context, id string, closes int) any {
+				return closingEventPublisherG4(ctx, id, closes, nil)
+			},
+			add: func(e *Engine, ps ...any) error {
 				pubs := make([]EventPublisher, 0, len(ps))
 				for _, p := range ps {
 					pubs = append(pubs, p.(EventPublisher))
@@ -232,8 +200,10 @@ func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
 			name:       "states",
 			topic:      protocol.StatesTopic,
 			registered: func(e *Engine) int { return e.statesStreams.Len() },
-			newPub:     func(id string) closeCounter { return &countingStatePublisher{id: id} },
-			add: func(e *Engine, ps ...closeCounter) error {
+			newPub: func(ctx *specs.Context, id string, closes int) any {
+				return closingStatePublisherG4(ctx, id, closes, nil)
+			},
+			add: func(e *Engine, ps ...any) error {
 				pubs := make([]StatePublisher, 0, len(ps))
 				for _, p := range ps {
 					pubs = append(pubs, p.(StatePublisher))
@@ -242,56 +212,70 @@ func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
 			},
 		},
 	}
+}
 
-	for _, k := range kinds {
-		t.Run(k.name+"/duplicate within the batch", func(t *testing.T) {
-			engine := newTestEngine(t, "dup-batch-"+uuid.NewString(), testkit.NewEventsStore())
-			require.NoError(t, engine.Start(ctx))
+// TestAddPublishersRejectsDuplicateIDs is the #126 defect 3 regression: a
+// publisher ID that is already registered for its kind, or repeated within
+// one batch, fails the whole call with ErrDuplicatePublisherID and leaves
+// the engine exactly as it was: no publisher of the batch is registered,
+// subscribed or started, and Stop closes only the publishers registered
+// before the call.
+func TestAddPublishersRejectsDuplicateIDs(t *testing.T) {
+	specs.Describe(t, "AddPublishers rejects a duplicate publisher ID and leaves the engine as it was", func(s *specs.Spec) {
+		bg := context.Background()
+		kinds := publisherKindsG4()
 
-			fresh := k.newPub("fresh")
-			first := k.newPub("dup")
-			second := k.newPub("dup")
-			err := k.add(engine, fresh, first, second)
-			require.ErrorIs(t, err, ErrDuplicatePublisherID)
-			assert.ErrorContains(t, err, `"dup"`)
+		specs.Table(s, kinds, func(k publisherKindG4) string { return k.name + "/duplicate within the batch" },
+			func(ctx *specs.Context, k publisherKindG4) {
+				engine := newTestEngine(ctx.T, "dup-batch-"+uuid.NewString(), testkit.NewEventsStore())
+				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
 
-			assert.Zero(t, k.registered(engine), "nothing registered")
-			assert.Zero(t, engine.eventStream.SubscribersCount(k.topic), "nothing subscribed")
+				// A rejected publisher is never started, so never closed: none of
+				// these declares a Close expectation.
+				fresh := k.newPub(ctx, "fresh", 0)
+				first := k.newPub(ctx, "dup", 0)
+				second := k.newPub(ctx, "dup", 0)
 
-			require.NoError(t, engine.Stop(ctx))
-			for _, p := range []closeCounter{fresh, first, second} {
-				assert.Zero(t, p.closeCount(), "a rejected publisher is never started, so never closed")
-			}
+				err := k.add(engine, fresh, first, second)
+
+				ctx.Expect(err).To(specs.MatchError(ErrDuplicatePublisherID))
+				ctx.Expect(err.Error()).To(specs.Contain(`"dup"`))
+				// nothing registered, nothing subscribed
+				ctx.Expect(k.registered(engine)).To(specs.BeZero())
+				ctx.Expect(engine.eventStream.SubscribersCount(k.topic)).To(specs.BeZero())
+				ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+			})
+
+		specs.Table(s, kinds, func(k publisherKindG4) string { return k.name + "/duplicate of a registered publisher" },
+			func(ctx *specs.Context, k publisherKindG4) {
+				engine := newTestEngine(ctx.T, "dup-registered-"+uuid.NewString(), testkit.NewEventsStore())
+				ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+
+				// the registered publisher is still closed by Stop; the two
+				// rejected ones are not
+				existing := k.newPub(ctx, "dup", 1)
+				ctx.Expect(k.add(engine, existing)).To(specs.BeNil())
+				subscribers := engine.eventStream.SubscribersCount(k.topic)
+
+				fresh := k.newPub(ctx, "fresh", 0)
+				again := k.newPub(ctx, "dup", 0)
+				err := k.add(engine, fresh, again)
+
+				ctx.Expect(err).To(specs.MatchError(ErrDuplicatePublisherID))
+				ctx.Expect(err.Error()).To(specs.Contain(`"dup"`))
+				// only the publisher registered before, and no new subscriber
+				ctx.Expect(k.registered(engine)).To(specs.Equal(1))
+				ctx.Expect(engine.eventStream.SubscribersCount(k.topic)).To(specs.Equal(subscribers))
+				ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
+			})
+
+		s.It("the same ID may be used once per kind", func(ctx *specs.Context) {
+			engine := newTestEngine(ctx.T, "dup-kinds-"+uuid.NewString(), testkit.NewEventsStore())
+			ctx.Expect(engine.Start(bg)).To(specs.BeNil())
+			ctx.Expect(engine.AddEventPublishers(closingEventPublisherG4(ctx, "shared", 1, nil))).To(specs.BeNil())
+			ctx.Expect(engine.AddStatePublishers(closingStatePublisherG4(ctx, "shared", 1, nil))).To(specs.BeNil())
+			// both publishers are registered, so Stop closes each of them once
+			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
 		})
-
-		t.Run(k.name+"/duplicate of a registered publisher", func(t *testing.T) {
-			engine := newTestEngine(t, "dup-registered-"+uuid.NewString(), testkit.NewEventsStore())
-			require.NoError(t, engine.Start(ctx))
-
-			existing := k.newPub("dup")
-			require.NoError(t, k.add(engine, existing))
-			subscribers := engine.eventStream.SubscribersCount(k.topic)
-
-			fresh := k.newPub("fresh")
-			again := k.newPub("dup")
-			err := k.add(engine, fresh, again)
-			require.ErrorIs(t, err, ErrDuplicatePublisherID)
-			assert.ErrorContains(t, err, `"dup"`)
-
-			assert.Equal(t, 1, k.registered(engine), "only the publisher registered before")
-			assert.Equal(t, subscribers, engine.eventStream.SubscribersCount(k.topic), "no new subscriber")
-
-			require.NoError(t, engine.Stop(ctx))
-			assert.EqualValues(t, 1, existing.closeCount(), "the registered publisher is still closed by Stop")
-			assert.Zero(t, fresh.closeCount())
-			assert.Zero(t, again.closeCount())
-		})
-	}
-
-	t.Run("the same ID may be used once per kind", func(t *testing.T) {
-		engine := newTestEngine(t, "dup-kinds-"+uuid.NewString(), testkit.NewEventsStore())
-		require.NoError(t, engine.Start(ctx))
-		require.NoError(t, engine.AddEventPublishers(&countingEventPublisher{id: "shared"}))
-		require.NoError(t, engine.AddStatePublishers(&countingStatePublisher{id: "shared"}))
 	})
 }

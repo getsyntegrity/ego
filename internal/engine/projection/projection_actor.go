@@ -28,11 +28,11 @@ import (
 
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/projectionrunner"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/internal/projectionrunner"
 )
 
 // runnerFailed is the internal message the projection actor sends itself when

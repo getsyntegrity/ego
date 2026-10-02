@@ -28,176 +28,174 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
 )
 
-// TestEngineMultiNodeNeutralBehaviors spawns behaviors through the public
+// clusterNodeOptsG4 returns the options of one cluster node: the given
+// behavior-kind option plus a durable-state store that is disconnected when the
+// case ends.
+func clusterNodeOptsG4(ctx *specs.Context, kinds Option) []Option {
+	return []Option{kinds, WithStateStore(connectedDurableStore(ctx))}
+}
+
+// expectNotSpawnedG4 checks that no node of the cluster hosts an actor named id.
+func expectNotSpawnedG4(ctx *specs.Context, cluster *testCluster, id string) {
+	for _, sys := range cluster.systems {
+		exists, err := sys.ActorExists(context.Background(), id)
+		ctx.Expect(err).To(specs.BeNil())
+		// no node may host an actor for a rejected behavior
+		ctx.Expect(exists).To(specs.BeFalse())
+	}
+}
+
+// hostedByPeerG4 spawns eight entities from one node, makes each answer a
+// command, and counts those the peer node hosts. With RoundRobin placement over
+// two members some entities land on the peer, which decodes the behavior with
+// the kind it registered.
+func hostedByPeerG4(ctx *specs.Context, from *Engine, peer goakt.ActorSystem, spawn func(id string) error) int {
+	bg := context.Background()
+	hosted := 0
+	for range 8 {
+		id := uuid.NewString()
+		ctx.Expect(spawn(id)).To(specs.BeNil())
+
+		state, _, err := from.SendCommand(bg, id, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
+		ctx.Expect(err).To(specs.BeNil())
+		account, ok := state.(*testpb.Account)
+		ctx.Expect(ok).To(specs.BeTrue())
+		ctx.Expect(account.GetAccountBalance()).ToEqual(float64(100))
+
+		pid, err := peer.ActorOf(bg, id)
+		ctx.Expect(err).To(specs.BeNil())
+		if pid.IsLocal() {
+			hosted++
+		}
+	}
+	return hosted
+}
+
+// domainOnlySpawnCaseG4 is one family spawned through its public Spawn method
+// with a behavior that implements only the port contracts.
+type domainOnlySpawnCaseG4 struct {
+	family string
+	kind   string
+	spawn  func(engine *Engine, id string) error
+}
+
+// TestClusterEngineNeutralBehaviors spawns behaviors through the public
 // Spawn* methods on a two-node cluster, where GoAkt serializes every spawn's
 // dependencies and may place the actor on the peer (ego-arch-002-s3 design,
-// §8). One cluster is shared by all subtests, and only node 1 spawns.
+// §8). Each case starts its own cluster, and only node 1 spawns.
 //
-// No subtest recovers a panic: GoAkt's Inject panics on a non-pointer type
+// No case recovers a panic: GoAkt's Inject panics on a non-pointer type
 // while it holds the actor-system lock, and a recovered panic would leave the
 // cluster cleanup blocked on that lock. Run the test with a short timeout
 // (-timeout 90s) so either the panic or the timeout ends the binary.
-func TestEngineMultiNodeNeutralBehaviors(t *testing.T) {
-	ctx := context.Background()
-
-	nodeOpts := func() []Option {
-		stateStore := testkit.NewDurableStore()
-		require.NoError(t, stateStore.Connect(ctx))
-		t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
-		return []Option{
-			WithEntityKinds(new(AccountEventSourcedBehavior)),
-			WithStateStore(stateStore),
+func TestClusterEngineNeutralBehaviors(t *testing.T) {
+	specs.Describe(t, "behaviors spawned through the Spawn methods on a two-node cluster", func(s *specs.Spec) {
+		// newCluster starts the cluster of the case: both nodes register
+		// AccountEventSourcedBehavior through WithEntityKinds.
+		newCluster := func(ctx *specs.Context) *testCluster {
+			kinds := WithEntityKinds(new(AccountEventSourcedBehavior))
+			return newTestCluster(ctx.T, clusterNodeOptsG4(ctx, kinds), clusterNodeOptsG4(ctx, kinds))
 		}
-	}
-	cluster := newTestCluster(t, nodeOpts(), nodeOpts())
-	engine1 := cluster.engines[0]
-	node2 := cluster.systems[1]
 
-	// requireNotSpawned asserts that no node hosts an actor named id.
-	requireNotSpawned := func(t *testing.T, id string) {
-		t.Helper()
-		for i, sys := range cluster.systems {
-			exists, err := sys.ActorExists(ctx, id)
-			require.NoError(t, err)
-			assert.False(t, exists, "node %d must not host an actor for a rejected behavior", i+1)
-		}
-	}
+		s.It("serializable behavior placed remotely", func(ctx *specs.Context) {
+			cluster := newCluster(ctx)
 
-	t.Run("serializable behavior placed remotely", func(t *testing.T) {
-		// With RoundRobin placement over two members, eight spawns from node
-		// 1 place some entities on node 2, which decodes the behavior with the
-		// kind it registered through WithEntityKinds.
-		placedOnNode2 := 0
-		for range 8 {
-			id := uuid.NewString()
-			require.NoError(t, engine1.SpawnEventSourced(ctx, NewAccountEventSourcedBehavior(id)))
-
-			state, _, err := engine1.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-			require.NoError(t, err)
-			account, ok := state.(*testpb.Account)
-			require.True(t, ok)
-			assert.EqualValues(t, 100, account.GetAccountBalance())
-
-			pid, err := node2.ActorOf(ctx, id)
-			require.NoError(t, err)
-			if pid.IsLocal() {
-				placedOnNode2++
-			}
-		}
-		assert.Positive(t, placedOnNode2, "at least one entity must be hosted by node 2")
-	})
-
-	t.Run("domain-only behavior is rejected in cluster mode", func(t *testing.T) {
-		cases := []struct {
-			family string
-			kind   string
-			spawn  func(id string) error
-		}{
-			{"event-sourced", fmt.Sprintf("%T", &domainOnlyEventSourced{}), func(id string) error {
-				return engine1.SpawnEventSourced(ctx, &domainOnlyEventSourced{id: id})
-			}},
-			{"durable state", fmt.Sprintf("%T", &domainOnlyDurableState{}), func(id string) error {
-				return engine1.SpawnDurableState(ctx, &domainOnlyDurableState{id: id})
-			}},
-			{"saga", fmt.Sprintf("%T", &domainOnlySaga{}), func(id string) error {
-				return engine1.SpawnSaga(ctx, &domainOnlySaga{id: id}, time.Minute)
-			}},
-		}
-		for _, tc := range cases {
-			t.Run(tc.family, func(t *testing.T) {
-				id := uuid.NewString()
-				err := tc.spawn(id)
-				require.ErrorIs(t, err, ErrBehaviorNotSerializable)
-				var placement *BehaviorPlacementError
-				require.ErrorAs(t, err, &placement)
-				assert.Equal(t, tc.kind, placement.Kind)
-				assert.Equal(t, id, placement.EntityID)
-				requireNotSpawned(t, id)
+			// With RoundRobin placement over two members, eight spawns from node
+			// 1 place some entities on node 2, which decodes the behavior with
+			// the kind it registered through WithEntityKinds.
+			placedOnNode2 := hostedByPeerG4(ctx, cluster.engines[0], cluster.systems[1], func(id string) error {
+				return cluster.engines[0].SpawnEventSourced(context.Background(), NewAccountEventSourcedBehavior(id))
 			})
-		}
-	})
-
-	t.Run("value-type behavior in cluster mode", func(t *testing.T) {
-		// The old contract with value receivers, spawned through the old API.
-		// Before the spawn-site bridge (#123, S3-2) Entity handed the value
-		// to GoAkt's Inject, which panicked in its type registry.
-		id := uuid.NewString()
-		err := engine1.Entity(ctx, valueTypeEventSourcedBehavior{id: id})
-		require.ErrorIs(t, err, ErrBehaviorNotPointer)
-		var placement *BehaviorPlacementError
-		require.ErrorAs(t, err, &placement)
-		assert.Equal(t, fmt.Sprintf("%T", valueTypeEventSourcedBehavior{}), placement.Kind)
-		assert.Equal(t, id, placement.EntityID)
-		requireNotSpawned(t, id)
-	})
-
-	t.Run("old and new registration interoperate", func(t *testing.T) {
-		// A second cluster, because the nodes register their kinds
-		// differently: node 1 with the old WithEntityKinds, node 2 with the
-		// new WithBehaviorKinds (#123, S3-4). Each direction spawns a
-		// different behavior type, so the receiving node can only decode it
-		// with the kind its own option registered, never with the lazy
-		// Inject the calling node does at spawn time. A spawn that lands on
-		// the peer proves the registry key and bytes are the same for both
-		// options.
-		mixedOpts := func(kinds Option) []Option {
-			stateStore := testkit.NewDurableStore()
-			require.NoError(t, stateStore.Connect(ctx))
-			t.Cleanup(func() { _ = stateStore.Disconnect(ctx) })
-			return []Option{kinds, WithStateStore(stateStore)}
-		}
-		mixed := newTestCluster(t,
-			mixedOpts(WithEntityKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
-			mixedOpts(WithBehaviorKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
-		)
-
-		// hostedByPeer spawns eight entities from one node and counts those
-		// the peer hosts; every spawn must answer a command.
-		hostedByPeer := func(t *testing.T, from *Engine, peer goakt.ActorSystem, spawn func(id string) error) int {
-			t.Helper()
-			hosted := 0
-			for range 8 {
-				id := uuid.NewString()
-				require.NoError(t, spawn(id))
-
-				state, _, err := from.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 100}, time.Minute)
-				require.NoError(t, err)
-				account, ok := state.(*testpb.Account)
-				require.True(t, ok)
-				assert.EqualValues(t, 100, account.GetAccountBalance())
-
-				pid, err := peer.ActorOf(ctx, id)
-				require.NoError(t, err)
-				if pid.IsLocal() {
-					hosted++
-				}
-			}
-			return hosted
-		}
-
-		t.Run("WithEntityKinds node spawns onto WithBehaviorKinds node", func(t *testing.T) {
-			engine := mixed.engines[0]
-			hosted := hostedByPeer(t, engine, mixed.systems[1], func(id string) error {
-				return engine.SpawnEventSourced(ctx, NewAccountEventSourcedBehavior(id))
-			})
-			assert.Positive(t, hosted, "at least one entity must be hosted by the WithBehaviorKinds node")
+			// at least one entity must be hosted by node 2
+			ctx.Expect(placedOnNode2).To(specs.BeGreaterThan(0))
 		})
 
-		t.Run("WithBehaviorKinds node spawns onto WithEntityKinds node", func(t *testing.T) {
-			engine := mixed.engines[1]
-			hosted := hostedByPeer(t, engine, mixed.systems[0], func(id string) error {
-				return engine.SpawnDurableState(ctx, NewAccountDurableStateBehavior(id))
+		specs.Table(s, []domainOnlySpawnCaseG4{
+			{"event-sourced", fmt.Sprintf("%T", &domainOnlyEventSourced{}), func(e *Engine, id string) error {
+				return e.SpawnEventSourced(context.Background(), &domainOnlyEventSourced{id: id})
+			}},
+			{"durable state", fmt.Sprintf("%T", &domainOnlyDurableState{}), func(e *Engine, id string) error {
+				return e.SpawnDurableState(context.Background(), &domainOnlyDurableState{id: id})
+			}},
+			{"saga", fmt.Sprintf("%T", &domainOnlySaga{}), func(e *Engine, id string) error {
+				return e.SpawnSaga(context.Background(), &domainOnlySaga{id: id}, time.Minute)
+			}},
+		}, func(c domainOnlySpawnCaseG4) string {
+			return "domain-only behavior is rejected in cluster mode: " + c.family
+		}, func(ctx *specs.Context, c domainOnlySpawnCaseG4) {
+			cluster := newCluster(ctx)
+			id := uuid.NewString()
+
+			err := c.spawn(cluster.engines[0], id)
+
+			ctx.Expect(err).To(specs.MatchError(ErrBehaviorNotSerializable))
+			var placement *BehaviorPlacementError
+			ctx.Expect(err).To(specs.MatchErrorAs(&placement))
+			ctx.Expect(placement.Kind).To(specs.Equal(c.kind))
+			ctx.Expect(placement.EntityID).To(specs.Equal(id))
+			expectNotSpawnedG4(ctx, cluster, id)
+		})
+
+		s.It("value-type behavior in cluster mode", func(ctx *specs.Context) {
+			cluster := newCluster(ctx)
+
+			// The old contract with value receivers, spawned through the old API.
+			// Before the spawn-site bridge (#123, S3-2) Entity handed the value
+			// to GoAkt's Inject, which panicked in its type registry.
+			id := uuid.NewString()
+			err := cluster.engines[0].Entity(context.Background(), valueTypeEventSourcedBehavior{id: id})
+
+			ctx.Expect(err).To(specs.MatchError(ErrBehaviorNotPointer))
+			var placement *BehaviorPlacementError
+			ctx.Expect(err).To(specs.MatchErrorAs(&placement))
+			ctx.Expect(placement.Kind).To(specs.Equal(fmt.Sprintf("%T", valueTypeEventSourcedBehavior{})))
+			ctx.Expect(placement.EntityID).To(specs.Equal(id))
+			expectNotSpawnedG4(ctx, cluster, id)
+		})
+
+		// The nodes register their kinds differently: node 1 with the old
+		// WithEntityKinds, node 2 with the new WithBehaviorKinds (#123, S3-4).
+		// Each direction spawns a different behavior type, so the receiving
+		// node can only decode it with the kind its own option registered,
+		// never with the lazy Inject the calling node does at spawn time. A
+		// spawn that lands on the peer proves the registry key and bytes are
+		// the same for both options.
+		newMixedCluster := func(ctx *specs.Context) *testCluster {
+			return newTestCluster(ctx.T,
+				clusterNodeOptsG4(ctx, WithEntityKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
+				clusterNodeOptsG4(ctx, WithBehaviorKinds(new(AccountEventSourcedBehavior), new(AccountDurableStateBehavior))),
+			)
+		}
+
+		s.It("old and new registration interoperate: WithEntityKinds node spawns onto WithBehaviorKinds node", func(ctx *specs.Context) {
+			mixed := newMixedCluster(ctx)
+			engine := mixed.engines[0]
+
+			hosted := hostedByPeerG4(ctx, engine, mixed.systems[1], func(id string) error {
+				return engine.SpawnEventSourced(context.Background(), NewAccountEventSourcedBehavior(id))
 			})
-			assert.Positive(t, hosted, "at least one entity must be hosted by the WithEntityKinds node")
+
+			// at least one entity must be hosted by the WithBehaviorKinds node
+			ctx.Expect(hosted).To(specs.BeGreaterThan(0))
+		})
+
+		s.It("old and new registration interoperate: WithBehaviorKinds node spawns onto WithEntityKinds node", func(ctx *specs.Context) {
+			mixed := newMixedCluster(ctx)
+			engine := mixed.engines[1]
+
+			hosted := hostedByPeerG4(ctx, engine, mixed.systems[0], func(id string) error {
+				return engine.SpawnDurableState(context.Background(), NewAccountDurableStateBehavior(id))
+			})
+
+			// at least one entity must be hosted by the WithEntityKinds node
+			ctx.Expect(hosted).To(specs.BeGreaterThan(0))
 		})
 	})
 }

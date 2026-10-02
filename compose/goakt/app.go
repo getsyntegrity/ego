@@ -20,18 +20,18 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package goakt is Ego's composition root for the GoAkt runtime
+// Package goakt is Urd's composition root for the GoAkt runtime
 // (openspec/changes/ego-arch-003/design.md). New validates a compose.Spec
 // and builds an App without starting anything; App.Start builds and starts,
 // in a fixed order, everything the Spec describes; App.Stop releases it in
-// the reverse order. Import it under an alias such as egoakt, so it does not
+// the reverse order. Import it under an alias such as urdakt, so it does not
 // clash with the GoAkt module itself:
 //
-//	app, err := egoakt.New(compose.Spec{
+//	app, err := urdakt.New(compose.Spec{
 //		Name:        "Sample",
 //		Families:    compose.EventSourced,
 //		EventsStore: eventStore,
-//	}, egoakt.WithLogger(logger))
+//	}, urdakt.WithLogger(logger))
 //	if err != nil {
 //		// static validation failed; nothing was started
 //	}
@@ -67,13 +67,13 @@ import (
 
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/compose"
-	"github.com/getsyntegrity/ego/compose/internal/adapters"
-	"github.com/getsyntegrity/ego/compose/internal/lifecycle"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/port/adapter"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/compose"
+	"github.com/getsyntegrity/urd/compose/internal/adapters"
+	"github.com/getsyntegrity/urd/compose/internal/lifecycle"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/port/adapter"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // The names of App.Start's five steps (design §D6). A failed Start returns
@@ -293,8 +293,8 @@ func (a *App) probeStores(ctx context.Context) error {
 // after a failed start.
 func (a *App) startActorSystem(ctx context.Context) error {
 	stream := a.hooks.newEventStream()
-	egoOpts := append(a.opts.egoOptions(a.spec), engine.WithEventStream(stream))
-	config := engine.NewConfig(a.spec.EventsStore, egoOpts...)
+	engineOpts := append(a.opts.engineOptions(a.spec), engine.WithEventStream(stream))
+	config := engine.NewConfig(a.spec.EventsStore, engineOpts...)
 
 	actorOpts := config.GoaktOptions()
 	if a.opts.cluster != nil {

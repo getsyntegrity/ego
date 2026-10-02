@@ -28,18 +28,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // TestTenancyArchitecture enforces design.md's ratified "Import-graph
 // tooling" decision (EGO-TENANT-001): the tenancy core package MUST NOT
 // acquire a dependency on GoAkt, net/http, JWT libraries, Ory libraries,
 // any transport adapter, or any application/runtime package of this repo
-// (including ego itself) — only the Go standard library.
+// (including engine itself) — only the Go standard library.
 //
 // The mechanism is a real `go list -deps ./tenancy/...` subprocess, not a
 // source-text scan (unlike logger_architecture_test.go's substring scan,
@@ -57,40 +56,54 @@ import (
 // "go.uber.org"), while no package in the Go standard library ever does
 // (e.g. "context", "net/http", "unicode/utf8").
 func TestTenancyArchitecture(t *testing.T) {
-	goBin, err := tenancyArchitectureGoBinary()
-	require.NoError(t, err, "go toolchain not found")
+	specs.Describe(t, "the tenancy core package depends only on the Go standard library", func(s *specs.Spec) {
+		s.It("has no external dependency, direct or transitive", func(ctx *specs.Context) {
+			goBin, err := tenancyArchitectureGoBinary()
+			// the go toolchain must be found
+			ctx.Expect(err).To(specs.BeNil())
 
-	root := architectureModuleRoot(t)
+			root := architectureModuleRoot(ctx.T)
 
-	// The tenancy package(s) themselves are always present in their own
-	// `-deps` output; they are the subject under test, not a dependency
-	// it acquired, so they must be excluded from the forbidden-import
-	// check below rather than trivially failing it.
-	tenancyPackages := tenancyArchitectureGoList(t, goBin, root, "list", "./tenancy/...")
-	require.NotEmpty(t, tenancyPackages, "go list ./tenancy/... returned no packages, so it proves nothing")
+			// The tenancy package(s) themselves are always present in their own
+			// `-deps` output; they are the subject under test, not a dependency
+			// it acquired, so they must be excluded from the forbidden-import
+			// check below rather than trivially failing it.
+			tenancyPackages := tenancyArchitectureGoList(ctx.T, goBin, root, "list", "./tenancy/...")
+			// go list ./tenancy/... returning no packages would prove nothing
+			ctx.Expect(tenancyPackages).To(specs.Not(specs.BeEmpty()))
 
-	self := make(map[string]struct{}, len(tenancyPackages))
-	for _, pkg := range tenancyPackages {
-		self[pkg] = struct{}{}
-	}
+			self := make(map[string]struct{}, len(tenancyPackages))
+			for _, pkg := range tenancyPackages {
+				self[pkg] = struct{}{}
+			}
 
-	deps := tenancyArchitectureGoList(t, goBin, root, "list", "-deps", "./tenancy/...")
-	require.NotEmpty(t, deps, "go list -deps ./tenancy/... returned no dependencies, so it proves nothing")
+			deps := tenancyArchitectureGoList(ctx.T, goBin, root, "list", "-deps", "./tenancy/...")
+			// go list -deps ./tenancy/... returning no dependencies would prove nothing
+			ctx.Expect(deps).To(specs.Not(specs.BeEmpty()))
 
-	var checked int
-	for _, dep := range deps {
-		if _, isSelf := self[dep]; isSelf {
-			continue
-		}
-		checked++
+			var checked int
+			var forbidden []string
+			for _, dep := range deps {
+				if _, isSelf := self[dep]; isSelf {
+					continue
+				}
+				checked++
 
-		first, _, _ := strings.Cut(dep, "/")
-		require.Falsef(t, strings.Contains(first, "."),
-			"tenancy/ must not depend on %q: the tenancy core package must be stdlib-only "+
-				"(design.md \"Import-graph tooling\" decision) — it is a leaf package with no "+
-				"GoAkt, transport, auth, or first-party runtime dependency", dep)
-	}
-	require.NotZero(t, checked, "no external dependency was checked against the allowlist, so this test proves nothing")
+				first, _, _ := strings.Cut(dep, "/")
+				if strings.Contains(first, ".") {
+					forbidden = append(forbidden, dep)
+				}
+			}
+
+			// tenancy/ must not depend on any of these: the tenancy core package must
+			// be stdlib-only (design.md "Import-graph tooling" decision) — it is a
+			// leaf package with no GoAkt, transport, auth, or first-party runtime
+			// dependency.
+			ctx.Expect(forbidden).To(specs.BeEmpty())
+			// no external dependency checked against the allowlist would prove nothing
+			ctx.Expect(checked).To(specs.BeGreaterThan(0))
+		})
+	})
 }
 
 // architectureModuleRoot returns the directory of the module's go.mod. The
@@ -98,18 +111,25 @@ func TestTenancyArchitecture(t *testing.T) {
 // files from the module root; go test runs them from the package directory
 // (engine/), so they must walk up to find it. The test fails when no go.mod is
 // found, rather than scanning the wrong tree and passing vacuously.
+//
+// It is shared with other architecture tests, so it takes a *testing.T and
+// reports through it directly.
 func architectureModuleRoot(t *testing.T) string {
 	t.Helper()
 
 	dir, err := os.Getwd()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("getting the working directory: %v", err)
+	}
 
 	for {
 		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
-		require.NotEqualf(t, dir, parent, "no go.mod found above the test working directory")
+		if parent == dir {
+			t.Fatalf("no go.mod found above the test working directory")
+		}
 		dir = parent
 	}
 }
@@ -128,14 +148,15 @@ func tenancyArchitectureGoList(t *testing.T, goBin, dir string, args ...string) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-	require.NoErrorf(t, err, "%s %s failed: %s", goBin, strings.Join(args, " "), stderr.String())
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%s %s failed: %v: %s", goBin, strings.Join(args, " "), err, stderr.String())
+	}
 
 	return strings.Fields(stdout.String())
 }
 
 // tenancyArchitectureGoBinary locates the Go toolchain binary. It prefers
-// PATH, then falls back to GOROOT/bin/go, so the test still runs in an
+// PATH, then falls back to $GOROOT/bin/go, so the test still runs in an
 // environment where `go` is not on PATH but a test binary was still built
 // with a known toolchain.
 func tenancyArchitectureGoBinary() (string, error) {
@@ -143,12 +164,12 @@ func tenancyArchitectureGoBinary() (string, error) {
 		return p, nil
 	}
 
-	if root := runtime.GOROOT(); root != "" {
+	if root := os.Getenv("GOROOT"); root != "" {
 		candidate := filepath.Join(root, "bin", "go")
 		if _, statErr := os.Stat(candidate); statErr == nil {
 			return candidate, nil
 		}
 	}
 
-	return "", fmt.Errorf("go toolchain not found on PATH or GOROOT (GOROOT=%q)", runtime.GOROOT())
+	return "", fmt.Errorf("go toolchain not found on PATH or GOROOT (GOROOT=%q)", os.Getenv("GOROOT"))
 }

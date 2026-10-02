@@ -28,191 +28,263 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/persistence"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/encryption"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
 )
+
+// connectable is the lifecycle every testkit store shares.
+type connectable interface {
+	Connect(context.Context) error
+	Disconnect(context.Context) error
+}
+
+// lifecycleStore is a store that can also be pinged.
+type lifecycleStore interface {
+	connectable
+	Ping(context.Context) error
+}
+
+// connectedStore holds the store of the running case. withConnectedStore gives
+// every case its own connected store and asserts that it disconnects cleanly
+// once the case ends.
+type connectedStore[S connectable] struct{ store S }
+
+func withConnectedStore[S connectable](s *specs.Spec, newStore func() S) *connectedStore[S] {
+	bg := context.TODO()
+	f := &connectedStore[S]{}
+	s.BeforeEach(func(ctx *specs.Context) {
+		f.store = newStore()
+		ctx.Expect(f.store.Connect(bg)).To(specs.BeNil())
+	})
+	s.AfterEach(func(ctx *specs.Context) {
+		ctx.Expect(f.store.Disconnect(bg)).To(specs.BeNil())
+	})
+	return f
+}
+
+// accountPayload and accountStatePayload build the protobuf payloads the
+// events and states of these tests carry.
+func accountPayload(ctx *specs.Context) *anypb.Any {
+	payload, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
+	ctx.Expect(err).To(specs.BeNil())
+	return payload
+}
+
+func accountStatePayload(ctx *specs.Context, balance float64) *anypb.Any {
+	payload, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: balance})
+	ctx.Expect(err).To(specs.BeNil())
+	return payload
+}
+
+// eventsOf builds one shard-1 event per sequence number for persistenceID.
+func eventsOf(ctx *specs.Context, persistenceID string, sequenceNumbers ...uint64) []*egopb.Event {
+	payload := accountPayload(ctx)
+	events := make([]*egopb.Event, 0, len(sequenceNumbers))
+	for _, sn := range sequenceNumbers {
+		events = append(events, &egopb.Event{PersistenceId: persistenceID, SequenceNumber: sn, Event: payload, Timestamp: time.Now().UnixMilli(), Shard: 1})
+	}
+	return events
+}
+
+// sequenceNumber projects the sequence number of an event or snapshot so a
+// failure names the field.
+func sequenceNumber[T interface{ GetSequenceNumber() uint64 }](want uint64) specs.Matcher {
+	return specs.Project("SequenceNumber", T.GetSequenceNumber, specs.Equal(want))
+}
+
+// versionNumber projects the version of a durable state so a failure names the
+// field.
+func versionNumber[T interface{ GetVersionNumber() uint64 }](want uint64) specs.Matcher {
+	return specs.Project("VersionNumber", T.GetVersionNumber, specs.Equal(want))
+}
+
+// lifecycleRow is one case of a Disconnect or Ping table.
+type lifecycleRow struct {
+	name      string
+	connected bool // whether the store is connected before the call
+}
+
+func lifecycleName(r lifecycleRow) string { return r.name }
+
+// lifecycleCases registers one case per row: it builds a store, connects it
+// when the row says so, and expects act to succeed.
+func lifecycleCases(s *specs.Spec, rows []lifecycleRow, newStore func() lifecycleStore, act func(lifecycleStore) error) {
+	bg := context.TODO()
+	specs.Table(s, rows, lifecycleName, func(ctx *specs.Context, r lifecycleRow) {
+		store := newStore()
+		if r.connected {
+			ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+		}
+		ctx.Expect(act(store)).To(specs.BeNil())
+	})
+}
+
+// connectCases registers the Connect cases. Both run against one store, so
+// "already connected" really connects a store that is connected already.
+func connectCases(s *specs.Spec, newStore func() lifecycleStore) {
+	bg := context.TODO()
+	store := newStore()
+	rows := []lifecycleRow{{name: "fresh connect"}, {name: "already connected"}}
+	specs.Table(s, rows, lifecycleName, func(ctx *specs.Context, _ lifecycleRow) {
+		ctx.Expect(store.Connect(bg)).To(specs.BeNil())
+	})
+}
+
+func disconnectCases(s *specs.Spec, newStore func() lifecycleStore) {
+	bg := context.TODO()
+	rows := []lifecycleRow{{name: "connected store", connected: true}, {name: "already disconnected"}}
+	lifecycleCases(s, rows, newStore, func(st lifecycleStore) error { return st.Disconnect(bg) })
+}
+
+func pingCases(s *specs.Spec, newStore func() lifecycleStore) {
+	bg := context.TODO()
+	rows := []lifecycleRow{{name: "when connected", connected: true}, {name: "when not connected auto-connects"}}
+	lifecycleCases(s, rows, newStore, func(st lifecycleStore) error { return st.Ping(bg) })
+}
+
+func newEventsLifecycle() lifecycleStore   { return NewEventsStore() }
+func newDurableLifecycle() lifecycleStore  { return NewDurableStore() }
+func newOffsetLifecycle() lifecycleStore   { return NewOffsetStore() }
+func newSnapshotLifecycle() lifecycleStore { return NewSnapshotStore() }
 
 // ---------------------------------------------------------------------------
 // EventStore tests
 // ---------------------------------------------------------------------------
 
 func TestEventStore_NewEventsStore(t *testing.T) {
-	store := NewEventsStore()
-	require.NotNil(t, store)
+	specs.Describe(t, "NewEventsStore", func(s *specs.Spec) {
+		s.It("returns a store", func(ctx *specs.Context) {
+			ctx.Expect(NewEventsStore()).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestEventStore_Connect(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	t.Run("fresh connect", func(t *testing.T) {
-		err := store.Connect(ctx)
-		require.NoError(t, err)
-	})
-	t.Run("already connected", func(t *testing.T) {
-		err := store.Connect(ctx)
-		require.NoError(t, err)
+	specs.Describe(t, "EventStore.Connect", func(s *specs.Spec) {
+		connectCases(s, newEventsLifecycle)
 	})
 }
 
 func TestEventStore_Disconnect(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("connected store", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		err := store.Disconnect(ctx)
-		require.NoError(t, err)
-	})
-	t.Run("already disconnected", func(t *testing.T) {
-		store := NewEventsStore()
-		err := store.Disconnect(ctx)
-		require.NoError(t, err)
+	specs.Describe(t, "EventStore.Disconnect", func(s *specs.Spec) {
+		disconnectCases(s, newEventsLifecycle)
 	})
 }
 
 func TestEventStore_Ping(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("when connected", func(t *testing.T) {
-		store := NewEventsStore()
-		require.NoError(t, store.Connect(ctx))
-		err := store.Ping(ctx)
-		require.NoError(t, err)
-	})
-	t.Run("when not connected auto-connects", func(t *testing.T) {
-		store := NewEventsStore()
-		err := store.Ping(ctx)
-		require.NoError(t, err)
+	specs.Describe(t, "EventStore.Ping", func(s *specs.Spec) {
+		pingCases(s, newEventsLifecycle)
 	})
 }
 
 func TestEventStore_WriteAndReplayEvents(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore replays the events written for an entity", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
+		s.BeforeEach(func(ctx *specs.Context) {
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), eventsOf(ctx, "entity-1", 1, 2, 3), persistence.Unconditional())).To(specs.BeNil())
+		})
 
-	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	require.NoError(t, err)
+		s.It("replay all events", func(ctx *specs.Context) {
+			replayed, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "entity-1", 1, 3, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(replayed).To(specs.HaveLen(3))
+		})
 
-	events := []*egopb.Event{
-		{PersistenceId: "entity-1", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		{PersistenceId: "entity-1", SequenceNumber: 2, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		{PersistenceId: "entity-1", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-	}
+		s.It("replay with limit", func(ctx *specs.Context) {
+			replayed, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "entity-1", 1, 3, 2)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(replayed).To(specs.HaveLen(2))
+		})
 
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
-
-	t.Run("replay all events", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "entity-1", 1, 3, 10)
-		require.NoError(t, err)
-		assert.Len(t, replayed, 3)
+		s.It("replay non-existent entity", func(ctx *specs.Context) {
+			replayed, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "non-existent", 1, 10, 100)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(replayed).To(specs.BeEmpty())
+		})
 	})
-
-	t.Run("replay with limit", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "entity-1", 1, 3, 2)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(replayed), 2)
-	})
-
-	t.Run("replay non-existent entity", func(t *testing.T) {
-		replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "non-existent", 1, 10, 100)
-		require.NoError(t, err)
-		assert.Empty(t, replayed)
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 func TestEventStore_GetLatestEvent(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.GetLatestEvent", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	t.Run("no events returns nil", func(t *testing.T) {
-		event, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "non-existent")
-		require.NoError(t, err)
-		assert.Nil(t, event)
+		s.It("no events returns nil", func(ctx *specs.Context) {
+			event, err := fx.store.GetLatestEvent(bg, persistence.Unscoped(), "non-existent")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(event).To(specs.BeNil())
+		})
+
+		s.It("returns latest by sequence number", func(ctx *specs.Context) {
+			events := eventsOf(ctx, "latest-test", 1, 5, 3)
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
+
+			latest, err := fx.store.GetLatestEvent(bg, persistence.Unscoped(), "latest-test")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(latest).To(specs.Not(specs.BeNil()))
+			ctx.Expect(latest).To(sequenceNumber[*egopb.Event](5))
+		})
 	})
-
-	t.Run("returns latest by sequence number", func(t *testing.T) {
-		anyEvent, _ := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-		events := []*egopb.Event{
-			{PersistenceId: "latest-test", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-			{PersistenceId: "latest-test", SequenceNumber: 5, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-			{PersistenceId: "latest-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		}
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
-
-		latest, err := store.GetLatestEvent(ctx, persistence.Unscoped(), "latest-test")
-		require.NoError(t, err)
-		require.NotNil(t, latest)
-		assert.EqualValues(t, 5, latest.GetSequenceNumber())
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 func TestEventStore_DeleteEvents(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.DeleteEvents", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	anyEvent, _ := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	events := []*egopb.Event{
-		{PersistenceId: "del-test", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		{PersistenceId: "del-test", SequenceNumber: 2, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		{PersistenceId: "del-test", SequenceNumber: 3, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-	}
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
+		s.It("removes the events up to the given sequence number", func(ctx *specs.Context) {
+			events := eventsOf(ctx, "del-test", 1, 2, 3)
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	err := store.DeleteEvents(ctx, persistence.Unscoped(), "del-test", 2)
-	require.NoError(t, err)
+			ctx.Expect(fx.store.DeleteEvents(bg, persistence.Unscoped(), "del-test", 2)).To(specs.BeNil())
 
-	replayed, err := store.ReplayEvents(ctx, persistence.Unscoped(), "del-test", 1, 3, 10)
-	require.NoError(t, err)
-	assert.Len(t, replayed, 1)
-	assert.EqualValues(t, 3, replayed[0].GetSequenceNumber())
-
-	require.NoError(t, store.Disconnect(ctx))
+			replayed, err := fx.store.ReplayEvents(bg, persistence.Unscoped(), "del-test", 1, 3, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(replayed).To(specs.HaveElementsInOrder(sequenceNumber[*egopb.Event](3)))
+		})
+	})
 }
 
 func TestEventStore_PersistenceIDs(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.PersistenceIDs", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	t.Run("empty store", func(t *testing.T) {
-		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, "")
-		require.NoError(t, err)
-		assert.Empty(t, ids)
-		assert.Empty(t, nextToken)
+		s.It("empty store", func(ctx *specs.Context) {
+			ids, nextToken, err := fx.store.PersistenceIDs(bg, persistence.Unscoped(), 10, "")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(ids).To(specs.BeEmpty())
+			ctx.Expect(nextToken).To(specs.BeEmpty())
+		})
+
+		s.It("with events and pagination", func(ctx *specs.Context) {
+			payload := accountPayload(ctx)
+			events := []*egopb.Event{
+				{PersistenceId: "pid-a", SequenceNumber: 1, Event: payload, Timestamp: time.Now().UnixMilli(), Shard: 1},
+				{PersistenceId: "pid-b", SequenceNumber: 1, Event: payload, Timestamp: time.Now().UnixMilli(), Shard: 1},
+				{PersistenceId: "pid-c", SequenceNumber: 1, Event: payload, Timestamp: time.Now().UnixMilli(), Shard: 1},
+			}
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
+
+			ids, nextToken, err := fx.store.PersistenceIDs(bg, persistence.Unscoped(), 2, "")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(ids).To(specs.HaveLen(2))
+			ctx.Expect(nextToken).To(specs.Not(specs.BeEmpty()))
+
+			ids2, nextToken2, err := fx.store.PersistenceIDs(bg, persistence.Unscoped(), 10, nextToken)
+			ctx.Expect(err).To(specs.BeNil())
+			// the third id must still be returned by the second page, not skipped at the page boundary
+			ctx.Expect(ids2).To(specs.Equal([]string{"pid-c"}))
+			// no ids remain, so the token must signal iteration is complete
+			ctx.Expect(nextToken2).To(specs.BeEmpty())
+		})
 	})
-
-	t.Run("with events and pagination", func(t *testing.T) {
-		anyEvent, _ := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-		events := []*egopb.Event{
-			{PersistenceId: "pid-a", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-			{PersistenceId: "pid-b", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-			{PersistenceId: "pid-c", SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1},
-		}
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
-
-		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 2, "")
-		require.NoError(t, err)
-		assert.Len(t, ids, 2)
-		assert.NotEmpty(t, nextToken)
-
-		ids2, nextToken2, err := store.PersistenceIDs(ctx, persistence.Unscoped(), 10, nextToken)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"pid-c"}, ids2, "the third id must still be returned by the second page, not skipped at the page boundary")
-		assert.Empty(t, nextToken2, "no ids remain, so the token must signal iteration is complete")
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 // TestEventStore_PersistenceIDsPaginationExhaustive is a direct regression
@@ -227,95 +299,97 @@ func TestEventStore_PersistenceIDs(t *testing.T) {
 // eventsPersistenceIDsPaginationCoversEveryIDExactlyOnce, which pins the
 // same contract for every conforming store implementation.
 func TestEventStore_PersistenceIDsPaginationExhaustive(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "EventStore.PersistenceIDs pagination", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	const pageSize = 3
-	const total = 10 // forces at least four pages at pageSize
-	anyEvent, err := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	require.NoError(t, err)
+		s.It("iterating to exhaustion returns every id exactly once", func(ctx *specs.Context) {
+			const pageSize = 3
+			const total = 10 // forces at least four pages at pageSize
 
-	want := make([]string, 0, total)
-	for i := 0; i < total; i++ {
-		id := fmt.Sprintf("pagination-exhaustive-%02d", i)
-		want = append(want, id)
-		event := &egopb.Event{PersistenceId: id, SequenceNumber: 1, Event: anyEvent, Timestamp: time.Now().UnixMilli(), Shard: 1}
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{event}, persistence.Unconditional()))
-	}
+			want := make([]string, 0, total)
+			for i := 0; i < total; i++ {
+				id := fmt.Sprintf("pagination-exhaustive-%02d", i)
+				want = append(want, id)
+				ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), eventsOf(ctx, id, 1), persistence.Unconditional())).To(specs.BeNil())
+			}
 
-	var got []string
-	var pageToken string
-	pages := 0
-	for {
-		ids, nextToken, err := store.PersistenceIDs(ctx, persistence.Unscoped(), pageSize, pageToken)
-		require.NoError(t, err)
-		pages++
-		require.LessOrEqual(t, pages, total+1, "pagination did not terminate")
-		got = append(got, ids...)
-		if nextToken == "" {
-			break
-		}
-		pageToken = nextToken
-	}
+			var got []string
+			var pageToken string
+			pages := 0
+			for {
+				ids, nextToken, err := fx.store.PersistenceIDs(bg, persistence.Unscoped(), pageSize, pageToken)
+				ctx.Expect(err).To(specs.BeNil())
+				pages++
+				// pagination must terminate
+				ctx.Expect(pages).To(specs.BeLessThanOrEqual(total + 1))
+				got = append(got, ids...)
+				if nextToken == "" {
+					break
+				}
+				pageToken = nextToken
+			}
 
-	assert.GreaterOrEqual(t, pages, 4, "the test setup must actually force multiple pages")
-	assert.ElementsMatch(t, want, got, "every written id must be returned exactly once across pages, none skipped at a page boundary")
+			// the setup must actually force multiple pages
+			ctx.Expect(pages).To(specs.BeGreaterThanOrEqual(4))
+			// every written id must be returned exactly once across pages, none skipped at a page boundary
+			ctx.Expect(got).To(specs.ContainTheSameElementsAs(want))
+		})
+	})
 }
 
 func TestEventStore_GetShardEvents(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.GetShardEvents", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	t.Run("no events for shard", func(t *testing.T) {
-		events, nextOffset, err := store.GetShardEvents(ctx, 99, 0, 10)
-		require.NoError(t, err)
-		assert.Empty(t, events)
-		assert.EqualValues(t, 0, nextOffset)
+		s.It("no events for shard", func(ctx *specs.Context) {
+			events, nextOffset, err := fx.store.GetShardEvents(bg, 99, 0, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(events).To(specs.BeEmpty())
+			ctx.Expect(nextOffset).To(specs.Equal(int64(0)))
+		})
+
+		s.It("with shard events", func(ctx *specs.Context) {
+			payload := accountPayload(ctx)
+			ts := time.Now().UnixMilli()
+			events := []*egopb.Event{
+				{PersistenceId: "shard-test-1", SequenceNumber: 1, Event: payload, Timestamp: ts, Shard: 5},
+				{PersistenceId: "shard-test-2", SequenceNumber: 1, Event: payload, Timestamp: ts + 1, Shard: 5},
+				{PersistenceId: "shard-test-3", SequenceNumber: 1, Event: payload, Timestamp: ts + 2, Shard: 6},
+			}
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
+
+			result, nextOffset, err := fx.store.GetShardEvents(bg, 5, 0, 10)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(result).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(nextOffset).To(specs.BeGreaterThan(int64(0)))
+		})
 	})
-
-	t.Run("with shard events", func(t *testing.T) {
-		anyEvent, _ := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-		ts := time.Now().UnixMilli()
-		events := []*egopb.Event{
-			{PersistenceId: "shard-test-1", SequenceNumber: 1, Event: anyEvent, Timestamp: ts, Shard: 5},
-			{PersistenceId: "shard-test-2", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 1, Shard: 5},
-			{PersistenceId: "shard-test-3", SequenceNumber: 1, Event: anyEvent, Timestamp: ts + 2, Shard: 6},
-		}
-		require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
-
-		result, nextOffset, err := store.GetShardEvents(ctx, 5, 0, 10)
-		require.NoError(t, err)
-		assert.NotEmpty(t, result)
-		assert.Greater(t, nextOffset, int64(0))
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 func TestEventStore_ShardOffsets(t *testing.T) {
-	ctx := context.TODO()
-	store := NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "EventStore.ShardOffsets", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewEventsStore)
 
-	anyEvent, _ := anypb.New(&testpb.AccountCreated{AccountId: "acc-1", AccountBalance: 100})
-	events := []*egopb.Event{
-		{PersistenceId: "sn-1", SequenceNumber: 1, Event: anyEvent, Timestamp: 100, Shard: 1},
-		{PersistenceId: "sn-2", SequenceNumber: 1, Event: anyEvent, Timestamp: 300, Shard: 2},
-		{PersistenceId: "sn-3", SequenceNumber: 1, Event: anyEvent, Timestamp: 200, Shard: 1},
-	}
-	require.NoError(t, store.WriteEvents(ctx, persistence.Unscoped(), events, persistence.Unconditional()))
+		s.It("reports the timestamp of each shard's most recent event", func(ctx *specs.Context) {
+			payload := accountPayload(ctx)
+			events := []*egopb.Event{
+				{PersistenceId: "sn-1", SequenceNumber: 1, Event: payload, Timestamp: 100, Shard: 1},
+				{PersistenceId: "sn-2", SequenceNumber: 1, Event: payload, Timestamp: 300, Shard: 2},
+				{PersistenceId: "sn-3", SequenceNumber: 1, Event: payload, Timestamp: 200, Shard: 1},
+			}
+			ctx.Expect(fx.store.WriteEvents(bg, persistence.Unscoped(), events, persistence.Unconditional())).To(specs.BeNil())
 
-	offsets, err := store.ShardOffsets(ctx)
-	require.NoError(t, err)
-	assert.Len(t, offsets, 2)
-	// each shard reports the timestamp of its most recent event
-	assert.Equal(t, int64(200), offsets[1])
-	assert.Equal(t, int64(300), offsets[2])
-
-	require.NoError(t, store.Disconnect(ctx))
+			offsets, err := fx.store.ShardOffsets(bg)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(offsets).To(specs.HaveLen(2))
+			// each shard reports the timestamp of its most recent event
+			ctx.Expect(offsets).To(specs.HavePair(uint64(1), int64(200)))
+			ctx.Expect(offsets).To(specs.HavePair(uint64(2), int64(300)))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -323,95 +397,87 @@ func TestEventStore_ShardOffsets(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDurableStore_NewDurableStore(t *testing.T) {
-	store := NewDurableStore()
-	require.NotNil(t, store)
+	specs.Describe(t, "NewDurableStore", func(s *specs.Spec) {
+		s.It("returns a store", func(ctx *specs.Context) {
+			ctx.Expect(NewDurableStore()).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestDurableStore_Connect(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	t.Run("fresh connect", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
-	})
-	t.Run("already connected", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "DurableStore.Connect", func(s *specs.Spec) {
+		connectCases(s, newDurableLifecycle)
 	})
 }
 
 func TestDurableStore_Disconnect(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("connected store", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Disconnect(ctx))
-	})
-	t.Run("already disconnected", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Disconnect(ctx))
+	specs.Describe(t, "DurableStore.Disconnect", func(s *specs.Spec) {
+		disconnectCases(s, newDurableLifecycle)
 	})
 }
 
 func TestDurableStore_Ping(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("when connected", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Ping(ctx))
-	})
-	t.Run("when not connected auto-connects", func(t *testing.T) {
-		store := NewDurableStore()
-		require.NoError(t, store.Ping(ctx))
+	specs.Describe(t, "DurableStore.Ping", func(s *specs.Spec) {
+		pingCases(s, newDurableLifecycle)
 	})
 }
 
 func TestDurableStore_WriteAndGetState(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "DurableStore writes and reads durable state", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewDurableStore)
 
-	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-	require.NoError(t, err)
+		s.It("write and read state", func(ctx *specs.Context) {
+			state := &egopb.DurableState{
+				PersistenceId:  "ds-entity-1",
+				ResultingState: accountStatePayload(ctx, 500),
+				VersionNumber:  1,
+			}
+			ctx.Expect(fx.store.WriteState(bg, persistence.Unscoped(), state, persistence.Unconditional())).To(specs.BeNil())
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "ds-entity-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got.GetPersistenceId()).To(specs.Equal(state.GetPersistenceId()))
+			ctx.Expect(got.GetVersionNumber()).To(specs.Equal(uint64(1)))
+		})
 
-	state := &egopb.DurableState{
-		PersistenceId:  "ds-entity-1",
-		ResultingState: anyState,
-		VersionNumber:  1,
-	}
-
-	t.Run("write and read state", func(t *testing.T) {
-		require.NoError(t, store.WriteState(ctx, persistence.Unscoped(), state, persistence.Unconditional()))
-		got, err := store.GetLatestState(ctx, persistence.Unscoped(), "ds-entity-1")
-		require.NoError(t, err)
-		require.NotNil(t, got)
-		assert.Equal(t, state.GetPersistenceId(), got.GetPersistenceId())
-		assert.EqualValues(t, 1, got.GetVersionNumber())
+		s.It("get non-existent state", func(ctx *specs.Context) {
+			got, err := fx.store.GetLatestState(bg, persistence.Unscoped(), "non-existent")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.BeNil())
+		})
 	})
+}
 
-	t.Run("get non-existent state", func(t *testing.T) {
-		got, err := store.GetLatestState(ctx, persistence.Unscoped(), "non-existent")
-		require.NoError(t, err)
-		assert.Nil(t, got)
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
+// notConnectedMessage matches the error a store returns while it is not
+// connected. The stores define no sentinel for it, so the text is the contract.
+func notConnectedMessage() specs.Matcher {
+	return specs.Project("message", error.Error, specs.Contain("not connected"))
 }
 
 func TestDurableStore_WriteState_NotConnected(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	anyState, _ := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 100})
-	state := &egopb.DurableState{PersistenceId: "entity-1", ResultingState: anyState, VersionNumber: 1}
-	err := store.WriteState(ctx, persistence.Unscoped(), state, persistence.Unconditional())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	specs.Describe(t, "DurableStore.WriteState on a store that is not connected", func(s *specs.Spec) {
+		s.It("fails with a not-connected error", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewDurableStore()
+			state := &egopb.DurableState{PersistenceId: "entity-1", ResultingState: accountStatePayload(ctx, 100), VersionNumber: 1}
+			err := store.WriteState(bg, persistence.Unscoped(), state, persistence.Unconditional())
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(notConnectedMessage())
+		})
+	})
 }
 
 func TestDurableStore_GetLatestState_NotConnected(t *testing.T) {
-	ctx := context.TODO()
-	store := NewDurableStore()
-	got, err := store.GetLatestState(ctx, persistence.Unscoped(), "entity-1")
-	require.Error(t, err)
-	assert.Nil(t, got)
+	specs.Describe(t, "DurableStore.GetLatestState on a store that is not connected", func(s *specs.Spec) {
+		s.It("fails and returns no state", func(ctx *specs.Context) {
+			bg := context.TODO()
+			store := NewDurableStore()
+			got, err := store.GetLatestState(bg, persistence.Unscoped(), "entity-1")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(specs.BeNil())
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -419,83 +485,65 @@ func TestDurableStore_GetLatestState_NotConnected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOffsetStore_NewOffsetStore(t *testing.T) {
-	store := NewOffsetStore()
-	require.NotNil(t, store)
+	specs.Describe(t, "NewOffsetStore", func(s *specs.Spec) {
+		s.It("returns a store", func(ctx *specs.Context) {
+			ctx.Expect(NewOffsetStore()).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestOffsetStore_Connect(t *testing.T) {
-	ctx := context.TODO()
-	store := NewOffsetStore()
-	t.Run("fresh connect", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
-	})
-	t.Run("already connected", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "OffsetStore.Connect", func(s *specs.Spec) {
+		connectCases(s, newOffsetLifecycle)
 	})
 }
 
 func TestOffsetStore_Disconnect(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("connected store", func(t *testing.T) {
-		store := NewOffsetStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Disconnect(ctx))
-	})
-	t.Run("already disconnected", func(t *testing.T) {
-		store := NewOffsetStore()
-		require.NoError(t, store.Disconnect(ctx))
+	specs.Describe(t, "OffsetStore.Disconnect", func(s *specs.Spec) {
+		disconnectCases(s, newOffsetLifecycle)
 	})
 }
 
 func TestOffsetStore_Ping(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("when connected", func(t *testing.T) {
-		store := NewOffsetStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Ping(ctx))
-	})
-	t.Run("when not connected auto-connects", func(t *testing.T) {
-		store := NewOffsetStore()
-		require.NoError(t, store.Ping(ctx))
+	specs.Describe(t, "OffsetStore.Ping", func(s *specs.Spec) {
+		pingCases(s, newOffsetLifecycle)
 	})
 }
 
 func TestOffsetStore_WriteAndGetOffset(t *testing.T) {
-	ctx := context.TODO()
-	store := NewOffsetStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "OffsetStore writes and reads projection offsets", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewOffsetStore)
 
-	offset := &egopb.Offset{
-		ProjectionName: "proj-1",
-		ShardNumber:    1,
-		Value:          100,
-		Timestamp:      time.Now().UnixMilli(),
-	}
+		s.It("write and read offset", func(ctx *specs.Context) {
+			offset := &egopb.Offset{
+				ProjectionName: "proj-1",
+				ShardNumber:    1,
+				Value:          100,
+				Timestamp:      time.Now().UnixMilli(),
+			}
+			ctx.Expect(fx.store.WriteOffset(bg, offset)).To(specs.BeNil())
 
-	t.Run("write and read offset", func(t *testing.T) {
-		require.NoError(t, store.WriteOffset(ctx, offset))
+			projID := &egopb.ProjectionId{
+				ProjectionName: "proj-1",
+				ShardNumber:    1,
+			}
+			got, err := fx.store.GetCurrentOffset(bg, projID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got.GetValue()).To(specs.Equal(int64(100)))
+		})
 
-		projID := &egopb.ProjectionId{
-			ProjectionName: "proj-1",
-			ShardNumber:    1,
-		}
-		got, err := store.GetCurrentOffset(ctx, projID)
-		require.NoError(t, err)
-		require.NotNil(t, got)
-		assert.EqualValues(t, 100, got.GetValue())
+		s.It("get non-existent offset", func(ctx *specs.Context) {
+			projID := &egopb.ProjectionId{
+				ProjectionName: "non-existent",
+				ShardNumber:    99,
+			}
+			got, err := fx.store.GetCurrentOffset(bg, projID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.BeNil())
+		})
 	})
-
-	t.Run("get non-existent offset", func(t *testing.T) {
-		projID := &egopb.ProjectionId{
-			ProjectionName: "non-existent",
-			ShardNumber:    99,
-		}
-		got, err := store.GetCurrentOffset(ctx, projID)
-		require.NoError(t, err)
-		assert.Nil(t, got)
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 // ---------------------------------------------------------------------------
@@ -503,104 +551,78 @@ func TestOffsetStore_WriteAndGetOffset(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSnapshotStore_NewSnapshotStore(t *testing.T) {
-	store := NewSnapshotStore()
-	require.NotNil(t, store)
+	specs.Describe(t, "NewSnapshotStore", func(s *specs.Spec) {
+		s.It("returns a store", func(ctx *specs.Context) {
+			ctx.Expect(NewSnapshotStore()).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestSnapshotStore_Connect(t *testing.T) {
-	ctx := context.TODO()
-	store := NewSnapshotStore()
-	t.Run("fresh connect", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
-	})
-	t.Run("already connected", func(t *testing.T) {
-		require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "SnapshotStore.Connect", func(s *specs.Spec) {
+		connectCases(s, newSnapshotLifecycle)
 	})
 }
 
 func TestSnapshotStore_Disconnect(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("connected store", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Disconnect(ctx))
-	})
-	t.Run("already disconnected", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Disconnect(ctx))
+	specs.Describe(t, "SnapshotStore.Disconnect", func(s *specs.Spec) {
+		disconnectCases(s, newSnapshotLifecycle)
 	})
 }
 
 func TestSnapshotStore_Ping(t *testing.T) {
-	ctx := context.TODO()
-	t.Run("when connected", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Connect(ctx))
-		require.NoError(t, store.Ping(ctx))
-	})
-	t.Run("when not connected auto-connects", func(t *testing.T) {
-		store := NewSnapshotStore()
-		require.NoError(t, store.Ping(ctx))
+	specs.Describe(t, "SnapshotStore.Ping", func(s *specs.Spec) {
+		pingCases(s, newSnapshotLifecycle)
 	})
 }
 
 func TestSnapshotStore_WriteAndGetSnapshot(t *testing.T) {
-	ctx := context.TODO()
-	store := NewSnapshotStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "SnapshotStore writes and reads snapshots", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewSnapshotStore)
+		s.BeforeEach(func(ctx *specs.Context) {
+			state := accountStatePayload(ctx, 500)
+			for _, sn := range []uint64{1, 5, 3} {
+				snap := &egopb.Snapshot{PersistenceId: "snap-entity-1", SequenceNumber: sn, State: state}
+				ctx.Expect(fx.store.WriteSnapshot(bg, persistence.Unscoped(), snap)).To(specs.BeNil())
+			}
+		})
 
-	anyState, err := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 500})
-	require.NoError(t, err)
+		s.It("returns latest snapshot", func(ctx *specs.Context) {
+			got, err := fx.store.GetLatestSnapshot(bg, persistence.Unscoped(), "snap-entity-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(sequenceNumber[*egopb.Snapshot](5))
+		})
 
-	snapshots := []*egopb.Snapshot{
-		{PersistenceId: "snap-entity-1", SequenceNumber: 1, State: anyState},
-		{PersistenceId: "snap-entity-1", SequenceNumber: 5, State: anyState},
-		{PersistenceId: "snap-entity-1", SequenceNumber: 3, State: anyState},
-	}
-
-	for _, snap := range snapshots {
-		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snap))
-	}
-
-	t.Run("returns latest snapshot", func(t *testing.T) {
-		got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "snap-entity-1")
-		require.NoError(t, err)
-		require.NotNil(t, got)
-		assert.EqualValues(t, 5, got.GetSequenceNumber())
+		s.It("no snapshot returns nil", func(ctx *specs.Context) {
+			got, err := fx.store.GetLatestSnapshot(bg, persistence.Unscoped(), "non-existent")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.BeNil())
+		})
 	})
-
-	t.Run("no snapshot returns nil", func(t *testing.T) {
-		got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "non-existent")
-		require.NoError(t, err)
-		assert.Nil(t, got)
-	})
-
-	require.NoError(t, store.Disconnect(ctx))
 }
 
 func TestSnapshotStore_DeleteSnapshots(t *testing.T) {
-	ctx := context.TODO()
-	store := NewSnapshotStore()
-	require.NoError(t, store.Connect(ctx))
+	specs.Describe(t, "SnapshotStore.DeleteSnapshots", func(s *specs.Spec) {
+		bg := context.TODO()
+		fx := withConnectedStore(s, NewSnapshotStore)
 
-	anyState, _ := anypb.New(&testpb.Account{AccountId: "acc-1", AccountBalance: 100})
-	snapshots := []*egopb.Snapshot{
-		{PersistenceId: "del-snap", SequenceNumber: 1, State: anyState},
-		{PersistenceId: "del-snap", SequenceNumber: 2, State: anyState},
-		{PersistenceId: "del-snap", SequenceNumber: 3, State: anyState},
-	}
-	for _, snap := range snapshots {
-		require.NoError(t, store.WriteSnapshot(ctx, persistence.Unscoped(), snap))
-	}
+		s.It("removes the snapshots up to the given sequence number", func(ctx *specs.Context) {
+			state := accountStatePayload(ctx, 100)
+			for _, sn := range []uint64{1, 2, 3} {
+				snap := &egopb.Snapshot{PersistenceId: "del-snap", SequenceNumber: sn, State: state}
+				ctx.Expect(fx.store.WriteSnapshot(bg, persistence.Unscoped(), snap)).To(specs.BeNil())
+			}
 
-	require.NoError(t, store.DeleteSnapshots(ctx, persistence.Unscoped(), "del-snap", 2))
+			ctx.Expect(fx.store.DeleteSnapshots(bg, persistence.Unscoped(), "del-snap", 2)).To(specs.BeNil())
 
-	got, err := store.GetLatestSnapshot(ctx, persistence.Unscoped(), "del-snap")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.EqualValues(t, 3, got.GetSequenceNumber())
-
-	require.NoError(t, store.Disconnect(ctx))
+			got, err := fx.store.GetLatestSnapshot(bg, persistence.Unscoped(), "del-snap")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).To(specs.Not(specs.BeNil()))
+			ctx.Expect(got).To(sequenceNumber[*egopb.Snapshot](3))
+		})
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -608,70 +630,79 @@ func TestSnapshotStore_DeleteSnapshots(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestKeyStore_NewKeyStore(t *testing.T) {
-	store := NewKeyStore()
-	require.NotNil(t, store)
+	specs.Describe(t, "NewKeyStore", func(s *specs.Spec) {
+		s.It("returns a store", func(ctx *specs.Context) {
+			ctx.Expect(NewKeyStore()).To(specs.Not(specs.BeNil()))
+		})
+	})
 }
 
 func TestKeyStore_GetOrCreateKey(t *testing.T) {
-	ctx := context.TODO()
-	store := NewKeyStore()
+	specs.Describe(t, "KeyStore.GetOrCreateKey", func(s *specs.Spec) {
+		bg := context.TODO()
+		store := NewKeyStore()
 
-	t.Run("creates new key", func(t *testing.T) {
-		keyID, key, err := store.GetOrCreateKey(ctx, "entity-1")
-		require.NoError(t, err)
-		assert.NotEmpty(t, keyID)
-		assert.Len(t, key, 32)
-	})
+		s.It("creates new key", func(ctx *specs.Context) {
+			keyID, key, err := store.GetOrCreateKey(bg, "entity-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(keyID).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(key).To(specs.HaveLen(32))
+		})
 
-	t.Run("returns existing key", func(t *testing.T) {
-		keyID1, key1, err := store.GetOrCreateKey(ctx, "entity-2")
-		require.NoError(t, err)
+		s.It("returns existing key", func(ctx *specs.Context) {
+			keyID1, key1, err := store.GetOrCreateKey(bg, "entity-2")
+			ctx.Expect(err).To(specs.BeNil())
 
-		keyID2, key2, err := store.GetOrCreateKey(ctx, "entity-2")
-		require.NoError(t, err)
+			keyID2, key2, err := store.GetOrCreateKey(bg, "entity-2")
+			ctx.Expect(err).To(specs.BeNil())
 
-		assert.Equal(t, keyID1, keyID2)
-		assert.Equal(t, key1, key2)
+			ctx.Expect(keyID2).ToEqual(keyID1)
+			ctx.Expect(key2).ToEqual(key1)
+		})
 	})
 }
 
 func TestKeyStore_GetKey(t *testing.T) {
-	ctx := context.TODO()
-	store := NewKeyStore()
+	specs.Describe(t, "KeyStore.GetKey", func(s *specs.Spec) {
+		bg := context.TODO()
+		store := NewKeyStore()
 
-	t.Run("existing key", func(t *testing.T) {
-		keyID, expectedKey, err := store.GetOrCreateKey(ctx, "entity-1")
-		require.NoError(t, err)
+		s.It("existing key", func(ctx *specs.Context) {
+			keyID, expectedKey, err := store.GetOrCreateKey(bg, "entity-1")
+			ctx.Expect(err).To(specs.BeNil())
 
-		key, err := store.GetKey(ctx, keyID)
-		require.NoError(t, err)
-		assert.Equal(t, expectedKey, key)
-	})
+			key, err := store.GetKey(bg, keyID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(key).ToEqual(expectedKey)
+		})
 
-	t.Run("non-existent key", func(t *testing.T) {
-		_, err := store.GetKey(ctx, "non-existent-key-id")
-		require.Error(t, err)
-		assert.ErrorIs(t, err, encryption.ErrKeyNotFound)
+		s.It("non-existent key", func(ctx *specs.Context) {
+			_, err := store.GetKey(bg, "non-existent-key-id")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(encryption.ErrKeyNotFound))
+		})
 	})
 }
 
 func TestKeyStore_DeleteKey(t *testing.T) {
-	ctx := context.TODO()
-	store := NewKeyStore()
+	specs.Describe(t, "KeyStore.DeleteKey", func(s *specs.Spec) {
+		bg := context.TODO()
+		store := NewKeyStore()
 
-	t.Run("delete existing key", func(t *testing.T) {
-		keyID, _, err := store.GetOrCreateKey(ctx, "entity-to-delete")
-		require.NoError(t, err)
+		s.It("delete existing key", func(ctx *specs.Context) {
+			keyID, _, err := store.GetOrCreateKey(bg, "entity-to-delete")
+			ctx.Expect(err).To(specs.BeNil())
 
-		err = store.DeleteKey(ctx, "entity-to-delete")
-		require.NoError(t, err)
+			err = store.DeleteKey(bg, "entity-to-delete")
+			ctx.Expect(err).To(specs.BeNil())
 
-		_, err = store.GetKey(ctx, keyID)
-		require.ErrorIs(t, err, encryption.ErrKeyNotFound)
-	})
+			_, err = store.GetKey(bg, keyID)
+			ctx.Expect(err).To(specs.MatchError(encryption.ErrKeyNotFound))
+		})
 
-	t.Run("delete non-existent key is no-op", func(t *testing.T) {
-		err := store.DeleteKey(ctx, "non-existent")
-		require.NoError(t, err)
+		s.It("delete non-existent key is no-op", func(ctx *specs.Context) {
+			err := store.DeleteKey(bg, "non-existent")
+			ctx.Expect(err).To(specs.BeNil())
+		})
 	})
 }

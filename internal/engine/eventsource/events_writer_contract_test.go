@@ -24,173 +24,136 @@ package eventsource
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/mock"
+	"github.com/getsyntegrity/go-specs/specs"
 	goakt "github.com/tochemey/goakt/v4/actor"
-	"github.com/tochemey/goakt/v4/log"
-	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 const contractTopic = "topic.events"
 
-// recordingStore captures the arguments of every WriteEvents call and
-// returns the configured error.
-type recordingStore struct {
-	persistence.EventsStore
-	err error
-
-	mu            sync.Mutex
-	scopes        []persistence.Scope
-	preconditions []persistence.WritePrecondition
-	batches       [][]*egopb.Event
-}
-
-func (x *recordingStore) WriteEvents(_ context.Context, scope persistence.Scope, events []*egopb.Event, precondition persistence.WritePrecondition) error {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	x.scopes = append(x.scopes, scope)
-	x.preconditions = append(x.preconditions, precondition)
-	x.batches = append(x.batches, events)
-	return x.err
-}
-
-// recordingStream captures every publication.
-type recordingStream struct {
-	eventstream.Stream
-
-	mu        sync.Mutex
-	published []any
-	topics    []string
-}
-
-func (x *recordingStream) Publish(topic string, msg any) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	x.topics = append(x.topics, topic)
-	x.published = append(x.published, msg)
-}
-
-func (x *recordingStream) count() int {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	return len(x.published)
-}
-
-func startWriter(t *testing.T, store persistence.EventsStore, stream eventstream.Stream) *goakt.PID {
-	t.Helper()
-	ctx := context.Background()
-
-	actorSystem, err := goakt.NewActorSystem("WriterContractSystem",
-		goakt.WithLogger(log.DiscardLogger),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(store),
-			extensions.NewEventsStream(stream),
-		),
-		goakt.WithActorInitMaxRetries(1))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
-	t.Cleanup(func() { _ = actorSystem.Stop(ctx) })
-
-	pid, err := actorSystem.Spawn(ctx, "events-writer", newEventsWriterActor())
-	require.NoError(t, err)
+// startWriter starts an events writer over store and stream and returns its PID.
+func startWriter(ctx *specs.Context, store persistence.EventsStore, stream eventstream.Stream) *goakt.PID {
+	system := startEventsSystem(ctx, "WriterContractSystem", 1,
+		extensions.NewEventsStore(store), extensions.NewEventsStream(stream))
+	pid, err := system.Spawn(context.Background(), "events-writer", newEventsWriterActor())
+	ctx.Expect(err).To(specs.BeNil())
 	return pid
 }
 
-func contractEnvelopes(t *testing.T) []*egopb.Event {
-	t.Helper()
-	event, err := anypb.New(&egopb.NoReply{})
-	require.NoError(t, err)
-	return []*egopb.Event{
-		{PersistenceId: "entity-1", SequenceNumber: 1, Event: event},
-		{PersistenceId: "entity-1", SequenceNumber: 2, Event: event},
-	}
+// contractWriteArgs are the arguments of the WriteEvents call the writer makes.
+// ctx and the batch are matched loosely or exactly depending on the case.
+type contractWriteArgs struct {
+	scope        persistence.Scope
+	batch        any
+	precondition persistence.WritePrecondition
+}
+
+// expectWrite declares the one WriteEvents call the writer must make.
+func expectWrite(ctrl *mock.Controller, a contractWriteArgs) *mock.Expectation {
+	return ctrl.Method("WriteEvents").Expect(mock.Any(), a.scope, a.batch, a.precondition).Times(1)
+}
+
+// expectNoPublication forbids any publication on the stream.
+func expectNoPublication(ctrl *mock.Controller) {
+	ctrl.Method("Publish").Expect(mock.Any(), mock.Any()).Never()
 }
 
 func TestWriterContract(t *testing.T) {
-	t.Run("a successful write reaches the store once and publishes every envelope in order on the request topic", func(t *testing.T) {
-		store := &recordingStore{}
-		stream := &recordingStream{Stream: eventstream.New()}
-		pid := startWriter(t, store, stream)
-		envelopes := contractEnvelopes(t)
+	specs.Describe(t, "the events writer writes a batch once, publishes it only after the store accepted it, and replies every failure unchanged", func(s *specs.Spec) {
+		s.It("a successful write reaches the store once and publishes every envelope in order on the request topic", func(ctx *specs.Context) {
+			envelopes := noReplyEnvelopes(ctx, "entity-1", 2)
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			stream := enginetest.NewEventStreamMock(ctrl)
+			write := expectWrite(ctrl, contractWriteArgs{persistence.Unscoped(), envelopes, persistence.ExpectRevision(0)}).Return(nil)
+			first := ctrl.Method("Publish").Expect(contractTopic, envelopes[0]).Times(1)
+			second := ctrl.Method("Publish").Expect(contractTopic, envelopes[1]).Times(1)
+			ctrl.InOrder(write, first, second)
+			pid := startWriter(ctx, store, stream)
 
-		resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
+			resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
 
-		require.NoError(t, err)
-		require.NoError(t, resp.Err)
-		require.Len(t, store.batches, 1)
-		assert.Equal(t, envelopes, store.batches[0])
-		assert.Equal(t, []persistence.WritePrecondition{persistence.ExpectRevision(0)}, store.preconditions)
-		assert.Equal(t, []any{envelopes[0], envelopes[1]}, stream.published)
-		assert.Equal(t, []string{contractTopic, contractTopic}, stream.topics)
-	})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(resp.Err).To(specs.BeNil())
+		})
 
-	t.Run("a revision conflict is replied unchanged and publishes nothing", func(t *testing.T) {
-		conflict := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(0),
-			persistence.WithActualRevision(3))
-		store := &recordingStore{err: conflict}
-		stream := &recordingStream{Stream: eventstream.New()}
-		pid := startWriter(t, store, stream)
+		s.It("a revision conflict is replied unchanged and publishes nothing", func(ctx *specs.Context) {
+			conflict := persistence.NewConflictError(persistence.Unscoped(), "entity-1", persistence.ExpectRevision(0),
+				persistence.WithActualRevision(3))
+			envelopes := noReplyEnvelopes(ctx, "entity-1", 2)
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			stream := enginetest.NewEventStreamMock(ctrl)
+			expectWrite(ctrl, contractWriteArgs{persistence.Unscoped(), envelopes, persistence.ExpectRevision(0)}).Return(conflict)
+			expectNoPublication(ctrl)
+			pid := startWriter(ctx, store, stream)
 
-		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
+			resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.ExpectRevision(0), persistence.Unscoped())
 
-		require.NoError(t, err)
-		var got *persistence.ConflictError
-		require.ErrorAs(t, resp.Err, &got)
-		assert.Same(t, conflict, got)
-		actual, ok := got.ActualRevision()
-		assert.True(t, ok)
-		assert.EqualValues(t, 3, actual)
-		assert.Zero(t, stream.count())
-	})
+			ctx.Expect(err).To(specs.BeNil())
+			var got *persistence.ConflictError
+			ctx.Expect(resp.Err).To(specs.MatchErrorAs(&got))
+			ctx.Expect(got).To(specs.Satisfy("be the very conflict the store returned", func(v any) bool { return v == conflict }))
+			actual, ok := got.ActualRevision()
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(actual).To(specs.Equal(uint64(3)))
+		})
 
-	t.Run("a store failure is replied unchanged and publishes nothing", func(t *testing.T) {
-		store := &recordingStore{err: assert.AnError}
-		stream := &recordingStream{Stream: eventstream.New()}
-		pid := startWriter(t, store, stream)
+		s.It("a store failure is replied unchanged and publishes nothing", func(ctx *specs.Context) {
+			envelopes := noReplyEnvelopes(ctx, "entity-1", 2)
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			stream := enginetest.NewEventStreamMock(ctrl)
+			expectWrite(ctrl, contractWriteArgs{persistence.Unscoped(), envelopes, persistence.Unconditional()}).Return(errEventsStoreDown)
+			expectNoPublication(ctrl)
+			pid := startWriter(ctx, store, stream)
 
-		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), persistence.Unscoped())
+			resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.Unconditional(), persistence.Unscoped())
 
-		require.NoError(t, err)
-		assert.ErrorIs(t, resp.Err, assert.AnError)
-		assert.Zero(t, stream.count())
-	})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(resp.Err).To(specs.MatchError(errEventsStoreDown))
+		})
 
-	t.Run("the tenant scope of the request reaches the store unchanged", func(t *testing.T) {
-		scope, err := persistence.NewTenantScope(tenancy.TenantID("tenant-a"))
-		require.NoError(t, err)
-		store := &recordingStore{}
-		stream := &recordingStream{Stream: eventstream.New()}
-		pid := startWriter(t, store, stream)
+		s.It("the tenant scope of the request reaches the store unchanged", func(ctx *specs.Context) {
+			scope, err := persistence.NewTenantScope(tenancy.TenantID("tenant-a"))
+			ctx.Expect(err).To(specs.BeNil())
+			envelopes := noReplyEnvelopes(ctx, "entity-1", 2)
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			stream := enginetest.NewEventStreamMock(ctrl)
+			expectWrite(ctrl, contractWriteArgs{scope, envelopes, persistence.Unconditional()}).Return(nil)
+			ctrl.Method("Publish").Expect(contractTopic, mock.Any()).Times(2)
+			pid := startWriter(ctx, store, stream)
 
-		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, 5*time.Second, persistence.Unconditional(), scope)
+			resp, err := askEventsWriter(pid, envelopes, contractTopic, 5*time.Second, persistence.Unconditional(), scope)
 
-		require.NoError(t, err)
-		require.NoError(t, resp.Err)
-		assert.Equal(t, []persistence.Scope{scope}, store.scopes)
-	})
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(resp.Err).To(specs.BeNil())
+		})
 
-	t.Run("a transport failure is embedded in the response, never returned", func(t *testing.T) {
-		store := &recordingStore{}
-		stream := &recordingStream{Stream: eventstream.New()}
-		pid := startWriter(t, store, stream)
-		require.NoError(t, pid.Shutdown(context.Background()))
+		s.It("a transport failure is embedded in the response, never returned", func(ctx *specs.Context) {
+			ctrl := mock.NewController(ctx)
+			store := enginetest.NewEventsStoreMock(ctrl)
+			stream := enginetest.NewEventStreamMock(ctrl)
+			ctrl.Method("WriteEvents").Expect(mock.Any(), mock.Any(), mock.Any(), mock.Any()).Never()
+			expectNoPublication(ctrl)
+			pid := startWriter(ctx, store, stream)
+			ctx.Expect(pid.Shutdown(context.Background())).To(specs.BeNil())
 
-		resp, err := askEventsWriter(pid, contractEnvelopes(t), contractTopic, time.Second, persistence.Unconditional(), persistence.Unscoped())
+			resp, err := askEventsWriter(pid, noReplyEnvelopes(ctx, "entity-1", 2), contractTopic, time.Second, persistence.Unconditional(), persistence.Unscoped())
 
-		require.NoError(t, err)
-		require.NotNil(t, resp)
-		assert.Error(t, resp.Err)
-		assert.Empty(t, store.batches)
-		assert.Zero(t, stream.count())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(resp).To(specs.Not(specs.BeNil()))
+			ctx.Expect(resp.Err).To(specs.Not(specs.BeNil()))
+		})
 	})
 }

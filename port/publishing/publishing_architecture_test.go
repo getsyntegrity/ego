@@ -24,11 +24,12 @@ package publishing_test
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // allowedDependencies lists every non-standard-library package that
@@ -37,7 +38,7 @@ import (
 // allowlist, rather than a denylist of GoAkt or OpenTelemetry, also catches a
 // dependency nobody thought to forbid.
 var allowedDependencies = []string{
-	"github.com/getsyntegrity/ego/egopb",
+	"github.com/getsyntegrity/urd/egopb",
 	"google.golang.org/protobuf/",
 }
 
@@ -45,25 +46,19 @@ var allowedDependencies = []string{
 // port/publishing with a real `go list -deps` subprocess, so transitive
 // dependencies are checked too, not only the direct imports.
 func TestPublishingDependsOnlyOnContracts(t *testing.T) {
-	goBin, err := exec.LookPath("go")
-	require.NoError(t, err, "go toolchain not found on PATH")
+	specs.Describe(t, "the import graph of port/publishing", func(s *specs.Spec) {
+		s.It("holds only the standard library, egopb and the protobuf runtime", func(ctx *specs.Context) {
+			self := goList(ctx, "list", ".")
+			ctx.Expect(self).To(specs.HaveLen(1))
 
-	self := goList(t, goBin, "list", ".")
-	require.Len(t, self, 1)
-
-	deps := goList(t, goBin, "list", "-deps", ".")
-	var checked int
-	for _, dep := range deps {
-		first, _, _ := strings.Cut(dep, "/")
-		if dep == self[0] || !strings.Contains(first, ".") {
-			continue // the package itself, or the standard library
-		}
-		checked++
-		require.Truef(t, isAllowed(dep),
-			"port/publishing must not depend on %q: contracts may import only the standard library, "+
-				"egopb and the protobuf runtime (openspec/changes/ego-arch-001/design.md §3)", dep)
-	}
-	require.NotZero(t, checked, "no non-standard dependency was checked, so this test proves nothing")
+			external := nonStdlibDeps(goList(ctx, "list", "-deps", "."), self[0])
+			// The guard first: with nothing to check, the test would prove nothing.
+			ctx.Expect(external).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(external).To(specs.EveryElement(specs.Satisfy(
+				"an allowed dependency of port/publishing: contracts may import only the standard library, egopb and the protobuf runtime (openspec/changes/ego-arch-001/design.md §3)",
+				func(dep any) bool { return isAllowed(dep.(string)) })))
+		})
+	})
 }
 
 func isAllowed(dep string) bool {
@@ -75,12 +70,35 @@ func isAllowed(dep string) bool {
 	return false
 }
 
-func goList(t *testing.T, goBin string, args ...string) []string {
-	t.Helper()
+// nonStdlibDeps keeps the dependencies outside the standard library, leaving
+// out the package itself.
+func nonStdlibDeps(deps []string, self string) []string {
+	var out []string
+	for _, dep := range deps {
+		first, _, _ := strings.Cut(dep, "/")
+		if dep != self && strings.Contains(first, ".") {
+			out = append(out, dep)
+		}
+	}
+	return out
+}
+
+// goList runs `go` with args and returns the fields of its output.
+func goList(ctx *specs.Context, args ...string) []string {
+	goBin, err := exec.LookPath("go")
+	var lookErr error
+	if err != nil {
+		lookErr = fmt.Errorf("go toolchain not found on PATH: %w", err)
+	}
+	ctx.Expect(lookErr).To(specs.BeNil())
 	cmd := exec.Command(goBin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	require.NoErrorf(t, cmd.Run(), "go %s failed: %s", strings.Join(args, " "), stderr.String())
+	var runErr error
+	if err := cmd.Run(); err != nil {
+		runErr = fmt.Errorf("go %s failed: %w\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	ctx.Expect(runErr).To(specs.BeNil())
 	return strings.Fields(stdout.String())
 }

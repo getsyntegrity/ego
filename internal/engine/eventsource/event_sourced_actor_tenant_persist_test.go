@@ -24,28 +24,30 @@ package eventsource
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/extension"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/internal/pause"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
+	"github.com/getsyntegrity/urd/testkit"
 )
+
+// tenantContextFor builds the named tenant's TenantContext for a spec, failing
+// the running case when the name is not a valid tenant.
+func tenantContextFor(ctx *specs.Context, name tenancy.TenantID) tenancy.TenantContext {
+	tc, err := tenancy.NewTenantContext(name)
+	ctx.Expect(err).To(specs.BeNil())
+	return tc
+}
 
 // TestEventSourcedActorMarshalEventWritesTenantMetadata covers tasks
 // 2.1/2.2 (sdd/ego-tenant-002/tasks Phase 2): marshalEvent must serialize
@@ -55,43 +57,44 @@ import (
 // for both a tenant-scoped and an administrative-scoped context. Legacy
 // mode (tenantAware == false) must write no tenant metadata at all (D2).
 func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
-	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		entity := &Actor{persistenceID: "acct-1"}
+	specs.Describe(t, "marshalEvent writes the command's tenant onto the event envelope in tenant-aware mode only", func(s *specs.Spec) {
+		s.It("legacy mode writes no tenant metadata", func(ctx *specs.Context) {
+			entity := &Actor{persistenceID: "acct-1"}
 
-		envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tenancy.TenantContext{}, 1, time.Now(), 0)
-		require.NoError(t, err)
-		assert.Empty(t, envelope.GetTenantMetadata())
-	})
+			envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tenancy.TenantContext{}, 1, time.Now(), 0)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(len(envelope.GetTenantMetadata())).ToEqual(0)
+		})
 
-	t.Run("tenant-scoped context round-trips via tenancy.UnmarshalMetadata", func(t *testing.T) {
-		entity := &Actor{persistenceID: "acct-1", tenantAware: true}
-		tc, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+		s.It("tenant-scoped context round-trips via tenancy.UnmarshalMetadata", func(ctx *specs.Context) {
+			entity := &Actor{persistenceID: "acct-1", tenantAware: true}
+			tc := tenantContextFor(ctx, "acme")
 
-		envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tc, 1, time.Now(), 0)
-		require.NoError(t, err)
+			envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tc, 1, time.Now(), 0)
+			ctx.Expect(err).To(specs.BeNil())
 
-		require.NotEmpty(t, envelope.GetTenantMetadata())
-		assert.Equal(t, map[string]string(tenancy.MarshalMetadata(tc)), envelope.GetTenantMetadata())
+			ctx.Expect(len(envelope.GetTenantMetadata()) > 0).To(specs.BeTrue())
+			ctx.Expect(envelope.GetTenantMetadata()).ToEqual(map[string]string(tenancy.MarshalMetadata(tc)))
 
-		roundTripped, err := tenancy.UnmarshalMetadata(envelope.GetTenantMetadata())
-		require.NoError(t, err)
-		assert.Equal(t, tc, roundTripped)
-	})
+			roundTripped, err := tenancy.UnmarshalMetadata(envelope.GetTenantMetadata())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(roundTripped).ToEqual(tc)
+		})
 
-	t.Run("administrative-scoped context round-trips via tenancy.UnmarshalMetadata", func(t *testing.T) {
-		entity := &Actor{persistenceID: "acct-1", tenantAware: true}
-		admin, err := tenancy.NewAdministrative("ops-team", "crypto-shred")
-		require.NoError(t, err)
-		tc, err := tenancy.NewAdministrativeContext(admin)
-		require.NoError(t, err)
+		s.It("administrative-scoped context round-trips via tenancy.UnmarshalMetadata", func(ctx *specs.Context) {
+			entity := &Actor{persistenceID: "acct-1", tenantAware: true}
+			admin, err := tenancy.NewAdministrative("ops-team", "crypto-shred")
+			ctx.Expect(err).To(specs.BeNil())
+			tc, err := tenancy.NewAdministrativeContext(admin)
+			ctx.Expect(err).To(specs.BeNil())
 
-		envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tc, 1, time.Now(), 0)
-		require.NoError(t, err)
+			envelope, err := entity.marshalEvent(context.Background(), &testpb.AccountCreated{AccountId: "acct-1"}, tc, 1, time.Now(), 0)
+			ctx.Expect(err).To(specs.BeNil())
 
-		roundTripped, err := tenancy.UnmarshalMetadata(envelope.GetTenantMetadata())
-		require.NoError(t, err)
-		assert.Equal(t, tc, roundTripped)
+			roundTripped, err := tenancy.UnmarshalMetadata(envelope.GetTenantMetadata())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(roundTripped).ToEqual(tc)
+		})
 	})
 }
 
@@ -102,30 +105,31 @@ func TestEventSourcedActorMarshalEventWritesTenantMetadata(t *testing.T) {
 // context (e.g. after a batch flush) still carries tenant identity for
 // recover() (Phase 3) to seed from. Legacy mode writes nothing.
 func TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata(t *testing.T) {
-	t.Run("legacy mode writes no tenant metadata", func(t *testing.T) {
-		entity := &Actor{persistenceID: "acct-1", eventsCounter: 3, lastCommandTime: time.Now()}
-		snapshot := entity.newSnapshotEnvelope(nil)
-		assert.Empty(t, snapshot.GetTenantMetadata())
-	})
+	specs.Describe(t, "newSnapshotEnvelope writes the actor's established tenant onto the snapshot in tenant-aware mode only", func(s *specs.Spec) {
+		s.It("legacy mode writes no tenant metadata", func(ctx *specs.Context) {
+			entity := &Actor{persistenceID: "acct-1", eventsCounter: 3, lastCommandTime: time.Now()}
+			snapshot := entity.newSnapshotEnvelope(nil)
+			ctx.Expect(len(snapshot.GetTenantMetadata())).ToEqual(0)
+		})
 
-	t.Run("tenant-aware mode writes the actor's established tenant", func(t *testing.T) {
-		tc, err := tenancy.NewTenantContext("acme")
-		require.NoError(t, err)
+		s.It("tenant-aware mode writes the actor's established tenant", func(ctx *specs.Context) {
+			tc := tenantContextFor(ctx, "acme")
 
-		entity := &Actor{
-			persistenceID:   "acct-1",
-			eventsCounter:   3,
-			lastCommandTime: time.Now(),
-			tenantAware:     true,
-			actorTenant:     tc,
-		}
+			entity := &Actor{
+				persistenceID:   "acct-1",
+				eventsCounter:   3,
+				lastCommandTime: time.Now(),
+				tenantAware:     true,
+				actorTenant:     tc,
+			}
 
-		snapshot := entity.newSnapshotEnvelope(nil)
-		require.NotEmpty(t, snapshot.GetTenantMetadata())
+			snapshot := entity.newSnapshotEnvelope(nil)
+			ctx.Expect(len(snapshot.GetTenantMetadata()) > 0).To(specs.BeTrue())
 
-		roundTripped, err := tenancy.UnmarshalMetadata(snapshot.GetTenantMetadata())
-		require.NoError(t, err)
-		assert.Equal(t, tc, roundTripped)
+			roundTripped, err := tenancy.UnmarshalMetadata(snapshot.GetTenantMetadata())
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(roundTripped).ToEqual(tc)
+		})
 	})
 }
 
@@ -136,245 +140,251 @@ func TestEventSourcedActorNewSnapshotEnvelopeWritesTenantMetadata(t *testing.T) 
 // the two when both exist, and fail closed (not open) when tenant-aware and
 // metadata is absent or malformed on persisted data that exists.
 func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := "acct-1"
+	specs.Describe(t, "recover seeds the actor's tenant from persisted metadata and fails closed on missing or conflicting metadata", func(s *specs.Spec) {
+		bg := context.Background()
+		persistenceID := "acct-1"
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	newEvent := func(seqNr uint64, tc tenancy.TenantContext) *egopb.Event {
-		eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		evt := &egopb.Event{
-			PersistenceId:  persistenceID,
-			SequenceNumber: seqNr,
-			Event:          eventAny,
-			Timestamp:      time.Now().UnixNano(),
-		}
-		if tc != noTenantContext {
-			evt.TenantMetadata = tenancy.MarshalMetadata(tc)
-		}
-		return evt
-	}
-
-	newSnapshot := func(seqNr uint64, tc tenancy.TenantContext) *egopb.Snapshot {
-		stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
-		require.NoError(t, err)
-		snap := &egopb.Snapshot{
-			PersistenceId:  persistenceID,
-			SequenceNumber: seqNr,
-			State:          stateAny,
-			Timestamp:      time.Now().Unix(),
-		}
-		if tc != noTenantContext {
-			snap.TenantMetadata = tenancy.MarshalMetadata(tc)
-		}
-		return snap
-	}
-
-	t.Run("3.1/3.2: seeds actorTenant from the latest event's metadata", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
-
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
+		newEvent := func(ctx *specs.Context, seqNr uint64, tc tenancy.TenantContext) *egopb.Event {
+			eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			evt := &egopb.Event{
+				PersistenceId:  persistenceID,
+				SequenceNumber: seqNr,
+				Event:          eventAny,
+				Timestamp:      time.Now().UnixNano(),
+			}
+			if tc != noTenantContext {
+				evt.TenantMetadata = tenancy.MarshalMetadata(tc)
+			}
+			return evt
 		}
 
-		require.NoError(t, entity.recover(ctx))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
-
-	t.Run("3.3/3.4: seeds actorTenant from the snapshot when events are retention-deleted", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
-
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			snapshotStore: snapshotStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
+		newSnapshot := func(ctx *specs.Context, seqNr uint64, tc tenancy.TenantContext) *egopb.Snapshot {
+			stateAny, err := anypb.New(&testpb.Account{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			snap := &egopb.Snapshot{
+				PersistenceId:  persistenceID,
+				SequenceNumber: seqNr,
+				State:          stateAny,
+				Timestamp:      time.Now().Unix(),
+			}
+			if tc != noTenantContext {
+				snap.TenantMetadata = tenancy.MarshalMetadata(tc)
+			}
+			return snap
 		}
 
-		require.NoError(t, entity.recover(ctx))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
+		s.It("3.1/3.2: seeds actorTenant from the latest event's metadata", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{newEvent(ctx, 1, tenantA)}, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("3.3/3.4: snapshot and latest event agreeing on tenant both succeed and match", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(6, tenantA)}, persistence.Unconditional()))
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			snapshotStore: snapshotStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recover(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-		require.NoError(t, entity.recover(ctx))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
+		s.It("3.3/3.4: seeds actorTenant from the snapshot when events are retention-deleted", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			snapshotStore := testkit.NewSnapshotStore()
+			ctx.Expect(snapshotStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.WriteSnapshot(bg, persistence.Unscoped(), newSnapshot(ctx, 5, tenantA))).To(specs.BeNil())
 
-	t.Run("3.3/3.4: snapshot and latest event disagreeing on tenant fails closed with ErrDenied", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(6, tenantB)}, persistence.Unconditional()))
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, tenantA)))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				snapshotStore: snapshotStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			snapshotStore: snapshotStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recover(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-		err := entity.recover(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrDenied))
-	})
+		s.It("3.3/3.4: snapshot and latest event agreeing on tenant both succeed and match", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{newEvent(ctx, 6, tenantA)}, persistence.Unconditional())).To(specs.BeNil())
+			snapshotStore := testkit.NewSnapshotStore()
+			ctx.Expect(snapshotStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.WriteSnapshot(bg, persistence.Unscoped(), newSnapshot(ctx, 5, tenantA))).To(specs.BeNil())
 
-	t.Run("3.5/3.6: fails closed when tenant-aware and the latest event carries no tenant metadata", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, noTenantContext)}, persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				snapshotStore: snapshotStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recover(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-		err := entity.recover(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-	})
+		s.It("3.3/3.4: snapshot and latest event disagreeing on tenant fails closed with ErrDenied", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{newEvent(ctx, 6, tenantB)}, persistence.Unconditional())).To(specs.BeNil())
+			snapshotStore := testkit.NewSnapshotStore()
+			ctx.Expect(snapshotStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.WriteSnapshot(bg, persistence.Unscoped(), newSnapshot(ctx, 5, tenantA))).To(specs.BeNil())
 
-	t.Run("3.5/3.6: fails closed when tenant-aware and the snapshot carries no tenant metadata", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		snapshotStore := testkit.NewSnapshotStore()
-		require.NoError(t, snapshotStore.Connect(ctx))
-		require.NoError(t, snapshotStore.WriteSnapshot(ctx, persistence.Unscoped(), newSnapshot(5, noTenantContext)))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				snapshotStore: snapshotStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			snapshotStore: snapshotStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			err := entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+		})
 
-		err := entity.recover(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
-	})
+		s.It("3.5/3.6: fails closed when tenant-aware and the latest event carries no tenant metadata", func(ctx *specs.Context) {
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{newEvent(ctx, 1, noTenantContext)}, persistence.Unconditional())).To(specs.BeNil())
 
-	t.Run("legacy mode never seeds actorTenant, even when metadata is present", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{newEvent(1, tenantA)}, persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			scope:         persistence.Unscoped(),
-		}
+			err := entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 
-		require.NoError(t, entity.recover(ctx))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
-	})
+		s.It("3.5/3.6: fails closed when tenant-aware and the snapshot carries no tenant metadata", func(ctx *specs.Context) {
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			snapshotStore := testkit.NewSnapshotStore()
+			ctx.Expect(snapshotStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(snapshotStore.WriteSnapshot(bg, persistence.Unscoped(), newSnapshot(ctx, 5, noTenantContext))).To(specs.BeNil())
 
-	t.Run("a brand new actor with no persisted data recovers without a tenant identity yet", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				snapshotStore: snapshotStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			err := entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 
-		require.NoError(t, entity.recover(ctx))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
-	})
+		s.It("legacy mode never seeds actorTenant, even when metadata is present", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{newEvent(ctx, 1, tenantA)}, persistence.Unconditional())).To(specs.BeNil())
 
-	// The next two subtests are PR1 review-comment regressions: recover()
-	// only validated latestEvent's tenant metadata before this fix (D3's
-	// fail-closed intent applied to the wrong event). replayEvents replayed
-	// every event strictly between the snapshot point and latestSeqNr
-	// unchecked, so an intermediate event belonging to another tenant, or
-	// missing tenant metadata altogether, would be silently applied to
-	// state as long as the *latest* event still carried the actor's own
-	// tenant.
-	t.Run("an intermediate event belonging to a different tenant fails closed with ErrDenied", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{
-			newEvent(1, tenantA),
-			newEvent(2, tenantB),
-			newEvent(3, tenantA),
-		}, persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recover(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+		})
 
-		err := entity.recover(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrDenied))
-	})
+		s.It("a brand new actor with no persisted data recovers without a tenant identity yet", func(ctx *specs.Context) {
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
 
-	t.Run("an intermediate event with no tenant metadata fails closed with ErrInvalid", func(t *testing.T) {
-		eventStore := testkit.NewEventsStore()
-		require.NoError(t, eventStore.Connect(ctx))
-		require.NoError(t, eventStore.WriteEvents(ctx, persistence.Unscoped(), []*egopb.Event{
-			newEvent(1, tenantA),
-			newEvent(2, noTenantContext),
-			newEvent(3, tenantA),
-		}, persistence.Unconditional()))
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
 
-		entity := &Actor{
-			persistenceID: persistenceID,
-			behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-			eventsStore:   eventStore,
-			tenantAware:   true,
-			scope:         persistence.Unscoped(),
-		}
+			ctx.Expect(entity.recover(bg)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+		})
 
-		err := entity.recover(ctx)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrInvalid))
+		// The next two cases are PR1 review-comment regressions: recover()
+		// only validated latestEvent's tenant metadata before this fix (D3's
+		// fail-closed intent applied to the wrong event). replayEvents replayed
+		// every event strictly between the snapshot point and latestSeqNr
+		// unchecked, so an intermediate event belonging to another tenant, or
+		// missing tenant metadata altogether, would be silently applied to
+		// state as long as the *latest* event still carried the actor's own
+		// tenant.
+		s.It("an intermediate event belonging to a different tenant fails closed with ErrDenied", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{
+				newEvent(ctx, 1, tenantA),
+				newEvent(ctx, 2, tenantB),
+				newEvent(ctx, 3, tenantA),
+			}, persistence.Unconditional())).To(specs.BeNil())
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+		})
+
+		s.It("an intermediate event with no tenant metadata fails closed with ErrInvalid", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
+			ctx.Expect(eventStore.WriteEvents(bg, persistence.Unscoped(), []*egopb.Event{
+				newEvent(ctx, 1, tenantA),
+				newEvent(ctx, 2, noTenantContext),
+				newEvent(ctx, 3, tenantA),
+			}, persistence.Unconditional())).To(specs.BeNil())
+
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+				scope:         persistence.Unscoped(),
+			}
+
+			err := entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrInvalid))
+		})
 	})
 }
 
@@ -395,49 +405,55 @@ func TestEventSourcedActorRecoverSeedsActorTenant(t *testing.T) {
 // literal, as the sibling tests above do), so the test also proves
 // resolveScope's own pre-seeding wiring, not just recover()'s cross-check.
 func TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant(t *testing.T) {
-	ctx := context.Background()
-	persistenceID := uuid.NewString()
+	specs.Describe(t, "recover rejects a persisted event whose tenant differs from the spawn-bound tenant", func(s *specs.Spec) {
+		s.It("fails closed with ErrDenied through the real resolveScope pre-seeding", func(ctx *specs.Context) {
+			bg := context.Background()
+			persistenceID := uuid.NewString()
 
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			tenantB := tenantContextFor(ctx, "globex")
 
-	scopeA, err := persistence.NewTenantScope("acme")
-	require.NoError(t, err)
+			scopeA, err := persistence.NewTenantScope("acme")
+			ctx.Expect(err).To(specs.BeNil())
 
-	eventStore := testkit.NewEventsStore()
-	require.NoError(t, eventStore.Connect(ctx))
+			eventStore := testkit.NewEventsStore()
+			ctx.Expect(eventStore.Connect(bg)).To(specs.BeNil())
 
-	// A record physically stored under scope A (as if this actor's own
-	// prior spawn wrote it) but whose carried TenantMetadata names tenant
-	// B — the corrupted/mismatched shape D6's cross-check exists to catch,
-	// since scope-keyed storage alone cannot rule out a metadata field that
-	// disagrees with its own storage key.
-	eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
-	require.NoError(t, err)
-	mismatched := &egopb.Event{
-		PersistenceId:  persistenceID,
-		SequenceNumber: 1,
-		Event:          eventAny,
-		Timestamp:      time.Now().UnixNano(),
-		TenantMetadata: tenancy.MarshalMetadata(tenantB),
-	}
-	require.NoError(t, eventStore.WriteEvents(ctx, scopeA, []*egopb.Event{mismatched}, persistence.Unconditional()))
+			// A record physically stored under scope A (as if this actor's own
+			// prior spawn wrote it) but whose carried TenantMetadata names tenant
+			// B — the corrupted/mismatched shape D6's cross-check exists to catch,
+			// since scope-keyed storage alone cannot rule out a metadata field that
+			// disagrees with its own storage key.
+			eventAny, err := anypb.New(&testpb.AccountCreated{AccountId: persistenceID, AccountBalance: 100})
+			ctx.Expect(err).To(specs.BeNil())
+			mismatched := &egopb.Event{
+				PersistenceId:  persistenceID,
+				SequenceNumber: 1,
+				Event:          eventAny,
+				Timestamp:      time.Now().UnixNano(),
+				TenantMetadata: tenancy.MarshalMetadata(tenantB),
+			}
+			ctx.Expect(eventStore.WriteEvents(bg, scopeA, []*egopb.Event{mismatched}, persistence.Unconditional())).To(specs.BeNil())
 
-	entity := &Actor{
-		persistenceID: persistenceID,
-		behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
-		eventsStore:   eventStore,
-		tenantAware:   true,
-	}
+			entity := &Actor{
+				persistenceID: persistenceID,
+				behavior:      enginetest.NewAccountEventSourcedBehavior(persistenceID),
+				eventsStore:   eventStore,
+				tenantAware:   true,
+			}
 
-	// resolveScope pre-seeds entity.actorTenant to tenant A (acme) and
-	// binds entity.scope to scopeA, exactly as PreStart does at spawn.
-	require.NoError(t, entity.resolveScope([]extension.Dependency{extensions.NewEntityTenantScope("acme")}))
+			// resolveScope pre-seeds entity.actorTenant to tenant A (acme) and
+			// binds entity.scope to scopeA, exactly as PreStart does at spawn.
+			ctx.Expect(entity.resolveScope([]extension.Dependency{extensions.NewEntityTenantScope("acme")})).To(specs.BeNil())
 
-	err = entity.recover(ctx)
-	require.Error(t, err, "recover must fail closed when the recovered event's tenant metadata disagrees with the spawn-bound tenant")
-	assert.True(t, errors.Is(err, tenancy.ErrDenied),
-		"the rejection must be VerifyUnchanged's ErrDenied, not a silent adoption of the recovered tenant")
+			// recover must fail closed when the recovered event's tenant
+			// metadata disagrees with the spawn-bound tenant, and the
+			// rejection must be VerifyUnchanged's ErrDenied, not a silent
+			// adoption of the recovered tenant.
+			err = entity.recover(bg)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+		})
+	})
 }
 
 // TestEventSourcedActorSeedActorTenant covers the seedActorTenant helper
@@ -445,35 +461,38 @@ func TestEventSourcedActorRecoverRejectsMismatchedSpawnBoundTenant(t *testing.T)
 // legacy mode, an unconditional first seed, and a VerifyUnchanged
 // cross-check once already seeded.
 func TestEventSourcedActorSeedActorTenant(t *testing.T) {
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+	specs.Describe(t, "seedActorTenant seeds the actor's tenant once and rejects a different tenant afterwards", func(s *specs.Spec) {
+		s.It("legacy mode is a no-op", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			entity := &Actor{}
+			ctx.Expect(entity.seedActorTenant(tenantA)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(noTenantContext)
+		})
 
-	t.Run("legacy mode is a no-op", func(t *testing.T) {
-		entity := &Actor{}
-		require.NoError(t, entity.seedActorTenant(tenantA))
-		assert.Equal(t, noTenantContext, entity.actorTenant)
-	})
+		s.It("first call unconditionally seeds", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			entity := &Actor{tenantAware: true}
+			ctx.Expect(entity.seedActorTenant(tenantA)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-	t.Run("first call unconditionally seeds", func(t *testing.T) {
-		entity := &Actor{tenantAware: true}
-		require.NoError(t, entity.seedActorTenant(tenantA))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
+		s.It("second call with the same tenant is a no-op success", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			entity := &Actor{tenantAware: true, actorTenant: tenantA}
+			ctx.Expect(entity.seedActorTenant(tenantA)).To(specs.BeNil())
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 
-	t.Run("second call with the same tenant is a no-op success", func(t *testing.T) {
-		entity := &Actor{tenantAware: true, actorTenant: tenantA}
-		require.NoError(t, entity.seedActorTenant(tenantA))
-		assert.Equal(t, tenantA, entity.actorTenant)
-	})
-
-	t.Run("second call with a different tenant fails with ErrDenied", func(t *testing.T) {
-		entity := &Actor{tenantAware: true, actorTenant: tenantA}
-		err := entity.seedActorTenant(tenantB)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, tenancy.ErrDenied))
-		assert.Equal(t, tenantA, entity.actorTenant, "a rejected re-seed must not overwrite the original")
+		s.It("second call with a different tenant fails with ErrDenied", func(ctx *specs.Context) {
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
+			entity := &Actor{tenantAware: true, actorTenant: tenantA}
+			err := entity.seedActorTenant(tenantB)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.MatchError(tenancy.ErrDenied))
+			// a rejected re-seed must not overwrite the original
+			ctx.Expect(entity.actorTenant).ToEqual(tenantA)
+		})
 	})
 }
 
@@ -484,66 +503,33 @@ func TestEventSourcedActorSeedActorTenant(t *testing.T) {
 // net-new enforcement per design.md risk #3 (this gate previously only
 // proved presence via tenancy.Require, never identity match).
 func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	// The empty Describe name keeps the old test name.
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a command of another tenant on the non-batched path", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// tenant A's first command must succeed and establish actorTenant
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's first command must succeed and establish actorTenant")
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "a cross-tenant command on the non-batched path must be rejected")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// a cross-tenant command on the non-batched path must be rejected with
+			// the fail-closed tenant error VerifyUnchanged produces, not an invented
+			// error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }
 
 // TestEventSourcedActorGetStateCommandRejectsCrossTenant is a PR1
@@ -555,66 +541,32 @@ func TestEventSourcedActorProcessCommandAndReplyRejectsCrossTenant(t *testing.T)
 // require a resolved TenantContext and reject one that mismatches the
 // actor's already-established actorTenant.
 func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a GetStateCommand of another tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// tenant A's command must succeed and establish actorTenant
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), pid, &egopb.GetStateCommand{})
 
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply(),
-		"tenant A's command must succeed and establish actorTenant")
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &egopb.GetStateCommand{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "GetStateCommand from a different tenant must be rejected, not return tenant A's state")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// the GetStateCommand from a different tenant must be rejected, not
+			// return tenant A's state, with the fail-closed tenant error
+			// VerifyUnchanged produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }
 
 // TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware is a
@@ -623,57 +575,25 @@ func TestEventSourcedActorGetStateCommandRejectsCrossTenant(t *testing.T) {
 // rejected (tenancy.Require's absence path), matching
 // processCommandAndReply's T4-A gate rather than silently returning state.
 func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a GetStateCommand with no resolved tenant", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	require.NoError(t, eventStore.Connect(ctx))
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantContextFor(ctx, "acme")), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	eventStream := eventstream.New()
-
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
-
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
-
-	reply, err = goakt.Ask(ctx, pid, &egopb.GetStateCommand{}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	_, ok = commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "GetStateCommand with no resolved tenant must be rejected on a tenant-aware actor")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// Ask itself must not fail; the rejection is carried in the
+			// CommandReply. A GetStateCommand with no resolved tenant must be
+			// rejected on a tenant-aware actor.
+			reply := ask(ctx, pid, &egopb.GetStateCommand{})
+			errorReplyMessage(ctx, reply)
+		})
+	})
 }
 
 // TestEventSourcedActorTenantIdentitySurvivesRestart covers task 4.6: a
@@ -681,79 +601,48 @@ func TestEventSourcedActorGetStateCommandRequiresTenantWhenTenantAware(t *testin
 // recovers its tenant identity from persisted event metadata (Phase 3),
 // not only while the original in-memory actorTenant is still warm.
 func TestEventSourcedActorTenantIdentitySurvivesRestart(t *testing.T) {
-	ctx := context.TODO()
+	specs.Describe(t, "", func(s *specs.Spec) {
+		s.It("rejects a cross-tenant command after the actor restarts", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
-	eventStore := testkit.NewEventsStore()
-	persistenceID := uuid.NewString()
-	behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+			rig := startActorRig(ctx,
+				extensions.NewEventsStore(connectedEventsStore(ctx)),
+				extensions.NewTenancyMarker())
 
-	require.NoError(t, eventStore.Connect(ctx))
+			tenantA := tenantContextFor(ctx, "acme")
+			tenantB := tenantContextFor(ctx, "globex")
 
-	eventStream := eventstream.New()
+			// First actor instance: tenant A persists, establishing actorTenant,
+			// then is stopped so no in-memory state survives.
+			pid := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
+			stateReplyOf(ctx, askWith(ctx, attachTenant(ctx, tenantA), pid, &testpb.CreateAccount{AccountBalance: 500}))
 
-	actorSystem, err := goakt.NewActorSystem("TestActorSystem",
-		goakt.WithLogger(goaktlog.New(enginetest.DiscardLogger)),
-		goakt.WithExtensions(
-			extensions.NewEventsStore(eventStore),
-			extensions.NewEventsStream(eventStream),
-			extensions.NewTenancyMarker(),
-		),
-		goakt.WithActorInitMaxRetries(3))
-	require.NoError(t, err)
-	require.NoError(t, actorSystem.Start(ctx))
+			ctx.Expect(rig.system.Kill(context.Background(), behavior.ID())).To(specs.BeNil())
+			waitStopped(ctx, pid)
 
-	tenantA, err := tenancy.NewTenantContext("acme")
-	require.NoError(t, err)
-	tenantB, err := tenancy.NewTenantContext("globex")
-	require.NoError(t, err)
+			// the name is free again once the system forgets the stopped actor
+			ctx.Eventually(func() any {
+				exists, err := rig.system.ActorExists(context.Background(), behavior.ID())
+				if err != nil {
+					return err
+				}
+				return exists
+			}, specs.BeFalse(), specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
 
-	// First actor instance: tenant A persists, establishing actorTenant,
-	// then is stopped so no in-memory state survives.
-	actor := New()
-	pid, err := actorSystem.Spawn(ctx, behavior.ID(), actor,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
+			// Second actor instance under the same persistence ID: recover() must
+			// seed actorTenant from the persisted event before this new in-process
+			// actor accepts any command.
+			restarted := rig.spawn(ctx, behavior, extensions.NewEntityTenantScope("acme"))
 
-	ctxA, err := tenancy.Attach(ctx, tenantA)
-	require.NoError(t, err)
-	reply, err := goakt.Ask(ctxA, pid, &testpb.CreateAccount{AccountBalance: 500}, 5*time.Second)
-	require.NoError(t, err)
-	commandReply, ok := reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	require.IsType(t, new(egopb.CommandReply_StateReply), commandReply.GetReply())
+			// Ask itself must not fail; the rejection is carried in the CommandReply
+			reply := askWith(ctx, attachTenant(ctx, tenantB), restarted, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10})
 
-	require.NoError(t, actorSystem.Kill(ctx, behavior.ID()))
-	pause.For(time.Second)
-
-	// Second actor instance under the same persistence ID: recover() must
-	// seed actorTenant from the persisted event before this new in-process
-	// actor accepts any command.
-	restarted := New()
-	pid, err = actorSystem.Spawn(ctx, behavior.ID(), restarted,
-		goakt.WithDependencies(behavior, extensions.NewEntityTenantScope("acme")),
-		goakt.WithLongLived(), goakt.WithStashing())
-	require.NoError(t, err)
-	require.NotNil(t, pid)
-	pause.For(time.Second)
-
-	ctxB, err := tenancy.Attach(ctx, tenantB)
-	require.NoError(t, err)
-	reply, err = goakt.Ask(ctxB, pid, &testpb.CreditAccount{AccountId: persistenceID, Balance: 10}, 5*time.Second)
-	require.NoError(t, err, "Ask itself must not fail; the rejection is carried in the CommandReply")
-	commandReply, ok = reply.(*egopb.CommandReply)
-	require.True(t, ok)
-	errorReply, ok := commandReply.GetReply().(*egopb.CommandReply_ErrorReply)
-	require.True(t, ok, "tenant identity recovered from persisted event metadata must survive actor restart")
-
-	wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
-	assert.Equal(t, wantErr.Error(), errorReply.ErrorReply.GetMessage(),
-		"rejection must be the fail-closed tenant error VerifyUnchanged produces, not an invented error type")
-
-	require.NoError(t, eventStore.Disconnect(ctx))
-	eventStream.Close()
-	pause.For(time.Second)
-	require.NoError(t, actorSystem.Stop(ctx))
+			// tenant identity recovered from persisted event metadata must survive
+			// the actor restart, and the rejection must be the fail-closed tenant
+			// error VerifyUnchanged produces, not an invented error type
+			wantErr := tenancy.VerifyUnchanged(tenantA, tenantB)
+			ctx.Expect(errorReplyMessage(ctx, reply)).To(specs.Equal(wantErr.Error()))
+		})
+	})
 }

@@ -24,20 +24,90 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/egopb"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	samplepb "github.com/getsyntegrity/urd/internal/samplepb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
 )
+
+// errSagaCompensationG4 is the failure a saga's compensation returns when the
+// test only needs it to fail.
+var errSagaCompensationG4 = errors.New("compensation failed")
+
+// sagaStatusRigG4 is a started engine plus the case it belongs to, with the
+// helpers the saga status specs share.
+type sagaStatusRigG4 struct {
+	ctx    *specs.Context
+	engine *Engine
+}
+
+// newSagaStatusRigG4 starts an engine with an in-memory events store.
+func newSagaStatusRigG4(ctx *specs.Context, name string) sagaStatusRigG4 {
+	engine := newTestEngine(ctx.T, name, connectedEventsStore(ctx), WithLogger(DiscardLogger))
+	ctx.Expect(engine.Start(context.Background())).To(specs.BeNil())
+	return sagaStatusRigG4{ctx: ctx, engine: engine}
+}
+
+// spawnSagaReactingTo spawns a saga that answers action for the
+// AccountCreated event of entityID and ignores every other event.
+func (r sagaStatusRigG4) spawnSagaReactingTo(entityID string, action func() *SagaAction,
+	compensate func(context.Context, State) ([]SagaCommand, error)) string {
+	sagaID := "saga-" + uuid.NewString()
+	saga := &enginetest.CallbackSagaBehavior{
+		SagaID: sagaID,
+		HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
+			created, ok := event.(*testpb.AccountCreated)
+			if !ok || created.GetAccountId() != entityID {
+				return &SagaAction{}, nil
+			}
+			return action(), nil
+		},
+		CompensateFn: compensate,
+	}
+	r.ctx.Expect(r.engine.SpawnSaga(context.Background(), saga, 0)).To(specs.BeNil())
+	return sagaID
+}
+
+// createAccount spawns entityID and sends it the command that emits the
+// AccountCreated event the sagas above react to.
+func (r sagaStatusRigG4) createAccount(entityID string) {
+	bg := context.Background()
+	r.ctx.Expect(r.engine.Entity(bg, NewAccountEventSourcedBehavior(entityID))).To(specs.BeNil())
+	_, _, err := r.engine.SendCommand(bg, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
+	r.ctx.Expect(err).To(specs.BeNil())
+}
+
+// status reads the saga's reported lifecycle status. A failed query reads as an
+// out-of-range status, so a poll keeps going until the saga answers.
+func (r sagaStatusRigG4) status(sagaID string) any {
+	info, err := r.engine.SagaStatus(context.Background(), sagaID, 5*time.Second)
+	if err != nil || info == nil {
+		return SagaStatus(-1)
+	}
+	return info.Status
+}
+
+// expectEventualStatus polls until the saga reports want, then checks that
+// SagaInfo still carries the saga ID and state.
+func (r sagaStatusRigG4) expectEventualStatus(sagaID string, want SagaStatus) {
+	r.ctx.Eventually(func() any { return r.status(sagaID) }, specs.Equal(want),
+		specs.WithTimeout(waitTimeout), specs.WithInterval(20*time.Millisecond))
+
+	info, err := r.engine.SagaStatus(context.Background(), sagaID, 5*time.Second)
+	r.ctx.Expect(err).To(specs.BeNil())
+	r.ctx.Expect(info.ID).To(specs.Equal(sagaID))
+	// SagaInfo.State must still carry the saga state
+	r.ctx.Expect(info.State).To(specs.Not(specs.BeNil()))
+}
 
 // TestEngineSagaStatusReportsLifecycleStatus covers #153: Engine.SagaStatus
 // must report the saga actor's real lifecycle status in SagaInfo.Status, not
@@ -46,7 +116,7 @@ import (
 //
 // Every saga below reacts only to the AccountCreated event of its own
 // entity, which the test triggers with SendCommand; the status is then
-// polled with require.Eventually under a bounded timeout, so the test waits
+// polled with ctx.Eventually under a bounded timeout, so the test waits
 // for the saga to process the event instead of sleeping.
 //
 // SagaCompensating is not observable through Engine.SagaStatus: the actor
@@ -56,109 +126,67 @@ import (
 // SagaFailed. Its wire mapping is covered by
 // TestEngineSagaStatusMapsWireStatus instead.
 func TestEngineSagaStatusReportsLifecycleStatus(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine.SagaStatus reports the saga actor's lifecycle status", func(s *specs.Spec) {
+		s.It("a saga that has not finished reports SagaRunning", func(ctx *specs.Context) {
+			rig := newSagaStatusRigG4(ctx, "SagaStatusRunning")
+			entityID := uuid.NewString()
+			// A non-terminal action: the saga reacts but neither completes nor
+			// compensates, so it must keep reporting SagaRunning.
+			var reacted atomic.Bool
+			sagaID := rig.spawnSagaReactingTo(entityID, func() *SagaAction {
+				reacted.Store(true)
+				return &SagaAction{}
+			}, nil)
+			rig.createAccount(entityID)
 
-	engine := newTestEngine(t, "SagaStatusLifecycle", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
+			// The actor answers the status query only after the message that
+			// handled the event, so the status read below already reflects it.
+			ctx.Eventually(func() any { return reacted.Load() }, specs.BeTrue(), specs.WithTimeout(waitTimeout))
 
-	// spawnSagaReactingTo spawns a saga that answers action for the
-	// AccountCreated event of entityID and ignores every other event.
-	spawnSagaReactingTo := func(t *testing.T, entityID string, action func() *SagaAction, compensate func(context.Context, State) ([]SagaCommand, error)) string {
-		t.Helper()
-		sagaID := "saga-" + uuid.NewString()
-		saga := &enginetest.CallbackSagaBehavior{
-			SagaID: sagaID,
-			HandleEventFn: func(_ context.Context, event Event, _ State) (*SagaAction, error) {
-				created, ok := event.(*testpb.AccountCreated)
-				if !ok || created.GetAccountId() != entityID {
-					return &SagaAction{}, nil
-				}
-				return action(), nil
-			},
-			CompensateFn: compensate,
-		}
-		require.NoError(t, engine.SpawnSaga(ctx, saga, 0))
-		return sagaID
-	}
+			info, err := rig.engine.SagaStatus(context.Background(), sagaID, 5*time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(info.Status).To(specs.Equal(SagaRunning))
+			ctx.Expect(info.State).To(specs.Not(specs.BeNil()))
+		})
 
-	// createAccount spawns entityID and sends it the command that emits the
-	// AccountCreated event the sagas above react to.
-	createAccount := func(t *testing.T, entityID string) {
-		t.Helper()
-		require.NoError(t, engine.Entity(ctx, NewAccountEventSourcedBehavior(entityID)))
-		_, _, err := engine.SendCommand(ctx, entityID, &testpb.CreateAccount{AccountBalance: 500}, time.Minute)
-		require.NoError(t, err)
-	}
+		s.It("a saga whose action completes reports SagaCompleted", func(ctx *specs.Context) {
+			rig := newSagaStatusRigG4(ctx, "SagaStatusCompleted")
+			entityID := uuid.NewString()
+			sagaID := rig.spawnSagaReactingTo(entityID, func() *SagaAction { return &SagaAction{Complete: true} }, nil)
+			rig.createAccount(entityID)
 
-	requireEventualStatus := func(t *testing.T, sagaID string, want SagaStatus) {
-		t.Helper()
-		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-			if !assert.NoError(c, err) {
-				return
-			}
-			assert.Equal(c, want, info.Status, "SagaInfo.Status")
-			assert.Equal(c, sagaID, info.ID)
-			assert.NotNil(c, info.State, "SagaInfo.State must still carry the saga state")
-		}, 10*time.Second, 20*time.Millisecond, "saga %s never reported status %s", sagaID, want)
-	}
+			rig.expectEventualStatus(sagaID, SagaCompleted)
+		})
 
-	t.Run("a saga that has not finished reports SagaRunning", func(t *testing.T) {
-		entityID := uuid.NewString()
-		// A non-terminal action: the saga reacts but neither completes nor
-		// compensates, so it must keep reporting SagaRunning.
-		reacted := make(chan struct{})
-		sagaID := spawnSagaReactingTo(t, entityID, func() *SagaAction {
-			close(reacted)
-			return &SagaAction{}
-		}, nil)
-		createAccount(t, entityID)
+		s.It("a saga whose compensation fails reports SagaFailed", func(ctx *specs.Context) {
+			rig := newSagaStatusRigG4(ctx, "SagaStatusFailed")
+			entityID := uuid.NewString()
+			sagaID := rig.spawnSagaReactingTo(entityID,
+				func() *SagaAction { return &SagaAction{Compensate: true} },
+				func(context.Context, State) ([]SagaCommand, error) { return nil, errSagaCompensationG4 })
+			rig.createAccount(entityID)
 
-		// The actor answers the status query only after the message that
-		// handled the event, so the status read below already reflects it.
-		select {
-		case <-reacted:
-		case <-time.After(10 * time.Second):
-			require.FailNow(t, "the saga never reacted to its triggering event")
-		}
+			rig.expectEventualStatus(sagaID, SagaFailed)
+		})
 
-		info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-		require.NoError(t, err)
-		assert.Equal(t, SagaRunning, info.Status)
-		assert.NotNil(t, info.State)
+		s.It("a saga whose compensation succeeds reports SagaCompleted", func(ctx *specs.Context) {
+			rig := newSagaStatusRigG4(ctx, "SagaStatusCompensated")
+			entityID := uuid.NewString()
+			sagaID := rig.spawnSagaReactingTo(entityID,
+				func() *SagaAction { return &SagaAction{Compensate: true} },
+				func(context.Context, State) ([]SagaCommand, error) { return nil, nil })
+			rig.createAccount(entityID)
+
+			rig.expectEventualStatus(sagaID, SagaCompleted)
+		})
 	})
+}
 
-	t.Run("a saga whose action completes reports SagaCompleted", func(t *testing.T) {
-		entityID := uuid.NewString()
-		sagaID := spawnSagaReactingTo(t, entityID, func() *SagaAction { return &SagaAction{Complete: true} }, nil)
-		createAccount(t, entityID)
-
-		requireEventualStatus(t, sagaID, SagaCompleted)
-	})
-
-	t.Run("a saga whose compensation fails reports SagaFailed", func(t *testing.T) {
-		entityID := uuid.NewString()
-		sagaID := spawnSagaReactingTo(t, entityID,
-			func() *SagaAction { return &SagaAction{Compensate: true} },
-			func(context.Context, State) ([]SagaCommand, error) { return nil, assert.AnError })
-		createAccount(t, entityID)
-
-		requireEventualStatus(t, sagaID, SagaFailed)
-	})
-
-	t.Run("a saga whose compensation succeeds reports SagaCompleted", func(t *testing.T) {
-		entityID := uuid.NewString()
-		sagaID := spawnSagaReactingTo(t, entityID,
-			func() *SagaAction { return &SagaAction{Compensate: true} },
-			func(context.Context, State) ([]SagaCommand, error) { return nil, nil })
-		createAccount(t, entityID)
-
-		requireEventualStatus(t, sagaID, SagaCompleted)
-	})
+// wireStatusCaseG4 maps one lifecycle status of the wire reply to the status
+// Engine.SagaStatus reports.
+type wireStatusCaseG4 struct {
+	wire egopb.SagaLifecycleStatus
+	want SagaStatus
 }
 
 // TestEngineSagaStatusMapsWireStatus covers the wire half of #153: whatever
@@ -170,47 +198,38 @@ func TestEngineSagaStatusReportsLifecycleStatus(t *testing.T) {
 // field (SAGA_LIFECYCLE_STATUS_NONE, as a saga node built before it existed
 // sends) keeps reading as SagaRunning.
 func TestEngineSagaStatusMapsWireStatus(t *testing.T) {
-	ctx := context.Background()
-	store := testkit.NewEventsStore()
-	require.NoError(t, store.Connect(ctx))
-	t.Cleanup(func() { _ = store.Disconnect(ctx) })
+	specs.Describe(t, "Engine.SagaStatus maps the wire lifecycle status of a StateReply", func(s *specs.Spec) {
+		specs.Table(s, []wireStatusCaseG4{
+			{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE, SagaRunning},
+			{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_RUNNING, SagaRunning},
+			{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPLETED, SagaCompleted},
+			{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPENSATING, SagaCompensating},
+			{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_FAILED, SagaFailed},
+		}, func(c wireStatusCaseG4) string { return c.wire.String() }, func(ctx *specs.Context, c wireStatusCaseG4) {
+			bg := context.Background()
+			rig := newSagaStatusRigG4(ctx, "SagaStatusWire")
 
-	engine := newTestEngine(t, "SagaStatusWire", store, WithLogger(DiscardLogger))
-	require.NoError(t, engine.Start(ctx))
-	t.Cleanup(func() { _ = engine.Stop(ctx) })
-
-	cases := []struct {
-		wire egopb.SagaLifecycleStatus
-		want SagaStatus
-	}{
-		{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_NONE, SagaRunning},
-		{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_RUNNING, SagaRunning},
-		{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPLETED, SagaCompleted},
-		{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_COMPENSATING, SagaCompensating},
-		{egopb.SagaLifecycleStatus_SAGA_LIFECYCLE_STATUS_FAILED, SagaFailed},
-	}
-	for _, tc := range cases {
-		t.Run(tc.wire.String(), func(t *testing.T) {
 			sagaID := "saga-wire-" + uuid.NewString()
 			reply := &egopb.CommandReply{
 				Reply: &egopb.CommandReply_StateReply{
 					StateReply: &egopb.StateReply{
 						PersistenceId: sagaID,
-						State:         enginetest.MustAny(t, &samplepb.Account{AccountId: sagaID}),
-						SagaStatus:    tc.wire,
+						State:         enginetest.MustAny(ctx.T, &samplepb.Account{AccountId: sagaID}),
+						SagaStatus:    c.wire,
 					},
 				},
 			}
-			_, err := engine.ActorSystem().Spawn(ctx, sagaID, &enginetest.SimpleReplyActor{Reply: reply}, goakt.WithLongLived())
-			require.NoError(t, err)
+			_, err := rig.engine.ActorSystem().Spawn(bg, sagaID, &enginetest.SimpleReplyActor{Reply: reply}, goakt.WithLongLived())
+			ctx.Expect(err).To(specs.BeNil())
 
-			info, err := engine.SagaStatus(ctx, sagaID, 5*time.Second)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, info.Status)
-			assert.Equal(t, sagaID, info.ID)
+			info, err := rig.engine.SagaStatus(bg, sagaID, 5*time.Second)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(info.Status).To(specs.Equal(c.want))
+			ctx.Expect(info.ID).To(specs.Equal(sagaID))
+			// SagaInfo.State must still carry the replied state
 			account, ok := info.State.(*samplepb.Account)
-			require.True(t, ok, "SagaInfo.State must still carry the replied state")
-			assert.Equal(t, sagaID, account.GetAccountId())
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(account.GetAccountId()).To(specs.Equal(sagaID))
 		})
-	}
+	})
 }

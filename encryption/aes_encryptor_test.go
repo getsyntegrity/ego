@@ -27,11 +27,10 @@ import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	"github.com/getsyntegrity/ego/encryption"
+	"github.com/getsyntegrity/urd/encryption"
 )
 
 // testKeyStore is an in-memory key store for testing
@@ -78,64 +77,82 @@ func (k *testKeyStore) DeleteKey(_ context.Context, persistenceID string) error 
 }
 
 func TestAESEncryptor_EncryptDecryptRoundTrip(t *testing.T) {
-	ctx := context.TODO()
-	ks := newTestKeyStore()
-	enc := encryption.NewAESEncryptor(ks)
+	specs.Describe(t, "AESEncryptor decrypts what it encrypted", func(s *specs.Spec) {
+		s.It("returns the original plaintext after a round trip", func(ctx *specs.Context) {
+			bg := context.TODO()
+			ks := newTestKeyStore()
+			enc := encryption.NewAESEncryptor(ks)
 
-	plaintext := []byte("hello world, this is a test message")
+			plaintext := []byte("hello world, this is a test message")
 
-	ciphertext, keyID, err := enc.Encrypt(ctx, "entity-1", plaintext)
-	require.NoError(t, err)
-	require.NotEmpty(t, ciphertext)
-	require.NotEmpty(t, keyID)
+			ciphertext, keyID, err := enc.Encrypt(bg, "entity-1", plaintext)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(ciphertext).To(specs.Not(specs.BeEmpty()))
+			ctx.Expect(keyID).To(specs.NotEqual(""))
 
-	decrypted, err := enc.Decrypt(ctx, "entity-1", ciphertext, keyID)
-	require.NoError(t, err)
-	assert.Equal(t, plaintext, decrypted)
+			decrypted, err := enc.Decrypt(bg, "entity-1", ciphertext, keyID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(decrypted).ToEqual(plaintext)
+		})
+	})
 }
 
 func TestAESEncryptor_EncryptProducesDifferentCiphertext(t *testing.T) {
-	ctx := context.TODO()
-	ks := newTestKeyStore()
-	enc := encryption.NewAESEncryptor(ks)
+	specs.Describe(t, "AESEncryptor encrypts the same plaintext to different ciphertexts", func(s *specs.Spec) {
+		s.It("differs between calls due to the random nonce", func(ctx *specs.Context) {
+			bg := context.TODO()
+			ks := newTestKeyStore()
+			enc := encryption.NewAESEncryptor(ks)
 
-	plaintext := []byte("same message")
+			plaintext := []byte("same message")
 
-	ct1, _, err := enc.Encrypt(ctx, "entity-1", plaintext)
-	require.NoError(t, err)
+			ct1, _, err := enc.Encrypt(bg, "entity-1", plaintext)
+			ctx.Expect(err).To(specs.BeNil())
 
-	ct2, _, err := enc.Encrypt(ctx, "entity-1", plaintext)
-	require.NoError(t, err)
+			ct2, _, err := enc.Encrypt(bg, "entity-1", plaintext)
+			ctx.Expect(err).To(specs.BeNil())
 
-	assert.NotEqual(t, ct1, ct2, "ciphertext should differ due to random nonce")
+			ctx.Expect(ct1).To(specs.NotEqual(ct2))
+		})
+	})
 }
 
 func TestAESEncryptor_DecryptWithWrongKeyID(t *testing.T) {
-	ctx := context.TODO()
-	ks := newTestKeyStore()
-	enc := encryption.NewAESEncryptor(ks)
+	specs.Describe(t, "AESEncryptor rejects a key ID it does not know", func(s *specs.Spec) {
+		s.It("fails to decrypt with a wrong key ID", func(ctx *specs.Context) {
+			bg := context.TODO()
+			ks := newTestKeyStore()
+			enc := encryption.NewAESEncryptor(ks)
 
-	plaintext := []byte("secret data")
-	ciphertext, _, err := enc.Encrypt(ctx, "entity-1", plaintext)
-	require.NoError(t, err)
+			plaintext := []byte("secret data")
+			ciphertext, _, err := enc.Encrypt(bg, "entity-1", plaintext)
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, err = enc.Decrypt(ctx, "entity-1", ciphertext, "wrong-key-id")
-	require.Error(t, err)
+			_, err = enc.Decrypt(bg, "entity-1", ciphertext, "wrong-key-id")
+			ctx.Expect(err).To(specs.MatchError(encryption.ErrKeyNotFound))
+		})
+	})
 }
 
 func TestAESEncryptor_DecryptShortCiphertext(t *testing.T) {
-	ctx := context.TODO()
-	ks := newTestKeyStore()
-	enc := encryption.NewAESEncryptor(ks)
+	specs.Describe(t, "AESEncryptor rejects a ciphertext shorter than a nonce", func(s *specs.Spec) {
+		s.It("fails to decrypt a short ciphertext", func(ctx *specs.Context) {
+			bg := context.TODO()
+			ks := newTestKeyStore()
+			enc := encryption.NewAESEncryptor(ks)
 
-	// ensure a key exists
-	_, _, err := ks.GetOrCreateKey(ctx, "entity-1")
-	require.NoError(t, err)
+			// ensure a key exists
+			_, _, err := ks.GetOrCreateKey(bg, "entity-1")
+			ctx.Expect(err).To(specs.BeNil())
 
-	// encrypt to get a valid keyID
-	_, keyID, err := enc.Encrypt(ctx, "entity-1", []byte("data"))
-	require.NoError(t, err)
+			// encrypt to get a valid keyID
+			_, keyID, err := enc.Encrypt(bg, "entity-1", []byte("data"))
+			ctx.Expect(err).To(specs.BeNil())
 
-	_, err = enc.Decrypt(ctx, "entity-1", []byte("short"), keyID)
-	require.Error(t, err)
+			_, err = enc.Decrypt(bg, "entity-1", []byte("short"), keyID)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err).To(specs.Project("message", func(e error) string { return e.Error() },
+				specs.MatchRegex("ciphertext too short")))
+		})
+	})
 }

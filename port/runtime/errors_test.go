@@ -27,44 +27,69 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/port/runtime"
 )
 
 func TestErrUnsupportedWrapsStandardError(t *testing.T) {
-	require.ErrorIs(t, runtime.ErrUnsupported, errors.ErrUnsupported)
+	specs.Describe(t, "ErrUnsupported wraps the standard library's errors.ErrUnsupported", func(s *specs.Spec) {
+		s.It("matches errors.ErrUnsupported", func(ctx *specs.Context) {
+			ctx.Expect(runtime.ErrUnsupported).To(specs.MatchError(errors.ErrUnsupported))
+		})
+	})
 }
 
 func TestUnsupportedError(t *testing.T) {
-	var err error = &runtime.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}
-	require.ErrorIs(t, err, runtime.ErrUnsupported)
-	require.ErrorIs(t, err, errors.ErrUnsupported)
-	require.Equal(t, `eGo: runtime "inmem" does not support StartProjection`, err.Error())
+	specs.Describe(t, "UnsupportedError names the runtime and the operation and matches the unsupported sentinels", func(s *specs.Spec) {
+		s.It("matches both sentinels, words its message and survives wrapping", func(ctx *specs.Context) {
+			var err error = &runtime.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}
+			ctx.Expect(err).To(specs.MatchError(runtime.ErrUnsupported))
+			ctx.Expect(err).To(specs.MatchError(errors.ErrUnsupported))
+			ctx.Expect(err.Error()).ToEqual(`urd: runtime "inmem" does not support StartProjection`)
 
-	wrapped := fmt.Errorf("spawn: %w", err)
-	var target *runtime.UnsupportedError
-	require.ErrorAs(t, wrapped, &target)
-	require.Equal(t, "inmem", target.Runtime)
-	require.Equal(t, "StartProjection", target.Operation)
-	require.ErrorIs(t, wrapped, runtime.ErrUnsupported)
+			wrapped := fmt.Errorf("spawn: %w", err)
+			var target *runtime.UnsupportedError
+			ctx.Expect(wrapped).To(specs.MatchErrorAs(&target))
+			ctx.Expect(target.Runtime).ToEqual("inmem")
+			ctx.Expect(target.Operation).ToEqual("StartProjection")
+			ctx.Expect(wrapped).To(specs.MatchError(runtime.ErrUnsupported))
+		})
+	})
 }
 
 func TestSentinelMessagesAreKept(t *testing.T) {
-	cases := map[error]string{
-		runtime.ErrEngineNotStarted:          "eGo engine has not started",
-		runtime.ErrUndefinedEntityID:         "eGo entity id is not defined",
-		runtime.ErrDurableStateStoreRequired: "durable state store is required",
-		runtime.ErrEventsStoreRequired:       "events store is required",
-		runtime.ErrProjectionNotRegistered:   "projection is not registered; register it with ego.WithProjection",
-		runtime.ErrSpawnTenantUndetermined:   "eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver",
-		runtime.ErrSpawnTenantMismatch:       "eGo: entity id is already bound to a different tenant",
-		runtime.ErrSpawnTenantUnverified:     "eGo: the spawned actor's tenant binding could not be verified",
-		runtime.ErrNotACommand:               "eGo: payload is an engine-internal control message, not a command",
-		runtime.ErrEntityFamilyNotDeclared:   "eGo: entity family is not declared; declare it with ego.WithEntityFamilies",
-	}
-	require.Len(t, cases, 10)
-	for err, msg := range cases {
-		require.EqualError(t, err, msg)
-	}
+	specs.Describe(t, "The runtime sentinel errors keep their messages", func(s *specs.Spec) {
+		type sentinel struct {
+			name string
+			err  error
+			msg  string
+		}
+		cases := []sentinel{
+			{"ErrEngineNotStarted", runtime.ErrEngineNotStarted, "urd engine has not started"},
+			{"ErrUndefinedEntityID", runtime.ErrUndefinedEntityID, "urd entity id is not defined"},
+			{"ErrDurableStateStoreRequired", runtime.ErrDurableStateStoreRequired, "durable state store is required"},
+			{"ErrEventsStoreRequired", runtime.ErrEventsStoreRequired, "events store is required"},
+			{"ErrProjectionNotRegistered", runtime.ErrProjectionNotRegistered, "projection is not registered; register it with engine.WithProjection"},
+			{"ErrSpawnTenantUndetermined", runtime.ErrSpawnTenantUndetermined, "urd: tenant-aware spawn requires engine.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver"},
+			{"ErrSpawnTenantMismatch", runtime.ErrSpawnTenantMismatch, "urd: entity id is already bound to a different tenant"},
+			{"ErrSpawnTenantUnverified", runtime.ErrSpawnTenantUnverified, "urd: the spawned actor's tenant binding could not be verified"},
+			{"ErrNotACommand", runtime.ErrNotACommand, "urd: payload is an engine-internal control message, not a command"},
+			{"ErrEntityFamilyNotDeclared", runtime.ErrEntityFamilyNotDeclared, "urd: entity family is not declared; declare it with engine.WithEntityFamilies"},
+		}
+
+		s.It("covers ten distinct sentinels", func(ctx *specs.Context) {
+			ctx.Expect(cases).To(specs.HaveLen(10))
+			for i, tc := range cases {
+				ctx.Expect(cases[:i]).To(specs.NoElement(specs.Satisfy(
+					"be the same error as "+tc.name,
+					func(other any) bool { return errors.Is(tc.err, other.(sentinel).err) },
+				)))
+			}
+		})
+
+		specs.Table(s, cases, func(tc sentinel) string { return tc.name }, func(ctx *specs.Context, tc sentinel) {
+			ctx.Expect(tc.err.Error()).ToEqual(tc.msg)
+		})
+	})
 }

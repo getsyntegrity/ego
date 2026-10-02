@@ -25,6 +25,7 @@ package saga
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
@@ -33,16 +34,16 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/persistence"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/persistence"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // sagaTimeoutMsg is an internal message sent when the saga timeout expires.
@@ -752,6 +753,27 @@ func (s *Actor) attachCommandMetadata(ctx context.Context, explicit command.Meta
 	return protocol.AttachCarrier(ctx, command.MarshalMetadata(md))
 }
 
+// defaultCommandTimeout is used when a saga command leaves Timeout unset.
+const defaultCommandTimeout = 5 * time.Second
+
+// commandTimeoutObserver is an unexported test seam: when set, it receives
+// the effective timeout of every dispatched command, so tests can prove the
+// default without waiting for it. It is nil in production.
+var commandTimeoutObserver atomic.Pointer[func(time.Duration)]
+
+// effectiveCommandTimeout resolves the timeout SendSync is given for a
+// command and reports it to the test seam, if any.
+func effectiveCommandTimeout(configured time.Duration) time.Duration {
+	timeout := configured
+	if timeout == 0 {
+		timeout = defaultCommandTimeout
+	}
+	if observe := commandTimeoutObserver.Load(); observe != nil {
+		(*observe)(timeout)
+	}
+	return timeout
+}
+
 // sendCommand sends a command to an entity and handles the result. ctx
 // carries the saga's tenant identity (attached by the caller) through the
 // dispatch to entity B, so the receiving entity's own T4-A gate observes the
@@ -759,10 +781,7 @@ func (s *Actor) attachCommandMetadata(ctx context.Context, explicit command.Meta
 // layers this saga's causally-chained command.Metadata (#60, M-3) on top,
 // without erasing the tenant identity ctx already carries.
 func (s *Actor) sendCommand(ctx context.Context, cmd sagaCommand) {
-	timeout := cmd.Timeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
+	timeout := effectiveCommandTimeout(cmd.Timeout)
 
 	noSender := s.actorSystem.NoSender()
 	reply, err := noSender.SendSync(s.attachCommandMetadata(ctx, cmd.Metadata), cmd.EntityID, cmd.Command, timeout)
@@ -815,10 +834,7 @@ func (s *Actor) compensate(ctx context.Context, logger kitlog.Logger, actorSyste
 	}
 
 	for _, cmd := range commands {
-		timeout := cmd.Timeout
-		if timeout == 0 {
-			timeout = 5 * time.Second
-		}
+		timeout := effectiveCommandTimeout(cmd.Timeout)
 
 		noSender := actorSystem.NoSender()
 		if _, err := noSender.SendSync(s.attachCommandMetadata(ctx, cmd.Metadata), cmd.EntityID, cmd.Command, timeout); err != nil {

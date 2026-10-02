@@ -25,7 +25,7 @@ package persistence
 import (
 	"context"
 
-	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/urd/egopb"
 )
 
 // SnapshotStore defines the API to persist and retrieve entity state snapshots.

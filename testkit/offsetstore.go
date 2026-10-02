@@ -29,9 +29,9 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 type OffsetKey struct {

@@ -31,17 +31,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	actor "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/discovery"
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/compose"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/eventstream"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/port/publishing"
-	testpb "github.com/getsyntegrity/ego/test/data/testpb"
+	"github.com/getsyntegrity/urd/compose"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/eventstream"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // ledger is a serializable event-sourced behavior: account's command and
@@ -82,28 +83,27 @@ type clusterNode struct {
 }
 
 // system is the node's running actor system.
+
+// system is the node's running actor system.
 func (n *clusterNode) system() actor.ActorSystem { return n.app.Engine().ActorSystem() }
 
 // hosts reports whether this node hosts the actor named id: ActorOf
-// resolves it cluster-wide, and IsLocal tells whether this node runs it.
-func (n *clusterNode) hosts(t *testing.T, ctx context.Context, id string) bool {
-	t.Helper()
-	pid, err := n.system().ActorOf(ctx, id)
-	if err != nil {
-		t.Fatalf("%s: ActorOf(%q): %v", n.name, id, err)
-	}
+// resolves it cluster-wide, and IsLocal tells whether this node runs it. An
+// ActorOf failure fails the spec.
+func (n *clusterNode) hosts(ctx *specs.Context, id string) bool {
+	pid, err := n.system().ActorOf(context.Background(), id)
+	ctx.Expect(err).To(specs.BeNil())
 	return pid.IsLocal()
 }
 
-// newClusterNodes builds two Apps with egoakt.New, each in cluster mode
+// newClusterNodes builds two Apps with urdakt.New, each in cluster mode
 // through WithCluster with the behavior kinds it may host (kindsA for node
 // A, kindsB for node B), with its own testkit stores, one publisher of each
 // kind and a counting event stream. It does not start them.
 //
 // Both nodes find each other through staticDiscovery on dynamic ports and
 // use GoAkt's default RoundRobin placement, which spawnOnPeer relies on.
-func newClusterNodes(t *testing.T, kindsA, kindsB []engine.BehaviorKind) (a, b *clusterNode) {
-	t.Helper()
+func newClusterNodes(ctx *specs.Context, kindsA, kindsB []engine.BehaviorKind) (a, b *clusterNode) {
 	const host = "127.0.0.1"
 	// Three ports per node: gossip, peers and remoting.
 	ports := dynaport.Get(6)
@@ -113,7 +113,7 @@ func newClusterNodes(t *testing.T, kindsA, kindsB []engine.BehaviorKind) (a, b *
 	}
 
 	newNode := func(name string, kinds []engine.BehaviorKind, gossipPort, peersPort, remotingPort int) *clusterNode {
-		events, states, _ := connected(t)
+		events, states, _ := connected(ctx)
 		n := &clusterNode{
 			name:  name,
 			evPub: newEventPublisher(name + "-events"),
@@ -126,7 +126,7 @@ func newClusterNodes(t *testing.T, kindsA, kindsB []engine.BehaviorKind) (a, b *
 			WithMinimumPeersQuorum(1).
 			WithReplicaCount(1).
 			WithPartitionCount(7)
-		n.app = mustNew(t, compose.Spec{
+		n.app = mustNew(ctx, compose.Spec{
 			// Both nodes belong to the same actor system.
 			Name:            "compose-cluster",
 			Families:        compose.EventSourced | compose.DurableState,
@@ -151,12 +151,12 @@ func newClusterNodes(t *testing.T, kindsA, kindsB []engine.BehaviorKind) (a, b *
 
 // startCluster starts both Apps concurrently, so their actor systems
 // bootstrap the cluster together, and waits until each sees the other.
-func startCluster(t *testing.T, ctx context.Context, nodes ...*clusterNode) {
-	t.Helper()
+func startCluster(ctx *specs.Context, nodes ...*clusterNode) {
+	bg := context.Background()
 	errs := make(chan error, len(nodes))
 	for _, n := range nodes {
 		go func() {
-			if err := n.app.Start(ctx); err != nil {
+			if err := n.app.Start(bg); err != nil {
 				errs <- fmt.Errorf("%s: Start: %w", n.name, err)
 				return
 			}
@@ -164,28 +164,37 @@ func startCluster(t *testing.T, ctx context.Context, nodes ...*clusterNode) {
 		}()
 	}
 	for range nodes {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
+		ctx.Expect(<-errs).To(specs.BeNil())
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		formed := true
+	// The cluster has formed once every node sees all the others; the poll
+	// reports the nodes that do not yet.
+	ctx.Eventually(func() any {
+		var lonely []string
 		for _, n := range nodes {
-			peers, err := n.system().Peers(ctx, time.Second)
+			peers, err := n.system().Peers(bg, time.Second)
 			if err != nil || len(peers) != len(nodes)-1 {
-				formed = false
+				lonely = append(lonely, n.name)
 			}
 		}
-		if formed {
-			return
+		return lonely
+	}, specs.BeEmpty(), specs.WithTimeout(30*time.Second), specs.WithInterval(100*time.Millisecond))
+}
+
+// receive returns the next value on ch, polling instead of blocking, and
+// fails the spec when nothing arrives within waitTimeout.
+func receive[T any](ctx *specs.Context, ch <-chan T) T {
+	var got T
+	var ok bool
+	ctx.Eventually(func() any {
+		select {
+		case got = <-ch:
+			ok = true
+		default:
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the two nodes never formed a cluster")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+		return ok
+	}, specs.BeTrue(), specs.WithTimeout(waitTimeout), specs.WithInterval(10*time.Millisecond))
+	return got
 }
 
 // spawnOnPeer spawns, from node from, the entity id so that it is placed on
@@ -210,36 +219,28 @@ func startCluster(t *testing.T, ctx context.Context, nodes ...*clusterNode) {
 // the subject stays on from —
 // placement Local, a single-member cluster, a changed strategy — the test
 // fails instead of retrying.
-func spawnOnPeer(t *testing.T, ctx context.Context, from, to *clusterNode, id string, spawn func(id string) error) {
-	t.Helper()
+func spawnOnPeer(ctx *specs.Context, from, to *clusterNode, id string, spawn func(id string) error) {
 	aligned := false
 	for i := range 2 {
 		alignerID := fmt.Sprintf("%s-aligner-%d", id, i)
-		if err := spawn(alignerID); err != nil {
-			t.Fatalf("%s: spawn aligner %q: %v", from.name, alignerID, err)
-		}
-		if from.hosts(t, ctx, alignerID) {
+		ctx.Expect(spawn(alignerID)).To(specs.BeNil())
+		if from.hosts(ctx, alignerID) {
 			aligned = true
 			break
 		}
 	}
-	if !aligned {
-		t.Fatalf("%s: two consecutive RoundRobin spawns both left %s; the round-robin alternation this test relies on no longer holds", from.name, from.name)
-	}
+	// Two consecutive RoundRobin spawns that both left from mean the
+	// alternation this test relies on no longer holds.
+	ctx.Expect(aligned).To(specs.BeTrue())
 
-	if err := spawn(id); err != nil {
-		t.Fatalf("%s: spawn %q: %v", from.name, id, err)
-	}
-	hostedByTarget := to.hosts(t, ctx, id)
-	hostedByCaller := from.hosts(t, ctx, id)
-	if !hostedByTarget || hostedByCaller {
-		t.Fatalf("%q: local on %s = %v, local on %s = %v; want the spawn placed remotely on %s, not kept on the calling node %s",
-			id, to.name, hostedByTarget, from.name, hostedByCaller, to.name, from.name)
-	}
+	ctx.Expect(spawn(id)).To(specs.BeNil())
+	// Placed remotely on to, not kept on the calling node from.
+	ctx.Expect(to.hosts(ctx, id)).To(specs.BeTrue())
+	ctx.Expect(from.hosts(ctx, id)).To(specs.BeFalse())
 }
 
-// TestApp_TwoNodeClusterPlacesAndStopsCleanly runs a real two-node GoAkt
-// cluster built entirely through egoakt.New, WithCluster and App.Start
+// TestCluster_AppTwoNodePlacesAndStopsCleanly runs a real two-node GoAkt
+// cluster built entirely through urdakt.New, WithCluster and App.Start
 // (#146). Each node registers, through WithCluster, only the behavior type
 // its peer places on it: node A a wallet, node B a ledger. So when node A
 // places a ledger on node B, B can rebuild it only from its own
@@ -247,91 +248,81 @@ func spawnOnPeer(t *testing.T, ctx context.Context, from, to *clusterNode, id st
 // calling node's lazy registration at spawn time never reaches the peer.
 // Each placed entity answers a command with the new state, and both Apps
 // then stop cleanly through App.Stop.
-func TestApp_TwoNodeClusterPlacesAndStopsCleanly(t *testing.T) {
-	ctx := context.Background()
-	nodeA, nodeB := newClusterNodes(t,
-		[]engine.BehaviorKind{new(wallet)},
-		[]engine.BehaviorKind{new(ledger)},
-	)
-	startCluster(t, ctx, nodeA, nodeB)
+//
+// The cluster is built once for the group and the cases run in order, as
+// the t.Run subtests they replace did.
+func TestCluster_AppTwoNodePlacesAndStopsCleanly(t *testing.T) {
+	specs.Describe(t, "a two-node GoAkt cluster built through urdakt.New", func(s *specs.Spec) {
+		bg := context.Background()
+		var nodeA, nodeB *clusterNode
 
-	t.Run("A places a ledger on B", func(t *testing.T) {
-		engine := nodeA.app.Engine()
-		const id = "ledger-1"
-		spawnOnPeer(t, ctx, nodeA, nodeB, id, func(id string) error {
-			return engine.SpawnEventSourced(ctx, &ledger{account{id: id}})
+		s.BeforeAll(func(ctx *specs.Context) {
+			nodeA, nodeB = newClusterNodes(ctx,
+				[]engine.BehaviorKind{new(wallet)},
+				[]engine.BehaviorKind{new(ledger)},
+			)
+			startCluster(ctx, nodeA, nodeB)
+		})
+		// Stop is idempotent, so this only matters when a case fails before
+		// the "stop cleanly" case; its error is ignored on purpose.
+		s.AfterAll(func(*specs.Context) {
+			for _, n := range []*clusterNode{nodeA, nodeB} {
+				if n != nil {
+					_ = n.app.Stop(bg)
+				}
+			}
 		})
 
-		state, revision, err := engine.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 100}, waitTimeout)
-		if err != nil {
-			t.Fatalf("SendCommand from node-A: %v", err)
-		}
-		if got := state.(*testpb.Account); revision != 1 || got.GetAccountId() != id || got.GetAccountBalance() != 100 {
-			t.Fatalf("SendCommand = (%v, %d), want %s with balance 100 at revision 1", state, revision, id)
-		}
-		// The event was persisted and published by node B's engine, the
-		// one hosting the entity.
-		select {
-		case evt := <-nodeB.evPub.events:
-			if evt.GetPersistenceId() != id {
-				t.Fatalf("node-B published an event for %q, want %q", evt.GetPersistenceId(), id)
-			}
-		case <-time.After(waitTimeout):
-			t.Fatal("node-B's events publisher received nothing")
-		}
-	})
+		s.It("A places a ledger on B", func(ctx *specs.Context) {
+			engine := nodeA.app.Engine()
+			const id = "ledger-1"
+			spawnOnPeer(ctx, nodeA, nodeB, id, func(id string) error {
+				return engine.SpawnEventSourced(bg, &ledger{account{id: id}})
+			})
 
-	t.Run("B places a wallet on A", func(t *testing.T) {
-		engine := nodeB.app.Engine()
-		const id = "wallet-1"
-		spawnOnPeer(t, ctx, nodeB, nodeA, id, func(id string) error {
-			return engine.SpawnDurableState(ctx, &wallet{id: id})
+			state, revision, err := engine.SendCommand(bg, id, &testpb.CreateAccount{AccountBalance: 100}, waitTimeout)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(revision).To(specs.Equal(uint64(1)))
+			ctx.Expect(state.(*testpb.Account).GetAccountId()).To(specs.Equal(id))
+			ctx.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(100)))
+			// The event was persisted and published by node B's engine, the
+			// one hosting the entity.
+			ctx.Expect(receive(ctx, nodeB.evPub.events).GetPersistenceId()).To(specs.Equal(id))
 		})
 
-		state, revision, err := engine.SendCommand(ctx, id, &testpb.CreateAccount{AccountBalance: 250}, waitTimeout)
-		if err != nil {
-			t.Fatalf("SendCommand from node-B: %v", err)
-		}
-		if got := state.(*testpb.Account); revision != 1 || got.GetAccountId() != id || got.GetAccountBalance() != 250 {
-			t.Fatalf("SendCommand = (%v, %d), want %s with balance 250 at revision 1", state, revision, id)
-		}
-		select {
-		case st := <-nodeA.stPub.states:
-			if st.GetPersistenceId() != id {
-				t.Fatalf("node-A published a state for %q, want %q", st.GetPersistenceId(), id)
-			}
-		case <-time.After(waitTimeout):
-			t.Fatal("node-A's state publisher received nothing")
-		}
-	})
+		s.It("B places a wallet on A", func(ctx *specs.Context) {
+			engine := nodeB.app.Engine()
+			const id = "wallet-1"
+			spawnOnPeer(ctx, nodeB, nodeA, id, func(id string) error {
+				return engine.SpawnDurableState(bg, &wallet{id: id})
+			})
 
-	t.Run("both nodes stop cleanly", func(t *testing.T) {
-		for _, n := range []*clusterNode{nodeA, nodeB} {
-			sys := n.system()
-			if err := n.app.Stop(ctx); err != nil {
-				t.Fatalf("%s: Stop: %v", n.name, err)
+			state, revision, err := engine.SendCommand(bg, id, &testpb.CreateAccount{AccountBalance: 250}, waitTimeout)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(revision).To(specs.Equal(uint64(1)))
+			ctx.Expect(state.(*testpb.Account).GetAccountId()).To(specs.Equal(id))
+			ctx.Expect(state.(*testpb.Account).GetAccountBalance()).To(specs.Equal(float64(250)))
+			ctx.Expect(receive(ctx, nodeA.stPub.states).GetPersistenceId()).To(specs.Equal(id))
+		})
+
+		s.It("both nodes stop cleanly", func(ctx *specs.Context) {
+			for _, n := range []*clusterNode{nodeA, nodeB} {
+				sys := n.system()
+				ctx.Expect(n.app.Stop(bg)).To(specs.BeNil())
+				ctx.Expect(sys.Running()).To(specs.BeFalse())
+				ctx.Expect(n.app.Engine().Started()).To(specs.BeFalse())
 			}
-			if sys.Running() {
-				t.Errorf("%s: the actor system is still running after Stop", n.name)
+			for _, n := range []*clusterNode{nodeA, nodeB} {
+				// The engine's Stop closes the stream; the actor-system step
+				// closes it again, which is a documented no-op (stopActorSystem).
+				ctx.Expect(n.stream).To(specs.Not(specs.BeNil()))
+				ctx.Expect(n.stream.closed.Load()).To(specs.BeGreaterThan(int32(0)))
+				// Each publisher is closed exactly once.
+				ctx.Expect(n.evPub.closed.Load()).To(specs.Equal(int32(1)))
+				ctx.Expect(n.stPub.closed.Load()).To(specs.Equal(int32(1)))
+				// A second Stop is a no-op.
+				ctx.Expect(n.app.Stop(bg)).To(specs.BeNil())
 			}
-			if n.app.Engine().Started() {
-				t.Errorf("%s: the engine is still started after Stop", n.name)
-			}
-		}
-		for _, n := range []*clusterNode{nodeA, nodeB} {
-			// The engine's Stop closes the stream; the actor-system step
-			// closes it again, which is a documented no-op (stopActorSystem).
-			if n.stream == nil {
-				t.Errorf("%s: the App never allocated its event stream", n.name)
-			} else if n.stream.closed.Load() == 0 {
-				t.Errorf("%s: the event stream was never closed", n.name)
-			}
-			if ev, st := n.evPub.closed.Load(), n.stPub.closed.Load(); ev != 1 || st != 1 {
-				t.Errorf("%s: publisher closes = (events %d, state %d), want each closed exactly once", n.name, ev, st)
-			}
-			if err := n.app.Stop(ctx); err != nil {
-				t.Errorf("%s: a second Stop = %v, want a no-op", n.name, err)
-			}
-		}
+		})
 	})
 }
