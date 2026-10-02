@@ -127,9 +127,8 @@ func TestDurableStateBehavior(t *testing.T) {
 			expectAccountState(ctx, reply, 2, persistenceID, 750.00)
 
 			// restart the actor: it must come back with the committed state
-			pid, err := rig.system.ReSpawn(bg, behavior.ID())
-			ctx.Expect(err).To(specs.BeNil())
-			waitRunning(ctx, pid)
+			rig.killForRestart(ctx, pid, behavior.ID())
+			pid = rig.spawn(ctx, behavior)
 
 			reply = ask(ctx, bg, pid, &egopb.GetStateCommand{})
 			expectAccountState(ctx, reply, 2, persistenceID, 750.00)
