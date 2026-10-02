@@ -195,7 +195,7 @@ func describeSpan(span tracetest.SpanStub, names map[string]string) string {
 	keys := make([]string, 0, len(span.Attributes))
 	for _, kv := range span.Attributes {
 		switch kv.Key {
-		case "ego.command_type":
+		case "urd.command_type":
 			keys = append(keys, string(kv.Key)+"="+kv.Value.AsString())
 		default:
 			keys = append(keys, string(kv.Key))
@@ -240,7 +240,7 @@ func TestTelemetryContract(t *testing.T) {
 				sdktrace.WithSampler(sdktrace.AlwaysSample()),
 			)
 			ctx.Cleanup(func() { _ = provider.Shutdown(bg) })
-			tracer := provider.Tracer("ego-contract")
+			tracer := provider.Tracer("urd-contract")
 			meter := newRecordingMeter()
 
 			engine := newTestEngine(ctx.T, "Sample", connectedEventsStore(ctx),
@@ -277,10 +277,10 @@ func TestTelemetryContract(t *testing.T) {
 
 			ctx.Expect(engine.StartProjection(bg, "discard")).To(specs.BeNil())
 			// the projection should handle the persisted event
-			ctx.Eventually(func() any { return meter.count("ego.projection.events.processed.total") },
+			ctx.Eventually(func() any { return meter.count("urd.projection.events.processed.total") },
 				specs.BeGreaterThan(0), specs.WithTimeout(waitTimeout), specs.WithInterval(20*time.Millisecond))
 			// the projection should record shard gauges
-			ctx.Eventually(func() any { return meter.count("ego.projection.lag_ms") },
+			ctx.Eventually(func() any { return meter.count("urd.projection.lag_ms") },
 				specs.BeGreaterThan(1), specs.WithTimeout(waitTimeout), specs.WithInterval(20*time.Millisecond))
 			ctx.Expect(engine.StopProjection(bg, "discard")).To(specs.BeNil())
 			ctx.Expect(engine.Stop(bg)).To(specs.BeNil())
@@ -324,38 +324,38 @@ func TestTelemetryContract(t *testing.T) {
 				ctx.Expect(os.WriteFile(path, raw, 0o600)).To(specs.BeNil())
 			}
 
-			const command = "ego.command_type=testpb.CreateAccount"
+			const command = "urd.command_type=testpb.CreateAccount"
 			ctx.Expect(observation.Spans).ToEqual([]string{
-				"1x ego.send_command kind=internal parent=test.parent attrs=[" + command + ",ego.entity_id] status=Error events=[exception]",
 				"1x test.parent kind=internal parent=<root> attrs=[] status=Unset events=[]",
-				"2x ego.command kind=internal parent=ego.send_command attrs=[" + command + ",ego.persistence_id] status=Unset events=[]",
-				"2x ego.send_command kind=internal parent=test.parent attrs=[" + command + ",ego.entity_id] status=Unset events=[]",
+				"1x urd.send_command kind=internal parent=test.parent attrs=[" + command + ",urd.entity_id] status=Error events=[exception]",
+				"2x urd.command kind=internal parent=urd.send_command attrs=[" + command + ",urd.persistence_id] status=Unset events=[]",
+				"2x urd.send_command kind=internal parent=test.parent attrs=[" + command + ",urd.entity_id] status=Unset events=[]",
 			})
 
 			ctx.Expect(observation.Instruments).ToEqual(map[string]string{
-				"ego.commands.total":                    "Int64Counter|Total number of commands processed|",
-				"ego.commands.duration":                 "Float64Histogram|Duration of command processing in milliseconds|",
-				"ego.events.persisted.total":            "Int64Counter|Total number of events persisted|",
-				"ego.projection.events.processed.total": "Int64Counter|Total number of events processed by projections|",
-				"ego.entities.active":                   "Int64UpDownCounter|Number of currently active entities|",
-				"ego.projections.active":                "Int64UpDownCounter|Number of currently active projections|",
-				"ego.projection.lag_ms":                 "Int64Gauge|Projection lag in milliseconds per shard|",
-				"ego.projection.latest_offset":          "Int64Gauge|Current projection offset timestamp per shard|",
-				"ego.projection.events_behind":          "Int64Gauge|Approximate number of unprocessed events per shard|",
+				"urd.commands.total":                    "Int64Counter|Total number of commands processed|",
+				"urd.commands.duration":                 "Float64Histogram|Duration of command processing in milliseconds|",
+				"urd.events.persisted.total":            "Int64Counter|Total number of events persisted|",
+				"urd.projection.events.processed.total": "Int64Counter|Total number of events processed by projections|",
+				"urd.entities.active":                   "Int64UpDownCounter|Number of currently active entities|",
+				"urd.projections.active":                "Int64UpDownCounter|Number of currently active projections|",
+				"urd.projection.lag_ms":                 "Int64Gauge|Projection lag in milliseconds per shard|",
+				"urd.projection.latest_offset":          "Int64Gauge|Current projection offset timestamp per shard|",
+				"urd.projection.events_behind":          "Int64Gauge|Approximate number of unprocessed events per shard|",
 			})
 
 			shard := []string{"{projection_name,shard}"}
 			none := []string{"{}"}
 			ctx.Expect(observation.Measurements).ToEqual(map[string][]string{
-				"ego.commands.total":                    none,
-				"ego.commands.duration":                 none,
-				"ego.events.persisted.total":            none,
-				"ego.projection.events.processed.total": none,
-				"ego.entities.active":                   none,
-				"ego.projections.active":                none,
-				"ego.projection.lag_ms":                 shard,
-				"ego.projection.latest_offset":          shard,
-				"ego.projection.events_behind":          shard,
+				"urd.commands.total":                    none,
+				"urd.commands.duration":                 none,
+				"urd.events.persisted.total":            none,
+				"urd.projection.events.processed.total": none,
+				"urd.entities.active":                   none,
+				"urd.projections.active":                none,
+				"urd.projection.lag_ms":                 shard,
+				"urd.projection.latest_offset":          shard,
+				"urd.projection.events_behind":          shard,
 			})
 
 			// One instrument set per Engine.Start, per entity actor and per

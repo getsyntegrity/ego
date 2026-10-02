@@ -166,7 +166,7 @@ func lagOf(reader *sdkmetric.ManualReader) func() any {
 		for _, scope := range collected.ScopeMetrics {
 			for _, metric := range scope.Metrics {
 				gauge, ok := metric.Data.(metricdata.Gauge[int64])
-				if metric.Name == "ego.projection.lag_ms" && ok && len(gauge.DataPoints) > 0 {
+				if metric.Name == "urd.projection.lag_ms" && ok && len(gauge.DataPoints) > 0 {
 					return gauge.DataPoints[0].Value
 				}
 			}

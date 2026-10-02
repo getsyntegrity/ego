@@ -64,39 +64,39 @@ func New(meter metric.Meter) *Instruments {
 		return nil
 	}
 
-	commandsTotal, _ := meter.Int64Counter("ego.commands.total",
+	commandsTotal, _ := meter.Int64Counter("urd.commands.total",
 		metric.WithDescription("Total number of commands processed"),
 	)
 
-	commandsDuration, _ := meter.Float64Histogram("ego.commands.duration",
+	commandsDuration, _ := meter.Float64Histogram("urd.commands.duration",
 		metric.WithDescription("Duration of command processing in milliseconds"),
 	)
 
-	eventsPersisted, _ := meter.Int64Counter("ego.events.persisted.total",
+	eventsPersisted, _ := meter.Int64Counter("urd.events.persisted.total",
 		metric.WithDescription("Total number of events persisted"),
 	)
 
-	projectionHandled, _ := meter.Int64Counter("ego.projection.events.processed.total",
+	projectionHandled, _ := meter.Int64Counter("urd.projection.events.processed.total",
 		metric.WithDescription("Total number of events processed by projections"),
 	)
 
-	entitiesActive, _ := meter.Int64UpDownCounter("ego.entities.active",
+	entitiesActive, _ := meter.Int64UpDownCounter("urd.entities.active",
 		metric.WithDescription("Number of currently active entities"),
 	)
 
-	projectionsActive, _ := meter.Int64UpDownCounter("ego.projections.active",
+	projectionsActive, _ := meter.Int64UpDownCounter("urd.projections.active",
 		metric.WithDescription("Number of currently active projections"),
 	)
 
-	projectionLag, _ := meter.Int64Gauge("ego.projection.lag_ms",
+	projectionLag, _ := meter.Int64Gauge("urd.projection.lag_ms",
 		metric.WithDescription("Projection lag in milliseconds per shard"),
 	)
 
-	projectionOffset, _ := meter.Int64Gauge("ego.projection.latest_offset",
+	projectionOffset, _ := meter.Int64Gauge("urd.projection.latest_offset",
 		metric.WithDescription("Current projection offset timestamp per shard"),
 	)
 
-	projectionBehind, _ := meter.Int64Gauge("ego.projection.events_behind",
+	projectionBehind, _ := meter.Int64Gauge("urd.projection.events_behind",
 		metric.WithDescription("Approximate number of unprocessed events per shard"),
 	)
 
@@ -212,31 +212,31 @@ func (x ShardGauges) Record(ctx context.Context, lagMs, offset, behind int64) {
 	x.instruments.projectionBehind.Record(ctx, behind, x.attrs)
 }
 
-// StartCommandSpan starts the "ego.command" span an entity opens while it
+// StartCommandSpan starts the "urd.command" span an entity opens while it
 // handles a command. With a nil tracer it returns ctx unchanged and a nil
 // span, and never inspects command.
 func StartCommandSpan(ctx context.Context, tracer trace.Tracer, persistenceID string, command proto.Message) (context.Context, trace.Span) {
 	if tracer == nil {
 		return ctx, nil
 	}
-	return tracer.Start(ctx, "ego.command",
+	return tracer.Start(ctx, "urd.command",
 		trace.WithAttributes(
-			attribute.String("ego.persistence_id", persistenceID),
-			attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
+			attribute.String("urd.persistence_id", persistenceID),
+			attribute.String("urd.command_type", string(command.ProtoReflect().Descriptor().FullName())),
 		))
 }
 
-// StartSendCommandSpan starts the "ego.send_command" span that links the
+// StartSendCommandSpan starts the "urd.send_command" span that links the
 // caller's context to the command dispatch. With a nil tracer it returns ctx
 // unchanged and a nil span.
 func StartSendCommandSpan(ctx context.Context, tracer trace.Tracer, entityID string, command proto.Message) (context.Context, trace.Span) {
 	if tracer == nil {
 		return ctx, nil
 	}
-	return tracer.Start(ctx, "ego.send_command",
+	return tracer.Start(ctx, "urd.send_command",
 		trace.WithAttributes(
-			attribute.String("ego.entity_id", entityID),
-			attribute.String("ego.command_type", string(command.ProtoReflect().Descriptor().FullName())),
+			attribute.String("urd.entity_id", entityID),
+			attribute.String("urd.command_type", string(command.ProtoReflect().Descriptor().FullName())),
 		))
 }
 

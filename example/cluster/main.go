@@ -315,8 +315,8 @@ func main() {
 	//
 	// The full trace in Jaeger looks like:
 	//   HTTP POST /accounts/{id}   ← otelhttp server span
-	//     └─ ego.send_command      ← engine.SendCommand
-	//          └─ ego.command      ← EventSourcedActor
+	//     └─ urd.send_command      ← engine.SendCommand
+	//          └─ urd.command      ← EventSourcedActor
 	//
 	// X-Served-By lets callers see which pod handled the request.
 	hostname, _ := os.Hostname()

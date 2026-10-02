@@ -33,7 +33,7 @@ data:
           },
           "targets": [
             {
-              "expr": "rate(ego_commands_total[1m])",
+              "expr": "rate(urd_commands_total[1m])",
               "legendFormat": "{{instance}}",
               "refId": "A"
             }
@@ -58,17 +58,17 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.50, rate(ego_commands_duration_bucket[1m]))",
+              "expr": "histogram_quantile(0.50, rate(urd_commands_duration_bucket[1m]))",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.95, rate(ego_commands_duration_bucket[1m]))",
+              "expr": "histogram_quantile(0.95, rate(urd_commands_duration_bucket[1m]))",
               "legendFormat": "p95",
               "refId": "B"
             },
             {
-              "expr": "histogram_quantile(0.99, rate(ego_commands_duration_bucket[1m]))",
+              "expr": "histogram_quantile(0.99, rate(urd_commands_duration_bucket[1m]))",
               "legendFormat": "p99",
               "refId": "C"
             }
@@ -93,7 +93,7 @@ data:
           },
           "targets": [
             {
-              "expr": "rate(ego_events_persisted_total[1m])",
+              "expr": "rate(urd_events_persisted_total[1m])",
               "legendFormat": "{{instance}}",
               "refId": "A"
             }
@@ -118,7 +118,7 @@ data:
           },
           "targets": [
             {
-              "expr": "rate(ego_projection_events_processed_total[1m])",
+              "expr": "rate(urd_projection_events_processed_total[1m])",
               "legendFormat": "{{projection_name}} / shard {{shard}}",
               "refId": "A"
             }
@@ -144,7 +144,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(ego_entities_active)",
+              "expr": "sum(urd_entities_active)",
               "legendFormat": "",
               "refId": "A"
             }
@@ -169,7 +169,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(ego_projections_active)",
+              "expr": "sum(urd_projections_active)",
               "legendFormat": "",
               "refId": "A"
             }
@@ -193,7 +193,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(ego_commands_total)",
+              "expr": "sum(urd_commands_total)",
               "legendFormat": "",
               "refId": "A"
             }
@@ -217,7 +217,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(ego_events_persisted_total)",
+              "expr": "sum(urd_events_persisted_total)",
               "legendFormat": "",
               "refId": "A"
             }
@@ -250,7 +250,7 @@ data:
           },
           "targets": [
             {
-              "expr": "ego_projection_lag_ms",
+              "expr": "urd_projection_lag_ms",
               "legendFormat": "{{projection_name}} / shard {{shard}}",
               "refId": "A"
             }
@@ -282,7 +282,7 @@ data:
           },
           "targets": [
             {
-              "expr": "ego_projection_events_behind",
+              "expr": "urd_projection_events_behind",
               "legendFormat": "{{projection_name}} / shard {{shard}}",
               "refId": "A"
             }

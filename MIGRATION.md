@@ -72,6 +72,29 @@ On macOS, use `sed -i ''` instead of `sed -i`. If you vendor dependencies, run
   `EGO_TELEMETRY_CONTRACT_DUMP`. The old name is still read as a fallback, and is
   deprecated; it will be removed in a later release. It is a test-only switch.
 
+- **OpenTelemetry names.** Metric, span and attribute names, and the tracer and
+  meter scope names, now use `urd` instead of `ego`. Dashboards, alerts and
+  trace queries that use the old names must be updated; there is no alias, so
+  both spellings never appear together. The Prometheus form replaces dots with
+  underscores (`ego_commands_total` is now `urd_commands_total`).
+
+  | Kind | Old name | New name |
+  | --- | --- | --- |
+  | Metric | `ego.commands.total` | `urd.commands.total` |
+  | Metric | `ego.commands.duration` | `urd.commands.duration` |
+  | Metric | `ego.events.persisted.total` | `urd.events.persisted.total` |
+  | Metric | `ego.projection.events.processed.total` | `urd.projection.events.processed.total` |
+  | Metric | `ego.entities.active` | `urd.entities.active` |
+  | Metric | `ego.projections.active` | `urd.projections.active` |
+  | Metric | `ego.projection.lag_ms` | `urd.projection.lag_ms` |
+  | Metric | `ego.projection.latest_offset` | `urd.projection.latest_offset` |
+  | Metric | `ego.projection.events_behind` | `urd.projection.events_behind` |
+  | Span | `ego.command` | `urd.command` |
+  | Span | `ego.send_command` | `urd.send_command` |
+  | Attribute | `ego.persistence_id` | `urd.persistence_id` |
+  | Attribute | `ego.command_type` | `urd.command_type` |
+  | Attribute | `ego.entity_id` | `urd.entity_id` |
+
 ## Intentionally not renamed
 
 These names keep the `ego` spelling. Each one is stored or exchanged outside
@@ -89,10 +112,6 @@ clusters.
 - **GoAkt extension ID strings.** Nodes of different versions look extensions up
   by these strings; changing them would break rolling upgrades. Only the Go
   constant names may change.
-- **OpenTelemetry metric, span and attribute names**, such as
-  `ego_commands_total`, the span `ego.command` and the attribute
-  `ego.persistence_id`. Dashboards and alerts depend on them. They may be
-  renamed in a later release, with notice.
 - **NATS stream names `ego-events` and `ego-durable-states`.** A stream is
   server-side state; a new name would point at empty streams.
 - **Postgres table `ego_schema_migrations` and its advisory lock key.** A new

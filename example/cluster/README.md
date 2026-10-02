@@ -224,8 +224,8 @@ make jaeger
 
 Opens Jaeger at [http://localhost:16686](http://localhost:16686). Select service `urd-cluster` to see traces for command processing, including:
 
-- Span name: `ego.command`
-- Attributes: `ego.persistence_id`, `ego.command_type`
+- Span name: `urd.command`
+- Attributes: `urd.persistence_id`, `urd.command_type`
 
 ### Prometheus
 
@@ -239,17 +239,17 @@ Urd defines OpenTelemetry instruments with dotted names; the OpenTelemetry Colle
 
 | Metric | Type | Description |
 | --- | --- | --- |
-| `ego_commands_total` | Counter | Total commands processed |
-| `ego_commands_duration` | Histogram | Command processing duration (ms) |
-| `ego_events_persisted` | Counter | Total events persisted |
-| `ego_projection_events_processed` | Counter | Total projection events processed |
-| `ego_entities_active` | UpDownCounter | Currently active entities |
-| `ego_projections_active` | UpDownCounter | Currently active projections |
-| `ego_projection_lag_ms` | Gauge | Projection lag per shard (ms) |
-| `ego_projection_latest_offset` | Gauge | Current projection offset per shard |
-| `ego_projection_events_behind` | Gauge | Unprocessed events per shard |
+| `urd_commands_total` | Counter | Total commands processed |
+| `urd_commands_duration` | Histogram | Command processing duration (ms) |
+| `urd_events_persisted` | Counter | Total events persisted |
+| `urd_projection_events_processed` | Counter | Total projection events processed |
+| `urd_entities_active` | UpDownCounter | Currently active entities |
+| `urd_projections_active` | UpDownCounter | Currently active projections |
+| `urd_projection_lag_ms` | Gauge | Projection lag per shard (ms) |
+| `urd_projection_latest_offset` | Gauge | Current projection offset per shard |
+| `urd_projection_events_behind` | Gauge | Unprocessed events per shard |
 
-The instrument, span and attribute names keep their `ego` spelling after the rename to Urd, so existing dashboards and alerts keep working. See [`MIGRATION.md`](../../MIGRATION.md).
+The instrument, span and attribute names use the `urd` spelling (they were `ego` before the rename to Urd), so dashboards and alerts written for the old names must be updated. See [`MIGRATION.md`](../../MIGRATION.md).
 
 ### Kubernetes Dashboard
 
