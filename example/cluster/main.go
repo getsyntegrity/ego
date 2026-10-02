@@ -69,7 +69,7 @@ const projectionName = "account-balances"
 var logger = kitlog.New(kitlog.Config{
 	Level:          kitlog.LevelInfo,
 	Format:         kitlog.FormatJSON,
-	GlobalFields:   map[string]string{"service": "ego-cluster"},
+	GlobalFields:   map[string]string{"service": "urd-cluster"},
 	ContextHandler: kitotel.Decorator(kitotel.Options{}),
 })
 
@@ -85,7 +85,7 @@ func main() {
 	peersPort := envInt("PEERS_PORT", 9002)
 	httpPort := envInt("HTTP_PORT", 8080)
 
-	tel, telShutdown, err := setupTelemetry(ctx, "ego-cluster")
+	tel, telShutdown, err := setupTelemetry(ctx, "urd-cluster")
 	if err != nil {
 		logger.Error("failed to setup telemetry", "error", err)
 		os.Exit(1)
@@ -115,7 +115,7 @@ func main() {
 
 	provider := NewKubernetesProvider(
 		namespace,
-		map[string]string{"app": "ego-cluster"},
+		map[string]string{"app": "urd-cluster"},
 		"discovery",
 		"remoting",
 		"peers",
@@ -163,7 +163,7 @@ func main() {
 		goakt.WithRemote(remote.NewConfig(nodeIP, remotingPort)),
 	)
 
-	sys, err := goakt.NewActorSystem("ego-cluster", goaktOpts...)
+	sys, err := goakt.NewActorSystem("urd-cluster", goaktOpts...)
 	if err != nil {
 		logger.Error("failed to build actor system", "error", err)
 		os.Exit(1)
@@ -330,8 +330,8 @@ func main() {
 	// Explicitly wire the tracer provider and propagator so otelhttp never
 	// falls back to a noop global (guards against subtle init-order races).
 	// spanNameFromRequest gives each route a clean name in Jaeger, e.g.
-	// "POST /accounts/{id}" instead of the generic "ego-cluster-http".
-	handler := servedByMiddleware(otelhttp.NewHandler(mux, "ego-cluster-http",
+	// "POST /accounts/{id}" instead of the generic "urd-cluster-http".
+	handler := servedByMiddleware(otelhttp.NewHandler(mux, "urd-cluster-http",
 		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
 		otelhttp.WithPropagators(otel.GetTextMapPropagator()),
 		otelhttp.WithSpanNameFormatter(spanNameFromRequest),

@@ -1,12 +1,12 @@
 # ---------------------------------------------------------------------------
-# OpenTelemetry Collector — receives OTLP from ego pods, exports to
+# OpenTelemetry Collector — receives OTLP from urd pods, exports to
 # Jaeger (traces) and Prometheus (metrics via scrape endpoint).
 # ---------------------------------------------------------------------------
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-collector-config
-  namespace: ego-example
+  namespace: urd-example
 data:
   config.yaml: |
     receivers:
@@ -21,7 +21,7 @@ data:
 
     exporters:
       otlp/jaeger:
-        endpoint: "jaeger.ego-example.svc.cluster.local:4317"
+        endpoint: "jaeger.urd-example.svc.cluster.local:4317"
         tls:
           insecure: true
       prometheus:
@@ -42,7 +42,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: otel-collector
-  namespace: ego-example
+  namespace: urd-example
 spec:
   replicas: 1
   selector:
@@ -74,7 +74,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: otel-collector
-  namespace: ego-example
+  namespace: urd-example
 spec:
   selector:
     app: otel-collector
@@ -95,7 +95,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jaeger
-  namespace: ego-example
+  namespace: urd-example
 spec:
   replicas: 1
   selector:
@@ -122,7 +122,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: jaeger
-  namespace: ego-example
+  namespace: urd-example
 spec:
   selector:
     app: jaeger
@@ -143,7 +143,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  namespace: ego-example
+  namespace: urd-example
 data:
   prometheus.yml: |
     global:
@@ -153,13 +153,13 @@ data:
     scrape_configs:
       - job_name: "otel-collector"
         static_configs:
-          - targets: ["otel-collector.ego-example.svc.cluster.local:8889"]
+          - targets: ["otel-collector.urd-example.svc.cluster.local:8889"]
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus
-  namespace: ego-example
+  namespace: urd-example
 spec:
   replicas: 1
   selector:
@@ -191,7 +191,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
-  namespace: ego-example
+  namespace: urd-example
 spec:
   selector:
     app: prometheus
@@ -202,14 +202,14 @@ spec:
 
 
 # ---------------------------------------------------------------------------
-# Grafana — pre-configured with Prometheus datasource and eGo dashboard
+# Grafana — pre-configured with Prometheus datasource and Urd dashboard
 # ---------------------------------------------------------------------------
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-datasources
-  namespace: ego-example
+  namespace: urd-example
 data:
   datasources.yaml: |
     apiVersion: 1
@@ -217,7 +217,7 @@ data:
       - name: Prometheus
         type: prometheus
         access: proxy
-        url: http://prometheus.ego-example.svc.cluster.local:9090
+        url: http://prometheus.urd-example.svc.cluster.local:9090
         isDefault: true
         editable: false
 ---
@@ -225,12 +225,12 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-provider
-  namespace: ego-example
+  namespace: urd-example
 data:
   dashboards.yaml: |
     apiVersion: 1
     providers:
-      - name: ego
+      - name: urd
         orgId: 1
         folder: ""
         type: file
@@ -244,7 +244,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: ego-example
+  namespace: urd-example
 spec:
   replicas: 1
   selector:
@@ -292,7 +292,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: grafana
-  namespace: ego-example
+  namespace: urd-example
 spec:
   selector:
     app: grafana
