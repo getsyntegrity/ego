@@ -1626,14 +1626,20 @@ func TestEngineRebuildProjectionSuccess(t *testing.T) {
 
 			const name = "rebuild-target"
 			sc.Expect(engine.StartProjection(ctx, name)).To(specs.BeNil())
-			pause.For(300 * time.Millisecond)
 
 			sc.Expect(engine.RebuildProjection(ctx, name, ZeroTime)).To(specs.BeNil())
-			pause.For(300 * time.Millisecond)
 
-			running, err := engine.IsProjectionRunning(ctx, name)
-			sc.Expect(err).To(specs.BeNil())
-			sc.Expect(running).To(specs.BeTrue())
+			// The rebuilt projection must come up and stay up: a stale stop
+			// cleanup of the old instance must not remove the new one.
+			projectionRunning := func() any {
+				running, err := engine.IsProjectionRunning(ctx, name)
+				if err != nil {
+					return err
+				}
+				return running
+			}
+			sc.Eventually(projectionRunning, specs.BeTrue(), specs.WithTimeout(waitTimeout))
+			sc.Consistently(projectionRunning, specs.BeTrue(), specs.WithTimeout(300*time.Millisecond))
 		})
 	})
 }

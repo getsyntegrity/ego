@@ -24,10 +24,12 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	goakt "github.com/tochemey/goakt/v4/actor"
+	gerrors "github.com/tochemey/goakt/v4/errors"
 
 	"github.com/getsyntegrity/urd/egopb"
 	"github.com/getsyntegrity/urd/internal/extensions"
@@ -196,6 +198,12 @@ func (engine *Engine) RebuildProjection(ctx context.Context, name string, from t
 		return fmt.Errorf("failed to stop projection %s for rebuild: %w", name, err)
 	}
 
+	// The actor system releases a stopped actor's name asynchronously, through
+	// its death watch. Spawning the same name before that happens hands back the
+	// stale, stopped instance, and the late cleanup then removes the name again,
+	// leaving no projection running after the rebuild.
+	engine.awaitProjectionReleased(ctx, name)
+
 	// reset the offset
 	if err := offsetStore.ResetOffset(ctx, name, from.UnixMilli()); err != nil {
 		return fmt.Errorf("failed to reset offset for projection %s: %w", name, err)
@@ -207,6 +215,44 @@ func (engine *Engine) RebuildProjection(ctx context.Context, name string, from t
 	}
 
 	return nil
+}
+
+const (
+	// projectionReleaseTimeout bounds how long a rebuild waits for the actor
+	// system to release a stopped projection's name.
+	projectionReleaseTimeout = 5 * time.Second
+	// projectionReleaseInterval is how often a rebuild checks that release.
+	projectionReleaseInterval = 5 * time.Millisecond
+)
+
+// awaitProjectionReleased blocks until the actor system no longer knows the
+// named projection, ctx ends, or projectionReleaseTimeout elapses. It never
+// fails: when the release cannot be confirmed in time the caller carries on and
+// the later spawn reports any real failure.
+func (engine *Engine) awaitProjectionReleased(ctx context.Context, name string) {
+	ref := engine.actorSystem.Load()
+	if ref == nil {
+		return
+	}
+
+	deadline := time.NewTimer(projectionReleaseTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(projectionReleaseInterval)
+	defer ticker.Stop()
+
+	for {
+		if _, err := ref.sys.ActorOf(ctx, name); errors.Is(err, gerrors.ErrActorNotFound) {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // ProjectionLag reports, per shard, how far behind the named projection is
