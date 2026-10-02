@@ -9,7 +9,7 @@ replace github.com/getsyntegrity/urd => ../
 replace github.com/getsyntegrity/urd/persistence/postgres => ../persistence/postgres
 
 require (
-	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd v0.1.0
 	github.com/getsyntegrity/urd/persistence/postgres v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0

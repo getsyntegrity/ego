@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/getsyntegrity/go-specs v0.3.3
-	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd v0.1.0
 	github.com/getsyntegrity/urd/publisher/kafka v0.0.0
 	github.com/getsyntegrity/urd/publisher/nats v0.0.0
 	github.com/getsyntegrity/urd/publisher/pulsar v0.0.0
