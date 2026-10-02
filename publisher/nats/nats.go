@@ -127,7 +127,7 @@ func (x *EventsPublisher) Close(context.Context) error {
 
 // ID returns the ID of the NATS publisher.
 func (x *EventsPublisher) ID() string {
-	return "ego-nats"
+	return "urd-nats"
 }
 
 // Publish sends an event to the NATS server.
@@ -243,7 +243,7 @@ func (e *DurableStatePublisher) Close(context.Context) error {
 
 // ID returns the ID of the NATS publisher.
 func (e *DurableStatePublisher) ID() string {
-	return "ego-nats"
+	return "urd-nats"
 }
 
 // Publish sends a message to the NATS server.

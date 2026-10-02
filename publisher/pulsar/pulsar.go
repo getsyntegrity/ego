@@ -100,7 +100,7 @@ func NewEventsPublisher(config *Config) (*EventsPublisher, error) {
 
 // ID returns the publisher ID.
 func (x *EventsPublisher) ID() string {
-	return "ego-pulsar"
+	return "urd-pulsar"
 }
 
 // Publish publishes an event to the Pulsar server.
@@ -203,7 +203,7 @@ func NewDurableStatePublisher(config *Config) (*DurableStatePublisher, error) {
 
 // ID returns the publisher ID.
 func (x *DurableStatePublisher) ID() string {
-	return "ego-pulsar"
+	return "urd-pulsar"
 }
 
 // Publish publishes an event to the Pulsar server.
