@@ -3,15 +3,15 @@ module github.com/getsyntegrity/urd/publisher/kafka
 go 1.26.0
 
 require (
-	github.com/IBM/sarama v1.60.2
+	github.com/IBM/sarama v1.61.1
 	github.com/getsyntegrity/go-specs v0.3.3
 	github.com/getsyntegrity/urd v0.1.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
-	go.uber.org/atomic v1.11.0
+	go.uber.org/atomic v1.12.0
 	google.golang.org/protobuf v1.36.12
 )
 
-require golang.org/x/sys v0.47.0 // indirect
+require golang.org/x/sys v0.48.0 // indirect
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -22,13 +22,13 @@ require (
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	github.com/klauspost/compress v1.20.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.29 // indirect
+	github.com/klauspost/compress v1.20.1 // indirect
+	github.com/pierrec/lz4/v4 v4.1.31 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
-	golang.org/x/crypto v0.56.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 )
 
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
