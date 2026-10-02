@@ -36,9 +36,9 @@ import (
 var (
 	// ErrEngineNotStarted is returned when the runtime has not started, or
 	// has stopped.
-	ErrEngineNotStarted = errors.New("Urd engine has not started")
+	ErrEngineNotStarted = errors.New("urd engine has not started")
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
-	ErrUndefinedEntityID = errors.New("Urd entity id is not defined")
+	ErrUndefinedEntityID = errors.New("urd entity id is not defined")
 	// ErrDurableStateStoreRequired is returned when a durable state entity is
 	// spawned and the runtime has no durable state store.
 	ErrDurableStateStoreRequired = errors.New("durable state store is required")

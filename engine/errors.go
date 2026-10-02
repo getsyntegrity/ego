@@ -32,7 +32,7 @@ import (
 )
 
 var (
-	// ErrEngineNotStarted is returned when the Urd engine has not started
+	// ErrEngineNotStarted is returned when the urd engine has not started
 	ErrEngineNotStarted = runtimeport.ErrEngineNotStarted
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
 	ErrUndefinedEntityID = runtimeport.ErrUndefinedEntityID
