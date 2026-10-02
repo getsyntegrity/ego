@@ -236,6 +236,20 @@ func (r *actorRig) spawnWithoutStash(ctx *specs.Context, behavior eventSourcedBe
 	return pid
 }
 
+// killForRestart stops the named actor and waits until the actor system has
+// released it and its children: count is the number of actors the system held
+// before the actor was spawned. The system drops a stopped actor from its tree
+// asynchronously, through the death watch, so a spawn right after the stop can
+// get the stale instance back, or have the late cleanup remove the fresh one.
+// A goakt ReSpawn has the same race and can even take the whole system down
+// under load, so a restart is a stop, this wait, and a new spawn.
+func (r *actorRig) killForRestart(ctx *specs.Context, pid *goakt.PID, name string, count uint64) {
+	ctx.Expect(r.system.Kill(context.Background(), name)).To(specs.BeNil())
+	waitStopped(ctx, pid)
+	ctx.Eventually(func() any { return r.system.NumActors() }, specs.Equal(count),
+		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+}
+
 func waitRunning(ctx *specs.Context, pid *goakt.PID) {
 	ctx.Eventually(func() any { return pid.IsRunning() }, specs.BeTrue(),
 		specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))

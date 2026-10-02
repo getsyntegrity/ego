@@ -107,6 +107,7 @@ func TestEventSourcedActor(t *testing.T) {
 			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			idle := rig.system.NumActors()
 			pid := rig.spawn(ctx, behavior)
 
 			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
@@ -116,9 +117,8 @@ func TestEventSourcedActor(t *testing.T) {
 			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
 
 			// restart the actor: it rebuilds its state from the events store
-			pid, err := rig.system.ReSpawn(context.Background(), behavior.ID())
-			ctx.Expect(err).To(specs.BeNil())
-			waitRunning(ctx, pid)
+			rig.killForRestart(ctx, pid, behavior.ID(), idle)
+			pid = rig.spawn(ctx, behavior)
 
 			// fetch the current state
 			state = stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
