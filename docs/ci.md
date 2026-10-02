@@ -99,7 +99,7 @@ Integration tests have one technique: Go tests in `inttest/` that start their co
 
 ### Why they never skip
 
-The old Postgres tests called `t.Skip` when `EGO_EXAMPLE_POSTGRES_DSN` was not set, and `go test` reports a skip as a pass, so they looked green in every CI run without running. The `inttest` module removes the cause instead of auditing it afterwards:
+The old Postgres tests called `t.Skip` when `URD_EXAMPLE_POSTGRES_DSN` was not set, and `go test` reports a skip as a pass, so they looked green in every CI run without running. The `inttest` module removes the cause instead of auditing it afterwards:
 
 - Each test package starts its container from `TestMain`. If Docker or the container is not available, `TestMain` exits non-zero and the run fails with the reason. There is no variable to forget.
 - The `unit-gate` job fails on a call to `Skip`, `Skipf` or `SkipNow` on any receiver, on the go-specs `SkipIt`, `PendingIt` and `FIt` (on a `Spec` or a `Builder`; `FIt` focuses one case, so every other case would be skipped), and on `testing.Short`, in any Go file under `inttest/`. No allowlist can excuse it.
