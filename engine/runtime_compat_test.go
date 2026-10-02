@@ -123,11 +123,11 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 	})
 }
 
-// TestEgoSpawnOptionsResolveThroughRuntime checks that every engine.With* spawn
+// TestUrdSpawnOptionsResolveThroughRuntime checks that every engine.With* spawn
 // option is readable by another runtime through ResolveSpawnOptions: the five
 // neutral ones through their getters, the four write-side ones as adapter
 // settings under the engine's own keys.
-func TestEgoSpawnOptionsResolveThroughRuntime(t *testing.T) {
+func TestUrdSpawnOptionsResolveThroughRuntime(t *testing.T) {
 	specs.Describe(t, "engine spawn options are readable through the port/runtime ResolveSpawnOptions", func(s *specs.Spec) {
 		s.It("exposes the neutral options through getters and the write-side ones as adapter settings", func(ctx *specs.Context) {
 			policy := RetentionPolicy{DeleteEventsOnSnapshot: true, EventsRetentionCount: 7}

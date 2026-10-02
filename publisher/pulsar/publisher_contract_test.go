@@ -49,7 +49,7 @@ var (
 // stopped publisher returns matches publishing.ErrPublisherNotStarted. The
 // publishers are built without a broker connection: Publish rejects the call
 // before touching the client. Together with test/compat's
-// TestEgoSentinelIsThePublishingSentinel, which checks that
+// TestUrdSentinelIsThePublishingSentinel, which checks that
 // engine.ErrPublisherNotStarted is this same error value, it proves the
 // historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).

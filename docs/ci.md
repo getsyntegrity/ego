@@ -64,7 +64,7 @@ The `workflow_dispatch` column reads "yes" once `ci.yml` exists on the default b
 
 ### The `TestCluster` naming rule
 
-A test that starts a clustered actor system (a real GoAkt cluster with gossip, peer and remoting ports on loopback, alone or with several nodes) is a top-level test whose name starts with `TestCluster`, in the same package as the code it tests. Nothing else is called `TestCluster*`: a single-node test of a cluster helper, such as `TestEngineClusterKindsExposesEgoActors`, uses another name, or it would be moved to the cluster lane by accident. The name is the only selector, so the lanes need no tag and no configuration, and every test runs in exactly one lane.
+A test that starts a clustered actor system (a real GoAkt cluster with gossip, peer and remoting ports on loopback, alone or with several nodes) is a top-level test whose name starts with `TestCluster`, in the same package as the code it tests. Nothing else is called `TestCluster*`: a single-node test of a cluster helper, such as `TestEngineClusterKindsExposesUrdActors`, uses another name, or it would be moved to the cluster lane by accident. The name is the only selector, so the lanes need no tag and no configuration, and every test runs in exactly one lane.
 
 The `unit-gate` job enforces the rule in one direction. Its `cluster-name` rule fails when a test file calls `WithCluster` or a `dynaport` function from a top-level test that is not called `TestCluster*`, directly or through a helper of the same file. It cannot see a helper in another file, and it does not flag a `TestCluster*` test that starts no cluster; such a test only costs time in the cluster lane. How to write one is in [`testing/go-specs.md`](testing/go-specs.md#writing-a-cluster-test).
 

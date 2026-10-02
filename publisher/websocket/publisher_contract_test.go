@@ -38,7 +38,7 @@ import (
 // publishing.ErrPublisherNotStarted used to live here. It is now PT-1 of
 // port/publishing/publishingtest, run in conformance_test.go against a
 // publisher that really was connected and closed. Together with
-// test/compat's TestEgoSentinelIsThePublishingSentinel, which checks that
+// test/compat's TestUrdSentinelIsThePublishingSentinel, which checks that
 // engine.ErrPublisherNotStarted is this same error value, it still proves the
 // historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).

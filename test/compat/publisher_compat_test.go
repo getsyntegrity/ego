@@ -53,7 +53,7 @@ var (
 	_ engine.StatePublisher = (*websocket.DurableStatePublisher)(nil)
 )
 
-// TestEgoSentinelIsThePublishingSentinel is the module-crossing half of the
+// TestUrdSentinelIsThePublishingSentinel is the module-crossing half of the
 // historical runtime check "a stopped publisher's error matches
 // engine.ErrPublisherNotStarted" (ADR ego-arch-006, §6 S1). The other half runs
 // inside each publisher module: TestPublishBeforeStartMatchesPublishingSentinel
@@ -62,7 +62,7 @@ var (
 // Because the two sentinels are the same error value, every error that
 // matches one matches the other, so together the two checks prove the
 // original assertion for every publisher.
-func TestEgoSentinelIsThePublishingSentinel(t *testing.T) {
+func TestUrdSentinelIsThePublishingSentinel(t *testing.T) {
 	specs.Describe(t, "engine.ErrPublisherNotStarted is the publishing sentinel", func(s *specs.Spec) {
 		s.It("is the same error value", func(ctx *specs.Context) {
 			// Identity, not errors.Is, is the claim: the alias is the very same value.
