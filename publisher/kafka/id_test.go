@@ -1,18 +1,45 @@
+// MIT License
+//
+// Copyright (c) 2022-2026 Arsene Tochemey Gandote
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 package kafka
 
-import "testing"
+import (
+	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
+)
+
+// TestPublisherIDsUseUrdPrefix checks that both publishers report the urd-kafka
+// ID after the ego -> urd rename (see MIGRATION.md).
 func TestPublisherIDsUseUrdPrefix(t *testing.T) {
-	if got := (&EventsPublisher{}).ID(); got != "urd-kafka" {
-		t.Errorf("EventsPublisher.ID() = %q, want %q", got, "urd-kafka")
-	}
-	if got := (&DurableStatePublisher{}).ID(); got != "urd-kafka" {
-		t.Errorf("DurableStatePublisher.ID() = %q, want %q", got, "urd-kafka")
-	}
-}
-
-func TestSaramaClientIDUsesUrdPrefix(t *testing.T) {
-	if got := toSaramaConfig(&Config{}).ClientID; got != "urd-kafka-publisher" {
-		t.Errorf("ClientID = %q, want %q", got, "urd-kafka-publisher")
-	}
+	specs.Describe(t, "the kafka publishers identify themselves as urd-kafka", func(s *specs.Spec) {
+		s.It("events publisher", func(ctx *specs.Context) {
+			ctx.Expect((&EventsPublisher{}).ID()).To(specs.Equal("urd-kafka"))
+		})
+		s.It("durable state publisher", func(ctx *specs.Context) {
+			ctx.Expect((&DurableStatePublisher{}).ID()).To(specs.Equal("urd-kafka"))
+		})
+		s.It("sarama client ID", func(ctx *specs.Context) {
+			ctx.Expect(toSaramaConfig(&Config{}).ClientID).To(specs.Equal("urd-kafka-publisher"))
+		})
+	})
 }
