@@ -71,7 +71,7 @@ func (r singleTenantResolver) Resolve(context.Context) (TenantContext, error) {
 //
 // The returned TenantResolver also implements FixedTenantResolver, which is
 // what lets a single-tenant deployment spawn entities, durable-state
-// entities, and sagas without ever passing ego.WithTenant (EGO-TENANT-003
+// entities, and sagas without ever passing engine.WithTenant (EGO-TENANT-003
 // acceptance criterion 6: single-tenant mode needs no tenant plumbing
 // invented by the application).
 func WithSingleTenant(id TenantID) (TenantResolver, error) {
@@ -92,7 +92,7 @@ func WithSingleTenant(id TenantID) (TenantResolver, error) {
 // Resolve outside the single command trust boundary, yet a single-tenant
 // deployment still needs entity/durable-state/saga spawns to bind a tenant
 // scope without the application repeating that one fixed tenant on every
-// spawn via ego.WithTenant. A resolver that has exactly one fixed tenant —
+// spawn via engine.WithTenant. A resolver that has exactly one fixed tenant —
 // built-in WithSingleTenant, or a custom resolver that chooses to advertise
 // one — implements FixedTenantResolver so the engine can read that identity
 // directly, with no Resolve call and no execution-time side effect.
@@ -100,7 +100,7 @@ func WithSingleTenant(id TenantID) (TenantResolver, error) {
 // An ordinary multi-tenant resolver has no such fixed identity: it either
 // does not implement this interface at all, or implements it and returns
 // (zero TenantID, false). Either way, the engine falls back to requiring an
-// explicit ego.WithTenant at spawn.
+// explicit engine.WithTenant at spawn.
 type FixedTenantResolver interface {
 	TenantResolver
 

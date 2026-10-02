@@ -67,10 +67,10 @@ func main() {
 	}
 	engine, err := engine.NewEngine(sys, cfg)
 	if err != nil {
-		logger.Error("failed to create ego engine", "error", err)
+		logger.Error("failed to create urd engine", "error", err)
 		os.Exit(1)
 	}
-	// start ego engine
+	// start urd engine
 	_ = engine.Start(ctx)
 	// create a persistence id
 	entityID := uuid.NewString()

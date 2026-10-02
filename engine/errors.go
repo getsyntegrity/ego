@@ -126,7 +126,7 @@ var (
 	// serializes every spawn's dependencies, so it can place the behavior on,
 	// or relocate it to, another node. Outside cluster mode such a behavior
 	// runs on the local node.
-	ErrBehaviorNotSerializable = errors.New("eGo: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
+	ErrBehaviorNotSerializable = errors.New("urd: behavior must implement encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to be spawned in cluster mode")
 	// ErrBehaviorNotPointer is the cause carried by a *BehaviorPlacementError
 	// when a behavior cannot be handed to GoAkt's type registry, which names
 	// a type through a pointer and panics on anything else. A spawned
@@ -135,7 +135,7 @@ var (
 	// WithBehaviorKinds or WithEntityKinds only needs a pointer type: a typed
 	// nil such as (*T)(nil) registers T, while an untyped nil or a value type
 	// is rejected.
-	ErrBehaviorNotPointer = errors.New("eGo: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
+	ErrBehaviorNotPointer = errors.New("urd: a behavior must be non-nil to be spawned, and a pointer to be spawned in cluster mode; a behavior kind registered with WithBehaviorKinds or WithEntityKinds must be a pointer type (a typed nil is allowed)")
 	// ErrEntityFamilyNotDeclared is returned by SpawnEventSourced,
 	// SpawnDurableState and SpawnSaga, and by their deprecated predecessors
 	// Entity, DurableStateEntity and Saga, when the engine's Config declares
@@ -171,9 +171,9 @@ type BehaviorPlacementError struct {
 func (e *BehaviorPlacementError) Error() string {
 	if e.EntityID == "" {
 		// Kind registration, or a nil behavior with no readable ID.
-		return fmt.Sprintf("eGo: cannot register or place behavior %s: %v", e.Kind, e.Err)
+		return fmt.Sprintf("urd: cannot register or place behavior %s: %v", e.Kind, e.Err)
 	}
-	return fmt.Sprintf("eGo: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
+	return fmt.Sprintf("urd: cannot place behavior %s for %q: %v", e.Kind, e.EntityID, e.Err)
 }
 
 // Unwrap returns the cause, ErrBehaviorNotSerializable or ErrBehaviorNotPointer.

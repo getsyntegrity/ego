@@ -149,7 +149,7 @@ type Sagas interface {
 
 // Projections controls the projections registered with the runtime. A
 // projection is registered by name when the runtime is built (with
-// ego.WithProjection for the GoAkt adapter); these methods address it by that
+// engine.WithProjection for the GoAkt adapter); these methods address it by that
 // name.
 type Projections interface {
 	// StartProjection starts the named projection. Once started, it processes

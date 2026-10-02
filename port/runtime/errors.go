@@ -47,38 +47,38 @@ var (
 	// durable-state-only deployment). Nothing is spawned.
 	ErrEventsStoreRequired = errors.New("events store is required")
 	// ErrProjectionNotRegistered is returned by StartProjection when the given
-	// name was never registered with the runtime (ego.WithProjection for the
+	// name was never registered with the runtime (engine.WithProjection for the
 	// GoAkt adapter).
-	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with ego.WithProjection")
+	ErrProjectionNotRegistered = errors.New("projection is not registered; register it with engine.WithProjection")
 	// ErrSpawnTenantUndetermined is returned by a spawn when tenancy is
 	// active but the runtime cannot determine which tenant to bind the
 	// spawned entity to: the caller did not pass WithTenant, and the
 	// registered tenancy.TenantResolver does not expose a fixed tenant via
 	// tenancy.FixedTenantResolver (TENANT-003 T4). The runtime never falls
 	// back to persistence.Unscoped() in this case.
-	ErrSpawnTenantUndetermined = errors.New("eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver")
+	ErrSpawnTenantUndetermined = errors.New("urd: tenant-aware spawn requires engine.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver")
 	// ErrSpawnTenantMismatch is returned by a spawn in tenant-aware mode when
 	// the entity that holds the requested id is bound to a different tenant
 	// than the one this spawn declared (TENANT-003 T4). Re-spawning a live id
 	// under the same tenant stays an idempotent success.
-	ErrSpawnTenantMismatch = errors.New("eGo: entity id is already bound to a different tenant")
+	ErrSpawnTenantMismatch = errors.New("urd: entity id is already bound to a different tenant")
 	// ErrSpawnTenantUnverified is returned by a spawn in tenant-aware mode
 	// when the tenant binding of the spawned entity could not be verified.
 	// The spawn fails closed, but unlike ErrSpawnTenantMismatch it asserts no
 	// cross-tenant conflict; retrying the spawn is safe.
-	ErrSpawnTenantUnverified = errors.New("eGo: the spawned actor's tenant binding could not be verified")
+	ErrSpawnTenantUnverified = errors.New("urd: the spawned actor's tenant binding could not be verified")
 	// ErrNotACommand is returned by Dispatch and SendCommand when the payload
 	// is a runtime-internal control message rather than a command.
-	ErrNotACommand = errors.New("eGo: payload is an engine-internal control message, not a command")
+	ErrNotACommand = errors.New("urd: payload is an engine-internal control message, not a command")
 	// ErrEntityFamilyNotDeclared is returned by a spawn when the runtime
-	// declares its entity families (ego.WithEntityFamilies for the GoAkt
+	// declares its entity families (engine.WithEntityFamilies for the GoAkt
 	// adapter) and the spawned behavior's family is not among them. The error
 	// names the family. Nothing is spawned.
-	ErrEntityFamilyNotDeclared = errors.New("eGo: entity family is not declared; declare it with ego.WithEntityFamilies")
+	ErrEntityFamilyNotDeclared = errors.New("urd: entity family is not declared; declare it with engine.WithEntityFamilies")
 
 	// ErrUnsupported reports an operation this runtime does not provide. It
 	// wraps errors.ErrUnsupported, so both errors.Is checks hold.
-	ErrUnsupported = fmt.Errorf("eGo: operation not supported by this runtime: %w", errors.ErrUnsupported)
+	ErrUnsupported = fmt.Errorf("urd: operation not supported by this runtime: %w", errors.ErrUnsupported)
 )
 
 // UnsupportedError names the runtime and the operation it does not provide.
@@ -92,7 +92,7 @@ type UnsupportedError struct {
 
 // Error implements error.
 func (e *UnsupportedError) Error() string {
-	return "eGo: runtime " + strconv.Quote(e.Runtime) + " does not support " + e.Operation
+	return "urd: runtime " + strconv.Quote(e.Runtime) + " does not support " + e.Operation
 }
 
 // Unwrap returns ErrUnsupported.

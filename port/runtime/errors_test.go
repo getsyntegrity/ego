@@ -46,7 +46,7 @@ func TestUnsupportedError(t *testing.T) {
 			var err error = &runtime.UnsupportedError{Runtime: "inmem", Operation: "StartProjection"}
 			ctx.Expect(err).To(specs.MatchError(runtime.ErrUnsupported))
 			ctx.Expect(err).To(specs.MatchError(errors.ErrUnsupported))
-			ctx.Expect(err.Error()).ToEqual(`eGo: runtime "inmem" does not support StartProjection`)
+			ctx.Expect(err.Error()).ToEqual(`urd: runtime "inmem" does not support StartProjection`)
 
 			wrapped := fmt.Errorf("spawn: %w", err)
 			var target *runtime.UnsupportedError
@@ -70,12 +70,12 @@ func TestSentinelMessagesAreKept(t *testing.T) {
 			{"ErrUndefinedEntityID", runtime.ErrUndefinedEntityID, "eGo entity id is not defined"},
 			{"ErrDurableStateStoreRequired", runtime.ErrDurableStateStoreRequired, "durable state store is required"},
 			{"ErrEventsStoreRequired", runtime.ErrEventsStoreRequired, "events store is required"},
-			{"ErrProjectionNotRegistered", runtime.ErrProjectionNotRegistered, "projection is not registered; register it with ego.WithProjection"},
-			{"ErrSpawnTenantUndetermined", runtime.ErrSpawnTenantUndetermined, "eGo: tenant-aware spawn requires ego.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver"},
-			{"ErrSpawnTenantMismatch", runtime.ErrSpawnTenantMismatch, "eGo: entity id is already bound to a different tenant"},
-			{"ErrSpawnTenantUnverified", runtime.ErrSpawnTenantUnverified, "eGo: the spawned actor's tenant binding could not be verified"},
-			{"ErrNotACommand", runtime.ErrNotACommand, "eGo: payload is an engine-internal control message, not a command"},
-			{"ErrEntityFamilyNotDeclared", runtime.ErrEntityFamilyNotDeclared, "eGo: entity family is not declared; declare it with ego.WithEntityFamilies"},
+			{"ErrProjectionNotRegistered", runtime.ErrProjectionNotRegistered, "projection is not registered; register it with engine.WithProjection"},
+			{"ErrSpawnTenantUndetermined", runtime.ErrSpawnTenantUndetermined, "urd: tenant-aware spawn requires engine.WithTenant (the registered resolver exposes no fixed tenant); see tenancy.FixedTenantResolver"},
+			{"ErrSpawnTenantMismatch", runtime.ErrSpawnTenantMismatch, "urd: entity id is already bound to a different tenant"},
+			{"ErrSpawnTenantUnverified", runtime.ErrSpawnTenantUnverified, "urd: the spawned actor's tenant binding could not be verified"},
+			{"ErrNotACommand", runtime.ErrNotACommand, "urd: payload is an engine-internal control message, not a command"},
+			{"ErrEntityFamilyNotDeclared", runtime.ErrEntityFamilyNotDeclared, "urd: entity family is not declared; declare it with engine.WithEntityFamilies"},
 		}
 
 		s.It("covers ten distinct sentinels", func(ctx *specs.Context) {
