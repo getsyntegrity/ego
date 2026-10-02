@@ -174,3 +174,5 @@ Then open https://pkg.go.dev/github.com/getsyntegrity/urd/engine and press
 - Downstream repos importing `github.com/getsyntegrity/ego/...`: run the sed snippet from `MIGRATION.md`.
 - Logo: `assets/logo.png` and `assets/logo.svg` still draw the "eGo" wordmark.
 - After the merge, remove the worktree: `git -C ~/workspace/getsyntegrity/ego worktree remove ../ego-worktrees/rename-to-urd`.
+
+- Hand-off steps 1-3 executed 2026-10-02 (authorized by the maintainer): deprecation commit e4f56fd on branch `chore/deprecate-ego-module`; tags v0.0.1 and publisher/{kafka,nats,pulsar,websocket}/v0.1.1 pushed and cached; `go list -m -u ...@latest` shows "(deprecated)" for all five old paths; repo renamed to getsyntegrity/urd (old URL 301-redirects); local origin set to https://github.com/getsyntegrity/urd.git. Remaining: steps 4-6.
