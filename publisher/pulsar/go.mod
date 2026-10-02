@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/apache/pulsar-client-go v0.21.0
 	github.com/getsyntegrity/go-specs v0.3.3
-	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd v0.1.0
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12

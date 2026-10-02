@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/getsyntegrity/go-specs v0.3.3
-	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd v0.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
