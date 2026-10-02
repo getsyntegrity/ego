@@ -3,7 +3,7 @@ FROM golang:1.27-alpine AS builder
 
 WORKDIR /src
 
-# Copy the entire ego repository so the replace directive (../../) resolves.
+# Copy the entire urd repository so the replace directive (../../) resolves.
 COPY . .
 
 WORKDIR /src/example/cluster

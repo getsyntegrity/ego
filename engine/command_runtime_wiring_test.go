@@ -34,10 +34,10 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getsyntegrity/ego/command"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/command"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // TestEngineSendCommandDispatchesHandleEnvelope proves the M-3 wiring

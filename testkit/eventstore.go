@@ -29,9 +29,9 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // EventKey identified an individual event record in the old, per-event

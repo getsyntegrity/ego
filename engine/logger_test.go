@@ -34,8 +34,8 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"github.com/tochemey/goakt/v4/log"
 
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // newLoggerAdapter wraps a kit-logger Logger for GoAkt the same way
@@ -93,10 +93,10 @@ func TestResolveLogger(t *testing.T) {
 
 func TestDefaultLoggerIsKitLoggerGlobal(t *testing.T) {
 	specs.Describe(t, "DefaultLogger is the kit-logger global", func(s *specs.Spec) {
-		s.It("follows the global, including one installed before configuring eGo", func(ctx *specs.Context) {
+		s.It("follows the global, including one installed before configuring Urd", func(ctx *specs.Context) {
 			ctx.Expect(kitlog.L()).To(beTheSame(DefaultLogger()))
 
-			// An application that installs its own global before configuring eGo
+			// An application that installs its own global before configuring Urd
 			// gets the engine's records through it without passing WithLogger.
 			previous := kitlog.L()
 			ctx.Cleanup(func() { kitlog.SetGlobal(previous) })
@@ -140,7 +140,7 @@ func TestDiscardLoggerDisablesEveryLevel(t *testing.T) {
 
 // TestGoaktOptionsCarryTheResolvedLogger pins the configuration wiring: the
 // logger GoAkt receives from Config.GoaktOptions is the one WithLogger
-// resolved, so eGo's actors recover exactly that backend.
+// resolved, so Urd's actors recover exactly that backend.
 //
 // The Describe name is empty on purpose: it keeps the subtest names these
 // cases had before the migration (an empty name adds no segment).

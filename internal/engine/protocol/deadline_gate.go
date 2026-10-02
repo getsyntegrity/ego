@@ -41,8 +41,8 @@ import (
 // caller-facing command.Result still reports OutcomeTimedOut/OutcomeCanceled
 // instead of falling into the otherwise-lossy OutcomeFailed mapping.
 var (
-	errActorDeadlineExceeded = errors.New("ego: command deadline exceeded")
-	errActorContextCanceled  = errors.New("ego: command context canceled")
+	errActorDeadlineExceeded = errors.New("urd: command deadline exceeded")
+	errActorContextCanceled  = errors.New("urd: command context canceled")
 )
 
 // CheckDeadline reports the error an actor's fail-closed gate should reply

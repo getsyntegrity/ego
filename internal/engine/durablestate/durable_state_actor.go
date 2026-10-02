@@ -34,17 +34,17 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/runner"
-	"github.com/getsyntegrity/ego/persistence"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/internal/runner"
+	"github.com/getsyntegrity/urd/persistence"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Actor is a durable state based actor

@@ -222,10 +222,10 @@ The dependencies column was computed before the migration, from static signals f
 | `TestBehaviorPlacementError` | migrated | none |
 | `TestBuildSpawnOptionsFromConfig` | migrated | none |
 | `TestClassifyTenantBinding` | migrated | none |
-| `TestEngineClusterKindsExposesEgoActors` | migrated | none |
+| `TestEngineClusterKindsExposesUrdActors` | migrated | none |
 | `TestDefaultLoggerIsKitLoggerGlobal` | migrated | none |
 | `TestDiscardLoggerDisablesEveryLevel` | migrated | none |
-| `TestEgoSpawnOptionsResolveThroughRuntime` | migrated | none |
+| `TestUrdSpawnOptionsResolveThroughRuntime` | migrated | none |
 | `TestEngineEraseEntityStoreErrors` | migrated | none |
 | `TestEngineHotPathGuards` | migrated | none |
 | `TestEngineProjectionLagComputation` | migrated | none |
@@ -856,7 +856,7 @@ The dependencies column was computed before the migration, from static signals f
 
 | Test | Status | Dependencies to substitute |
 |---|---|---|
-| `TestEgoSentinelIsThePublishingSentinel` | migrated | none |
+| `TestUrdSentinelIsThePublishingSentinel` | migrated | none |
 
 ## Out of phase
 

@@ -36,10 +36,10 @@ import (
 	kitlog "github.com/pablogore/kit-logger/pkg/logger"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/logging"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/logging"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // TenantAdopter and Migrator replay "everything" with two separate bounds,
@@ -462,7 +462,7 @@ func WithPersistenceIDs(ids ...string) AdoptionOption {
 // WithAdoptionLogger sets the kit-logger Logger used during adoption, the
 // same logging seam Migrator uses. When not set, or when the given logger
 // is nil or a typed-nil pointer, TenantAdopter logs through kit-logger's
-// process-wide logger — the same default ego.DefaultLogger() returns.
+// process-wide logger — the same default engine.DefaultLogger() returns.
 func WithAdoptionLogger(logger kitlog.Logger) AdoptionOption {
 	return adoptionOptionFunc(func(a *TenantAdopter) { a.logger = logger })
 }
@@ -986,7 +986,7 @@ func (a *TenantAdopter) adoptState(ctx context.Context, id string, intent adopti
 // present in written under the same sequence number and proto.Equal it
 // exactly; no extra sequence numbers may appear in written; a sequence
 // number is never expected more than once (WriteEvents already guards a
-// batch to one persistence_id, and eGo's own event log de-duplicates by
+// batch to one persistence_id, and Urd's own event log de-duplicates by
 // sequence number — see testkit/eventstore.go's newEventLog). On any
 // mismatch the returned error names id and the sequence number that
 // differed, so the caller never deletes based on a check that cannot detect

@@ -28,7 +28,7 @@ import (
 	"github.com/getsyntegrity/go-specs/assert"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 type revisionCase struct {

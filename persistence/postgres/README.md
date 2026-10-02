@@ -1,13 +1,13 @@
 # persistence/postgres
 
-PostgreSQL implementations of eGo's `persistence.EventsStore` and `offsetstore.OffsetStore`, plus the schema
+PostgreSQL implementations of Urd's `persistence.EventsStore` and `offsetstore.OffsetStore`, plus the schema
 they need and a way to keep that schema up to date.
 
-This is a separate Go module (`github.com/getsyntegrity/ego/persistence/postgres`). The root `ego` module does
+This is a separate Go module (`github.com/getsyntegrity/urd/persistence/postgres`). The root `urd` module does
 not depend on `pgx`; only a program that imports this package does.
 
 ```go
-import "github.com/getsyntegrity/ego/persistence/postgres"
+import "github.com/getsyntegrity/urd/persistence/postgres"
 
 eventStore := postgres.NewEventStore(dsn)
 if err := eventStore.Connect(ctx); err != nil { /* ... */ }

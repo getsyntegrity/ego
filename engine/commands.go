@@ -30,11 +30,11 @@ import (
 	goakterrors "github.com/tochemey/goakt/v4/errors"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Dispatch sends env's payload to the entity identified by entityID and

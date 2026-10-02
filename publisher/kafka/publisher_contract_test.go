@@ -29,17 +29,17 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // The publishers implement the contracts from port/publishing directly, with
-// no dependency on package `ego` or the GoAkt runtime it pulls in. The
-// historical compatibility check against the `ego` aliases (ADR
+// no dependency on package `engine` or the GoAkt runtime it pulls in. The
+// historical compatibility check against the `engine` aliases (ADR
 // ego-arch-001, S1 criterion 3) still exists, but it lives in the separate,
 // unreleased test/compat module (ADR ego-arch-006, slice S1; docs/ci.md,
 // "Compatibility checks: the test/compat module"), precisely so that this
-// module's tests never need to import `ego` (#122).
+// module's tests never need to import `engine` (#122).
 var (
 	_ publishing.EventPublisher = (*EventsPublisher)(nil)
 	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)
@@ -49,9 +49,9 @@ var (
 // stopped publisher returns matches publishing.ErrPublisherNotStarted. The
 // publishers are built without a broker connection: Publish rejects the call
 // before touching the client. Together with test/compat's
-// TestEgoSentinelIsThePublishingSentinel, which checks that
-// ego.ErrPublisherNotStarted is this same error value, it proves the
-// historical check that the error also matches ego.ErrPublisherNotStarted
+// TestUrdSentinelIsThePublishingSentinel, which checks that
+// engine.ErrPublisherNotStarted is this same error value, it proves the
+// historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).
 func TestPublishBeforeStartMatchesPublishingSentinel(t *testing.T) {
 	specs.Describe(t, "a publisher that was never started rejects Publish with the publishing sentinel", func(s *specs.Spec) {

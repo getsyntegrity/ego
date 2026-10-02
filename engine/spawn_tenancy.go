@@ -31,9 +31,9 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	goakterrors "github.com/tochemey/goakt/v4/errors"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // spawnTenantScope determines the per-spawn tenant dependency to inject for

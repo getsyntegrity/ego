@@ -37,15 +37,15 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/internal/goaktlog"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/persistence"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	"github.com/getsyntegrity/ego/tenancy"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/goaktlog"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
+	"github.com/getsyntegrity/urd/tenancy"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // tenantMetadata is a small test helper converting a TenantContext into the

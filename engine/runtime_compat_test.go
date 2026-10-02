@@ -30,8 +30,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
-	"github.com/getsyntegrity/ego/tenancy"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // optRecovered runs fn and returns the value it panicked with, or nil.
@@ -42,14 +42,14 @@ func optRecovered(fn func()) (value any) {
 }
 
 // TestRuntimeSentinelsAreTheSameValues checks, for each of the ten sentinels
-// that moved to port/runtime (ego-runtime-001 design §D2), that the ego name
+// that moved to port/runtime (ego-runtime-001 design §D2), that the engine name
 // and the port/runtime name are the same error value, and that errors.Is
 // matches a wrapped error in both directions.
 func TestRuntimeSentinelsAreTheSameValues(t *testing.T) {
 	type sentinelCase struct {
-		name    string
-		ego     error
-		runtime error
+		name       string
+		engineSide error
+		runtime    error
 	}
 	cases := []sentinelCase{
 		{"ErrEngineNotStarted", ErrEngineNotStarted, runtimeport.ErrEngineNotStarted},
@@ -63,25 +63,25 @@ func TestRuntimeSentinelsAreTheSameValues(t *testing.T) {
 		{"ErrNotACommand", ErrNotACommand, runtimeport.ErrNotACommand},
 		{"ErrEntityFamilyNotDeclared", ErrEntityFamilyNotDeclared, runtimeport.ErrEntityFamilyNotDeclared},
 	}
-	specs.Describe(t, "each moved sentinel is the same error value under the ego and port/runtime names", func(s *specs.Spec) {
+	specs.Describe(t, "each moved sentinel is the same error value under the engine and port/runtime names", func(s *specs.Spec) {
 		specs.Table(s, cases, func(tc sentinelCase) string { return tc.name }, func(ctx *specs.Context, tc sentinelCase) {
-			ctx.Expect(tc.ego).To(specs.Not(specs.BeNil()))
-			ctx.Expect(tc.ego).To(beTheSame(tc.runtime))
+			ctx.Expect(tc.engineSide).To(specs.Not(specs.BeNil()))
+			ctx.Expect(tc.engineSide).To(beTheSame(tc.runtime))
 
-			ctx.Expect(fmt.Errorf("op: %w", tc.ego)).To(specs.MatchError(tc.runtime))
-			ctx.Expect(fmt.Errorf("op: %w", tc.runtime)).To(specs.MatchError(tc.ego))
-			ctx.Expect(fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime))).To(specs.MatchError(tc.ego))
+			ctx.Expect(fmt.Errorf("op: %w", tc.engineSide)).To(specs.MatchError(tc.runtime))
+			ctx.Expect(fmt.Errorf("op: %w", tc.runtime)).To(specs.MatchError(tc.engineSide))
+			ctx.Expect(fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", tc.runtime))).To(specs.MatchError(tc.engineSide))
 		})
 	})
 }
 
 // TestRuntimeMovedTypesAreAliases checks that each type that moved to
-// port/runtime is the same type under both names: a value of the ego name is
+// port/runtime is the same type under both names: a value of the engine name is
 // a value of the port/runtime name.
 func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 	pairs := []struct {
-		ego     any
-		runtime any
+		engineSide any
+		runtime    any
 	}{
 		{EntitiesPlacement(0), runtimeport.EntitiesPlacement(0)},
 		{SupervisorDirective(0), runtimeport.SupervisorDirective(0)},
@@ -89,15 +89,15 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 		{SagaInfo{}, runtimeport.SagaInfo{}},
 		{(*SpawnOption)(nil), (*runtimeport.SpawnOption)(nil)},
 	}
-	specs.Describe(t, "the types and constants that moved to port/runtime are aliases of the ego names", func(s *specs.Spec) {
+	specs.Describe(t, "the types and constants that moved to port/runtime are aliases of the engine names", func(s *specs.Spec) {
 		s.It("aliases the moved types, constants and values", func(ctx *specs.Context) {
-			var egoTypes, runtimeTypes []reflect.Type
+			var builtinTypes, runtimeTypes []reflect.Type
 			for _, p := range pairs {
-				egoTypes = append(egoTypes, reflect.TypeOf(p.ego))
+				builtinTypes = append(builtinTypes, reflect.TypeOf(p.engineSide))
 				runtimeTypes = append(runtimeTypes, reflect.TypeOf(p.runtime))
 			}
-			ctx.Expect(egoTypes).To(specs.HaveLen(len(pairs)))
-			ctx.Expect(egoTypes).ToEqual(runtimeTypes)
+			ctx.Expect(builtinTypes).To(specs.HaveLen(len(pairs)))
+			ctx.Expect(builtinTypes).ToEqual(runtimeTypes)
 
 			var _ *runtimeport.SagaInfo = &SagaInfo{ID: "s", Status: SagaCompleted} //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
 			info := &SagaInfo{ID: "s", Status: SagaCompleted}
@@ -105,8 +105,8 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 
 			opt := WithPlacement(Local)
 			var _ runtimeport.SpawnOption = opt //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
-			var egoOpt SpawnOption = opt        //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
-			ctx.Expect(runtimeport.ResolveSpawnOptions(egoOpt).Placement()).ToEqual(runtimeport.Local)
+			var engineOpt SpawnOption = opt     //nolint:staticcheck // compile-time alias assertion: the explicit type is the point
+			ctx.Expect(runtimeport.ResolveSpawnOptions(engineOpt).Placement()).ToEqual(runtimeport.Local)
 
 			ctx.Expect(RoundRobin).ToEqual(runtimeport.RoundRobin)
 			ctx.Expect(Random).ToEqual(runtimeport.Random)
@@ -123,11 +123,11 @@ func TestRuntimeMovedTypesAreAliases(t *testing.T) {
 	})
 }
 
-// TestEgoSpawnOptionsResolveThroughRuntime checks that every engine.With* spawn
+// TestUrdSpawnOptionsResolveThroughRuntime checks that every engine.With* spawn
 // option is readable by another runtime through ResolveSpawnOptions: the five
 // neutral ones through their getters, the four write-side ones as adapter
-// settings under ego's own keys.
-func TestEgoSpawnOptionsResolveThroughRuntime(t *testing.T) {
+// settings under the engine's own keys.
+func TestUrdSpawnOptionsResolveThroughRuntime(t *testing.T) {
 	specs.Describe(t, "engine spawn options are readable through the port/runtime ResolveSpawnOptions", func(s *specs.Spec) {
 		s.It("exposes the neutral options through getters and the write-side ones as adapter settings", func(ctx *specs.Context) {
 			policy := RetentionPolicy{DeleteEventsOnSnapshot: true, EventsRetentionCount: 7}

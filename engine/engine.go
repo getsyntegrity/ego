@@ -35,15 +35,15 @@ import (
 	"github.com/tochemey/goakt/v4/extension"
 	"go.uber.org/atomic"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	"github.com/getsyntegrity/ego/internal/syncmap"
-	"github.com/getsyntegrity/ego/offsetstore"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	"github.com/getsyntegrity/urd/internal/syncmap"
+	"github.com/getsyntegrity/urd/offsetstore"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // Done is a signal that an operation has completed
@@ -99,7 +99,7 @@ type Engine struct {
 	entityFamilies EntityFamily
 }
 
-// NewEngine plugs eGo into an already-constructed and started goakt.ActorSystem.
+// NewEngine plugs Urd into an already-constructed and started goakt.ActorSystem.
 //
 // The caller builds a single Config with NewConfig, passes cfg.GoaktOptions()
 // to goakt.NewActorSystem, starts the actor system, and then hands the same
@@ -111,10 +111,10 @@ type Engine struct {
 //
 //   - sys must be non-nil (otherwise returns ErrActorSystemRequired);
 //   - sys.Running() must be true (otherwise returns ErrActorSystemNotStarted);
-//   - every extension eGo needs based on cfg must be registered on sys
+//   - every extension Urd needs based on cfg must be registered on sys
 //     (otherwise returns ErrMissingRequiredExtensions with the missing IDs).
 //
-// NewEngine also registers eGo's internal spawn-configuration dependency
+// NewEngine also registers Urd's internal spawn-configuration dependency
 // types and any behavior kinds supplied via WithBehaviorKinds or
 // WithEntityKinds on the actor system, so that entity spawn requests routed
 // to this node from cluster peers can be deserialized. Every node in a
@@ -129,8 +129,8 @@ type Engine struct {
 // schedule (typically after Engine.Stop).
 //
 // Parameters:
-//   - actorSys: A running goakt.ActorSystem with eGo's required extensions registered.
-//   - config: The Config used to build the actor system's eGo extensions.
+//   - actorSys: A running goakt.ActorSystem with Urd's required extensions registered.
+//   - config: The Config used to build the actor system's Urd extensions.
 //
 // Returns:
 //   - A pointer to the newly created Engine instance, or an error.
@@ -211,7 +211,7 @@ func NewEngine(actorSys goakt.ActorSystem, config *Config) (*Engine, error) {
 	return e, nil
 }
 
-// validateActorSystemExtensions asserts that every extension eGo needs given
+// validateActorSystemExtensions asserts that every extension Urd needs given
 // the engine's configuration is registered on the actor system. Missing
 // extensions are collected and reported together so the caller learns about
 // the full set of problems at once.
@@ -246,7 +246,7 @@ func validateActorSystemExtensions(sys goakt.ActorSystem, cfg *Config) error {
 	return nil
 }
 
-// Start initializes the eGo engine on top of an actor system that is already
+// Start initializes the Urd engine on top of an actor system that is already
 // running.
 //
 // In the meta-framework design, Start does no actor-system construction —
@@ -316,7 +316,7 @@ func (engine *Engine) migrateSchemas(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the eGo engine.
+// Stop gracefully shuts down the Urd engine.
 //
 // Stop terminates all running publishers, closes the local event stream
 // adapter, and detaches the engine's reference to the actor system so
@@ -375,7 +375,7 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Started returns true when the eGo engine has started
+// Started returns true when the Urd engine has started
 func (engine *Engine) Started() bool {
 	return engine.started.Load()
 }

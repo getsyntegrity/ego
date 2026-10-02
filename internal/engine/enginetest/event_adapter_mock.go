@@ -26,7 +26,7 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/eventadapter"
+	"github.com/getsyntegrity/urd/eventadapter"
 )
 
 // EventAdapterMock is an eventadapter.EventAdapter backed by a go-specs

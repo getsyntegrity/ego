@@ -43,13 +43,27 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/projection"
+	"github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/projection"
 )
 
 // telemetryDumpEnv names an optional file the contract test writes its
 // normalized observation to, so two revisions can be diffed byte for byte.
-const telemetryDumpEnv = "EGO_TELEMETRY_CONTRACT_DUMP"
+const telemetryDumpEnv = "URD_TELEMETRY_CONTRACT_DUMP"
+
+// legacyTelemetryDumpEnv is the deprecated former name of telemetryDumpEnv.
+// It is still read when the new name is unset.
+const legacyTelemetryDumpEnv = "EGO_TELEMETRY_CONTRACT_DUMP"
+
+// telemetryDumpPath returns the dump file path, preferring the URD_ variable
+// and falling back to the deprecated EGO_ one. legacy reports the fallback.
+func telemetryDumpPath() (path string, legacy bool) {
+	if path = os.Getenv(telemetryDumpEnv); path != "" {
+		return path, false
+	}
+	path = os.Getenv(legacyTelemetryDumpEnv)
+	return path, path != ""
+}
 
 // recordingMeter wraps the no-op meter and records every instrument the
 // engine creates and every measurement it takes. It only overrides the
@@ -301,7 +315,10 @@ func TestTelemetryContract(t *testing.T) {
 			}
 			sort.Strings(observation.Spans)
 
-			if path := os.Getenv(telemetryDumpEnv); path != "" {
+			if path, legacy := telemetryDumpPath(); path != "" {
+				if legacy {
+					t.Logf("deprecated: %s is set; use %s instead", legacyTelemetryDumpEnv, telemetryDumpEnv)
+				}
 				raw, err := json.MarshalIndent(observation, "", "  ")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(os.WriteFile(path, raw, 0o600)).To(specs.BeNil())

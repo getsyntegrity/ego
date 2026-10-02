@@ -25,6 +25,6 @@
 //
 // Package engine wraps Actor in the DurableStateActor cluster kind because
 // GoAkt names a kind after the Go type, and that name must not change. The
-// package depends on eGo's contract packages, internal/engine/protocol and
+// package depends on Urd's contract packages, internal/engine/protocol and
 // internal/extensions, and never imports package engine.
 package durablestate

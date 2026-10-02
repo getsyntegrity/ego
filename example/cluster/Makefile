@@ -1,4 +1,4 @@
-# eGo Cluster Example — Kind-based Kubernetes deployment
+# Urd Cluster Example — Kind-based Kubernetes deployment
 #
 # Usage:
 #   make all       — Create Kind cluster, build, deploy, and wait until it is ready
@@ -10,10 +10,10 @@
         db reset status logs teardown clean \
         dashboard grafana jaeger prometheus
 
-CLUSTER   := ego-cluster
-IMAGE     := ego-cluster-example:latest
-NAMESPACE := ego-example
-APP_LABEL := app=ego-cluster
+CLUSTER   := urd-cluster
+IMAGE     := urd-cluster-example:latest
+NAMESPACE := urd-example
+APP_LABEL := app=urd-cluster
 BASE_URL  := http://localhost
 
 # NGINX Ingress Controller manifest for Kind
@@ -27,7 +27,7 @@ all: kind-create docker-build deploy wait
 	@echo ""
 	@echo "=== All steps completed successfully ==="
 	@echo ""
-	@echo "  The eGo API is available at $(BASE_URL)"
+	@echo "  The Urd API is available at $(BASE_URL)"
 	@echo "  Requests are load-balanced across 3 pods via NGINX Ingress."
 	@echo ""
 	@echo "Next steps:"
@@ -103,7 +103,7 @@ deploy:
 wait:
 	@echo "==> Waiting for StatefulSet to roll out (pods start sequentially)..."
 	kubectl rollout status --context kind-$(CLUSTER) -n $(NAMESPACE) \
-		statefulset/ego-cluster --timeout=300s
+		statefulset/urd-cluster --timeout=300s
 	@echo "==> All pods are ready."
 	kubectl get pods --context kind-$(CLUSTER) -n $(NAMESPACE)
 	@echo ""
@@ -176,7 +176,7 @@ load-test:
 
 grafana:
 	@echo "==> Grafana: http://localhost:3000  (admin / admin)"
-	@echo "    Dashboard: http://localhost:3000/d/ego-cluster-dashboard"
+	@echo "    Dashboard: http://localhost:3000/d/urd-cluster-dashboard"
 	@echo "    Press Ctrl+C to stop."
 	kubectl port-forward --context kind-$(CLUSTER) -n $(NAMESPACE) svc/grafana 3000:3000
 
@@ -225,10 +225,10 @@ dashboard:
 # ---------------------------------------------------------------------------
 
 db:
-	@echo "==> Database snapshot (ego / ego-example)"
+	@echo "==> Database snapshot (urd / urd-example)"
 	@echo ""
 	@PSQL="kubectl exec --context kind-$(CLUSTER) -n $(NAMESPACE) statefulset/postgres -- \
-		psql -U ego -d ego -c"; \
+		psql -U urd -d urd -c"; \
 	echo "--- account_balances (projection read model) ---"; \
 	eval $$PSQL '"\x auto \\ SELECT account_id, balance, to_timestamp(updated_at/1000.0) AS updated_at FROM account_balances ORDER BY account_id LIMIT 50;"'; \
 	echo ""; \
@@ -242,9 +242,9 @@ db:
 	eval $$PSQL '"SELECT '\''account_balances'\'' AS table_name, COUNT(*) FROM account_balances UNION ALL SELECT '\''events_store'\'', COUNT(*) FROM events_store UNION ALL SELECT '\''offsets_store'\'', COUNT(*) FROM offsets_store ORDER BY 1;"'
 
 reset:
-	@echo "==> Truncating all eGo tables for a clean re-run..."
+	@echo "==> Truncating all Urd tables for a clean re-run..."
 	@kubectl exec --context kind-$(CLUSTER) -n $(NAMESPACE) statefulset/postgres -- \
-		psql -U ego -d ego -c \
+		psql -U urd -d urd -c \
 		"TRUNCATE events_store, offsets_store, account_balances;"
 	@echo "    Done. Tables are empty — ready for make load-test."
 

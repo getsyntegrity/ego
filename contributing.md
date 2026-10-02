@@ -42,7 +42,7 @@ Prior to submitting a [pull request](https://help.github.com/articles/using-pull
 please build the CI tooling image once and then run lint and tests:
 
 ```bash
-make docker-image   # builds ego-ci:latest from Dockerfile.ci (one-time per change)
+make docker-image   # builds urd-ci:latest from Dockerfile.ci (one-time per change)
 make docker-ci      # runs docker-lint + docker-test
 ```
 
@@ -50,7 +50,7 @@ Each target also works on its own:
 
 | Target            | Purpose                                                              |
 |-------------------|----------------------------------------------------------------------|
-| `docker-image`    | Build the hermetic CI image (`ego-ci:latest`) from `Dockerfile.ci`.  |
+| `docker-image`    | Build the hermetic CI image (`urd-ci:latest`) from `Dockerfile.ci`.  |
 | `docker-lint`     | Run `golangci-lint` against the working tree.                        |
 | `docker-test`     | Run the root module test suite with coverage.                        |
 | `docker-protogen` | Regenerate protobuf code via `buf` and refresh `internal/samplepb` and `example/examplepb`. |
@@ -62,8 +62,8 @@ See [`docs/ci.md`](docs/ci.md) for how the GitHub Actions pipeline works and
 The Docker targets mount the working tree at `/workspace` inside the container
 and run as your local UID/GID, so any generated files (protobufs,
 `coverage.out`) appear in the repo with normal ownership. Go build and module
-caches are kept warm between runs in the named volumes `ego-go-build-cache`
-and `ego-go-mod-cache`.
+caches are kept warm between runs in the named volumes `urd-go-build-cache`
+and `urd-go-mod-cache`.
 
 If you have the toolchain installed locally, the convenience targets
 `make run-eventsourced`, `make run-durablestate`, `make run-saga`, and

@@ -30,9 +30,9 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/adapter"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/adapter"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 type EventsPublisher struct {
@@ -77,7 +77,7 @@ func NewEventsPublisher(config *Config) (*EventsPublisher, error) {
 
 // ID returns the ID of the publisher.
 func (x *EventsPublisher) ID() string {
-	return "ego-websocket"
+	return "urd-websocket"
 }
 
 // Describe implements adapter.Describer: the publisher serves
@@ -160,7 +160,7 @@ func NewDurableStatePublisher(config *Config) (*DurableStatePublisher, error) {
 
 // ID returns the ID of the publisher.
 func (x *DurableStatePublisher) ID() string {
-	return "ego-websocket"
+	return "urd-websocket"
 }
 
 // Describe implements adapter.Describer: the publisher serves

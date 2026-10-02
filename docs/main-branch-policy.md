@@ -1,6 +1,6 @@
 # Branch policy: `develop` integrates, `main` releases
 
-Ego has two long-lived branches. `develop` is where work is integrated and `main` is where released code lives. Every merge to `main` publishes a new version, so `main` is never a place for unfinished work.
+Urd has two long-lived branches. `develop` is where work is integrated and `main` is where released code lives. Every merge to `main` publishes a new version, so `main` is never a place for unfinished work.
 
 This document records which branches may reach which, what runs on each event, how the branches should be protected, and what to do when a release goes wrong. The mechanics of each workflow are in [`docs/ci.md`](ci.md).
 

@@ -29,9 +29,9 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/persistence/conformance"
-	"github.com/getsyntegrity/ego/persistence/postgres"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/persistence/conformance"
+	"github.com/getsyntegrity/urd/persistence/postgres"
 )
 
 // postgresLatestSchemaVersion is the version of the newest file in persistence/postgres/schema. Adding a file
@@ -291,7 +291,7 @@ func TestPostgresEventStore_MigrateRefusesASchemaNewerThanTheBinary(t *testing.T
 }
 
 // TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone starts from a database that another tool
-// already manages: it holds a schema_migrations table in golang-migrate's shape. ego must neither read that table
+// already manages: it holds a schema_migrations table in golang-migrate's shape. urd must neither read that table
 // as its own version line nor change it.
 func TestPostgresEventStore_MigrateLeavesAForeignSchemaMigrationsTableAlone(t *testing.T) {
 	t.Parallel()

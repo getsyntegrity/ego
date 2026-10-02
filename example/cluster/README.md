@@ -1,6 +1,6 @@
-# eGo Cluster Example
+# Urd Cluster Example
 
-A production-ready example that runs a 3-node eGo cluster on Kubernetes using [Kind](https://kind.sigs.k8s.io/). It demonstrates event sourcing, CQRS with a projection read side, Kubernetes-native peer discovery, PostgreSQL persistence, and full observability with OpenTelemetry, Jaeger, Prometheus, and Grafana.
+A production-ready example that runs a 3-node Urd cluster on Kubernetes using [Kind](https://kind.sigs.k8s.io/). It demonstrates event sourcing, CQRS with a projection read side, Kubernetes-native peer discovery, PostgreSQL persistence, and full observability with OpenTelemetry, Jaeger, Prometheus, and Grafana.
 
 ## What This Example Shows
 
@@ -30,10 +30,10 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
               ┌──────────────────────┼──────────────────────┐
               │                      │                      │
      ┌────────▼────────┐   ┌────────▼────────┐   ┌────────▼────────┐
-     │  ego-cluster-0  │   │  ego-cluster-1  │   │  ego-cluster-2  │
+     │  urd-cluster-0  │   │  urd-cluster-1  │   │  urd-cluster-2  │
      │  (oldest node)  │   │                 │   │                 │
      │                 │   │                 │   │                 │
-     │  eGo Engine     │   │  eGo Engine     │   │  eGo Engine     │
+     │  Urd Engine     │   │  Urd Engine     │   │  Urd Engine     │
      │  HTTP API :8080 │   │  HTTP API :8080 │   │  HTTP API :8080 │
      │  ┌────────────┐ │   │                 │   │                 │
      │  │ Projection │ │   │  (no projection │   │  (no projection │
@@ -68,7 +68,7 @@ A production-ready example that runs a 3-node eGo cluster on Kubernetes using [K
               └─────────────────────────────────────────┘
 
 Projection singleton: In cluster mode the projection runs on exactly ONE
-node — the oldest (ego-cluster-0). If that node leaves the cluster, the
+node — the oldest (urd-cluster-0). If that node leaves the cluster, the
 projection automatically migrates to the new oldest node. This prevents
 duplicate event processing across pods.
 ```
@@ -93,7 +93,7 @@ make all
 
 This will:
 
-1. Create a Kind cluster named `ego-cluster` with ingress port mappings
+1. Create a Kind cluster named `urd-cluster` with ingress port mappings
 2. Build the Docker image and load it into Kind
 3. Install NGINX Ingress Controller for load balancing
 4. Deploy PostgreSQL, the observability stack (OTel Collector, Jaeger, Prometheus, Grafana), RBAC, and the 3-replica app with an Ingress
@@ -111,7 +111,7 @@ make dashboard   # Kubernetes dashboard https://localhost:8443
 # Load & inspect
 make load-test   # create 1000 accounts (sequential) and report throughput/pod distribution
 make db          # snapshot PostgreSQL tables (events, offsets, balances) — no psql needed
-make status      # show all Kubernetes resources in the ego-example namespace
+make status      # show all Kubernetes resources in the urd-example namespace
 make logs        # tail logs from all app pods
 make reset       # truncate all tables for a clean re-run (no teardown needed)
 
@@ -144,10 +144,10 @@ make deploy
 This applies the manifests in order:
 
 - NGINX Ingress Controller — installed from the official Kind-compatible manifest
-- `k8s/namespace.yaml` — creates the `ego-example` namespace
+- `k8s/namespace.yaml` — creates the `urd-example` namespace
 - `k8s/postgres.yaml` — deploys PostgreSQL with init SQL (events, offsets, and account_balances tables)
 - `k8s/rbac.yaml` — creates ServiceAccount, Role, and RoleBinding for pod discovery
-- `k8s/grafana-dashboard.yaml` — pre-built Grafana dashboard for eGo metrics
+- `k8s/grafana-dashboard.yaml` — pre-built Grafana dashboard for Urd metrics
 - `k8s/observability.yaml` — OTel Collector, Jaeger, Prometheus, and Grafana
 - `k8s/app.yaml` — 3-replica StatefulSet + headless Service (gossip) + ClusterIP Service (HTTP) + Ingress
 
@@ -199,7 +199,7 @@ make grafana
 
 Opens Grafana at [http://localhost:3000](http://localhost:3000) (login: `admin` / `admin`).
 
-The pre-built **eGo Cluster** dashboard is automatically provisioned and includes:
+The pre-built **Urd Cluster** dashboard is automatically provisioned and includes:
 
 | Panel | Description |
 | --- | --- |
@@ -214,7 +214,7 @@ The pre-built **eGo Cluster** dashboard is automatically provisioned and include
 | Projection Lag (ms) | How far behind each projection shard is |
 | Projection Events Behind | Approximate unprocessed event count per shard |
 
-Direct link: [http://localhost:3000/d/ego-cluster-dashboard](http://localhost:3000/d/ego-cluster-dashboard)
+Direct link: [http://localhost:3000/d/urd-cluster-dashboard](http://localhost:3000/d/urd-cluster-dashboard)
 
 ### Jaeger
 
@@ -222,7 +222,7 @@ Direct link: [http://localhost:3000/d/ego-cluster-dashboard](http://localhost:30
 make jaeger
 ```
 
-Opens Jaeger at [http://localhost:16686](http://localhost:16686). Select service `ego-cluster` to see traces for command processing, including:
+Opens Jaeger at [http://localhost:16686](http://localhost:16686). Select service `urd-cluster` to see traces for command processing, including:
 
 - Span name: `ego.command`
 - Attributes: `ego.persistence_id`, `ego.command_type`
@@ -235,7 +235,7 @@ make prometheus
 
 Opens Prometheus at [http://localhost:9090](http://localhost:9090). Available metrics:
 
-eGo defines OpenTelemetry instruments with dotted names; the OpenTelemetry Collector exposes them to Prometheus with underscores.
+Urd defines OpenTelemetry instruments with dotted names; the OpenTelemetry Collector exposes them to Prometheus with underscores.
 
 | Metric | Type | Description |
 | --- | --- | --- |
@@ -248,6 +248,8 @@ eGo defines OpenTelemetry instruments with dotted names; the OpenTelemetry Colle
 | `ego_projection_lag_ms` | Gauge | Projection lag per shard (ms) |
 | `ego_projection_latest_offset` | Gauge | Current projection offset per shard |
 | `ego_projection_events_behind` | Gauge | Unprocessed events per shard |
+
+The instrument, span and attribute names keep their `ego` spelling after the rename to Urd, so existing dashboards and alerts keep working. See [`MIGRATION.md`](../../MIGRATION.md).
 
 ### Kubernetes Dashboard
 
@@ -273,7 +275,7 @@ Installs and opens the Kubernetes Dashboard. A token is printed to the terminal 
 | `make prometheus` | Port-forward Prometheus to localhost:9090 |
 | `make dashboard` | Install and open the Kubernetes dashboard at `https://localhost:8443` |
 | `make reset` | Truncate all tables for a clean re-run (no teardown needed) |
-| `make status` | Show all Kubernetes resources in the ego-example namespace |
+| `make status` | Show all Kubernetes resources in the urd-example namespace |
 | `make logs` | Tail logs from all app pods |
 | `make teardown` | Delete the Kind cluster and all resources |
 | `make clean` | Alias for `teardown` |
@@ -308,11 +310,11 @@ example/cluster/
 ├── go.sum
 ├── README.md
 └── k8s/
-    ├── namespace.yaml       # ego-example namespace
+    ├── namespace.yaml       # urd-example namespace
     ├── postgres.yaml        # PostgreSQL StatefulSet + init SQL
     ├── rbac.yaml            # ServiceAccount + Role + RoleBinding
     ├── observability.yaml   # OTel Collector, Jaeger, Prometheus, Grafana
-    ├── grafana-dashboard.yaml # Pre-built Grafana dashboard for eGo metrics
+    ├── grafana-dashboard.yaml # Pre-built Grafana dashboard for Urd metrics
     └── app.yaml             # 3-replica StatefulSet + headless Service
 ```
 
@@ -320,9 +322,9 @@ example/cluster/
 
 All HTTP requests go through the **NGINX Ingress Controller**, which distributes them across the 3 app pods using round-robin. After `make all`, the API is accessible at `http://localhost` — no port-forwarding needed.
 
-The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so that host port 80 maps into the cluster's ingress controller node. The Ingress resource in `k8s/app.yaml` routes all paths (`/`) to the `ego-cluster` ClusterIP service.
+The Kind cluster is created with `extraPortMappings` (see `kind-config.yaml`) so that host port 80 maps into the cluster's ingress controller node. The Ingress resource in `k8s/app.yaml` routes all paths (`/`) to the `urd-cluster` ClusterIP service.
 
-A separate headless service (`ego-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
+A separate headless service (`urd-cluster-headless`) is kept for gossip-based peer discovery — it is not used for HTTP traffic.
 
 ## Schema migrations
 
@@ -422,7 +424,7 @@ tenant identity for a row that never had one.
 
 ## Dependency Isolation
 
-This example is the package `github.com/getsyntegrity/ego/example/cluster` of the **`example` module** (`example/go.mod`), which holds every example. CI builds, vets and tests that module on every pull request with Go changes. The example imports the generated messages from `example/examplepb`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are listed in the `example` module only, so they do not affect the core eGo library. Go only compiles what each program imports, so the simple examples in the same module do not link them.
+This example is the package `github.com/getsyntegrity/urd/example/cluster` of the **`example` module** (`example/go.mod`), which holds every example. CI builds, vets and tests that module on every pull request with Go changes. The example imports the generated messages from `example/examplepb`. Heavy dependencies like `k8s.io/client-go`, `github.com/jackc/pgx/v5`, and the OpenTelemetry SDK are listed in the `example` module only, so they do not affect the core Urd library. Go only compiles what each program imports, so the simple examples in the same module do not link them.
 
 ## Cleanup
 

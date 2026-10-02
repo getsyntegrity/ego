@@ -80,7 +80,7 @@ func TestProductionClosureExcludesRootAndGoAkt(t *testing.T) {
 		})
 
 		s.It("never reaches the engine package", func(ctx *specs.Context) {
-			ctx.Expect(deps).To(specs.NoElement(specs.Equal("github.com/getsyntegrity/ego/engine")))
+			ctx.Expect(deps).To(specs.NoElement(specs.Equal("github.com/getsyntegrity/urd/engine")))
 		})
 	})
 }

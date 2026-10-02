@@ -2,9 +2,17 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions will follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-eGo is pre-release: no version has been published yet, and the entries below describe the current state of the repository, not a release.
+Urd is pre-release: no version has been published yet, and the entries below describe the current state of the repository, not a release.
 
 ## Unreleased
+
+### Renamed to Urd
+
+- **The project is now Urd, at `github.com/getsyntegrity/urd`.** Every module path changed its prefix from `github.com/getsyntegrity/ego`; the `engine` package and its API are unchanged, and there is still no root package. Rewrite imports with the command in [`MIGRATION.md`](./MIGRATION.md). The first release under the new path is `v0.1.0`.
+- **Publisher IDs and the Kafka client ID are now `urd-*`.** `ID()` returns `urd-kafka`, `urd-nats`, `urd-pulsar` and `urd-websocket`; the Kafka `ClientID` is `urd-kafka-publisher`.
+- **Free-text error messages start with `urd:`** instead of `ego:` or `eGo:`. The concurrency-conflict grammar `ego: concurrency conflict: grammar=v1` is unchanged because callers parse it.
+- **`URD_TELEMETRY_CONTRACT_DUMP` replaces `EGO_TELEMETRY_CONTRACT_DUMP`.** The old name is still read as a fallback and is deprecated.
+- **Internal identifiers and doc comments no longer say `ego`.** Persisted and wire-level names (`egopb`, `ego.*` metadata keys, GoAkt extension IDs, OpenTelemetry names, NATS stream names, `ego_schema_migrations`) keep their spelling on purpose; see [`MIGRATION.md`](./MIGRATION.md).
 
 ### Breaking changes
 

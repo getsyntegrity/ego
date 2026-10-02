@@ -23,7 +23,7 @@
 package runtime
 
 import (
-	"github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/port/behavior"
 )
 
 // SagaStatus represents the current status of a saga.

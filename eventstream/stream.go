@@ -23,7 +23,7 @@
 package eventstream
 
 import (
-	"github.com/getsyntegrity/ego/internal/syncmap"
+	"github.com/getsyntegrity/urd/internal/syncmap"
 )
 
 type Stream interface {

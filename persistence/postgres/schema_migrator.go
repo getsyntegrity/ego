@@ -30,7 +30,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // schemaLockKey is the key of the Postgres advisory lock that serializes
@@ -40,7 +40,7 @@ const schemaLockKey int64 = 0x65676f5f73636865
 
 // createSchemaVersionsSQL creates the bookkeeping table: one row per applied
 // schema file. The name is prefixed on purpose: a bare schema_migrations is what
-// golang-migrate and other tools create, and ego must not read or write a table
+// golang-migrate and other tools create, and urd must not read or write a table
 // that belongs to them.
 const createSchemaVersionsSQL = `
 CREATE TABLE IF NOT EXISTS ego_schema_migrations
@@ -63,7 +63,7 @@ var embeddedSchemaFiles = sync.OnceValues(func() ([]schemaFile, error) {
 	return loadSchemaFiles(schemaFS, schemaDir)
 })
 
-// SchemaMigrator brings a Postgres database to the schema ego's stores expect:
+// SchemaMigrator brings a Postgres database to the schema Urd's stores expect:
 // the events_store, events_store_revisions and offsets_store tables. It
 // implements persistence.SchemaMigrator and is what EventStore.Migrate and
 // OffsetStore.Migrate run, so either store migrates the whole schema; the two

@@ -28,8 +28,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // BadVersionDurableStateBehavior returns an invalid version increment from HandleCommand

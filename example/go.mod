@@ -1,16 +1,16 @@
-module github.com/getsyntegrity/ego/example
+module github.com/getsyntegrity/urd/example
 
 go 1.26.0
 
-// Use the local ego module so the examples always build against the current source.
-replace github.com/getsyntegrity/ego => ../
+// Use the local urd module so the examples always build against the current source.
+replace github.com/getsyntegrity/urd => ../
 
 // The cluster example uses the Postgres stores from the working tree as well.
-replace github.com/getsyntegrity/ego/persistence/postgres => ../persistence/postgres
+replace github.com/getsyntegrity/urd/persistence/postgres => ../persistence/postgres
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
-	github.com/getsyntegrity/ego/persistence/postgres v0.0.0
+	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd/persistence/postgres v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pablogore/kit-logger v0.1.2-0.20260912231430-17d1a6eacc85
@@ -134,7 +134,7 @@ require (
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (

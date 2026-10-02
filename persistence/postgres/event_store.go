@@ -35,8 +35,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // scopeKey validates scope and returns the tenant_id column value it maps

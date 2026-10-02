@@ -29,7 +29,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // RunStateStoreConformance runs the full cross-tenant isolation matrix

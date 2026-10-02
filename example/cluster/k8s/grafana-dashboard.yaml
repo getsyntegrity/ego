@@ -2,9 +2,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboards
-  namespace: ego-example
+  namespace: urd-example
 data:
-  ego-dashboard.json: |
+  urd-dashboard.json: |
     {
       "annotations": { "list": [] },
       "editable": true,
@@ -306,6 +306,6 @@ data:
         ]
       },
       "time": { "from": "now-15m", "to": "now" },
-      "title": "eGo Cluster",
-      "uid": "ego-cluster-dashboard"
+      "title": "Urd Cluster",
+      "uid": "urd-cluster-dashboard"
     }

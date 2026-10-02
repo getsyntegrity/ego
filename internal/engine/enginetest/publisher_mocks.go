@@ -27,8 +27,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/mock"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // EventPublisherMock is a publishing.EventPublisher backed by a go-specs

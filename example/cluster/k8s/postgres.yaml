@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-init
-  namespace: ego-example
+  namespace: urd-example
 data:
   init.sql: |
     -- This init script keeps the example working with no extra step, but it is
@@ -86,7 +86,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: ego-example
+  namespace: urd-example
 spec:
   selector:
     app: postgres
@@ -98,7 +98,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: ego-example
+  namespace: urd-example
 spec:
   serviceName: postgres
   replicas: 1
@@ -115,11 +115,11 @@ spec:
           image: postgres:17-alpine
           env:
             - name: POSTGRES_DB
-              value: ego
+              value: urd
             - name: POSTGRES_USER
-              value: ego
+              value: urd
             - name: POSTGRES_PASSWORD
-              value: ego_secret
+              value: urd_secret
           ports:
             - containerPort: 5432
           volumeMounts:
@@ -129,7 +129,7 @@ spec:
               mountPath: /var/lib/postgresql/data
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "ego"]
+              command: ["pg_isready", "-U", "urd"]
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

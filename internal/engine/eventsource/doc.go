@@ -29,6 +29,6 @@
 // it in the EventSourcedActor cluster kind, because GoAkt names a kind after
 // the Go type that implements goakt.Actor and the name must not change.
 //
-// The package depends on eGo's contract packages and on internal/engine/protocol
+// The package depends on Urd's contract packages and on internal/engine/protocol
 // and internal/extensions. It never imports package engine.
 package eventsource

@@ -59,7 +59,7 @@ type Config struct {
 func toSaramaConfig(config *Config) *sarama.Config {
 	saramaConfig := sarama.NewConfig()
 	saramaConfig.Version = sarama.V0_11_0_2
-	saramaConfig.ClientID = "ego-kafka-publisher"
+	saramaConfig.ClientID = "urd-kafka-publisher"
 
 	if config.EnableTLS {
 		saramaConfig.Net.TLS.Enable = true

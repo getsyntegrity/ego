@@ -27,7 +27,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/internal/extensions"
+	"github.com/getsyntegrity/urd/internal/extensions"
 )
 
 // engRestErrText is err's message, or "" for nil, so a text expectation on a
@@ -45,7 +45,7 @@ func TestMissingRequiredExtensionsSentinel(t *testing.T) {
 			// Actors outside this package (internal/engine/...) wrap the sentinel
 			// owned by internal/extensions; callers match it through the public name.
 			ctx.Expect(extensions.ErrMissingRequiredExtensions == ErrMissingRequiredExtensions).To(specs.BeTrue()) //nolint:errorlint // identity is the point
-			ctx.Expect(engRestErrText(ErrMissingRequiredExtensions)).ToEqual("actor system is missing required ego extensions")
+			ctx.Expect(engRestErrText(ErrMissingRequiredExtensions)).ToEqual("actor system is missing required urd extensions")
 		})
 	})
 }

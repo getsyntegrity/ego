@@ -30,7 +30,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/jackc/pgx/v5"
 
-	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
+	pginfra "github.com/getsyntegrity/urd/inttest/infra/postgres"
 )
 
 var shared *pginfra.Postgres

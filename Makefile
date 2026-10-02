@@ -45,7 +45,7 @@ proto:
 # the toolchain installed locally.
 # ---------------------------------------------------------------------------
 
-DOCKER_IMAGE       ?= ego-ci:latest
+DOCKER_IMAGE       ?= urd-ci:latest
 DOCKER_DOCKERFILE  ?= Dockerfile.ci
 WORKDIR_IN_CONT    ?= /workspace
 
@@ -54,8 +54,8 @@ WORKDIR_IN_CONT    ?= /workspace
 # inherit world-writable permissions and can be used by any host UID.
 # Versioned suffix ('-v2') so older volumes from earlier (broken) versions
 # of this Makefile are not reused.
-GO_BUILD_CACHE_VOL ?= ego-go-build-cache-v2
-GO_MOD_CACHE_VOL   ?= ego-go-mod-cache-v2
+GO_BUILD_CACHE_VOL ?= urd-go-build-cache-v2
+GO_MOD_CACHE_VOL   ?= urd-go-mod-cache-v2
 
 # Run the tooling image with the working tree mounted at $(WORKDIR_IN_CONT)
 # and shared Go caches under /cache (prepared 0777 in Dockerfile.ci).

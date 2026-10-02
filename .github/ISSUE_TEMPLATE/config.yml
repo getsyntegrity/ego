@@ -2,8 +2,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Usage question
-    url: https://github.com/getsyntegrity/ego/discussions
-    about: Questions about how to use Ego. An issue is for concrete bugs or changes.
+    url: https://github.com/getsyntegrity/urd/discussions
+    about: Questions about how to use Urd. An issue is for concrete bugs or changes.
   - name: Security vulnerability
-    url: https://github.com/getsyntegrity/ego/security/advisories/new
+    url: https://github.com/getsyntegrity/urd/security/advisories/new
     about: Do NOT open a public issue. Follow the security policy to report it privately.

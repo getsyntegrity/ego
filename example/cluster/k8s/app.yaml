@@ -2,12 +2,12 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: ego-cluster-headless
-  namespace: ego-example
+  name: urd-cluster-headless
+  namespace: urd-example
 spec:
   clusterIP: None
   selector:
-    app: ego-cluster
+    app: urd-cluster
   ports:
     - name: remoting
       port: 9000
@@ -23,11 +23,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ego-cluster
-  namespace: ego-example
+  name: urd-cluster
+  namespace: urd-example
 spec:
   selector:
-    app: ego-cluster
+    app: urd-cluster
   ports:
     - name: http
       port: 8080
@@ -38,8 +38,8 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ego-cluster
-  namespace: ego-example
+  name: urd-cluster
+  namespace: urd-example
   annotations:
     nginx.ingress.kubernetes.io/load-balance: "round_robin"
 spec:
@@ -51,7 +51,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: ego-cluster
+                name: urd-cluster
                 port:
                   number: 8080
 ---
@@ -61,24 +61,24 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: ego-cluster
-  namespace: ego-example
+  name: urd-cluster
+  namespace: urd-example
 spec:
-  serviceName: ego-cluster-headless
+  serviceName: urd-cluster-headless
   replicas: 3
   podManagementPolicy: OrderedReady
   selector:
     matchLabels:
-      app: ego-cluster
+      app: urd-cluster
   template:
     metadata:
       labels:
-        app: ego-cluster
+        app: urd-cluster
     spec:
-      serviceAccountName: ego-cluster
+      serviceAccountName: urd-cluster
       containers:
-        - name: ego-cluster
-          image: ego-cluster-example:latest
+        - name: urd-cluster
+          image: urd-cluster-example:latest
           imagePullPolicy: Never # Image is loaded into Kind directly
           ports:
             - name: http
@@ -91,7 +91,7 @@ spec:
               containerPort: 9002
           env:
             - name: POSTGRES_DSN
-              value: "postgres://ego:ego_secret@postgres.ego-example.svc.cluster.local:5432/ego?sslmode=disable"
+              value: "postgres://urd:urd_secret@postgres.urd-example.svc.cluster.local:5432/urd?sslmode=disable"
             - name: NODE_IP
               valueFrom:
                 fieldRef:
@@ -109,7 +109,7 @@ spec:
             - name: HTTP_PORT
               value: "8080"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://otel-collector.ego-example.svc.cluster.local:4317"
+              value: "http://otel-collector.urd-example.svc.cluster.local:4317"
           readinessProbe:
             httpGet:
               path: /healthz

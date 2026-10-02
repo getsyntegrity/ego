@@ -42,7 +42,7 @@ func TestScanFlagsRealResourcesInTestFiles(t *testing.T) {
 			{name: "exec.Command", body: "_ = exec.Command(\"go\", \"list\")", want: []string{"calls os/exec.Command"}},
 			{name: "httptest server", body: "_ = httptest.NewServer(nil)", want: []string{"calls net/http/httptest.NewServer"}},
 			{name: "goakt actor system", body: "_, _ = actor.NewActorSystem(\"a\")", want: []string{"calls goakt actor.NewActorSystem"}},
-			{name: "DSN from the environment", body: "_ = os.Getenv(\"EGO_POSTGRES_DSN\")", want: []string{"reads the DSN variable EGO_POSTGRES_DSN"}},
+			{name: "DSN from the environment", body: "_ = os.Getenv(\"URD_POSTGRES_DSN\")", want: []string{"reads the DSN variable URD_POSTGRES_DSN"}},
 			{name: "os.Create with no TempDir", body: "_, _ = os.Create(\"out.txt\")", want: []string{"calls os.Create outside t.TempDir"}},
 			{name: "os.Create next to TempDir is allowed", body: "_ = ctx.T.TempDir()\n_, _ = os.Create(\"out.txt\")"},
 			{name: "an unrelated Getenv is allowed", body: "_ = os.Getenv(\"HOME\")"},
@@ -60,7 +60,7 @@ func TestScanFlagsRealResourcesInTestFiles(t *testing.T) {
 		})
 
 		s.It("does not apply the resource rule to the inttest module", func(ctx *specs.Context) {
-			src := resourceSource(resourceImports, "_, _ = net.Dial(\"tcp\", \"x:1\")\n_ = os.Getenv(\"EGO_POSTGRES_DSN\")")
+			src := resourceSource(resourceImports, "_, _ = net.Dial(\"tcp\", \"x:1\")\n_ = os.Getenv(\"URD_POSTGRES_DSN\")")
 			ctx.Expect(scanFiles(ctx, map[string]string{"inttest/flows/eventstore/a_test.go": src})).To(specs.BeEmpty())
 		})
 

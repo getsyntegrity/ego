@@ -23,12 +23,12 @@
 package engine
 
 import (
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/testkit"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
-// The testkit declares the behavior subsets it needs rather than importing ego,
-// because ego's own tests import the testkit. Structural compatibility only holds
+// The testkit declares the behavior subsets it needs rather than importing engine,
+// because engine's own tests import the testkit. Structural compatibility only holds
 // while Command, Event, and State are aliases for proto.Message: turning any of
 // them back into a defined type makes the signatures differ, and no behavior the
 // engine accepts would compile against the scenario API. These assertions fail

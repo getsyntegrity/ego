@@ -33,7 +33,7 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/compose"
+	"github.com/getsyntegrity/urd/compose"
 )
 
 // recorder builds steps that append "start X" or "stop X" to one shared,

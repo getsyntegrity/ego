@@ -13,7 +13,7 @@
 #
 # Go validation (semantic import versioning): from v2 onwards the module path in
 # go.mod MUST end in /vN. If it does not match, it exits with an error: a v2.0.0
-# tag on "module github.com/org/ego" cannot be consumed with go get.
+# tag on "module github.com/org/urd" cannot be consumed with go get.
 #
 # Output (GITHUB_OUTPUT format): version=, previous=, bump=, source=
 set -euo pipefail

@@ -30,11 +30,11 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/persistence/postgres"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/persistence/postgres"
 )
 
-// node is one running eGo process: an actor system, the engine plugged into it and the Postgres events store
+// node is one running Urd process: an actor system, the engine plugged into it and the Postgres events store
 // the engine persists to. Stopping it and starting another on the same database is the restart under test.
 type node struct {
 	store  *postgres.EventStore

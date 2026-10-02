@@ -29,11 +29,11 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/compose"
-	egoakt "github.com/getsyntegrity/ego/compose/goakt"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/internal/runtimeconsumer"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/compose"
+	urdakt "github.com/getsyntegrity/urd/compose/goakt"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/internal/runtimeconsumer"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // TestRuntime_ConsumerDrivesTheAppEndToEnd is #147's end-to-end criterion
@@ -48,12 +48,12 @@ func TestRuntime_ConsumerDrivesTheAppEndToEnd(t *testing.T) {
 			ctx.Expect(events.Connect(bg)).To(specs.BeNil())
 			ctx.Cleanup(func() { _ = events.Disconnect(bg) })
 
-			app, err := egoakt.New(compose.Spec{
+			app, err := urdakt.New(compose.Spec{
 				Name:            "runtime-consumer-e2e",
 				Families:        compose.EventSourced,
 				EventsStore:     events,
 				ShutdownTimeout: 20 * time.Second,
-			}, egoakt.WithLogger(engine.DiscardLogger))
+			}, urdakt.WithLogger(engine.DiscardLogger))
 			ctx.Expect(err).To(specs.BeNil())
 			// Stop is idempotent (a no-op after Stop or a failed Start), so this
 			// cleanup only matters when the case fails before its explicit Stop;

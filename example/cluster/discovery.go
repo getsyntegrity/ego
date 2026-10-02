@@ -34,7 +34,7 @@ import (
 //
 // Parameters:
 //   - namespace: the Kubernetes namespace to search for pods.
-//   - podLabels: label selector for matching ego cluster pods.
+//   - podLabels: label selector for matching urd cluster pods.
 //   - discoveryPortName: the named container port used for gossip/discovery.
 //   - remotingPortName: the named container port used for remote actor communication.
 //   - peersPortName: the named container port used for peer-to-peer communication.

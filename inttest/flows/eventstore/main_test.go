@@ -27,7 +27,7 @@ import (
 	"os"
 	"testing"
 
-	pginfra "github.com/getsyntegrity/ego/inttest/infra/postgres"
+	pginfra "github.com/getsyntegrity/urd/inttest/infra/postgres"
 )
 
 // shared is the one Postgres container of this package. TestMain starts it before the first test and terminates

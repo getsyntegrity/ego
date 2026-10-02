@@ -29,7 +29,7 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // fixedResolver is a stand-in for a "real" multi-tenant TenantResolver: it

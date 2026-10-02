@@ -39,12 +39,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/persistence/conformance"
-	"github.com/getsyntegrity/ego/persistence/postgres"
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/egopb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/persistence/conformance"
+	"github.com/getsyntegrity/urd/persistence/postgres"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 func TestPostgresEventStore_Conformance(t *testing.T) {

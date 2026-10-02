@@ -28,7 +28,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/urd/command"
 )
 
 func TestCarrierFromContext_NoneAttached(t *testing.T) {

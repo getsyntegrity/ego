@@ -28,8 +28,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/egopb"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/egopb"
 )
 
 // ParseCommandReply unpacks a wire-level egopb.CommandReply into the state it

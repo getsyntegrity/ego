@@ -29,5 +29,5 @@ var (
 	// tenancy is active but no valid EntityTenantScope dependency was
 	// injected at spawn. engine re-exports it as
 	// engine.ErrEntityTenantScopeMissing.
-	ErrEntityTenantScopeMissing = errors.New("eGo: tenant-aware actor spawned without a bound tenant scope")
+	ErrEntityTenantScopeMissing = errors.New("urd: tenant-aware actor spawned without a bound tenant scope")
 )

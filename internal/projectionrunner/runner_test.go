@@ -43,16 +43,16 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/internal/instrumentation"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/persistence"
-	"github.com/getsyntegrity/ego/projection"
-	testkit2 "github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/instrumentation"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/persistence"
+	"github.com/getsyntegrity/urd/projection"
+	testkit2 "github.com/getsyntegrity/urd/testkit"
 )
 
 // errFailed is the failure the stubbed collaborators return.
@@ -1749,13 +1749,13 @@ func TestProjectionRunnerStaysRuntimeNeutral(t *testing.T) {
 
 			deps := strings.Fields(string(out))
 			// The guard first: an empty or truncated graph would prove nothing.
-			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/ego/internal/projectionrunner"))
+			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/urd/internal/projectionrunner"))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"a GoAkt package: internal/projectionrunner must not depend on GoAkt",
 				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"the engine package: internal/projectionrunner must not depend on it",
-				func(dep any) bool { return strings.HasSuffix(dep.(string), "/ego/engine") })))
+				func(dep any) bool { return strings.HasSuffix(dep.(string), "/urd/engine") })))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"the GoAkt adapter internals (internal/extensions): internal/projectionrunner must not depend on them",
 				func(dep any) bool { return strings.HasSuffix(dep.(string), "/internal/extensions") })))

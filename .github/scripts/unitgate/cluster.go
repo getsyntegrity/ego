@@ -31,7 +31,7 @@ import (
 const (
 	clusterTestPrefix = "TestCluster"
 	dynaportPrefix    = "github.com/travisjeffery/go-dynaport"
-	composeGoaktPath  = "github.com/getsyntegrity/ego/compose/goakt"
+	composeGoaktPath  = "github.com/getsyntegrity/urd/compose/goakt"
 )
 
 // clusterFindings reports the top-level tests of a test file that start a real cluster and are not named

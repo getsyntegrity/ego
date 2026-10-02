@@ -23,22 +23,22 @@
 package websocket
 
 import (
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // The publishers implement the contracts from port/publishing directly, with
-// no dependency on package `ego` or the GoAkt runtime it pulls in. The
-// historical compatibility check against the `ego` aliases (ADR
+// no dependency on package `engine` or the GoAkt runtime it pulls in. The
+// historical compatibility check against the `engine` aliases (ADR
 // ego-arch-001, S1 criterion 3) still exists, but it lives in the separate,
 // unreleased test/compat module (ADR ego-arch-006, slice S1; docs/ci.md,
 // "Compatibility checks: the test/compat module"), precisely so that this
-// module's tests never need to import `ego` (#122).
+// module's tests never need to import `engine` (#122).
 //
 // The check that Publish on a closed publisher returns
 // publishing.ErrPublisherNotStarted used to live here. It is now PT-1 of
 // port/publishing/publishingtest, run in conformance_test.go against a
 // publisher that really was connected and closed. Together with
-// test/compat's TestEgoSentinelIsThePublishingSentinel, which checks that
+// test/compat's TestUrdSentinelIsThePublishingSentinel, which checks that
 // engine.ErrPublisherNotStarted is this same error value, it still proves the
 // historical check that the error also matches engine.ErrPublisherNotStarted
 // (ADR ego-arch-006, §6 S1).

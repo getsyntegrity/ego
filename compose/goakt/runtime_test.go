@@ -29,8 +29,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/compose"
-	runtimeport "github.com/getsyntegrity/ego/port/runtime"
+	"github.com/getsyntegrity/urd/compose"
+	runtimeport "github.com/getsyntegrity/urd/port/runtime"
 )
 
 // TestRuntime_NilBeforeStart pins design ego-runtime-001 §D6: before Start

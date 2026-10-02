@@ -1,5 +1,5 @@
 name: Bug
-description: Something in Ego does not work as it should
+description: Something in Urd does not work as it should
 labels: ["kind/bug", "needs-triage"]
 body:
   - type: markdown
@@ -31,17 +31,17 @@ body:
       render: go
       placeholder: |
         func TestRepro(t *testing.T) {
-            got, err := ego.Something(...)
+            got, err := engine.Something(...)
             // ...
         }
     validations:
       required: true
 
   - type: input
-    id: ego-version
+    id: urd-version
     attributes:
-      label: Ego version
-      description: "Output of `go list -m github.com/getsyntegrity/ego` in the service that uses it"
+      label: Urd version
+      description: "Output of `go list -m github.com/getsyntegrity/urd` in the service that uses it"
       placeholder: v0.1.0
     validations:
       required: true
@@ -86,7 +86,7 @@ body:
     id: consumer
     attributes:
       label: Affected service
-      description: Which service consumes Ego and is affected
+      description: Which service consumes Urd and is affected
       placeholder: my-service
 
   - type: textarea

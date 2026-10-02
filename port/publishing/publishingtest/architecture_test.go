@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	rootModule         = "github.com/getsyntegrity/ego"
+	rootModule         = "github.com/getsyntegrity/urd"
 	publishingPath     = rootModule + "/port/publishing"
 	publishingtestPath = publishingPath + "/publishingtest"
 	egopbPath          = rootModule + "/egopb"

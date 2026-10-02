@@ -31,8 +31,8 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/tochemey/goakt/v4/extension"
 
-	"github.com/getsyntegrity/ego/command"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
+	"github.com/getsyntegrity/urd/command"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
 )
 
 // The old behavior names in package engine are re-expressed on top of the

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Ego follows [semver](https://semver.org/) and fixes are always published as a new **patch**
+Urd follows [semver](https://semver.org/) and fixes are always published as a new **patch**
 version (the `hotfix/*` → `main` flow).
 
 | Version                                   | Support                                          |
@@ -19,12 +19,12 @@ so the way to receive a fix is always to move to the latest version.
 **Do not open a public issue or PR**: the details would be visible to everyone before a fix exists.
 
 Report it privately through GitHub, using the
-["Report a Vulnerability"](https://github.com/getsyntegrity/ego/security/advisories/new) feature,
+["Report a Vulnerability"](https://github.com/getsyntegrity/urd/security/advisories/new) feature,
 or contact [@pablogore](https://github.com/pablogore) directly.
 
 Include, if you can:
 
-- The affected Ego version (`go list -m github.com/getsyntegrity/ego`)
+- The affected Urd version (`go list -m github.com/getsyntegrity/urd`)
 - A description of the problem and its impact
 - Steps or code to reproduce it
 - Services that might be exposed
@@ -38,7 +38,7 @@ Include, if you can:
 | Fix published (critical/high)  | As soon as possible, via hotfix |
 | Fix published (medium/low)     | In the next release          |
 
-Once the fix is published, the teams that consume Ego are told which version to upgrade to. The
+Once the fix is published, the teams that consume Urd are told which version to upgrade to. The
 release note marks it as `action required`, so it appears under **Urgent Upgrade Notes** in the
 [CHANGELOG](../CHANGELOG/README.md).
 

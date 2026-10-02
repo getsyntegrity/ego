@@ -25,20 +25,20 @@ package engine
 import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/internal/engine/durablestate"
-	"github.com/getsyntegrity/ego/internal/engine/eventsource"
-	"github.com/getsyntegrity/ego/internal/engine/projection"
-	"github.com/getsyntegrity/ego/internal/engine/saga"
+	"github.com/getsyntegrity/urd/internal/engine/durablestate"
+	"github.com/getsyntegrity/urd/internal/engine/eventsource"
+	"github.com/getsyntegrity/urd/internal/engine/projection"
+	"github.com/getsyntegrity/urd/internal/engine/saga"
 )
 
-// The four actor types below are the cluster kinds of eGo. Each one stays
+// The four actor types below are the cluster kinds of Urd. Each one stays
 // declared in package engine and delegates to an implementation in an internal
 // package, and that is deliberate: GoAkt names an actor kind
 // lower(reflect.TypeOf(actor).Elem().String()), so EventSourcedActor travels
 // as "engine.eventsourcedactor" in the spawn, relocation and singleton records
 // it ships between nodes. Moving the type to another package would rename the
 // kind and break a cluster that runs two versions during a rolling upgrade.
-// TestEngineClusterKindsExposesEgoActors pins the names.
+// TestEngineClusterKindsExposesUrdActors pins the names.
 //
 // Each type is a struct with one unexported value field, so new(T) and
 // reflect.New(T) yield a ready zero value, exactly like the types they wrap.
@@ -177,7 +177,7 @@ func (x *ProjectionActor) PostStop(ctx *goakt.Context) error {
 	return x.impl.PostStop(ctx)
 }
 
-// ClusterKinds returns the actor kinds eGo needs registered in the cluster
+// ClusterKinds returns the actor kinds Urd needs registered in the cluster
 // configuration so that entity, durable-state, saga, and projection actors
 // can be relocated across nodes.
 //

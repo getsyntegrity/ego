@@ -1018,7 +1018,7 @@ const file_ego_ego_proto_rawDesc = "" +
 	"\x1fSAGA_LIFECYCLE_STATUS_COMPLETED\x10\x02\x12&\n" +
 	"\"SAGA_LIFECYCLE_STATUS_COMPENSATING\x10\x03\x12 \n" +
 	"\x1cSAGA_LIFECYCLE_STATUS_FAILED\x10\x04Bu\n" +
-	"\tcom.egopbB\bEgoProtoH\x02P\x01Z(github.com/getsyntegrity/ego/egopb;egopb\xa2\x02\x03EXX\xaa\x02\x05Egopb\xca\x02\x05Egopb\xe2\x02\x11Egopb\\GPBMetadata\xea\x02\x05Egopbb\x06proto3"
+	"\tcom.egopbB\bEgoProtoH\x02P\x01Z(github.com/getsyntegrity/urd/egopb;egopb\xa2\x02\x03EXX\xaa\x02\x05Egopb\xca\x02\x05Egopb\xe2\x02\x11Egopb\\GPBMetadata\xea\x02\x05Egopbb\x06proto3"
 
 var (
 	file_ego_ego_proto_rawDescOnce sync.Once

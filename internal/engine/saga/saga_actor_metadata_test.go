@@ -28,9 +28,9 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/command"
-	"github.com/getsyntegrity/ego/internal/engine/enginetest"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/command"
+	"github.com/getsyntegrity/urd/internal/engine/enginetest"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
 )
 
 // TestActorAttachCommandMetadata exercises sagaCommand's dual metadata

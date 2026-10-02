@@ -87,7 +87,7 @@ func TestLoggingStaysRuntimeNeutral(t *testing.T) {
 
 			deps := strings.Fields(string(out))
 			// The guard first: an empty or truncated graph would prove nothing.
-			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/ego/internal/logging"))
+			ctx.Expect(deps).To(specs.Contain("github.com/getsyntegrity/urd/internal/logging"))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"a GoAkt package: internal/logging must not depend on GoAkt, directly or transitively",
 				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))

@@ -30,6 +30,6 @@
 // in package engine. Package engine also wraps Actor in the ProjectionActor
 // cluster kind for the same reason. This package never imports package engine.
 //
-// The root package github.com/getsyntegrity/ego/projection is imported here
+// The root package github.com/getsyntegrity/urd/projection is imported here
 // as egoprojection, since it shares this package's name.
 package projection

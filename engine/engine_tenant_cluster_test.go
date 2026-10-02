@@ -35,7 +35,7 @@ import (
 	"github.com/tochemey/goakt/v4/remote"
 	"github.com/travisjeffery/go-dynaport"
 
-	"github.com/getsyntegrity/ego/tenancy"
+	"github.com/getsyntegrity/urd/tenancy"
 )
 
 // TestClusterEngineRemoteSpawnTenantBinding runs the spawn-binding contract

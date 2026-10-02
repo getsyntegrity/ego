@@ -28,11 +28,11 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/adapter"
-	"github.com/getsyntegrity/ego/port/adapter/adaptertest"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/port/publishing/publishingtest"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter/adaptertest"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/port/publishing/publishingtest"
 )
 
 // The websocket publishers run both conformance suites against a real

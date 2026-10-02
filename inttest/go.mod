@@ -1,16 +1,16 @@
-module github.com/getsyntegrity/ego/inttest
+module github.com/getsyntegrity/urd/inttest
 
 go 1.26.0
 
 // Build against the local sources so the integration tests always exercise the current code.
-replace github.com/getsyntegrity/ego => ../
+replace github.com/getsyntegrity/urd => ../
 
-replace github.com/getsyntegrity/ego/persistence/postgres => ../persistence/postgres
+replace github.com/getsyntegrity/urd/persistence/postgres => ../persistence/postgres
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
-	github.com/getsyntegrity/ego/persistence/postgres v0.0.0-00010101000000-000000000000
 	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd/persistence/postgres v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/testcontainers/testcontainers-go v0.44.0

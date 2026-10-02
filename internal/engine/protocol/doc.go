@@ -26,19 +26,19 @@
 // command reply and its classification into a command.Result, the tenant
 // binding answer, and the names of the event and state streams.
 //
-// It depends only on eGo's contract packages, so every actor package and the
+// It depends only on Urd's contract packages, so every actor package and the
 // engine facade can share it without importing each other.
 package protocol
 
 const (
-	// EventsTopic is the single in-process pub/sub topic eGo's event-sourced
+	// EventsTopic is the single in-process pub/sub topic Urd's event-sourced
 	// entities publish to and the engine's publishers/subscribers consume
 	// from. The shard each event belongs to is carried in egopb.Event.Shard,
 	// so downstream consumers can filter by shard without the topic name
 	// having to encode it.
 	EventsTopic = "topic.events"
 
-	// StatesTopic is the single in-process pub/sub topic eGo's durable-state
+	// StatesTopic is the single in-process pub/sub topic Urd's durable-state
 	// entities publish to and the engine's state publishers/subscribers
 	// consume from. The shard each state version belongs to is carried in
 	// egopb.DurableState.Shard, so downstream consumers can filter by shard

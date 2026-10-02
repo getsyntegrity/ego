@@ -1,6 +1,6 @@
 # Writing an adapter
 
-An adapter is the code that connects Ego to one piece of infrastructure: a store, a publisher, an
+An adapter is the code that connects Urd to one piece of infrastructure: a store, a publisher, an
 encryptor, a tenant resolver. This guide explains how to add one **without editing any file outside
 your own module**.
 
@@ -169,7 +169,7 @@ events, err := websocket.NewEventsPublisher(&websocket.Config{URL: url})
 if err != nil {
 	return err
 }
-app, err := egoakt.New(compose.Spec{
+app, err := urdakt.New(compose.Spec{
 	Name:            "orders",
 	Families:        compose.EventSourced,
 	EventsStore:     store, // connected by the consumer before New

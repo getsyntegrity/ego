@@ -54,7 +54,7 @@ func hermeticGoEnv() []string {
 // rootModule and compositionRoot are the root module's path and the
 // composition root under it.
 const (
-	rootModule      = "github.com/getsyntegrity/ego"
+	rootModule      = "github.com/getsyntegrity/urd"
 	compositionRoot = rootModule + "/compose"
 	// enginePackage is the runtime engine package; the module root itself
 	// holds no Go files.
@@ -70,9 +70,9 @@ const (
 func closureViolation(dep string) string {
 	switch {
 	case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-		return "unit-test closure regressed: GoAkt package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+		return "unit-test closure regressed: GoAkt package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical engine-alias checks belong in the test/compat module, not in this module's test closure"
 	case dep == enginePackage:
-		return "unit-test closure regressed: engine package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+		return "unit-test closure regressed: engine package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical engine-alias checks belong in the test/compat module, not in this module's test closure"
 	case dep == compositionRoot || strings.HasPrefix(dep, compositionRoot+"/"):
 		return "adapter depends on the composition root: " + strconv.Quote(dep) + " appeared in `go list -deps -test ./...`; an adapter module must not import compose or anything under it, in production code or tests (ego-arch-004 design §D7); end-to-end tests that need a running App belong in the test/compat module"
 	default:
@@ -134,14 +134,14 @@ func TestClosureGuardRejectsCompositionRoot(t *testing.T) {
 			rootDependency   = "adapter depends on the composition root: "
 		)
 		rows := []closureCase{
-			{"rejects the composition root", "github.com/getsyntegrity/ego/compose", rootDependency},
-			{"rejects a package under the composition root", "github.com/getsyntegrity/ego/compose/goakt", rootDependency},
-			{"rejects a nested package under the composition root", "github.com/getsyntegrity/ego/compose/internal/lifecycle", rootDependency},
-			{"rejects the engine package", "github.com/getsyntegrity/ego/engine", runtimeRegressed},
+			{"rejects the composition root", "github.com/getsyntegrity/urd/compose", rootDependency},
+			{"rejects a package under the composition root", "github.com/getsyntegrity/urd/compose/goakt", rootDependency},
+			{"rejects a nested package under the composition root", "github.com/getsyntegrity/urd/compose/internal/lifecycle", rootDependency},
+			{"rejects the engine package", "github.com/getsyntegrity/urd/engine", runtimeRegressed},
 			{"rejects a GoAkt package", "github.com/tochemey/goakt/v4/actor", runtimeRegressed},
-			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/ego/composer", ""},
-			{"allows the publishing port", "github.com/getsyntegrity/ego/port/publishing", ""},
-			{"allows the protobuf package", "github.com/getsyntegrity/ego/egopb", ""},
+			{"allows a sibling that only shares the compose prefix", "github.com/getsyntegrity/urd/composer", ""},
+			{"allows the publishing port", "github.com/getsyntegrity/urd/port/publishing", ""},
+			{"allows the protobuf package", "github.com/getsyntegrity/urd/egopb", ""},
 		}
 		specs.Table(s, rows, func(c closureCase) string { return c.name }, func(ctx *specs.Context, c closureCase) {
 			got := closureViolation(c.dep)

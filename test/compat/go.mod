@@ -1,14 +1,14 @@
-module github.com/getsyntegrity/ego/test/compat
+module github.com/getsyntegrity/urd/test/compat
 
 go 1.26.2
 
 require (
-	github.com/getsyntegrity/ego v0.0.0
-	github.com/getsyntegrity/ego/publisher/kafka v0.0.0
-	github.com/getsyntegrity/ego/publisher/nats v0.0.0
-	github.com/getsyntegrity/ego/publisher/pulsar v0.0.0
-	github.com/getsyntegrity/ego/publisher/websocket v0.0.0
 	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd/publisher/kafka v0.0.0
+	github.com/getsyntegrity/urd/publisher/nats v0.0.0
+	github.com/getsyntegrity/urd/publisher/pulsar v0.0.0
+	github.com/getsyntegrity/urd/publisher/websocket v0.0.0
 )
 
 require (
@@ -144,9 +144,9 @@ require (
 // local replace for its whole in-repository closure instead of relying on the
 // publishers' own replace of the root.
 replace (
-	github.com/getsyntegrity/ego => ../../
-	github.com/getsyntegrity/ego/publisher/kafka => ../../publisher/kafka
-	github.com/getsyntegrity/ego/publisher/nats => ../../publisher/nats
-	github.com/getsyntegrity/ego/publisher/pulsar => ../../publisher/pulsar
-	github.com/getsyntegrity/ego/publisher/websocket => ../../publisher/websocket
+	github.com/getsyntegrity/urd => ../../
+	github.com/getsyntegrity/urd/publisher/kafka => ../../publisher/kafka
+	github.com/getsyntegrity/urd/publisher/nats => ../../publisher/nats
+	github.com/getsyntegrity/urd/publisher/pulsar => ../../publisher/pulsar
+	github.com/getsyntegrity/urd/publisher/websocket => ../../publisher/websocket
 )

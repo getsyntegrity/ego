@@ -17,7 +17,7 @@ import (
 
 const (
 	testifyPrefix = "github.com/stretchr/testify"
-	mocksPrefix   = "github.com/getsyntegrity/ego/mocks"
+	mocksPrefix   = "github.com/getsyntegrity/urd/mocks"
 	specsPath     = "github.com/getsyntegrity/go-specs/specs"
 )
 

@@ -30,7 +30,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // The AT-4 self-check needs a release that never returns, so the harness has

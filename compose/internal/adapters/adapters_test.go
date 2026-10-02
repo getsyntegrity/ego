@@ -30,8 +30,8 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/compose/internal/adapters"
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/compose/internal/adapters"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // The adapters below are go-specs mocks: each method forwards to the case's

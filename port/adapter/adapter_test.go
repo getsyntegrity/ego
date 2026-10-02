@@ -31,7 +31,7 @@ import (
 	"github.com/getsyntegrity/go-specs/mock"
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/getsyntegrity/ego/port/adapter"
+	"github.com/getsyntegrity/urd/port/adapter"
 )
 
 // undeclared implements none of the optional interfaces.
@@ -139,7 +139,7 @@ func TestAccessors_AreIndependent(t *testing.T) {
 
 // A typed-nil pointer implements the interfaces by method set, but calling
 // a method on it would dereference nil. The accessors treat it as absent,
-// as package ego's ResolveLogger treats a typed-nil logger, so a caller
+// as package engine's ResolveLogger treats a typed-nil logger, so a caller
 // never receives a value it cannot safely call, and Describe never calls
 // the method.
 func TestAccessors_TypedNilIsTreatedAsAbsent(t *testing.T) {

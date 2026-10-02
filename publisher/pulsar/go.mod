@@ -1,11 +1,11 @@
-module github.com/getsyntegrity/ego/publisher/pulsar
+module github.com/getsyntegrity/urd/publisher/pulsar
 
 go 1.26.2
 
 require (
 	github.com/apache/pulsar-client-go v0.21.0
-	github.com/getsyntegrity/ego v0.0.0
 	github.com/getsyntegrity/go-specs v0.3.3
+	github.com/getsyntegrity/urd v0.0.0
 	github.com/tochemey/gopack v0.2.1
 	go.uber.org/atomic v1.11.0
 	google.golang.org/protobuf v1.36.12
@@ -96,7 +96,7 @@ require (
 // HashiCorp renamed github.com/armon/go-metrics to github.com/hashicorp/go-metrics
 // in v0.4.2 and every release since declares the new module path, so they fail
 // to satisfy the legacy import path that hashicorp/go-metrics/compat still
-// pulls in transitively (via memberlist → goakt → ego). v0.4.1 is the last
+// pulls in transitively (via memberlist → goakt → urd). v0.4.1 is the last
 // version that resolves under the armon path; exclude the broken ones so
 // `go mod tidy` and `go get -u` stop probing them.
 exclude (
@@ -110,4 +110,4 @@ exclude (
 	github.com/armon/go-metrics v0.6.1
 )
 
-replace github.com/getsyntegrity/ego => ../../
+replace github.com/getsyntegrity/urd => ../../

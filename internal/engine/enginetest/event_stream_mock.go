@@ -25,7 +25,7 @@ package enginetest
 import (
 	"github.com/getsyntegrity/go-specs/mock"
 
-	"github.com/getsyntegrity/ego/eventstream"
+	"github.com/getsyntegrity/urd/eventstream"
 )
 
 // EventStreamMock is an eventstream.Stream backed by a go-specs

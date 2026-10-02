@@ -31,9 +31,9 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/google/uuid"
 
-	"github.com/getsyntegrity/ego/eventstream"
-	"github.com/getsyntegrity/ego/internal/engine/protocol"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/eventstream"
+	"github.com/getsyntegrity/urd/internal/engine/protocol"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // familyTestEngineG4 builds a started engine with an events store and a state

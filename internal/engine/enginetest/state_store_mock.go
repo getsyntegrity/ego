@@ -27,8 +27,8 @@ import (
 
 	"github.com/getsyntegrity/go-specs/mock"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/persistence"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 // StateStoreMock is a persistence.StateStore backed by a go-specs

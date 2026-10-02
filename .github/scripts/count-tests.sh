@@ -15,7 +15,7 @@ go test -count=1 -json "$@" |
     map(select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip")))
     | group_by(.Package)
     | map({
-        pkg: (.[0].Package | sub("^github.com/getsyntegrity/ego/"; "")),
+        pkg: (.[0].Package | sub("^github.com/getsyntegrity/urd/"; "")),
         top: (map(select(.Test | contains("/") | not)) | length),
         sub: (map(select(.Test | contains("/"))) | length),
         fail: (map(select(.Action == "fail")) | length),

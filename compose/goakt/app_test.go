@@ -35,15 +35,15 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 	actor "github.com/tochemey/goakt/v4/actor"
 
-	"github.com/getsyntegrity/ego/compose"
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/engine"
-	"github.com/getsyntegrity/ego/eventstream"
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
-	"github.com/getsyntegrity/ego/port/adapter"
-	"github.com/getsyntegrity/ego/port/publishing"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/compose"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/engine"
+	"github.com/getsyntegrity/urd/eventstream"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
+	"github.com/getsyntegrity/urd/port/adapter"
+	"github.com/getsyntegrity/urd/port/publishing"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 const projectionName = "balances"
@@ -347,7 +347,7 @@ type g2Case struct{ row, name string }
 func TestNew_G2_ActorSystemName(t *testing.T) {
 	specs.Describe(t, "New rejects an actor system name with G2 exactly when GoAkt's NewActorSystem rejects it", func(s *specs.Spec) {
 		specs.Table(s, []g2Case{
-			{"empty name", ""}, {"Sample", "Sample"}, {"ego-cluster", "ego-cluster"}, {"a_b-9", "a_b-9"},
+			{"empty name", ""}, {"Sample", "Sample"}, {"urd-cluster", "urd-cluster"}, {"a_b-9", "a_b-9"},
 			{"9lives", "9lives"}, {"-lead", "-lead"}, {"_lead", "_lead"}, {"has space", "has space"},
 			{"dot.ted", "dot.ted"}, {"é", "é"},
 		}, func(c g2Case) string { return c.row }, func(ctx *specs.Context, c g2Case) {

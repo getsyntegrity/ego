@@ -37,12 +37,12 @@ import (
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/getsyntegrity/ego/encryption"
-	"github.com/getsyntegrity/ego/eventadapter"
-	"github.com/getsyntegrity/ego/internal/extensions"
-	"github.com/getsyntegrity/ego/projection"
-	"github.com/getsyntegrity/ego/tenancy"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/encryption"
+	"github.com/getsyntegrity/urd/eventadapter"
+	"github.com/getsyntegrity/urd/internal/extensions"
+	"github.com/getsyntegrity/urd/projection"
+	"github.com/getsyntegrity/urd/tenancy"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // stubTenantResolver is a minimal tenancy.TenantResolver used across
@@ -563,13 +563,13 @@ func TestConfigGoaktOptionsProjectionDefaultsRecovery(t *testing.T) {
 	})
 }
 
-// TestEngineClusterKindsExposesEgoActors pins the GoAkt kind names of the cluster
+// TestEngineClusterKindsExposesUrdActors pins the GoAkt kind names of the cluster
 // actors. GoAkt names a kind lower(reflect.Type.String()) and ships that name
 // in spawn, relocation and singleton records, so a node running another
 // version only understands these exact names: the types must stay declared in
 // package engine.
-func TestEngineClusterKindsExposesEgoActors(t *testing.T) {
-	specs.Describe(t, "ClusterKinds exposes the GoAkt kind names of the eGo actors", func(s *specs.Spec) {
+func TestEngineClusterKindsExposesUrdActors(t *testing.T) {
+	specs.Describe(t, "ClusterKinds exposes the GoAkt kind names of the Urd actors", func(s *specs.Spec) {
 		s.It("lists exactly the four cluster actors under their lower-cased type names", func(ctx *specs.Context) {
 			want := []string{
 				"engine.eventsourcedactor",

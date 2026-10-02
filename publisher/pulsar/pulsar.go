@@ -31,12 +31,12 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/egopb"
-	"github.com/getsyntegrity/ego/port/publishing"
+	"github.com/getsyntegrity/urd/egopb"
+	"github.com/getsyntegrity/urd/port/publishing"
 )
 
 // EventsPublisher defines a Pulsar publisher.
-// This publisher is responsible for delivering ego events to a Pulsar server.
+// This publisher is responsible for delivering Urd events to a Pulsar server.
 type EventsPublisher struct {
 	config   *Config
 	client   pulsar.Client
@@ -100,7 +100,7 @@ func NewEventsPublisher(config *Config) (*EventsPublisher, error) {
 
 // ID returns the publisher ID.
 func (x *EventsPublisher) ID() string {
-	return "ego-pulsar"
+	return "urd-pulsar"
 }
 
 // Publish publishes an event to the Pulsar server.
@@ -140,7 +140,7 @@ func (x *EventsPublisher) Close(context.Context) error {
 }
 
 // EventsPublisher defines a Pulsar publisher.
-// This publisher is responsible for delivering ego events to a Pulsar server.
+// This publisher is responsible for delivering Urd events to a Pulsar server.
 type DurableStatePublisher struct {
 	client   pulsar.Client
 	producer pulsar.Producer
@@ -203,7 +203,7 @@ func NewDurableStatePublisher(config *Config) (*DurableStatePublisher, error) {
 
 // ID returns the publisher ID.
 func (x *DurableStatePublisher) ID() string {
-	return "ego-pulsar"
+	return "urd-pulsar"
 }
 
 // Publish publishes an event to the Pulsar server.

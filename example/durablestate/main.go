@@ -35,17 +35,17 @@ import (
 	goakt "github.com/tochemey/goakt/v4/actor"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/engine"
-	samplepb "github.com/getsyntegrity/ego/example/examplepb"
-	behaviorport "github.com/getsyntegrity/ego/port/behavior"
-	"github.com/getsyntegrity/ego/testkit"
+	"github.com/getsyntegrity/urd/engine"
+	samplepb "github.com/getsyntegrity/urd/example/examplepb"
+	behaviorport "github.com/getsyntegrity/urd/port/behavior"
+	"github.com/getsyntegrity/urd/testkit"
 )
 
 // nolint
 func main() {
 	// create the go context
 	ctx := context.Background()
-	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// create the kit-logger Logger the whole runtime logs through: Urd, the
 	// actor system it sits on, and this program
 	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
 	// create the durable state store
@@ -54,7 +54,7 @@ func main() {
 	_ = durableStore.Connect(ctx)
 	// Durable-state-only deployments pass a nil events store to NewConfig;
 	// the EventsStore extension is still registered by GoaktOptions because
-	// eGo's actor types depend on it being present.
+	// Urd's actor types depend on it being present.
 	cfg := engine.NewConfig(nil, engine.WithStateStore(durableStore), engine.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
 	if err != nil {
@@ -67,10 +67,10 @@ func main() {
 	}
 	engine, err := engine.NewEngine(sys, cfg)
 	if err != nil {
-		logger.Error("failed to create ego engine", "error", err)
+		logger.Error("failed to create urd engine", "error", err)
 		os.Exit(1)
 	}
-	// start ego engine
+	// start urd engine
 	_ = engine.Start(ctx)
 	// create a persistence id
 	entityID := uuid.NewString()
@@ -110,7 +110,7 @@ func main() {
 
 	// disconnect the durable state store
 	_ = durableStore.Disconnect(ctx)
-	// stop ego, then the caller-owned actor system
+	// stop urd, then the caller-owned actor system
 	_ = engine.Stop(ctx)
 	_ = sys.Stop(ctx)
 	os.Exit(0)

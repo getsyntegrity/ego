@@ -38,7 +38,7 @@ import (
 // tooling" decision (EGO-TENANT-001): the tenancy core package MUST NOT
 // acquire a dependency on GoAkt, net/http, JWT libraries, Ory libraries,
 // any transport adapter, or any application/runtime package of this repo
-// (including ego itself) — only the Go standard library.
+// (including engine itself) — only the Go standard library.
 //
 // The mechanism is a real `go list -deps ./tenancy/...` subprocess, not a
 // source-text scan (unlike logger_architecture_test.go's substring scan,

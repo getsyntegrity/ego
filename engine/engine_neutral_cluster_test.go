@@ -32,7 +32,7 @@ import (
 	"github.com/google/uuid"
 	goakt "github.com/tochemey/goakt/v4/actor"
 
-	testpb "github.com/getsyntegrity/ego/internal/testpb"
+	testpb "github.com/getsyntegrity/urd/internal/testpb"
 )
 
 // clusterNodeOptsG4 returns the options of one cluster node: the given

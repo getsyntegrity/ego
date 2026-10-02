@@ -21,7 +21,7 @@
 // SOFTWARE.
 
 // Package behavior defines the runtime-neutral contracts for the domain code
-// a user writes for Ego: the command and event handlers of an event-sourced
+// a user writes for Urd: the command and event handlers of an event-sourced
 // entity (EventSourced), of a durable state entity (DurableState), and of a
 // saga (Saga).
 //
@@ -30,10 +30,10 @@
 // behavior written against these interfaces needs only ID() and its domain
 // methods; it does not have to implement MarshalBinary or UnmarshalBinary.
 //
-// Package ego keeps its older names on top of these contracts:
-// ego.EventSourcedBehavior is behavior.EventSourced plus GoAkt's
-// extension.Dependency, and the same holds for ego.DurableStateBehavior and
-// ego.SagaBehavior. ego.SagaAction and ego.SagaCommand are aliases of the types
+// Package engine keeps its older names on top of these contracts:
+// engine.EventSourcedBehavior is behavior.EventSourced plus GoAkt's
+// extension.Dependency, and the same holds for engine.DurableStateBehavior and
+// engine.SagaBehavior. engine.SagaAction and engine.SagaCommand are aliases of the types
 // declared here.
 package behavior
 
@@ -42,7 +42,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getsyntegrity/ego/command"
+	"github.com/getsyntegrity/urd/command"
 )
 
 // Command is a command sent to an entity. It is an alias for [proto.Message],
