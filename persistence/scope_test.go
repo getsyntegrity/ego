@@ -25,9 +25,9 @@ package persistence_test
 import (
 	"testing"
 
+	"github.com/getsyntegrity/go-specs/specs"
 	"github.com/getsyntegrity/urd/persistence"
 	"github.com/getsyntegrity/urd/tenancy"
-	"github.com/getsyntegrity/go-specs/specs"
 )
 
 // mustTenantScope builds a tenant scope for the tenant id, failing the case on error.

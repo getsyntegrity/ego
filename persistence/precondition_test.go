@@ -25,8 +25,8 @@ package persistence_test
 import (
 	"testing"
 
-	"github.com/getsyntegrity/urd/persistence"
 	"github.com/getsyntegrity/go-specs/specs"
+	"github.com/getsyntegrity/urd/persistence"
 )
 
 func TestWritePreconditionZeroValueIsInvalid(t *testing.T) {
