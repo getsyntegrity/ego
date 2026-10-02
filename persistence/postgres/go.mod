@@ -7,7 +7,7 @@ replace github.com/getsyntegrity/urd => ../../
 
 require (
 	github.com/getsyntegrity/go-specs v0.3.3
-	github.com/getsyntegrity/urd v0.0.0
+	github.com/getsyntegrity/urd v0.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 )
 
