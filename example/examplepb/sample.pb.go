@@ -792,7 +792,7 @@ const file_sample_sample_proto_rawDesc = "" +
 	"\x13DestinationCredited\x124\n" +
 	"\x16destination_account_id\x18\x01 \x01(\tR\x14destinationAccountId\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x01R\x06amountB\x96\x01\n" +
-	"\fcom.samplepbB\vSampleProtoH\x02P\x01Z7github.com/getsyntegrity/ego/example/examplepb;samplepb\xa2\x02\x03SXX\xaa\x02\bSamplepb\xca\x02\bSamplepb\xe2\x02\x14Samplepb\\GPBMetadata\xea\x02\bSamplepbb\x06proto3"
+	"\fcom.samplepbB\vSampleProtoH\x02P\x01Z7github.com/getsyntegrity/urd/example/examplepb;samplepb\xa2\x02\x03SXX\xaa\x02\bSamplepb\xca\x02\bSamplepb\xe2\x02\x14Samplepb\\GPBMetadata\xea\x02\bSamplepbb\x06proto3"
 
 var (
 	file_sample_sample_proto_rawDescOnce sync.Once
