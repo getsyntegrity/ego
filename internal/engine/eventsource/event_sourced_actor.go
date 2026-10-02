@@ -1576,7 +1576,7 @@ func (entity *Actor) processAndBatch(ctx *goakt.ReceiveContext, command Command)
 	entity.batchNumEvents += len(envelopes)
 
 	stateAny, _ := anypb.New(pendingState)
-	entity.batchEntries = append(entity.batchEntries, batchEntry{
+	entry := batchEntry{
 		reply: &egopb.CommandReply{
 			Reply: &egopb.CommandReply_StateReply{
 				StateReply: &egopb.StateReply{
@@ -1589,7 +1589,12 @@ func (entity *Actor) processAndBatch(ctx *goakt.ReceiveContext, command Command)
 		},
 		startTime: startTime,
 		span:      span,
-	})
+	}
+	// batchMu guards the slice header so it can be observed from outside the
+	// receive goroutine (tests, PreStart) without racing the append.
+	entity.batchMu.Lock()
+	entity.batchEntries = append(entity.batchEntries, entry)
+	entity.batchMu.Unlock()
 
 	ctx.Stash()
 
