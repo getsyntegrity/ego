@@ -1,6 +1,6 @@
 # Writing unit tests with go-specs
 
-Epic #201 moves every Ego unit test to [go-specs](https://github.com/getsyntegrity/go-specs). This page is
+Epic #201 moves every Urd unit test to [go-specs](https://github.com/getsyntegrity/go-specs). This page is
 the short convention for doing that, plus the evidence that the first migrated test (the pilot from #215)
 behaves like the `t.Run` table it replaced. The checklist of tests still to migrate is
 [`unit-migration.md`](unit-migration.md) (#202).
@@ -257,7 +257,7 @@ CI runs `go run ./.github/scripts/unitgate` in the `unit-gate` job (#204). It re
 module, nested ones included, and fails on:
 
 1. an import of `github.com/stretchr/testify/...`, in a test or a non-test file;
-2. an import of the generated `github.com/getsyntegrity/ego/mocks/...` packages from outside `mocks/`;
+2. an import of the generated `github.com/getsyntegrity/urd/mocks/...` packages from outside `mocks/`;
 3. a `*_test.go` file that declares `func TestXxx(t *testing.T)` and never calls `specs.Describe`. Fuzz
    targets, benchmarks and `TestMain` do not count as tests here;
 4. a test file that calls something outside the process: `sql.Open`, `net.Dial*`, `net.Listen*`,

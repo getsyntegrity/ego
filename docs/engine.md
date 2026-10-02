@@ -51,7 +51,7 @@ imports them. There is no `common` package; every shared helper has a named home
 `internal/engine/...` is also kept out of the application, composition and adapter
 layers. That is a convention today: the `archcheck` rule that enforced it was removed with the
 old CI pipeline, and restoring an automated check is tracked in
-[#208](https://github.com/getsyntegrity/ego/issues/208).
+[#208](https://github.com/getsyntegrity/urd/issues/208).
 
 ## Why the cluster kinds stay in `engine`
 
