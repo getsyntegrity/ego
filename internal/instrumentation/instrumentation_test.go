@@ -401,7 +401,7 @@ func TestInstrumentationStaysRuntimeNeutral(t *testing.T) {
 				func(dep any) bool { return strings.HasPrefix(dep.(string), "github.com/tochemey/goakt") })))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"the engine package: internal/instrumentation must not depend on it",
-				func(dep any) bool { return strings.HasSuffix(dep.(string), "/ego/engine") })))
+				func(dep any) bool { return strings.HasSuffix(dep.(string), "/urd/engine") })))
 			ctx.Expect(deps).To(specs.NoElement(specs.Satisfy(
 				"the GoAkt adapter internals (internal/extensions): internal/instrumentation must not depend on them",
 				func(dep any) bool { return strings.HasSuffix(dep.(string), "/internal/extensions") })))

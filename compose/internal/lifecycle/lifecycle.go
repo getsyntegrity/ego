@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package lifecycle is the runtime-free start/stop sequencer shared by Ego's
+// Package lifecycle is the runtime-free start/stop sequencer shared by Urd's
 // composition roots (openspec/changes/ego-arch-003/design.md §D1, §D6, §D7).
 //
 // A Sequence runs named steps in order. When a step fails, it undoes the

@@ -35,7 +35,7 @@ import (
 )
 
 // EventsPublisher defines a NATS publisher.
-// This publisher is responsible for delivering ego events to a NATS server.
+// This publisher is responsible for delivering Urd events to a NATS server.
 type EventsPublisher struct {
 	config     *Config
 	started    *atomic.Bool

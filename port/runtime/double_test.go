@@ -40,7 +40,7 @@ import (
 	"github.com/getsyntegrity/urd/port/runtime"
 )
 
-// The contract is implementable without GoAkt and without package ego:
+// The contract is implementable without GoAkt and without package engine:
 // TestRuntimeTestClosureExcludesGoAktAndRoot checks that this file's package
 // depends on neither.
 var _ runtime.Runtime = (*double)(nil)

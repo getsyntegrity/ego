@@ -35,7 +35,7 @@ import (
 )
 
 // EventsPublisher defines a Kafka publisher.
-// This publisher is responsible for delivering ego events to a Kafka broker.
+// This publisher is responsible for delivering Urd events to a Kafka broker.
 type EventsPublisher struct {
 	config   *Config
 	producer sarama.SyncProducer

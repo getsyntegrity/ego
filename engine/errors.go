@@ -32,13 +32,13 @@ import (
 )
 
 var (
-	// ErrEngineNotStarted is returned when the eGo engine has not started
+	// ErrEngineNotStarted is returned when the Urd engine has not started
 	ErrEngineNotStarted = runtimeport.ErrEngineNotStarted
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
 	ErrUndefinedEntityID = runtimeport.ErrUndefinedEntityID
 	// ErrCommandReplyUnmarshalling is returned when the unmarshalling command reply failed
 	ErrCommandReplyUnmarshalling = errors.New("failed to parse command reply")
-	// ErrDurableStateStoreRequired is returned when the eGo engine durable store is not set
+	// ErrDurableStateStoreRequired is returned when the Urd engine durable store is not set
 	ErrDurableStateStoreRequired = runtimeport.ErrDurableStateStoreRequired
 	// ErrEventsStoreRequired is returned by Entity and Saga when the engine's
 	// Config has no events store (NewConfig was given a nil
@@ -56,7 +56,7 @@ var (
 	ErrProjectionNotRegistered = runtimeport.ErrProjectionNotRegistered
 	// ErrActorSystemRequired is returned when NewEngine is called with a nil
 	// actor system. The caller must construct and start the actor system
-	// themselves before plugging eGo in.
+	// themselves before plugging Urd in.
 	ErrActorSystemRequired = errors.New("actor system is required")
 	// ErrAmbiguousTenantResolver is returned when NewEngine finds that a
 	// Config recorded more than one non-nil WithTenantResolver registration.
@@ -69,7 +69,7 @@ var (
 	// system whose Start has not yet been called or has not yet succeeded.
 	ErrActorSystemNotStarted = errors.New("actor system must be started before NewEngine")
 	// ErrMissingRequiredExtensions is returned when NewEngine validates the
-	// actor system and finds that one or more extensions eGo needs are
+	// actor system and finds that one or more extensions Urd needs are
 	// absent. The error message lists the missing extension IDs. Callers
 	// typically hit this when the actor system was built from a different
 	// Config than the one passed to NewEngine, or when cfg.GoaktOptions()

@@ -58,7 +58,7 @@ type options struct {
 }
 
 // WithLogger sets the logger the engine and the actor system log through.
-// Without it, Ego's default logger is used (see engine.WithLogger).
+// Without it, Urd's default logger is used (see engine.WithLogger).
 func WithLogger(logger kitlog.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
@@ -94,8 +94,8 @@ func WithCluster(cfg *actor.ClusterConfig, kinds ...engine.BehaviorKind) Option 
 
 // WithActorSystemOptions appends GoAkt options to the ones the App derives
 // from the Spec, for settings it does not model itself (remoting, TLS,
-// custom extensions, supervision). They are applied after Ego's own
-// options, so an option that GoAkt applies last-wins overrides Ego's value.
+// custom extensions, supervision). They are applied after Urd's own
+// options, so an option that GoAkt applies last-wins overrides Urd's value.
 func WithActorSystemOptions(opts ...actor.Option) Option {
 	return func(o *options) { o.actorOptions = append(o.actorOptions, opts...) }
 }
@@ -126,9 +126,9 @@ func (o *options) validate(spec compose.Spec) []error {
 	return errs
 }
 
-// egoOptions translates the Spec and these options into the engine.Config
+// engineOptions translates the Spec and these options into the engine.Config
 // options step 2 builds the engine's configuration from.
-func (o *options) egoOptions(spec compose.Spec) []engine.Option {
+func (o *options) engineOptions(spec compose.Spec) []engine.Option {
 	var opts []engine.Option
 	if o.logger != nil {
 		opts = append(opts, engine.WithLogger(o.logger))

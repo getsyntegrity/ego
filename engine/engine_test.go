@@ -96,7 +96,7 @@ func TestNewEngineValidation(t *testing.T) {
 		s.It("missing required extension is reported", func(sc *specs.Context) {
 			t := sc.T
 			ctx := context.Background()
-			// Build an actor system with NO ego extensions registered.
+			// Build an actor system with NO urd extensions registered.
 			sys, err := goakt.NewActorSystem("Sample", goakt.WithPubSub())
 			sc.Expect(err).To(specs.BeNil())
 			sc.Expect(sys.Start(ctx)).To(specs.BeNil())
@@ -1061,7 +1061,7 @@ func TestClusterEngineSingleNodeServesProjectionsAndEntities(t *testing.T) {
 //
 // With the default RoundRobin placement, Engine.Entity routes spawns to peer
 // nodes. The receiving node deserializes the spawn request's dependencies
-// (the behavior and eGo's internal EntityConfig) against its own registry,
+// (the behavior and Urd's internal EntityConfig) against its own registry,
 // which is populated at NewEngine time from WithEntityKinds. Only node1 ever
 // calls Entity(), so every spawn landing on node2 exercises that
 // pre-registration path; before the fix those spawns failed because node2's
@@ -1100,14 +1100,14 @@ func TestClusterEngineRemoteEntitySpawn(t *testing.T) {
 	})
 }
 
-// testCluster is a cluster of eGo engines started in one process by
+// testCluster is a cluster of Urd engines started in one process by
 // newTestCluster. systems[i] and engines[i] belong to node i.
 type testCluster struct {
 	systems []goakt.ActorSystem
 	engines []*Engine
 }
 
-// newTestCluster starts one clustered actor system and eGo engine per entry
+// newTestCluster starts one clustered actor system and Urd engine per entry
 // of nodeOpts, all in this process, and waits until every node sees all the
 // others as peers. Each node gets its own in-memory events store and
 // DiscardLogger; nodeOpts[i] adds node i's options (for example its entity
@@ -1304,10 +1304,10 @@ func TestBuildSpawnOptionsFromConfig(t *testing.T) {
 	})
 }
 
-// TestToSpawnPlacement maps eGo placement strategies to their goakt
+// TestToSpawnPlacement maps Urd placement strategies to their goakt
 // equivalents.
 func TestToSpawnPlacement(t *testing.T) {
-	specs.Describe(t, "toSpawnPlacement maps each eGo placement strategy to its GoAkt equivalent", func(s *specs.Spec) {
+	specs.Describe(t, "toSpawnPlacement maps each Urd placement strategy to its GoAkt equivalent", func(s *specs.Spec) {
 		s.It("maps LeastLoad, Random, Local and RoundRobin", func(ctx *specs.Context) {
 			ctx.Expect(toSpawnPlacement(LeastLoad)).ToEqual(goakt.LeastLoad)
 			ctx.Expect(toSpawnPlacement(Random)).ToEqual(goakt.Random)
@@ -1317,9 +1317,9 @@ func TestToSpawnPlacement(t *testing.T) {
 	})
 }
 
-// TestToSupervisorDirective maps eGo supervisor directives to goakt.
+// TestToSupervisorDirective maps Urd supervisor directives to goakt.
 func TestToSupervisorDirective(t *testing.T) {
-	specs.Describe(t, "toSupervisorDirective maps eGo supervisor directives to GoAkt", func(s *specs.Spec) {
+	specs.Describe(t, "toSupervisorDirective maps Urd supervisor directives to GoAkt", func(s *specs.Spec) {
 		s.It("stop maps to Stop", func(ctx *specs.Context) {
 			// concrete assertion is on stringer; behavior is "anything not RestartDirective stops".
 			// Negative test below.
@@ -1728,7 +1728,7 @@ func TestEngineAddEventPublishers(t *testing.T) {
 			ctx.Cleanup(func() { _ = store.Disconnect(bg) })
 
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.EventPublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.EventPublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			ctrl.Method("Publish").Expect(mock.Any(), anEvent).Return(nil).AtLeast(1)
 
@@ -1763,12 +1763,12 @@ func TestEnginePublisherIdleCPU(t *testing.T) {
 			t.Cleanup(func() { _ = store.Disconnect(ctx) })
 
 			eventCtrl := mock.NewController(t)
-			eventCtrl.Method("ID").Expect().Return("eGo.test.EventPublisher").AnyTimes()
+			eventCtrl.Method("ID").Expect().Return("Urd.test.EventPublisher").AnyTimes()
 			eventCtrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			eventPub := enginetest.NewEventPublisherMock(eventCtrl)
 
 			stateCtrl := mock.NewController(t)
-			stateCtrl.Method("ID").Expect().Return("eGo.test.StatePublisher").AnyTimes()
+			stateCtrl.Method("ID").Expect().Return("Urd.test.StatePublisher").AnyTimes()
 			stateCtrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			statePub := enginetest.NewStatePublisherMock(stateCtrl)
 
@@ -1817,7 +1817,7 @@ func TestEngineAddStatePublishers(t *testing.T) {
 			ctx.Cleanup(func() { _ = stateStore.Disconnect(bg) })
 
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.StatePublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.StatePublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			ctrl.Method("Publish").Expect(mock.Any(), aState).Return(nil).AtLeast(1)
 
@@ -1847,7 +1847,7 @@ func TestEngineStopReturnsEventPublisherCloseError(t *testing.T) {
 
 			closeErr := errors.New("close error")
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.FailingEventPublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.FailingEventPublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(1)
 
 			cfg := NewConfig(store, WithLogger(DiscardLogger))
@@ -1878,7 +1878,7 @@ func TestEngineStopReturnsStatePublisherCloseError(t *testing.T) {
 
 			closeErr := errors.New("close error")
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.FailingStatePublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.FailingStatePublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(closeErr).Times(1)
 
 			cfg := NewConfig(nil, WithLogger(DiscardLogger), WithStateStore(stateStore))
@@ -1909,7 +1909,7 @@ func TestEngineEventPublisherKeepsGoingOnPublishError(t *testing.T) {
 			ctx.Cleanup(func() { _ = store.Disconnect(bg) })
 
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.FailingPublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.FailingPublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			ctrl.Method("Publish").Expect(mock.Any(), anEvent).Return(errAnyFailure).AtLeast(2)
 
@@ -1941,7 +1941,7 @@ func TestEngineStatePublisherKeepsGoingOnPublishError(t *testing.T) {
 			ctx.Cleanup(func() { _ = stateStore.Disconnect(bg) })
 
 			ctrl := mock.NewController(ctx)
-			ctrl.Method("ID").Expect().Return("eGo.test.FailingStatePublisher").AnyTimes()
+			ctrl.Method("ID").Expect().Return("Urd.test.FailingStatePublisher").AnyTimes()
 			ctrl.Method("Close").Expect(mock.Any()).Return(nil).AnyTimes()
 			ctrl.Method("Publish").Expect(mock.Any(), aState).Return(errAnyFailure).AtLeast(2)
 

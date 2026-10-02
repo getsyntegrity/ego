@@ -31,7 +31,7 @@ import (
 	"github.com/getsyntegrity/urd/internal/engine/saga"
 )
 
-// The four actor types below are the cluster kinds of eGo. Each one stays
+// The four actor types below are the cluster kinds of Urd. Each one stays
 // declared in package engine and delegates to an implementation in an internal
 // package, and that is deliberate: GoAkt names an actor kind
 // lower(reflect.TypeOf(actor).Elem().String()), so EventSourcedActor travels
@@ -177,7 +177,7 @@ func (x *ProjectionActor) PostStop(ctx *goakt.Context) error {
 	return x.impl.PostStop(ctx)
 }
 
-// ClusterKinds returns the actor kinds eGo needs registered in the cluster
+// ClusterKinds returns the actor kinds Urd needs registered in the cluster
 // configuration so that entity, durable-state, saga, and projection actors
 // can be relocated across nodes.
 //

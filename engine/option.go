@@ -85,7 +85,7 @@ type Config struct {
 	// ordering the way WithLogger/WithTelemetry do (DP2).
 	tenantResolverCount int
 
-	// eventStream is the in-process pub/sub stream eGo's entity actors
+	// eventStream is the in-process pub/sub stream Urd's entity actors
 	// publish to and the engine's publishers/subscribers consume from. It is
 	// allocated by NewConfig and the same instance is wired into the actor
 	// system (as the EventsStream extension) by GoaktOptions and into the
@@ -95,7 +95,7 @@ type Config struct {
 
 // NewConfig builds a Config from a list of Options.
 //
-// eventsStore is the events store eGo persists event-sourced state to; pass
+// eventsStore is the events store Urd persists event-sourced state to; pass
 // nil for durable-state-only deployments that never host event-sourced
 // entities.
 //
@@ -118,12 +118,12 @@ func NewConfig(eventsStore persistence.EventsStore, opts ...Option) *Config {
 	return c
 }
 
-// GoaktOptions returns the goakt.Options eGo requires when the caller
+// GoaktOptions returns the goakt.Options Urd requires when the caller
 // constructs the actor system that hosts it.
 //
 // Pass the returned slice to goakt.NewActorSystem alongside any other
 // goakt.Options the deployment needs (cluster, remote, TLS, custom
-// extensions, …). eGo cannot register its extensions on an
+// extensions, …). Urd cannot register its extensions on an
 // already-constructed actor system, so this handoff at construction time is
 // the only supported entry point.
 //
@@ -214,9 +214,9 @@ func (f OptionFunc) Apply(c *Config) {
 // WithLogger sets the kit-logger Logger used by the engine and the goakt
 // actor system it sits on.
 //
-// When unset, or when the given logger is nil or a typed-nil pointer, eGo
+// When unset, or when the given logger is nil or a typed-nil pointer, Urd
 // logs through DefaultLogger(): kit-logger's process-wide logger. The same
-// logger is adapted into the goakt logger so the actor system, eGo's
+// logger is adapted into the goakt logger so the actor system, Urd's
 // internals, and the caller log through one backend.
 func WithLogger(logger kitlog.Logger) Option {
 	return OptionFunc(func(c *Config) {
@@ -244,7 +244,7 @@ func WithStateStore(stateStore persistence.StateStore) Option {
 // and the engine does not start.
 //
 // The option is off by default, so an engine never changes a database schema
-// unless asked to. The stores must be connected before Start: eGo does not
+// unless asked to. The stores must be connected before Start: Urd does not
 // connect them.
 func WithSchemaMigration() Option {
 	return OptionFunc(func(c *Config) {
@@ -338,7 +338,7 @@ func WithEventAdapters(adapters ...eventadapter.EventAdapter) Option {
 	})
 }
 
-// EntityKind is the common contract satisfied by every behavior eGo spawns
+// EntityKind is the common contract satisfied by every behavior Urd spawns
 // as an entity: EventSourcedBehavior, DurableStateBehavior, and SagaBehavior
 // values are all EntityKinds.
 //
@@ -364,7 +364,7 @@ type EntityKind = extension.Dependency
 //
 // Pass one value per behavior type (a zero value is fine; only its concrete
 // type is registered): event-sourced behaviors, durable-state behaviors, and
-// saga behaviors all qualify. NewEngine registers them, alongside eGo's
+// saga behaviors all qualify. NewEngine registers them, alongside Urd's
 // internal spawn-configuration types, on the node's actor system.
 //
 // Single-node deployments may omit this option; the lazy registration done by

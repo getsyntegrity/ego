@@ -23,7 +23,7 @@
 // Package runtimeconsumer is evidence for #147, not API: consumer code
 // written only against the runtime-neutral contracts — port/runtime,
 // port/behavior and the internal/testpb messages — never against package
-// ego or GoAkt (openspec/changes/ego-runtime-001/design.md §D8). Its
+// engine or GoAkt (openspec/changes/ego-runtime-001/design.md §D8). Its
 // closure test keeps it that way; compose/goakt's end-to-end test drives a
 // real application through it with App.Runtime().
 package runtimeconsumer

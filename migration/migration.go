@@ -39,7 +39,7 @@
 //	}
 //
 // When no logger is supplied the migrator logs through kit-logger's
-// process-wide logger — the same default ego.DefaultLogger() returns.
+// process-wide logger — the same default engine.DefaultLogger() returns.
 //
 // The migrator reads every persistence ID in its scope (see WithScope), finds the latest
 // event for each entity that carried a resulting_state (field 5 in the old proto),

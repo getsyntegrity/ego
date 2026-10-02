@@ -36,7 +36,7 @@ import (
 )
 
 // EventsPublisher defines a Pulsar publisher.
-// This publisher is responsible for delivering ego events to a Pulsar server.
+// This publisher is responsible for delivering Urd events to a Pulsar server.
 type EventsPublisher struct {
 	config   *Config
 	client   pulsar.Client
@@ -140,7 +140,7 @@ func (x *EventsPublisher) Close(context.Context) error {
 }
 
 // EventsPublisher defines a Pulsar publisher.
-// This publisher is responsible for delivering ego events to a Pulsar server.
+// This publisher is responsible for delivering Urd events to a Pulsar server.
 type DurableStatePublisher struct {
 	client   pulsar.Client
 	producer pulsar.Producer

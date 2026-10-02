@@ -142,7 +142,7 @@ type Sagas interface {
 	// SagaInfo.Status is the saga's lifecycle status when it answers:
 	// SagaRunning, SagaCompensating, SagaCompleted or SagaFailed. An adapter
 	// that runs a compensation to its end before answering (the GoAkt adapter,
-	// *ego.Engine, does) reports SagaCompleted or SagaFailed rather than
+	// *engine.Engine, does) reports SagaCompleted or SagaFailed rather than
 	// SagaCompensating.
 	SagaStatus(ctx context.Context, sagaID string, timeout time.Duration) (*SagaInfo, error)
 }
@@ -193,7 +193,7 @@ type Events interface {
 
 // Runtime is every capability together. It is what a composition root hands
 // out; a consumer narrows it to the capability it needs, for example
-// var entities runtime.Entities = r. *ego.Engine, the GoAkt adapter,
+// var entities runtime.Entities = r. *engine.Engine, the GoAkt adapter,
 // implements it.
 type Runtime interface {
 	Entities

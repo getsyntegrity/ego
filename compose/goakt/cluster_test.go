@@ -96,7 +96,7 @@ func (n *clusterNode) hosts(ctx *specs.Context, id string) bool {
 	return pid.IsLocal()
 }
 
-// newClusterNodes builds two Apps with egoakt.New, each in cluster mode
+// newClusterNodes builds two Apps with urdakt.New, each in cluster mode
 // through WithCluster with the behavior kinds it may host (kindsA for node
 // A, kindsB for node B), with its own testkit stores, one publisher of each
 // kind and a counting event stream. It does not start them.
@@ -240,7 +240,7 @@ func spawnOnPeer(ctx *specs.Context, from, to *clusterNode, id string, spawn fun
 }
 
 // TestCluster_AppTwoNodePlacesAndStopsCleanly runs a real two-node GoAkt
-// cluster built entirely through egoakt.New, WithCluster and App.Start
+// cluster built entirely through urdakt.New, WithCluster and App.Start
 // (#146). Each node registers, through WithCluster, only the behavior type
 // its peer places on it: node A a wallet, node B a ledger. So when node A
 // places a ledger on node B, B can rebuild it only from its own
@@ -252,7 +252,7 @@ func spawnOnPeer(ctx *specs.Context, from, to *clusterNode, id string, spawn fun
 // The cluster is built once for the group and the cases run in order, as
 // the t.Run subtests they replace did.
 func TestCluster_AppTwoNodePlacesAndStopsCleanly(t *testing.T) {
-	specs.Describe(t, "a two-node GoAkt cluster built through egoakt.New", func(s *specs.Spec) {
+	specs.Describe(t, "a two-node GoAkt cluster built through urdakt.New", func(s *specs.Spec) {
 		bg := context.Background()
 		var nodeA, nodeB *clusterNode
 

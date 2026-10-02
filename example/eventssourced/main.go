@@ -36,7 +36,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getsyntegrity/urd/compose"
-	egoakt "github.com/getsyntegrity/urd/compose/goakt"
+	urdakt "github.com/getsyntegrity/urd/compose/goakt"
 	"github.com/getsyntegrity/urd/engine"
 	samplepb "github.com/getsyntegrity/urd/example/examplepb"
 	behaviorport "github.com/getsyntegrity/urd/port/behavior"
@@ -44,7 +44,7 @@ import (
 )
 
 func main() {
-	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// create the kit-logger Logger the whole runtime logs through: Urd, the
 	// actor system it sits on, and this program
 	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
 	if err := run(context.Background(), logger); err != nil {
@@ -53,7 +53,7 @@ func main() {
 	}
 }
 
-// run wires and runs the example through compose/goakt, eGo's GoAkt
+// run wires and runs the example through compose/goakt, Urd's GoAkt
 // composition root (openspec/changes/ego-arch-003/design.md §5.1). Every
 // cleanup step is registered with defer before the corresponding resource
 // can fail later, so run never leaves anything open on its way out and main
@@ -69,15 +69,15 @@ func run(ctx context.Context, logger kitlog.Logger) error {
 	// after app.Stop, per Go's LIFO defer order.
 	defer func() { _ = eventStore.Disconnect(ctx) }()
 
-	// egoakt.New validates the Spec (V1-V8) with no I/O and starts nothing:
+	// urdakt.New validates the Spec (V1-V8) with no I/O and starts nothing:
 	// a configuration mistake is visible before any goroutine or connection
-	// exists. Import compose/goakt as egoakt so it doesn't clash with the
+	// exists. Import compose/goakt as urdakt so it doesn't clash with the
 	// goakt module.
-	app, err := egoakt.New(compose.Spec{
+	app, err := urdakt.New(compose.Spec{
 		Name:        "Sample",
 		Families:    compose.EventSourced,
 		EventsStore: eventStore,
-	}, egoakt.WithLogger(logger))
+	}, urdakt.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("build app: %w", err)
 	}

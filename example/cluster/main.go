@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package main demonstrates a production-ready eGo cluster running on
+// Package main demonstrates a production-ready Urd cluster running on
 // Kubernetes with:
 //
 //   - Kubernetes-native peer discovery (pods find each other via the k8s API)
@@ -63,7 +63,7 @@ import (
 const projectionName = "account-balances"
 
 // logger is the kit-logger Logger the whole process logs through: this
-// program, eGo, and the actor system. Records carry the OpenTelemetry
+// program, Urd, and the actor system. Records carry the OpenTelemetry
 // trace_id/span_id of the context they are written with, so a log line can
 // be joined to its trace in Jaeger.
 var logger = kitlog.New(kitlog.Config{
@@ -123,7 +123,7 @@ func main() {
 
 	projectionHandler := NewAccountBalanceHandler(pool, logger)
 
-	// Build the eGo Config once; the same instance is passed to both the
+	// Build the Urd Config once; the same instance is passed to both the
 	// actor system (for extension wiring) and the engine.
 	cfg := engine.NewConfig(eventStore,
 		engine.WithLogger(logger),

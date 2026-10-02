@@ -23,7 +23,7 @@
 // Package goaktlog presents a kit-logger Logger to the GoAkt actor runtime
 // through GoAkt's own log.Logger interface.
 //
-// GoAkt is the actor runtime eGo sits on and cannot take a kit-logger Logger
+// GoAkt is the actor runtime Urd sits on and cannot take a kit-logger Logger
 // directly, so this package is the single seam where GoAkt's printf-style
 // logging API is translated into structured kit-logger records. It is the
 // only first-party package allowed to import github.com/tochemey/goakt/v4/log
@@ -60,7 +60,7 @@ import (
 // nobody will emit is never formatted.
 type adapter struct {
 	// backend is the kit-logger Logger the application configured, exactly as
-	// it was given. It is what Backend hands back to eGo's own actors,
+	// it was given. It is what Backend hands back to Urd's own actors,
 	// which call it directly and must be attributed to their own call sites.
 	backend kitlog.Logger
 
@@ -99,7 +99,7 @@ func newAdapter(backend kitlog.Logger) *adapter {
 
 // Backend recovers the kit-logger Logger behind a GoAkt logger. Every
 // actor system built from Config.GoaktOptions carries an adapter, so
-// eGo's own actors log through the same backend the application configured.
+// Urd's own actors log through the same backend the application configured.
 // A foreign GoAkt logger — an actor system assembled without GoaktOptions —
 // yields logging.DefaultLogger(), which is the same fallback the engine
 // applies when no logger is configured.

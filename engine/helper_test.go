@@ -35,7 +35,7 @@ import (
 	"github.com/getsyntegrity/urd/persistence"
 )
 
-// newTestEngine bootstraps a goakt.ActorSystem and a plugged-in eGo Engine
+// newTestEngine bootstraps a goakt.ActorSystem and a plugged-in Urd Engine
 // the way callers are expected to do it post-refactor, and registers a
 // t.Cleanup hook that stops both at the end of the test.
 //

@@ -32,10 +32,10 @@ import (
 )
 
 // EventSourcedBehavior is the subset of engine.EventSourcedBehavior the scenarios
-// exercise, declared here because the testkit cannot import ego (ego's own tests
+// exercise, declared here because the testkit cannot import engine (engine's own tests
 // import the testkit). Every engine.EventSourcedBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
-// for the test. A compile-time assertion in the ego package keeps it that way.
+// for the test. A compile-time assertion in the engine package keeps it that way.
 //
 // The runtime-neutral contract lives in port/behavior
 // (behaviorport.EventSourced); this interface is its structural subset for
@@ -47,10 +47,10 @@ type EventSourcedBehavior interface {
 }
 
 // DurableStateBehavior is the subset of engine.DurableStateBehavior the scenarios
-// exercise, declared here because the testkit cannot import ego (ego's own tests
+// exercise, declared here because the testkit cannot import engine (engine's own tests
 // import the testkit). Every engine.DurableStateBehavior satisfies it structurally,
 // so a scenario tests the very behavior the engine runs — never a copy written
-// for the test. A compile-time assertion in the ego package keeps it that way.
+// for the test. A compile-time assertion in the engine package keeps it that way.
 //
 // The runtime-neutral contract lives in port/behavior
 // (behaviorport.DurableState); this interface is its structural subset for

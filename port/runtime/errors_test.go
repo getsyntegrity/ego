@@ -66,8 +66,8 @@ func TestSentinelMessagesAreKept(t *testing.T) {
 			msg  string
 		}
 		cases := []sentinel{
-			{"ErrEngineNotStarted", runtime.ErrEngineNotStarted, "eGo engine has not started"},
-			{"ErrUndefinedEntityID", runtime.ErrUndefinedEntityID, "eGo entity id is not defined"},
+			{"ErrEngineNotStarted", runtime.ErrEngineNotStarted, "Urd engine has not started"},
+			{"ErrUndefinedEntityID", runtime.ErrUndefinedEntityID, "Urd entity id is not defined"},
 			{"ErrDurableStateStoreRequired", runtime.ErrDurableStateStoreRequired, "durable state store is required"},
 			{"ErrEventsStoreRequired", runtime.ErrEventsStoreRequired, "events store is required"},
 			{"ErrProjectionNotRegistered", runtime.ErrProjectionNotRegistered, "projection is not registered; register it with engine.WithProjection"},

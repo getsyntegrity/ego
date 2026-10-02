@@ -34,12 +34,12 @@ import (
 )
 
 // The publishers implement the contracts from port/publishing directly, with
-// no dependency on package `ego` or the GoAkt runtime it pulls in. The
-// historical compatibility check against the `ego` aliases (ADR
+// no dependency on package `engine` or the GoAkt runtime it pulls in. The
+// historical compatibility check against the `engine` aliases (ADR
 // ego-arch-001, S1 criterion 3) still exists, but it lives in the separate,
 // unreleased test/compat module (ADR ego-arch-006, slice S1; docs/ci.md,
 // "Compatibility checks: the test/compat module"), precisely so that this
-// module's tests never need to import `ego` (#122).
+// module's tests never need to import `engine` (#122).
 var (
 	_ publishing.EventPublisher = (*EventsPublisher)(nil)
 	_ publishing.StatePublisher = (*DurableStatePublisher)(nil)

@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package adapters is the runtime-free start-and-probe loop Ego's
+// Package adapters is the runtime-free start-and-probe loop Urd's
 // composition roots run over the adapters they own
 // (openspec/changes/ego-arch-004/design.md §D4). compose/goakt runs it in
 // its "attach publishers" step; compose/inmem (#148) reuses it unchanged.

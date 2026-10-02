@@ -30,14 +30,14 @@ import (
 	"github.com/getsyntegrity/urd/internal/logging"
 )
 
-// eGo logs through kit-logger (github.com/pablogore/kit-logger). Every
+// Urd logs through kit-logger (github.com/pablogore/kit-logger). Every
 // logging surface of the framework — the engine, the migrator, the
-// publishers, and the GoAkt actor system eGo sits on — takes a kit-logger
+// publishers, and the GoAkt actor system Urd sits on — takes a kit-logger
 // Logger, so one logger instance configured by the application covers the
 // whole runtime.
 //
 // This file is the public logging facade: DiscardLogger, DefaultLogger and
-// ResolveLogger, the loggers and the fallback eGo itself supplies. The glue
+// ResolveLogger, the loggers and the fallback Urd itself supplies. The glue
 // behind it lives in two internal packages:
 //
 //   - internal/logging resolves the default logger and the nil and typed-nil
@@ -53,12 +53,12 @@ import (
 // benchmarks, or wherever logging is not desired.
 var DiscardLogger kitlog.Logger = kitlog.New(kitlog.Config{Sink: slog.DiscardHandler})
 
-// DefaultLogger returns the Logger eGo uses when none is supplied: kit-logger's
+// DefaultLogger returns the Logger Urd uses when none is supplied: kit-logger's
 // process-wide logger, as returned by logger.L(). An application that installs
 // its own logger with logger.SetGlobal before building the engine therefore
-// gets eGo's records through it without passing WithLogger at all.
+// gets Urd's records through it without passing WithLogger at all.
 //
-// It is a function rather than a variable so that importing eGo never
+// It is a function rather than a variable so that importing Urd never
 // constructs the global logger as a side effect; the lookup happens when a
 // Config or a Migrator is built.
 //

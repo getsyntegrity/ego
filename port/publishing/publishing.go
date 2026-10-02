@@ -20,14 +20,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package publishing defines the contracts Ego uses to hand persisted events
+// Package publishing defines the contracts Urd uses to hand persisted events
 // and durable state to external systems such as message brokers.
 //
 // It is a runtime-neutral contract package: it depends only on the standard
 // library, egopb and the protobuf runtime, never on the GoAkt runtime. A
-// publisher implementation can import it without pulling in package ego.
-// Package ego keeps type aliases for the publisher interfaces, so
-// ego.EventPublisher and publishing.EventPublisher are the same type, and
+// publisher implementation can import it without pulling in package engine.
+// Package engine keeps type aliases for the publisher interfaces, so
+// engine.EventPublisher and publishing.EventPublisher are the same type, and
 // re-exports ErrPublisherNotStarted as a variable holding the same error value.
 package publishing
 

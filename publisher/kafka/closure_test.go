@@ -70,9 +70,9 @@ const (
 func closureViolation(dep string) string {
 	switch {
 	case dep == "github.com/tochemey/goakt/v4" || strings.HasPrefix(dep, "github.com/tochemey/goakt/v4/"):
-		return "unit-test closure regressed: GoAkt package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+		return "unit-test closure regressed: GoAkt package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical engine-alias checks belong in the test/compat module, not in this module's test closure"
 	case dep == enginePackage:
-		return "unit-test closure regressed: engine package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical ego-alias checks belong in the test/compat module, not in this module's test closure"
+		return "unit-test closure regressed: engine package " + strconv.Quote(dep) + " reappeared in `go list -deps -test ./...`; the historical engine-alias checks belong in the test/compat module, not in this module's test closure"
 	case dep == compositionRoot || strings.HasPrefix(dep, compositionRoot+"/"):
 		return "adapter depends on the composition root: " + strconv.Quote(dep) + " appeared in `go list -deps -test ./...`; an adapter module must not import compose or anything under it, in production code or tests (ego-arch-004 design §D7); end-to-end tests that need a running App belong in the test/compat module"
 	default:

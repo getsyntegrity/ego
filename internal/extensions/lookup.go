@@ -34,7 +34,7 @@ import (
 // extension it requires on its actor system. The engine package exposes this
 // same value as engine.ErrMissingRequiredExtensions, so errors.Is matches it
 // whichever package the failing actor lives in.
-var ErrMissingRequiredExtensions = errors.New("actor system is missing required ego extensions")
+var ErrMissingRequiredExtensions = errors.New("actor system is missing required urd extensions")
 
 // Require looks up the extension registered under extensionID on the actor
 // system reachable through ctx and asserts it to type T.

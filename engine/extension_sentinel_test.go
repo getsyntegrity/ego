@@ -45,7 +45,7 @@ func TestMissingRequiredExtensionsSentinel(t *testing.T) {
 			// Actors outside this package (internal/engine/...) wrap the sentinel
 			// owned by internal/extensions; callers match it through the public name.
 			ctx.Expect(extensions.ErrMissingRequiredExtensions == ErrMissingRequiredExtensions).To(specs.BeTrue()) //nolint:errorlint // identity is the point
-			ctx.Expect(engRestErrText(ErrMissingRequiredExtensions)).ToEqual("actor system is missing required ego extensions")
+			ctx.Expect(engRestErrText(ErrMissingRequiredExtensions)).ToEqual("actor system is missing required urd extensions")
 		})
 	})
 }

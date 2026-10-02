@@ -138,7 +138,7 @@ func beTheSameInstance(want any) specs.Matcher {
 	return specs.Satisfy("be the same instance", func(got any) bool { return got == want })
 }
 
-// beAnAdapter matches a logger that is eGo's *adapter.
+// beAnAdapter matches a logger that is Urd's *adapter.
 func beAnAdapter() specs.Matcher {
 	return specs.Satisfy("be an *adapter", func(got any) bool {
 		_, ok := got.(*adapter)
@@ -497,7 +497,7 @@ func TestNewWrapsTheBackendInAnAdapter(t *testing.T) {
 
 func TestBackend(t *testing.T) {
 	specs.Describe(t, "Backend recovers the kit-logger behind a GoAkt logger", func(s *specs.Spec) {
-		s.It("recovers the backend behind eGo's adapter", func(ctx *specs.Context) {
+		s.It("recovers the backend behind Urd's adapter", func(ctx *specs.Context) {
 			logger, _ := newCaptureLogger(kitlog.LevelInfo)
 			ctx.Expect(Backend(New(logger))).To(beTheSameInstance(logger))
 		})
@@ -583,7 +583,7 @@ func TestBackendAttributesRecordsToItsDirectCaller(t *testing.T) {
 		s.It("skips no frame for the recovered backend", func(ctx *specs.Context) {
 			logger, sink := newSourceCaptureLogger()
 
-			// eGo's own actors call the recovered backend directly, so no frame must
+			// Urd's own actors call the recovered backend directly, so no frame must
 			// be skipped for them: a skip would blame whoever called the actor.
 			Backend(newAdapter(logger)).Error("msg")
 			file, function := sourceOf(sink.last(ctx))

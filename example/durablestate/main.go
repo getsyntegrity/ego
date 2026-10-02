@@ -45,7 +45,7 @@ import (
 func main() {
 	// create the go context
 	ctx := context.Background()
-	// create the kit-logger Logger the whole runtime logs through: eGo, the
+	// create the kit-logger Logger the whole runtime logs through: Urd, the
 	// actor system it sits on, and this program
 	logger := kitlog.New(kitlog.Config{Level: kitlog.LevelInfo, Format: kitlog.FormatText})
 	// create the durable state store
@@ -54,7 +54,7 @@ func main() {
 	_ = durableStore.Connect(ctx)
 	// Durable-state-only deployments pass a nil events store to NewConfig;
 	// the EventsStore extension is still registered by GoaktOptions because
-	// eGo's actor types depend on it being present.
+	// Urd's actor types depend on it being present.
 	cfg := engine.NewConfig(nil, engine.WithStateStore(durableStore), engine.WithLogger(logger))
 	sys, err := goakt.NewActorSystem("Sample", cfg.GoaktOptions()...)
 	if err != nil {
@@ -110,7 +110,7 @@ func main() {
 
 	// disconnect the durable state store
 	_ = durableStore.Disconnect(ctx)
-	// stop ego, then the caller-owned actor system
+	// stop urd, then the caller-owned actor system
 	_ = engine.Stop(ctx)
 	_ = sys.Stop(ctx)
 	os.Exit(0)

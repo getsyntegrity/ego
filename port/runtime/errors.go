@@ -29,16 +29,16 @@ import (
 )
 
 // The sentinels below keep the names and exact messages they had in package
-// ego, where the same values are still reachable under the old names
-// (ego.ErrEngineNotStarted is ErrEngineNotStarted). Some messages name ego
+// engine, where the same values are still reachable under the old names
+// (engine.ErrEngineNotStarted is ErrEngineNotStarted). Some messages name engine
 // options; they stay as they are because tests and log-based alerts compare
 // them.
 var (
 	// ErrEngineNotStarted is returned when the runtime has not started, or
 	// has stopped.
-	ErrEngineNotStarted = errors.New("eGo engine has not started")
+	ErrEngineNotStarted = errors.New("Urd engine has not started")
 	// ErrUndefinedEntityID is returned when sending a command to an undefined entity
-	ErrUndefinedEntityID = errors.New("eGo entity id is not defined")
+	ErrUndefinedEntityID = errors.New("Urd entity id is not defined")
 	// ErrDurableStateStoreRequired is returned when a durable state entity is
 	// spawned and the runtime has no durable state store.
 	ErrDurableStateStoreRequired = errors.New("durable state store is required")

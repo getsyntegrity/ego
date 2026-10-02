@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package compose is the runtime-neutral half of Ego's composition root
+// Package compose is the runtime-neutral half of Urd's composition root
 // (openspec/changes/ego-arch-003/design.md). It holds Spec, the plain
 // description of what a deployment wires together, its static validation
 // (Spec.Validate), and the StartError type a composition root returns when
@@ -36,7 +36,7 @@
 // (ego-arch-004 design §D6).
 //
 // This package imports contract packages only. It must not import package
-// ego, internal/extensions or the GoAkt runtime; the former architecture checker's
+// engine, internal/extensions or the GoAkt runtime; the former architecture checker's
 // composition-no-runtime rule enforces that, and its composition-leaf rule
 // keeps every other production package in the root module, except main
 // packages and examples, from importing compose (design §D8).

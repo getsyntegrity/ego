@@ -39,7 +39,7 @@ import (
 const loggerSeamFile = "internal/goaktlog/adapter.go"
 
 // bannedLoggerConstructs are logging constructs first-party production code
-// must not contain anywhere. eGo logs through kit-logger, so no default may be
+// must not contain anywhere. Urd logs through kit-logger, so no default may be
 // derived from a concrete third-party backend the caller cannot replace.
 var bannedLoggerConstructs = []string{
 	"log.NewZap(",
