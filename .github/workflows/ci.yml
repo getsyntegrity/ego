@@ -6,7 +6,7 @@
 #                  (.github/scripts/test-matrix.sh): regular packages go whole into TEST_SHARDS
 #                  shards; a package slower than SPLIT_THRESHOLD is split by test into several
 #                  shards, so one slow package cannot dominate the wall time
-#   test (N)    -> each shard on its own runner, in parallel
+#   test (N)    -> each shard on its own runner, in parallel; the TestCluster* tests are skipped (cluster job)
 #   test-report -> merges coverage, publishes the slowest tests, stores timings for the next run
 #   test (min)  -> builds with the minimum Go (PR to develop) or runs everything (PR to main)
 #   modules     -> build, vet and test of every nested module (persistence/postgres, publishers, compat,
@@ -17,6 +17,10 @@
 #                  never on feature or hotfix PRs
 #   benchmark   -> every benchmark of the benchmark module once (-benchtime=1x; a manual run can choose a
 #                  longer benchtime), same triggers as inttest; fails if no benchmark ran
+#   cluster     -> every TestCluster* test of the root module, alone (the shards skip them); every pull request
+#                  with Go changes, like the unit shards, plus pushes to develop; fails if no TestCluster* test passed
+#   race        -> the whole root module under -race, TestCluster* skipped; every pull request with Go
+#                  changes, like the unit shards, plus pushes to develop
 #   unit-gate   -> the unit-test rules of #204 (no testify, no generated mocks, go-specs, no real resources)
 #                  plus the no-skip rule for inttest/
 name: ci
@@ -51,6 +55,10 @@ env:
   SPLIT_THRESHOLD: "90"   # seconds. A package slower than this (by real timings) is split by test.
   SPLIT_TARGET: "90"      # seconds. Aimed duration of each shard of a split package.
   TESTFLAGS: "-timeout=20m"
+  # Top-level tests that start a multi-node cluster (named TestCluster*, see docs/ci.md). The test shards and
+  # the race job skip them (-skip), the cluster job runs only them (-run), and test-matrix.sh leaves them
+  # out of the lists it distributes, so every test runs in exactly one lane.
+  CLUSTER_TESTS: "^TestCluster"
   GOTESTSUM_VERSION: "v1.13.0"
 
 jobs:
@@ -165,6 +173,9 @@ jobs:
           mkdir -p reports
           args=()
           [ -z "$RUN" ] || args+=(-run "$RUN")
+          # -run selects the share of a split package and -skip removes the cluster tests from it;
+          # both apply at once. The cluster tests run in the cluster job.
+          args+=(-skip "$CLUSTER_TESTS")
           # shellcheck disable=SC2086  # PACKAGES is a space-separated list
           gotestsum --format github-actions \
             --jsonfile "reports/test-$ID.json" --junitfile "reports/junit-$ID.xml" \
@@ -238,6 +249,9 @@ jobs:
   #   PR to develop: build and vet (fast; detects use of newer stdlib API).
   #   PR to main:    runs ALL the tests with the minimum before publishing.
   # Uses plain `go test`: gotestsum 1.13 needs Go >= 1.24 and the minimum may be lower.
+  # It does NOT skip the TestCluster tests, on purpose: it is the only job that runs them with the minimum
+  # Go. (The cluster job also runs on every PR with Go changes, hotfix PRs included, but with the toolchain
+  # of .go-version.) It keeps running everything.
   test-min:
     name: test (min)
     needs: plan
@@ -369,6 +383,72 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # The multi-node cluster tests: every top-level test named TestCluster* in the root module. They start real
+  # clustered actor systems on loopback ports, so the test shards skip them (-skip) and they run here, alone.
+  # They run on every pull request with Go changes, like the unit shards, plus pushes to develop and manual
+  # runs: they are in-process (no Docker) and every PR ran them before the lanes existed. The command takes
+  # ./... on purpose. A hardcoded package list would let a new TestCluster* in another package be skipped by
+  # the shards and never run here, and the zero-pass guard would not notice while other packages still pass.
+  # `go test` reports "no tests to run" as a pass, so the step counts the top-level TestCluster* pass events in
+  # the -json output and fails if there is none (a rename that left the lane empty would otherwise stay
+  # green). No retries: a flaky cluster test is fixed in its own PR.
+  cluster:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Cluster tests
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/cluster.json"
+          status=0
+          go test -count=1 -timeout=8m -run "$CLUSTER_TESTS" -json ./... > "$out" || status=$?
+          # Top-level tests only (no "/" in the name) that passed.
+          passed=$(jq -Rr --arg re "$CLUSTER_TESTS" 'fromjson? | select(.Action == "pass" and .Test != null and (.Test | contains("/") | not) and (.Test | test($re))) | .Test' "$out" | sort -u)
+          n=$(printf '%s' "$passed" | grep -c . || true)
+          {
+            echo "### Cluster tests: $n top-level tests passed (go test exit status $status)"
+            echo '```'
+            echo "$passed"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$n top-level $CLUSTER_TESTS tests passed (go test exit status $status)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test failed in the cluster lane (exit status $status)"
+            exit 1
+          fi
+          if [ "$n" -eq 0 ]; then
+            echo "::error::the cluster lane ran no top-level $CLUSTER_TESTS test"
+            exit 1
+          fi
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cluster-results
+          path: ${{ runner.temp }}/cluster.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The whole root module under the race detector (#206), TestCluster* skipped: they are not run under -race
+  # yet (out of scope for #206, a follow-up once the in-process suites are known to be race-free). It runs on
+  # every pull request with Go changes, like the unit shards, plus pushes to develop and manual runs. A race
+  # found here is fixed in its own pull request, never by silencing the job. No retries. A package with a
+  # known race is excluded only via an explicit list here with a linked issue and exit condition, never
+  # silently, never with retries. The race detector is never run locally.
+  race:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: Race detector
+        run: go test -race -count=1 -timeout=8m -skip "$CLUSTER_TESTS" ./...
+
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.
   unit-gate:
@@ -450,7 +530,7 @@ jobs:
   # A new check in the future = add the job and list it here. Branch protection is not touched.
   ci-ok:
     if: always()
-    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, benchmark, unit-gate, tidy, api, vuln]
+    needs: [flow, lint, plan, test, test-report, test-min, modules, inttest, benchmark, cluster, race, unit-gate, tidy, api, vuln]
     runs-on: ubuntu-latest
     steps:
       - env:
