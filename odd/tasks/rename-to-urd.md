@@ -39,7 +39,7 @@ TDD: strict mode on (user global config). Runner: `go test ./...` per module.
 Race detector only where the user asked: `go test -race -count=1 ./...` on
 the root module in T4.
 
-- [ ] T1 — Module paths: rewrite every `go.mod`, import, `replace`, hardcoded
+- [x] T1 — Module paths: rewrite every `go.mod`, import, `replace`, hardcoded
   module-path string (closure/architecture tests, `unitgate/scan.go`,
   `benchmark/Makefile`), proto `go_package` options and
   `buf.gen.example.yaml`; regenerate with `make docker-protogen`;
@@ -63,3 +63,5 @@ the root module in T4.
 ## Progress
 
 Base: `origin/develop` at `afaafb3`. Branch: `refactor/rename-to-urd`.
+
+- T1 done (dfe3462 module path, ce18478 proto go_package + regen). `make docker-protogen` ran; pb.go changed only the go_package string (same length, no version-header changes). Per module `go build ./... && go vet ./...` clean (10 modules); root `go test ./...` 39 packages ok, none failing. Also fixed `.github/scripts/count-tests.sh`. Leftover `getsyntegrity/ego` only in `.github/ISSUE_TEMPLATE/*.yml` (URLs, T3).
