@@ -1,3 +1,4 @@
+// Deprecated: moved to github.com/getsyntegrity/urd
 module github.com/getsyntegrity/ego/inttest
 
 go 1.26.0

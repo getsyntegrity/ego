@@ -1,3 +1,4 @@
+// Deprecated: moved to github.com/getsyntegrity/urd
 module github.com/getsyntegrity/ego/publisher/pulsar
 
 go 1.26.2
