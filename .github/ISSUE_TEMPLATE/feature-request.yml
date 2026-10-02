@@ -1,5 +1,5 @@
 name: Feature or API change
-description: Propose something new or a change to Ego's public API
+description: Propose something new or a change to Urd's public API
 labels: ["kind/feature", "needs-triage"]
 body:
   - type: markdown
@@ -27,7 +27,7 @@ body:
         func WithTimeout(d time.Duration) Option
 
         // Usage
-        c := ego.New(ego.WithTimeout(5 * time.Second))
+        c := engine.New(engine.WithTimeout(5 * time.Second))
 
   - type: dropdown
     id: compat
@@ -45,7 +45,7 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Can it be solved without changing Ego? Why is that not enough?
+      description: Can it be solved without changing Urd? Why is that not enough?
 
   - type: input
     id: consumers

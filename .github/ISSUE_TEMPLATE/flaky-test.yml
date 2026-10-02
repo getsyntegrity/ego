@@ -20,7 +20,7 @@ body:
     id: run
     attributes:
       label: Link to the failed run
-      placeholder: https://github.com/getsyntegrity/ego/actions/runs/...
+      placeholder: https://github.com/getsyntegrity/urd/actions/runs/...
     validations:
       required: true
 

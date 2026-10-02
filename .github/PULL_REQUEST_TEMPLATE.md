@@ -34,7 +34,7 @@ If there is no issue, write N/A.
 
 #### Special notes for the reviewer
 
-#### Does this PR introduce a user-visible change for people who use Ego?
+#### Does this PR introduce a user-visible change for people who use Urd?
 
 <!--
 If NOT: write NONE in the block.
