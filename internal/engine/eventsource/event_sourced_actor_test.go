@@ -1861,7 +1861,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		//     through goakt.Ask to the actor, simulating an inbound traced request.
 		//
 		// Assertions:
-		//   - Exactly 3 "ego.command" spans are produced (one per batched command).
+		//   - Exactly 3 "urd.command" spans are produced (one per batched command).
 		//   - Every command span shares the same TraceID as the parent span, proving
 		//     trace context flows from the caller through GoAkt into processAndBatch.
 		//   - Every command span's Parent.SpanID equals the parent span's SpanID,
@@ -1899,8 +1899,8 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 			spans := recorder.spans(ctx)
 
-			// Collect "ego.command" spans (one per batched command).
-			commandSpans := spansNamed(spans, "ego.command")
+			// Collect "urd.command" spans (one per batched command).
+			commandSpans := spansNamed(spans, "urd.command")
 
 			parent := findSpan(spans, "test.batch.parent")
 			ctx.Expect(parent).To(specs.Not(specs.BeNil()))
@@ -1921,9 +1921,9 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 			// required observability attributes are present
 			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("has the ego.persistence_id attribute",
-				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "ego.persistence_id") == persistenceID })))
+				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "urd.persistence_id") == persistenceID })))
 			ctx.Expect(commandSpans).To(specs.EveryElement(spanSatisfies("has the ego.command_type attribute",
-				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "ego.command_type") != "" })))
+				func(cs tracetest.SpanStub) bool { return spanAttribute(cs, "urd.command_type") != "" })))
 
 			// each command span has a unique span ID (no accidental reuse)
 			spanIDs := make(map[trace.SpanID]struct{})
@@ -1935,7 +1935,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		// Test: batch trace spans are ended on error
 		//
-		// Verifies that when HandleCommand returns an error the "ego.command" span
+		// Verifies that when HandleCommand returns an error the "urd.command" span
 		// is still created and properly ended, rather than being leaked.
 		//
 		// Setup:
@@ -1945,7 +1945,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		//   - The parent span ("test.error.parent") provides the trace context.
 		//
 		// Assertions:
-		//   - Exactly 1 "ego.command" span is produced despite the error.
+		//   - Exactly 1 "urd.command" span is produced despite the error.
 		//   - The span has a non-zero EndTime, proving processAndBatch called
 		//     span.End() on the error path before sendErrorReply.
 		//   - The span shares the parent's TraceID (trace context propagated).
@@ -1978,7 +1978,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 
 		// Test: batch trace spans with no-event command are ended immediately
 		//
-		// Verifies that when HandleCommand returns zero events the "ego.command"
+		// Verifies that when HandleCommand returns zero events the "urd.command"
 		// span is ended immediately inside processAndBatch — it must not be
 		// deferred to the batch flush cycle, because the command is answered
 		// inline without entering the batch buffer.
@@ -1990,7 +1990,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		//   - The parent span ("test.noevent.parent") provides the trace context.
 		//
 		// Assertions:
-		//   - Exactly 1 "ego.command" span is produced for the no-event command.
+		//   - Exactly 1 "urd.command" span is produced for the no-event command.
 		//   - The span has a non-zero EndTime, proving processAndBatch called
 		//     span.End() immediately when len(events) == 0.
 		//   - The span shares the parent's TraceID (trace context propagated).
@@ -2023,7 +2023,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		// Test: batch trace spans with encryption failure are ended
 		//
 		// Verifies that when buildEnvelopes fails due to an encryption error the
-		// "ego.command" span is still ended, preventing span leaks on the
+		// "urd.command" span is still ended, preventing span leaks on the
 		// encryption-failure path inside processAndBatch.
 		//
 		// Setup:
@@ -2034,7 +2034,7 @@ func TestEventSourcedActorBatch(t *testing.T) {
 		//   - The parent span ("test.encrypt.parent") provides the trace context.
 		//
 		// Assertions:
-		//   - Exactly 1 "ego.command" span is produced despite the encryption failure.
+		//   - Exactly 1 "urd.command" span is produced despite the encryption failure.
 		//   - The span has a non-zero EndTime, proving processAndBatch called
 		//     span.End() on the buildEnvelopes error path before sendErrorReply.
 		//   - The span shares the parent's TraceID (trace context propagated).
@@ -2100,7 +2100,7 @@ func newSpanRecorder(ctx *specs.Context) *spanRecorder {
 	)
 	ctx.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 
-	return &spanRecorder{exporter: exporter, provider: provider, tracer: provider.Tracer("ego-test")}
+	return &spanRecorder{exporter: exporter, provider: provider, tracer: provider.Tracer("urd-test")}
 }
 
 // spans force-flushes the provider so every ended span is exported, and returns
@@ -2142,7 +2142,7 @@ func spanAttribute(span tracetest.SpanStub, key string) string {
 // expectOneEndedCommandSpan requires exactly one ego.command span among spans,
 // ended, and a direct child of the span called parentName, in the same trace.
 func expectOneEndedCommandSpan(ctx *specs.Context, spans tracetest.SpanStubs, parentName string) {
-	commandSpans := spansNamed(spans, "ego.command")
+	commandSpans := spansNamed(spans, "urd.command")
 
 	// a span is still produced, whatever way the command ended
 	ctx.Expect(commandSpans).To(specs.HaveLen(1))

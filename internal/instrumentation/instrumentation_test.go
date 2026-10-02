@@ -183,15 +183,15 @@ func TestNewCreatesTheCatalog(t *testing.T) {
 			ctx.Expect(New(meter)).To(specs.Not(specs.BeNil()))
 
 			ctx.Expect(meter.catalog).ToEqual(map[string]string{
-				"ego.commands.total":                    "Int64Counter|Total number of commands processed|",
-				"ego.commands.duration":                 "Float64Histogram|Duration of command processing in milliseconds|",
-				"ego.events.persisted.total":            "Int64Counter|Total number of events persisted|",
-				"ego.projection.events.processed.total": "Int64Counter|Total number of events processed by projections|",
-				"ego.entities.active":                   "Int64UpDownCounter|Number of currently active entities|",
-				"ego.projections.active":                "Int64UpDownCounter|Number of currently active projections|",
-				"ego.projection.lag_ms":                 "Int64Gauge|Projection lag in milliseconds per shard|",
-				"ego.projection.latest_offset":          "Int64Gauge|Current projection offset timestamp per shard|",
-				"ego.projection.events_behind":          "Int64Gauge|Approximate number of unprocessed events per shard|",
+				"urd.commands.total":                    "Int64Counter|Total number of commands processed|",
+				"urd.commands.duration":                 "Float64Histogram|Duration of command processing in milliseconds|",
+				"urd.events.persisted.total":            "Int64Counter|Total number of events persisted|",
+				"urd.projection.events.processed.total": "Int64Counter|Total number of events processed by projections|",
+				"urd.entities.active":                   "Int64UpDownCounter|Number of currently active entities|",
+				"urd.projections.active":                "Int64UpDownCounter|Number of currently active projections|",
+				"urd.projection.lag_ms":                 "Int64Gauge|Projection lag in milliseconds per shard|",
+				"urd.projection.latest_offset":          "Int64Gauge|Current projection offset timestamp per shard|",
+				"urd.projection.events_behind":          "Int64Gauge|Approximate number of unprocessed events per shard|",
 			})
 		})
 	})
@@ -235,12 +235,12 @@ func TestRecordingMethods(t *testing.T) {
 			instruments.ProjectionStopped(base)
 			instruments.ProjectionEventHandled(base)
 
-			commands := meter.measurements["ego.commands.total"]
-			duration := meter.measurements["ego.commands.duration"]
-			persisted := meter.measurements["ego.events.persisted.total"]
-			entities := meter.measurements["ego.entities.active"]
-			projections := meter.measurements["ego.projections.active"]
-			processed := meter.measurements["ego.projection.events.processed.total"]
+			commands := meter.measurements["urd.commands.total"]
+			duration := meter.measurements["urd.commands.duration"]
+			persisted := meter.measurements["urd.events.persisted.total"]
+			entities := meter.measurements["urd.entities.active"]
+			projections := meter.measurements["urd.projections.active"]
+			processed := meter.measurements["urd.projection.events.processed.total"]
 
 			// Every instrument carries no attributes: the failure names the offending measurement.
 			noAttributes := specs.EveryElement(specs.Project("attributes", measurementAttributeCount, specs.Equal(0)))
@@ -280,9 +280,9 @@ func TestShardRecordsTheGaugesWithProjectionAttributes(t *testing.T) {
 			value float64
 		}
 		specs.Table(s, []gauge{
-			{"ego.projection.lag_ms", 11},
-			{"ego.projection.latest_offset", 22},
-			{"ego.projection.events_behind", 33},
+			{"urd.projection.lag_ms", 11},
+			{"urd.projection.latest_offset", 22},
+			{"urd.projection.events_behind", 33},
 		}, func(g gauge) string { return g.name }, func(ctx *specs.Context, g gauge) {
 			meter := newFakeMeter()
 			New(meter).Shard("orders", 7).Record(context.Background(), 11, 22, 33)
@@ -315,13 +315,13 @@ func TestStartCommandSpan(t *testing.T) {
 			span.End()
 			parent.End()
 
-			commandSpans := spansNamed(exporter, "ego.command")
+			commandSpans := spansNamed(exporter, "urd.command")
 			ctx.Expect(commandSpans).To(specs.HaveLen(1))
 			stub := commandSpans[0]
 			ctx.Expect(stub.Parent.SpanID()).ToEqual(parent.SpanContext().SpanID())
 			ctx.Expect(stub.Attributes).ToEqual([]attribute.KeyValue{
-				attribute.String("ego.persistence_id", "pid-1"),
-				attribute.String("ego.command_type", "google.protobuf.StringValue"),
+				attribute.String("urd.persistence_id", "pid-1"),
+				attribute.String("urd.command_type", "google.protobuf.StringValue"),
 			})
 		})
 	})
@@ -343,12 +343,12 @@ func TestSendCommandSpan(t *testing.T) {
 			spans := exporter.GetSpans()
 			ctx.Expect(spans).To(specs.HaveLen(2))
 
-			ctx.Expect(spans[0].Name).ToEqual("ego.send_command")
+			ctx.Expect(spans[0].Name).ToEqual("urd.send_command")
 			ctx.Expect(spans[0].Status.Code).ToEqual(codes.Unset)
 			ctx.Expect(spans[0].Events).To(specs.BeEmpty())
 			ctx.Expect(spans[0].Attributes).ToEqual([]attribute.KeyValue{
-				attribute.String("ego.entity_id", "entity-1"),
-				attribute.String("ego.command_type", "google.protobuf.StringValue"),
+				attribute.String("urd.entity_id", "entity-1"),
+				attribute.String("urd.command_type", "google.protobuf.StringValue"),
 			})
 
 			ctx.Expect(spans[1].Status.Code).ToEqual(codes.Error)
