@@ -279,6 +279,9 @@ func New() *Actor {
 // recovers the actor state from the events and snapshot stores. Child actors
 // are spawned in PostStart where [goakt.ReceiveContext] is available.
 func (entity *Actor) PreStart(ctx *goakt.Context) error {
+	// A restart reuses this value: drop the batch cycle the previous run left.
+	entity.resetBatch()
+	entity.stopFlushTimer()
 	eventsStoreExt, err := extensions.Require[*extensions.EventsStore](ctx, extensions.EventsStoreExtensionID)
 	if err != nil {
 		return err
@@ -360,12 +363,18 @@ func (entity *Actor) Receive(ctx *goakt.ReceiveContext) {
 	}
 }
 
-// PostStop releases resources and resets counters when the actor shuts down.
+// PostStop releases resources when the actor shuts down.
+//
+// GoAkt may run PostStop on the shutdown goroutine while a Receive turn is
+// still in flight (a stopping parent frees its children concurrently). The
+// Receive path reads the batch fields without a lock, so PostStop must not
+// write them: it only stops the flush timer, which is guarded by batchMu. The
+// batch accumulation state is cleared by PreStart, which runs before any turn
+// of a restarted actor.
 // nolint
 func (entity *Actor) PostStop(ctx *goakt.Context) error {
 	entity.metrics.EntityStopped(ctx.Context())
 	entity.stopFlushTimer()
-	entity.resetBatch()
 	return nil
 }
 
@@ -1567,7 +1576,7 @@ func (entity *Actor) processAndBatch(ctx *goakt.ReceiveContext, command Command)
 	entity.batchNumEvents += len(envelopes)
 
 	stateAny, _ := anypb.New(pendingState)
-	entity.batchEntries = append(entity.batchEntries, batchEntry{
+	entry := batchEntry{
 		reply: &egopb.CommandReply{
 			Reply: &egopb.CommandReply_StateReply{
 				StateReply: &egopb.StateReply{
@@ -1580,7 +1589,12 @@ func (entity *Actor) processAndBatch(ctx *goakt.ReceiveContext, command Command)
 		},
 		startTime: startTime,
 		span:      span,
-	})
+	}
+	// batchMu guards the slice header so it can be observed from outside the
+	// receive goroutine (tests, PreStart) without racing the append.
+	entity.batchMu.Lock()
+	entity.batchEntries = append(entity.batchEntries, entry)
+	entity.batchMu.Unlock()
 
 	ctx.Stash()
 

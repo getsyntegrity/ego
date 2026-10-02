@@ -107,6 +107,7 @@ func TestEventSourcedActor(t *testing.T) {
 			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
 
 			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			idle := rig.system.NumActors()
 			pid := rig.spawn(ctx, behavior)
 
 			state := stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500.00}))
@@ -116,9 +117,8 @@ func TestEventSourcedActor(t *testing.T) {
 			expectAccountState(ctx, state, 2, &testpb.Account{AccountId: persistenceID, AccountBalance: 750.00})
 
 			// restart the actor: it rebuilds its state from the events store
-			pid, err := rig.system.ReSpawn(context.Background(), behavior.ID())
-			ctx.Expect(err).To(specs.BeNil())
-			waitRunning(ctx, pid)
+			rig.killForRestart(ctx, pid, behavior.ID(), idle)
+			pid = rig.spawn(ctx, behavior)
 
 			// fetch the current state
 			state = stateReplyOf(ctx, ask(ctx, pid, &egopb.GetStateCommand{}))
@@ -1759,6 +1759,40 @@ func TestEventSourcedActorBatch(t *testing.T) {
 			// The mailbox is ordered: the command below is read after the unhandled
 			// message, so its reply proves the actor survived it.
 			stateReplyOf(ctx, ask(ctx, pid, &testpb.CreateAccount{AccountBalance: 500}))
+		})
+
+		s.It("stopping with a batch in flight leaves the batch state to the receive path", func(ctx *specs.Context) {
+			persistenceID := uuid.NewString()
+			behavior := enginetest.NewAccountEventSourcedBehavior(persistenceID)
+
+			rig := startActorRig(ctx, extensions.NewEventsStore(connectedEventsStore(ctx)))
+			entity := New()
+			pid, err := rig.system.Spawn(context.Background(), behavior.ID(), entity,
+				goakt.WithDependencies(behavior, &extensions.EntityConfig{
+					BatchThreshold:   100,
+					BatchFlushWindow: time.Hour,
+				}),
+				goakt.WithLongLived(), goakt.WithStashing())
+			ctx.Expect(err).To(specs.BeNil())
+			waitRunning(ctx, pid)
+
+			batched := func() int {
+				entity.batchMu.Lock()
+				defer entity.batchMu.Unlock()
+				return len(entity.batchEntries)
+			}
+
+			// the command waits in the open batch: the flush window is an hour
+			ctx.Expect(goakt.Tell(context.Background(), pid, &testpb.CreateAccount{AccountBalance: 500})).To(specs.BeNil())
+			ctx.Eventually(func() any { return batched() }, specs.Equal(1),
+				specs.WithTimeout(pollTimeout), specs.WithInterval(pollInterval))
+
+			ctx.Expect(rig.system.Kill(context.Background(), behavior.ID())).To(specs.BeNil())
+			waitStopped(ctx, pid)
+
+			// PostStop may run while a Receive turn is still reading the batch,
+			// so it must not clear it: the next PreStart does
+			ctx.Expect(batched()).To(specs.Equal(1))
 		})
 
 		s.It("batch mode with encryption failure and telemetry ends span", func(ctx *specs.Context) {
