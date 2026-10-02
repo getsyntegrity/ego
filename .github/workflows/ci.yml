@@ -251,7 +251,7 @@ jobs:
   # Uses plain `go test`: gotestsum 1.13 needs Go >= 1.24 and the minimum may be lower.
   # It does NOT skip the TestCluster tests, on purpose: it is the only job that runs them with the minimum
   # Go. (The cluster job also runs on every PR with Go changes, hotfix PRs included, but with the toolchain
-# of .go-version.) It keeps running everything.
+  # of .go-version.) It keeps running everything.
   test-min:
     name: test (min)
     needs: plan
@@ -396,7 +396,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/go-setup
@@ -405,7 +405,7 @@ jobs:
         run: |
           out="$RUNNER_TEMP/cluster.json"
           status=0
-          go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./... > "$out" || status=$?
+          go test -count=1 -timeout=8m -run "$CLUSTER_TESTS" -json ./... > "$out" || status=$?
           # Top-level tests only (no "/" in the name) that passed.
           passed=$(jq -Rr --arg re "$CLUSTER_TESTS" 'fromjson? | select(.Action == "pass" and .Test != null and (.Test | contains("/") | not) and (.Test | test($re))) | .Test' "$out" | sort -u)
           n=$(printf '%s' "$passed" | grep -c . || true)
@@ -442,12 +442,12 @@ jobs:
     needs: plan
     if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/go-setup
       - name: Race detector
-        run: go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS" ./...
+        run: go test -race -count=1 -timeout=8m -skip "$CLUSTER_TESTS" ./...
 
   # Unit-test rules of #204 over every Go file of every module (docs/testing/go-specs.md, "The unit-test gate").
   # Cheap and independent of the test shards, so it runs even when the plan skips the tests.

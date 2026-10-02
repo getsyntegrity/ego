@@ -128,7 +128,41 @@ What changed:
 - `cluster` runs `go test -count=1 -timeout=15m -run "$CLUSTER_TESTS" -json ./...` on the whole root module. A hardcoded package list would let a new `TestCluster*` in another package be skipped by the shards and never run, unnoticed by the zero-pass guard. The guard, the exit-status check, `-count=1` and the absence of retries are unchanged.
 - `race` runs `go test -race -count=1 -timeout=25m -skip "$CLUSTER_TESTS" ./...` on the whole root module. `timeout-minutes` stays 30 until the real duration is measured. A comment states the rule: a package with a known race is excluded only via an explicit list in `ci.yml` with a linked issue and an exit condition, never silently, never with retries. No exclusion list exists yet.
 - Texts that were no longer true are updated: the header comment of `ci.yml`, the `test (min)` comment (the cluster job now also runs on hotfix PRs; what stays true is that `test (min)` is the only job running the cluster tests with the minimum Go), the `cluster` and `race` job comments, the job and lane tables, the "Why the cluster tests have their own lane" and "What `race` does not cover" sections of `docs/ci.md`, and the "Writing a cluster test" section of `docs/testing/go-specs.md`.
-- PR run: _pending_ (link, total race time, per-package race times, cluster test count and timings)
+- PR run: https://github.com/getsyntegrity/ego/actions/runs/36943393982 at `96ea3cb`, green (`race`, `cluster`, the shards and `ci-ok`). This is the first time `-race` runs over the whole root module. It runs in the PR itself, so no temporary commit was needed.
+  - **`race`**: the job took 121 s, and the `go test -race` step 107 s. The root module has 42 packages: 39 with tests, all `ok`, and 3 without test files. The run reported **0** `WARNING: DATA RACE`, so no package needs an exclusion and there was nothing to fix in a separate PR. Package times:
+
+    | Package | Time |
+    |---|---|
+    | `internal/engine/eventsource` | 22.7 s |
+    | `internal/engine/saga` | 13.1 s |
+    | `engine` | 7.9 s |
+    | `internal/engine/projection` | 6.2 s |
+    | `internal/projectionrunner` | 2.3 s |
+    | `port/adapter` | 2.0 s |
+    | `port/runtime` | 1.2 s |
+    | `internal/engine/durablestate` | 1.2 s |
+    | `compose/goakt` | 1.2 s |
+    | `migration` | 1.2 s |
+    | each of the other 29 packages | 1.0–1.2 s |
+
+    The 29 packages not listed include `testkit` (1.05 s, which has `concurrency_test.go`), `persistence/conformance`, `port/publishing`, `command`, `tenancy`, `encryption` and the architecture-test packages.
+  - **`cluster`**: the job took 129 s and logged `9 top-level ^TestCluster tests passed (go test exit status 0)`, still 9. The run covered all 42 root packages through `./...`. Elapsed time per test, from the `cluster-results` artifact:
+
+    | Test | Elapsed |
+    |---|---|
+    | `TestClusterEventPublisherHighPartitionCount` | 10.19 s |
+    | `TestClusterNewEngineRejectsValueTypeKind` | 10.11 s |
+    | `TestClusterEngineSingleNodeServesProjectionsAndEntities` | 10.11 s |
+    | `TestClusterEngineRejectsUnplaceableBehaviors` | 10.11 s |
+    | `TestClusterEngineStartProjectionAlreadyExists` | 10.10 s |
+    | `TestClusterEngineNeutralBehaviors` | 5.64 s |
+    | `TestClusterEngineRemoteSpawnTenantBinding` | 0.81 s |
+    | `TestClusterEngineRemoteEntitySpawn` | 0.81 s |
+    | `TestCluster_AppTwoNodePlacesAndStopsCleanly` (`compose/goakt`) | 0.83 s |
+
+    The five tests near 10 s are dominated by waiting for the node to join its single-member cluster. No test failed, and none was intermittent in this run.
+  - **Timeouts set from the measurement.** Both `go test` invocations took about 2 minutes, so `cluster` and `race` now use `timeout-minutes: 10` (previously 20 and 30) with `go test -timeout=8m` (previously 15m and 25m). That leaves about 4 times the measured time before either job is cut.
+- Nit from review: the continuation line of the `test (min)` comment in `ci.yml` was at column 0. It is indented now.
 
 ## Next step
 
